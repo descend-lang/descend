@@ -25,6 +25,8 @@ pub enum Expr {
     Unary(UnOp, Box<ExprNode>),
     Binary(BinOp, Box<ExprNode>),
     IfElse(Box<ExprNode>, Box<ExprNode>, Box<ExprNode>),
+    // e1 ; e2
+    Seq(Box<ExprNode>, Box<ExprNode>),
 }
 
 pub struct Ident {
