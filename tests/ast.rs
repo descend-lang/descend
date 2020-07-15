@@ -1,8 +1,8 @@
 extern crate descend;
 
-use descend::types::*;
-use descend::dsl::*;
 use descend::ast::*;
+use descend::dsl::*;
+use descend::types::*;
 
 #[test]
 fn let_examples() {
@@ -16,5 +16,6 @@ fn let_examples() {
         Ty::Data(DataTy::Un(CopyData::Scalar(ScalarData::I32))),
         Mutability::Const,
         lit(&5),
-        tuple(vec![]));
+        tuple(vec![]),
+    );
 }
