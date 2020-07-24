@@ -114,7 +114,7 @@ macro_rules! tuple {
 }
 
 pub fn at(i: Expr, arr: Expr) -> Expr {
-    exprn(ExprKind::At(Box::new(i), Box::new(arr)))
+    exprn(ExprKind::Index(Box::new(i), Box::new(arr)))
 }
 
 pub fn r#let(
@@ -263,7 +263,7 @@ pub static bool: Ty = Ty::Data(DataTy::Un(CopyData::Scalar(ScalarData::Bool)));
 #[allow(non_upper_case_globals)]
 pub static unit_ty: Ty = Ty::Data(DataTy::Un(CopyData::Scalar(ScalarData::Unit)));
 
-pub fn refc_ty(lf: &Lifetime, mem: Memory, dt: &Ty) -> Ty {
+pub fn ref_const_ty(lf: &Lifetime, mem: Memory, dt: &Ty) -> Ty {
     let dty = extract_dty(dt);
     Ty::Data(DataTy::Un(CopyData::RefConst(
         lf.clone(),
@@ -272,7 +272,7 @@ pub fn refc_ty(lf: &Lifetime, mem: Memory, dt: &Ty) -> Ty {
     )))
 }
 
-pub fn refm_ty(lf: &Lifetime, mem: Memory, dt: &Ty) -> Ty {
+pub fn ref_mutable_ty(lf: &Lifetime, mem: Memory, dt: &Ty) -> Ty {
     let dty = extract_dty(dt);
     Ty::Data(DataTy::Aff(MoveData::RefMut(
         lf.clone(),
@@ -286,9 +286,9 @@ pub fn arr_ty(size: u32, dt: &Ty) -> Ty {
     Ty::Data(DataTy::Aff(MoveData::Array(Nat::Lit(size), Box::new(dty))))
 }
 
-pub fn own_ty(dt: &Ty, mem: Memory) -> Ty {
+pub fn at_ty(dt: &Ty, mem: Memory) -> Ty {
     let dty = extract_dty(dt);
-    Ty::Data(DataTy::Aff(MoveData::Own(Box::new(dty), mem)))
+    Ty::Data(DataTy::Aff(MoveData::At(Box::new(dty), mem)))
 }
 
 pub fn extract_dty(ty: &Ty) -> DataTy {

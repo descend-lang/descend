@@ -118,7 +118,7 @@ pub enum MoveData {
     Tuple(Vec<DataTy>),
     Array(Nat, Box<DataTy>),
     RefMut(Lifetime, Memory, Box<DataTy>),
-    Own(Box<DataTy>, Memory),
+    At(Box<DataTy>, Memory),
     Ident(TyIdent),
 }
 

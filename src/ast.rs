@@ -14,7 +14,7 @@ pub enum ExprKind {
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),
     // Index into array, e.g., arr[i]
-    At(Box<Expr>, Box<Expr>),
+    Index(Box<Expr>, Box<Expr>),
     Tuple(Vec<Expr>),
     // Variable declaration and assignment
     Let(Mutability, Ident, Ty, Box<Expr>, Box<Expr>),

@@ -41,7 +41,7 @@ fn array_move_example() {
     let a = life("'a");
     let_const("x", &a, &arr_ty(5, &i32), arr![1, 2, 3, 4, 5],
     let_const("y", &a, &arr_ty(5, &i32), ident("x", &a),
-    let_const("z", &a, &arr_ty(5, &i32), ident("z", &a),
+    let_const("z", &a, &arr_ty(5, &i32), ident("x", &a),
     unit())));
     
     panic!("This shouldn't type check.")
@@ -76,17 +76,17 @@ fn gpu_memory_alloc_move_example() {
     // let z: i32 + gpu.global = x; // Error
     //
     //      desugared:
-    // let const x_'a: aff i32 + gpu.global = copy_to_gpumem_'static<un i32>(5);
-    // let const y_'a: aff i32 + gpu.global = x_'a;
-    // let const z_'a: aff i32 + gpu.global = x_'a; // Error
+    // let const x_'a: aff i32 @ gpu.global = copy_to_gpumem_'static<un i32>(5);
+    // let const y_'a: aff i32 @ gpu.global = x_'a;
+    // let const z_'a: aff i32 @ gpu.global = x_'a; // Error
     // ()
     use Memory::GpuGlobal;
 
     let a = life("'a");
-    let_const("x", &a, &own_ty(&i32, GpuGlobal),
+    let_const("x", &a, &at_ty(&i32, GpuGlobal),
         app(ddep_app(ident("copy_to_gpumem", &life("'static")), &i32_dt), lit(&5)),
-    let_const("y", &a, &own_ty(&i32, GpuGlobal), ident("x", &a),
-    let_const("z", &a, &own_ty(&i32, GpuGlobal), ident("x", &a),
+    let_const("y", &a, &at_ty(&i32, GpuGlobal), ident("x", &a),
+    let_const("z", &a, &at_ty(&i32, GpuGlobal), ident("x", &a),
     unit())));
     
     panic!("This shouldn't type check.")
@@ -95,25 +95,25 @@ fn gpu_memory_alloc_move_example() {
 #[test]
 #[rustfmt::skip]
 fn gpu_memory_alloc_borrow_example() {
-    // let x: i32 + gpu.global = copy_to_gpumem(5);
+    // let x: i32 @ gpu.global = copy_to_gpumem(5);
     // let y: &'a mut gpu.global i32 = &mut x;
-    // let z: i32 + gpu.global = x; // Error
+    // let z: i32 @ gpu.global = x; // Error
     // // do_something(y);
     //
     //      desugared:
-    // let const x_'a: aff i32 + gpu.global = copy_to_gpumem_'static<un i32>(5);
+    // let const x_'a: aff i32 @ gpu.global = copy_to_gpumem_'static<un i32>(5);
     // let const y_'a: aff &'a mut gpu.global i32 = &mut x_'a;
-    // let const z_'a: aff i32 + gpu.global = x_'a; // Error
+    // let const z_'a: aff i32 @ gpu.global = x_'a; // Error
     // // do_something_'static(y_'a);
     // ()
     use Memory::GpuGlobal;
 
     let a = life("'a");
-    let_const("x", &a, &own_ty(&i32, GpuGlobal),
+    let_const("x", &a, &at_ty(&i32, GpuGlobal),
         app(ddep_app(ident("copy_to_gpumem", &life("'static")), &i32_dt), lit(&5)),
-    let_const("y", &a, &refm_ty(&life("a"), GpuGlobal, &i32),
+    let_const("y", &a, &ref_mutable_ty(&life("a"), GpuGlobal, &i32),
         borr(mutable, ident("x", &a)),
-    let_const("z", &a, &own_ty(&i32, GpuGlobal), ident("x", &a),
+    let_const("z", &a, &at_ty(&i32, GpuGlobal), ident("x", &a),
     unit())));
     
     panic!("This shouldn't type check.")
@@ -125,15 +125,15 @@ fn gpu_memory_alloc_immediate_borrow_example() {
     // let x: &'a const gpu.global i32 = &const copy_to_gpumem(5);
     //
     //      desugared:
-    // let const tmp_'a: aff i32 + gpu.global = copy_to_gpumem_'static<un i32>(5);
+    // let const tmp_'a: aff i32 @ gpu.global = copy_to_gpumem_'static<un i32>(5);
     // let const x_'a: un &'a const gpu.global i32 = &const tmp_'a;
     // ()
     use Memory::GpuGlobal;
 
     let a = life("'a");
-    let_const("tmp", &a, &own_ty(&i32, GpuGlobal),
+    let_const("tmp", &a, &at_ty(&i32, GpuGlobal),
         app(ddep_app(ident("copy_to_gpumem", &life("'static")), &i32_dt), lit(&5)),
-    let_const("x", &a, &refc_ty(&life("a"), GpuGlobal, &i32),
+    let_const("x", &a, &ref_const_ty(&life("a"), GpuGlobal, &i32),
         borr(constant, ident("tmp", &a)),
     unit()));
 }
@@ -154,11 +154,11 @@ fn mut_ref_movement_example() {
 
     let a = life("'a");
     let b = life("'b");
-    let_const("x", &a, &refm_ty(&a, GpuGlobal, &i32),
+    let_const("x", &a, &ref_mutable_ty(&a, GpuGlobal, &i32),
         borr(mutable, ident("g", &b)),
-    let_const("y", &a, &refm_ty(&b, GpuGlobal, &i32),
+    let_const("y", &a, &ref_mutable_ty(&b, GpuGlobal, &i32),
         ident("x", &a),
-    let_const("z", &a, &refm_ty(&b, GpuGlobal, &i32),
+    let_const("z", &a, &ref_mutable_ty(&b, GpuGlobal, &i32),
         ident("x", &a),
     unit())));
 
@@ -181,11 +181,11 @@ fn const_ref_copy_example() {
 
     let a = life("'a");
     let b = life("'b");
-    let_const("x", &a, &refc_ty(&b, GpuGlobal, &i32),
+    let_const("x", &a, &ref_const_ty(&b, GpuGlobal, &i32),
         borr(constant, ident("g", &b)),
-    let_const("y", &a, &refc_ty(&b, GpuGlobal, &i32),
+    let_const("y", &a, &ref_const_ty(&b, GpuGlobal, &i32),
         ident("x", &a),
-    let_const("z", &a, &refc_ty(&b, GpuGlobal, &i32),
+    let_const("z", &a, &ref_const_ty(&b, GpuGlobal, &i32),
         ident("x", &a),
     unit())));
 }
