@@ -282,8 +282,12 @@ pub fn ref_mutable_ty(lf: &Lifetime, mem: Memory, dt: &Ty) -> Ty {
 }
 
 pub fn arr_ty(size: u32, dt: &Ty) -> Ty {
+    Ty::Data(arr_dty(size, dt))
+}
+
+pub fn arr_dty(size: u32, dt: &Ty) -> DataTy {
     let dty = extract_dty(dt);
-    Ty::Data(DataTy::Aff(MoveData::Array(Nat::Lit(size), Box::new(dty))))
+    DataTy::Aff(MoveData::Array(Nat::Lit(size), Box::new(dty)))
 }
 
 pub fn at_ty(dt: &Ty, mem: Memory) -> Ty {
