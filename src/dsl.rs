@@ -18,9 +18,13 @@ pub fn life(name: &str) -> Lifetime {
     Lifetime::L(String::from(name))
 }
 
+pub fn life_id(name: &str) -> Lifetime {
+    Lifetime::Ident(Lifetime::new_ident(name))
+}
+
 // Identifier
-pub fn ident(name: &str) -> Expr {
-    exprn(ExprKind::Ident(Ident::new(name)))
+pub fn ident(name: &str, life: &Lifetime) -> Expr {
+    exprn(ExprKind::Ident(Ident::new(name, life)))
 }
 
 // Compound Expressions
@@ -113,34 +117,41 @@ pub fn at(i: Expr, arr: Expr) -> Expr {
     exprn(ExprKind::At(Box::new(i), Box::new(arr)))
 }
 
-pub fn r#let(id_name: &str, m: Mutability, ident_type: &Ty, value: Expr, r#in: Expr) -> Expr {
+pub fn r#let(
+    m: Mutability,
+    id_name: &str,
+    life: &Lifetime,
+    ident_type: &Ty,
+    value: Expr,
+    r#in: Expr,
+) -> Expr {
     exprn(ExprKind::Let(
         m,
-        Ident::new(id_name),
+        Ident::new(id_name, life),
         ident_type.clone(),
         Box::new(value),
         Box::new(r#in),
     ))
 }
 
-pub fn let_const(id_name: &str, ident_type: &Ty, value: Expr, r#in: Expr) -> Expr {
-    r#let(id_name, constant, ident_type, value, r#in)
+pub fn let_const(id_name: &str, life: &Lifetime, ident_type: &Ty, value: Expr, r#in: Expr) -> Expr {
+    r#let(constant, id_name, life, ident_type, value, r#in)
 }
 
-pub fn let_mut(id_name: &str, ident_type: &Ty, value: Expr, r#in: Expr) -> Expr {
-    r#let(id_name, mutable, ident_type, value, r#in)
+pub fn let_mut(id_name: &str, life: &Lifetime, ident_type: &Ty, value: Expr, r#in: Expr) -> Expr {
+    r#let(mutable, id_name, life, ident_type, value, r#in)
 }
 
 pub fn assign(lhs: Expr, rhs: Expr) -> Expr {
     exprn(ExprKind::Assign(Box::new(lhs), Box::new(rhs)))
 }
 
-pub fn borr(l: &Lifetime, m: Mutability, expr: Expr) -> Expr {
-    exprn(ExprKind::Ref(l.clone(), m, Box::new(expr)))
+pub fn borr(m: Mutability, expr: Expr) -> Expr {
+    exprn(ExprKind::Ref(m, Box::new(expr)))
 }
 
-pub fn fun<F: DescendLambda>(f: F, exec: &ExecLoc) -> Expr {
-    let (param_idents, body) = f.as_params_and_body();
+pub fn fun<F: DescendLambda>(life: &Lifetime, f: F, exec: &ExecLoc) -> Expr {
+    let (param_idents, body) = f.as_params_and_body(life);
     exprn(ExprKind::Lambda(param_idents, exec.clone(), Box::new(body)))
 }
 
@@ -154,34 +165,39 @@ where
 }
 
 pub trait DescendLambda {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr);
+    fn as_params_and_body(&self, life: &Lifetime) -> (Vec<Ident>, Expr);
 }
 
 impl DescendLambda for dyn Fn(Expr) -> Expr {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
+    fn as_params_and_body(&self, life: &Lifetime) -> (Vec<Ident>, Expr) {
         let name = &fresh_name("p");
-        let param_ident = ident(name);
-        let param_idents = vec![Ident::new(name)];
+        let param_ident = ident(name, life);
+        let param_idents = vec![Ident::new(name, life)];
         let body = self(param_ident);
         (param_idents, body)
     }
 }
 
 impl DescendLambda for dyn Fn(Expr, Expr) -> Expr {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
+    fn as_params_and_body(&self, life: &Lifetime) -> (Vec<Ident>, Expr) {
         let (name1, name2) = (&fresh_name("p"), &fresh_name("p"));
-        let (param_ident1, param_ident2) = (ident(name1), ident(name2));
-        let param_idents = vec![Ident::new(name1), Ident::new(name2)];
+        let (param_ident1, param_ident2) = (ident(name1, life), ident(name2, life));
+        let param_idents = vec![Ident::new(name1, life), Ident::new(name2, life)];
         let body = self(param_ident1, param_ident2);
         (param_idents, body)
     }
 }
 
 impl DescendLambda for dyn Fn(Expr, Expr, Expr) -> Expr {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
+    fn as_params_and_body(&self, life: &Lifetime) -> (Vec<Ident>, Expr) {
         let (name1, name2, name3) = (&fresh_name("p"), &fresh_name("p"), &fresh_name("p"));
-        let (param_ident1, param_ident2, param_ident3) = (ident(name1), ident(name2), ident(name3));
-        let param_idents = vec![Ident::new(name1), Ident::new(name2), Ident::new(name3)];
+        let (param_ident1, param_ident2, param_ident3) =
+            (ident(name1, life), ident(name2, life), ident(name3, life));
+        let param_idents = vec![
+            Ident::new(name1, life),
+            Ident::new(name2, life),
+            Ident::new(name3, life),
+        ];
         let body = self(param_ident1, param_ident2, param_ident3);
         (param_idents, body)
     }

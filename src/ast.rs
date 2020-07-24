@@ -21,7 +21,7 @@ pub enum ExprKind {
     // Assignment to existing variable
     Assign(Box<Expr>, Box<Expr>),
     // Reference to memory underlying Ident
-    Ref(Lifetime, Mutability, Box<Expr>),
+    Ref(Mutability, Box<Expr>),
     // Anonymous function which can capture its surrounding context
     Lambda(Vec<Ident>, ExecLoc, Box<Expr>),
     DepLambda(TyIdent, ExecLoc, Box<Expr>),
@@ -42,12 +42,14 @@ pub enum ExprKind {
 #[derive(Debug, Clone)]
 pub struct Ident {
     pub name: String,
+    pub life: Lifetime,
 }
 
 impl Ident {
-    pub fn new(name: &str) -> Ident {
+    pub fn new(name: &str, life: &Lifetime) -> Ident {
         Ident {
             name: String::from(name),
+            life: life.clone(),
         }
     }
 }
