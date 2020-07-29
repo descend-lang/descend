@@ -17,9 +17,9 @@ fn scalar_copy_example() {
     // let z: i32 = x;
     //
     //      desugared:
-    // let const x_'a: un i32 = 5;
-    // let const y_'a: un i32 = x_'a;
-    // let const z_'a: un i32 = x_'a;
+    // let const x{a}: un i32 = 5;
+    // let const y{a}: un i32 = x{a};
+    // let const z{a}: un i32 = x{a};
     // ()
     let a = life("'a");
     let _e =
@@ -37,9 +37,9 @@ fn array_move_example() {
     // let z: 5.i32 = x; // Error
     //
     //      desugared:
-    // let const x_'a: aff 5.i32 = [1, 2, 3, 4, 5];
-    // let const y_'a: aff 5.i32 = x_'a;
-    // let const z_'a: aff 5.i32 = x_'a; // Error
+    // let const x{a}: aff 5.i32 = [1, 2, 3, 4, 5];
+    // let const y{a}: aff 5.i32 = x{a};
+    // let const z{a}: aff 5.i32 = x{a}; // Error
     // ()
     let a = life("'a");
     let_const("x", &a, &arr_ty(5, &i32), arr![1, 2, 3, 4, 5],
@@ -58,9 +58,9 @@ fn tuple_move_example() {
     // let z: i32 x f32 = x; // Error 
     //
     //      desugared:
-    // let const x_'a: aff i32 x f32 = (1, 2.0f32);
-    // let const y_'a: aff i32 x f32 = x_'a;
-    // let const z_'a: aff i32 x f32 = x_'a; // Error
+    // let const x{a}: aff i32 x f32 = (1, 2.0f32);
+    // let const y{a}: aff i32 x f32 = x{a};
+    // let const z{a}: aff i32 x f32 = x{a}; // Error
     // ()
     let a = life("'a");
     let_const("x", &a, &tuple_ty!(&i32, &f32), tuple!(1, 2.0f32),
@@ -79,9 +79,9 @@ fn gpu_memory_alloc_move_example() {
     // let z: i32 + gpu.global = x; // Error
     //
     //      desugared:
-    // let const x_'a: aff i32 @ gpu.global = copy_to_gpumem_'static<un i32>(5);
-    // let const y_'a: aff i32 @ gpu.global = x_'a;
-    // let const z_'a: aff i32 @ gpu.global = x_'a; // Error
+    // let const x{a}: aff i32 @ gpu.global = copy_to_gpumem{static}<un i32>(5);
+    // let const y{a}: aff i32 @ gpu.global = x{a};
+    // let const z{a}: aff i32 @ gpu.global = x{a}; // Error
     // ()
     use Memory::GpuGlobal;
 
@@ -99,15 +99,15 @@ fn gpu_memory_alloc_move_example() {
 #[rustfmt::skip]
 fn gpu_memory_alloc_borrow_example() {
     // let x: i32 @ gpu.global = copy_to_gpumem(5);
-    // let y: &'a mut gpu.global i32 = &mut x;
+    // let y: &a mut gpu.global i32 = &mut x;
     // let z: i32 @ gpu.global = x; // Error
     // // do_something(y);
     //
     //      desugared:
-    // let const x_'a: aff i32 @ gpu.global = copy_to_gpumem_'static<un i32>(5);
-    // let const y_'a: aff &'a mut gpu.global i32 = &mut x_'a;
-    // let const z_'a: aff i32 @ gpu.global = x_'a; // Error
-    // // do_something_'static(y_'a);
+    // let const x{a}: aff i32 @ gpu.global = copy_to_gpumem{static}<un i32>(5);
+    // let const y{a}: aff &a mut gpu.global i32 = &mut x{a};
+    // let const z{a}: aff i32 @ gpu.global = x{a}; // Error
+    // // do_something{static}(y{a});
     // ()
     use Memory::GpuGlobal;
 
@@ -125,12 +125,12 @@ fn gpu_memory_alloc_borrow_example() {
 #[test]
 #[rustfmt::skip]
 fn gpu_memory_alloc_immediate_borrow_example() {
-    // let x: &'a const gpu.global i32 = &const copy_to_gpumem(5);
+    // let x: &a const gpu.global i32 = &const copy_to_gpumem(5);
     //
     //      desugared:
-    // let const tmp{'a}: aff i32 @ gpu.global =
-    //      copy_to_gpumem{'static}<i32>(5);
-    // let const x{'a}: un &'a const gpu.global i32 = &const tmp{'a};
+    // let const tmp{a}: aff i32 @ gpu.global =
+    //      copy_to_gpumem{static}<i32>(5);
+    // let const x{a}: un &a const gpu.global i32 = &const tmp{a};
     // ()
     use Memory::GpuGlobal;
 
@@ -145,14 +145,14 @@ fn gpu_memory_alloc_immediate_borrow_example() {
 #[test]
 #[rustfmt::skip]
 fn mut_ref_movement_example() {
-    // let x: &'a mut gpu.global i32 = &mut g;
-    // let y: &'a mut gpu.global i32 = x;
-    // let z: &'a mut gpu.global i32 = x; // Error
+    // let x: &a mut gpu.global i32 = &mut g;
+    // let y: &a mut gpu.global i32 = x;
+    // let z: &a mut gpu.global i32 = x; // Error
     //
     //      desugared:
-    // let const x_'a: aff &'b mut gpu.global i32 = &mut g_'b;
-    // let const y_'a: aff &'b mut gpu.global i32 = x_'a;
-    // let const z_'a: aff &'b mut gpu.global i32 = x_'a; //Error
+    // let const x{a}: aff &b mut gpu.global i32 = &mut g{b};
+    // let const y{a}: aff &b mut gpu.global i32 = x{a};
+    // let const z{a}: aff &b mut gpu.global i32 = x{a}; //Error
     // ()
     use Memory::GpuGlobal;
 
@@ -172,14 +172,14 @@ fn mut_ref_movement_example() {
 #[test]
 #[rustfmt::skip]
 fn const_ref_copy_example() {
-    // let x: &'a const gpu.global i32 = &const g;
-    // let y: &'a const gpu.global i32 = x;
-    // let z: &'a const gpu.global i32 = x;
+    // let x: &a const gpu.global i32 = &const g;
+    // let y: &a const gpu.global i32 = x;
+    // let z: &a const gpu.global i32 = x;
     //
     //      desugared:
-    // let const x_'a: un &'b const gpu.global i32 = &const g_'b;
-    // let const y_'a: un &'b const gpu.global i32 = x_'a;
-    // let const z_'a: un &'b const gpu.global i32 = x_'a;
+    // let const x{a}: un &b const gpu.global i32 = &const g{b};
+    // let const y{a}: un &b const gpu.global i32 = x{a};
+    // let const z{a}: un &b const gpu.global i32 = x{a};
     // ()
     use Memory::GpuGlobal;
 
@@ -203,9 +203,9 @@ fn function_app_copy_example() {
     // let y: i32 = x;
     //
     //      desugared:
-    // let const x_'a: un i32 = 5;
-    // (f_'static(x_'a);
-    // let const y_'a: un i32 = x_'a;
+    // let const x{a}: un i32 = 5;
+    // (f{static}(x{a});
+    // let const y{a}: un i32 = x{a};
     // ())
     let a = life("a");
     let_const("x", &a, &i32, lit(&5),
@@ -225,9 +225,9 @@ fn function_app_move_example() {
     // let y: 3.i32 = x; // Error
     //
     //      desugared:
-    // let const x_'a: aff 3.i32 = [1, 2, 3];
-    // (f_'static(x_'a);
-    // let const y_'a: aff 3.i32 = x_'a; // Error
+    // let const x{a}: aff 3.i32 = [1, 2, 3];
+    // (f{static}(x{a});
+    // let const y{a}: aff 3.i32 = x{a}; // Error
     // ())
     let a = life("a");
     let_const("x", &a, &arr_ty(3, &i32), arr![1, 2, 3],
@@ -250,10 +250,10 @@ fn function_app_borrow_example() {
     // let mut y: 3.i32 = x;
     //
     //      desugared:
-    // let mut x{'a}: aff 3.i32 = [1, 2, 3];
+    // let mut x{a}: aff 3.i32 = [1, 2, 3];
     // //f: r:region => (&r mut 3.i32) ->[host] i32
-    // (f_'static<'a>(&mut x{'a});
-    // let mut y{'a}: aff 3.i32 = x{'a};
+    // (f{static}<a>(&mut x{a});
+    // let mut y{a}: aff 3.i32 = x{a};
     // ())
     let a = life("a");
     let_mut("x", &a, &arr_ty(3, &i32), arr![1, 2, 3],
@@ -275,15 +275,15 @@ fn function_app_move_attype_example() {
     // let y: 3.i32 @ gpu.global = x; // Error
     //
     //      desugared:
-    // let const tmp{'a}: 3.i32 = [1, 2, 3];
-    // let const x{'a}: aff 3.i32 @ gpu.global =
-    //      copy_to_gpumem{'static}<3.i32><'a>(&tmp{'a});
-    // (f{'static}(x{'a});
-    // let const y{'a}: aff 3.i32 @ gpu.global = x{'a}; // Error
+    // let const tmp{a}: 3.i32 = [1, 2, 3];
+    // let const x{a}: aff 3.i32 @ gpu.global =
+    //      copy_to_gpumem{static}<3.i32><a>(&tmp{a});
+    // (f{static}(x{a});
+    // let const y{a}: aff 3.i32 @ gpu.global = x{a}; // Error
     // ())
     use Memory::GpuGlobal;
 
-    let a = life("'a");
+    let a = life("a");
     let stat = life("'static");
     let_const("tmp", &a, &arr_ty(3, &i32), arr![1, 2, 3],
     let_const("x", &a, &at_ty(&arr_ty(3, &i32), GpuGlobal),
@@ -311,8 +311,8 @@ fn function_decl_no_params_example() {
     // }
     //
     //      desugared:
-    // fn{'host_f} host_f<>() ->[host] un () {
-    //   let const x{'a}: un i32 = 5;
+    // fn{host_f} host_f<>() ->[host] un () {
+    //   let const x{a}: un i32 = 5;
     //   ()
     // }
     use ExecLoc::Host;
@@ -332,7 +332,9 @@ fn function_decl_params_example() {
     // }
     //
     //      desugared:
-    // fn{gpu_thread_f} gpu_thread_f<>(p1{'gpu_thread_f}: un i32, p2{'gpu_thread_f}: un i32) ->[gpu.thread] () {
+    // fn{gpu_thread_f} gpu_thread_f<>(
+    //      p1{gpu_thread_f}: un i32, p2{gpu_thread_f}: un i32)
+    // ->[gpu.thread] () {
     //   let const x{gpu_thread_f}: un i32 = p1{gpu_thread_f} + p2{gpu_thread_f};
     //   ()
     // }
@@ -355,11 +357,11 @@ fn function_decl_reference_params_example() {
     // }
     //
     //      desugared:
-    // fn{gpu_group_f} gpu_group_f<r1: life, r2: life>(
-    //   p1{gpu_group_f}: &r1 const local i32,
-    //   p2{gpu_group_f}: &r2 mut gpu.global 3.i32
+    // fn{gpu_group_f} gpu_group_f<'r1: life, 'r2: life>(
+    //   p1{gpu_group_f}: &'r1 const local i32,
+    //   p2{gpu_group_f}: &'r2 mut gpu.global 3.i32
     // ) ->[gpu.group] () {
-    //   let const x{'a}: i32 = *p1{'a} + *p2{'a}[0];
+    //   let const x{gpu_group_f}: i32 = *p1{gpu_group_f} + *p2{gpu_group_f}[0];
     //   ()
     // }
     use ExecLoc::GpuGroup;
@@ -375,7 +377,7 @@ fn function_decl_reference_params_example() {
         &unit_ty,
 
         let_const("x", &fl, &i32,
-                  add(deref(ident("p1", &fl)), at(deref(ident("p2", &fl)), lit(&0))),
+            add(deref(ident("p1", &fl)), at(deref(ident("p2", &fl)), lit(&0))),
         unit())
     );
 }
