@@ -46,6 +46,7 @@ pub enum ExprKind {
     Assign(Box<Expr>, Box<Expr>),
     // Reference to memory underlying Ident
     Ref(Mutability, Box<Expr>),
+    DeRef(Box<Expr>),
     // Anonymous function which can capture its surrounding context
     Lambda(Vec<Ident>, ExecLoc, Box<Expr>),
     DepLambda(TyIdent, ExecLoc, Box<Expr>),

@@ -212,6 +212,10 @@ pub fn borr(m: Mutability, expr: Expr) -> Expr {
     Expr::new(ExprKind::Ref(m, Box::new(expr)))
 }
 
+pub fn deref(expr: Expr) -> Expr {
+    Expr::new(ExprKind::DeRef(Box::new(expr)))
+}
+
 pub fn fun<F: DescendLambda>(life: &Lifetime, f: F, exec: &ExecLoc) -> Expr {
     let (param_idents, body) = f.as_params_and_body(life);
     Expr::new(ExprKind::Lambda(param_idents, exec.clone(), Box::new(body)))
