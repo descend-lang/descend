@@ -375,7 +375,7 @@ fn function_decl_reference_params_example() {
         &unit_ty,
 
         let_const("x", &fl, &i32,
-                  add(deref(ident("p1", &fl)), deref(at(ident("p2", &fl), lit(&0)))),
+                  add(deref(ident("p1", &fl)), at(deref(ident("p2", &fl)), lit(&0))),
         unit())
     );
 }
