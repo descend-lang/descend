@@ -2,11 +2,11 @@
 pub enum Nat {
     Ident(String),
     Lit(u32),
-    Binary(BinOp, Box<Nat>, Box<Nat>),
+    Binary(BinOpNat, Box<Nat>, Box<Nat>),
 }
 
 #[derive(Debug, Clone)]
-pub enum BinOp {
+pub enum BinOpNat {
     Add,
     Sub,
     Mul,

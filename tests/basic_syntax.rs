@@ -3,7 +3,10 @@
 extern crate descend;
 
 use descend::dsl::*;
+use descend::types::ExecLoc;
+use descend::types::Lifetime;
 use descend::types::Memory;
+use descend::types::Memory::GpuGlobal;
 use descend::{arr, tuple, tuple_ty};
 
 #[test]
@@ -302,50 +305,77 @@ fn function_app_move_attype_example() {
 #[test]
 #[rustfmt::skip]
 fn function_decl_no_params_example() {
-    // TODO
     // fn host_f() ->[host] () {
     //   let x: i32 = 5;
     //   ()
     // }
     //
     //      desugared:
-    // fn{'a} host_f<>() ->[host] un () {
+    // fn{'host_f} host_f<>() ->[host] un () {
     //   let const x{'a}: un i32 = 5;
     //   ()
     // }
+    use ExecLoc::Host;
+    
+    fdecl("host_f", vec![], vec![], Host, &unit_ty,
+
+        let_const("x", &life("host_f"), &i32, lit(&5),
+        unit())
+    );
 }
 
 #[test]
 #[rustfmt::skip]
 fn function_decl_params_example() {
-    // TODO
     // fn gpu_thread_f(p1: i32, p2: i32) ->[gpu.thread] () {
     //   let x: i32 = p1 + p2;    
     // }
     //
     //      desugared:
-    // fn{'a} gpu_thread_f<>(p1{'a}: un i32, p2{'a}: un i32) ->[gpu.thread] () {
-    //   let const x{'a}: un i32 = p1{'a} + p2{'a};
+    // fn{gpu_thread_f} gpu_thread_f<>(p1{'gpu_thread_f}: un i32, p2{'gpu_thread_f}: un i32) ->[gpu.thread] () {
+    //   let const x{gpu_thread_f}: un i32 = p1{gpu_thread_f} + p2{gpu_thread_f};
     //   ()
     // }
+    use ExecLoc::GpuThread;
+
+    let fl = life("gpu_thread_f");
+    fdecl("gpu_thread_f", vec![], vec![("p1", &i32), ("p2", &i32)],
+          GpuThread, &unit_ty,
+
+        let_const("x", &fl, &i32, add(ident("p1", &fl), ident("p2", &fl)),
+        unit())
+    );
 }
 
 #[test]
 #[rustfmt::skip]
 fn function_decl_reference_params_example() {
-    // TODO
     // fn gpu_group_f(p1: &i32, p2: &mut gpu.global 3.i32) ->[gpu.group] () {
     //    let x: i32 = *p1 + *p2[0];
     // }
     //
     //      desugared:
-    // fn{'a} gpu_group_f<r1: region, r2: region>(
-    //   p1{'a}: &r1 const nondyn i32,
-    //   p2: &r2 mut gpu.global 3.i32
+    // fn{gpu_group_f} gpu_group_f<r1: life, r2: life>(
+    //   p1{gpu_group_f}: &r1 const local i32,
+    //   p2{gpu_group_f}: &r2 mut gpu.global 3.i32
     // ) ->[gpu.group] () {
     //   let const x{'a}: i32 = *p1{'a} + *p2{'a}[0];
     //   ()
     // }
-}
+    use ExecLoc::GpuGroup;
 
-// TODO TODO TODO Dereferencing
+    let fl = life("gpu_group_f");
+    fdecl("gpu_group_f",
+       vec![life_ident("r1"), life_ident("r2")],
+       vec![("p1",
+            &ref_const_ty(&Lifetime::Ident(life_ident("r1")), Memory::Local, &i32)),
+            ("p2",
+            &at_ty(&arr_ty(3, &i32), GpuGlobal))],
+        GpuGroup,
+        &unit_ty,
+
+        let_const("x", &fl, &i32,
+                  add(deref(ident("p1", &fl)), deref(at(ident("p2", &fl), lit(&0)))),
+        unit())
+    );
+}

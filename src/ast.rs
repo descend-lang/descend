@@ -7,8 +7,32 @@ pub struct Expr {
     pub ty: Option<Ty>,
 }
 
+impl Expr {
+    pub fn typed_expr(expr: ExprKind, ty: &Ty) -> Expr {
+        Expr {
+            expr,
+            ty: Some(ty.clone()),
+        }
+    }
+
+    pub fn new(expr: ExprKind) -> Expr {
+        Expr { expr, ty: None }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
+    // function declaration
+    // Identifer, Type parameter, Function parameter, execution location, body
+    FunDecl(
+        Lifetime,
+        Ident,
+        Vec<TyIdent>,
+        Vec<Expr>,
+        ExecLoc,
+        Ty,
+        Box<Expr>,
+    ),
     Ident(Ident),
     Lit(Lit),
     // e.g., [1, 2 + 3, 4]
@@ -33,7 +57,7 @@ pub enum ExprKind {
     FDepApp(Box<Expr>, FnTy),
     LDepApp(Box<Expr>, Lifetime),
     Unary(UnOp, Box<Expr>),
-    Binary(BinOp, Box<Expr>),
+    Binary(BinOp, Box<Expr>, Box<Expr>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),

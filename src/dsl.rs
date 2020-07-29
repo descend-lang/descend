@@ -22,37 +22,99 @@ pub fn life_id(name: &str) -> Lifetime {
     Lifetime::Ident(Lifetime::new_ident(name))
 }
 
+#[allow(non_upper_case_globals)]
+pub static static_l: Lifetime = Lifetime::Static;
+
 // Identifier
 pub fn ident(name: &str, life: &Lifetime) -> Expr {
-    exprn(ExprKind::Ident(Ident::new(name, life)))
+    Expr::new(ExprKind::Ident(Ident::new(name, life)))
+}
+
+// Function Declaration
+pub fn fdecl(
+    name: &str,
+    type_params: Vec<TyIdent>,
+    params: Vec<(&str, &Ty)>,
+    exec: ExecLoc,
+    ret_ty: &Ty,
+    body: Expr,
+) -> Expr {
+    let life = life(name);
+    let f_ty = fn_ty(
+        AffQual::Un,
+        params
+            .iter()
+            .map(|p: &(&str, &Ty)| -> Ty { p.1.clone() })
+            .collect(),
+        exec.clone(),
+        ret_ty.clone(),
+    );
+    Expr::typed_expr(
+        ExprKind::FunDecl(
+            life.clone(),
+            Ident::new(name, &static_l),
+            type_params,
+            param_list(&life, params),
+            exec,
+            ret_ty.clone(),
+            Box::new(body),
+        ),
+        &f_ty,
+    )
+}
+
+// creates a list of identifier expressions; every expression has a set type
+fn param_list(life: &Lifetime, params: Vec<(&str, &Ty)>) -> Vec<Expr> {
+    params
+        .into_iter()
+        .map(|p: (&str, &Ty)| -> Expr {
+            Expr::typed_expr(ExprKind::Ident(Ident::new(p.0, life)), &p.1)
+        })
+        .collect()
 }
 
 // Compound Expressions
 pub fn seq(e1: Expr, e2: Expr) -> Expr {
-    exprn(ExprKind::Seq(Box::new(e1), Box::new(e2)))
+    Expr::new(ExprKind::Seq(Box::new(e1), Box::new(e2)))
 }
 
 pub fn app(f: Expr, arg: Expr) -> Expr {
-    exprn(ExprKind::App(Box::new(f), Box::new(arg)))
+    Expr::new(ExprKind::App(Box::new(f), Box::new(arg)))
 }
 
 pub fn ddep_app(f: Expr, dt: &DataTy) -> Expr {
-    exprn(ExprKind::DDepApp(Box::new(f), dt.clone()))
+    Expr::new(ExprKind::DDepApp(Box::new(f), dt.clone()))
 }
 pub fn ndep_app(f: Expr, nat: &Nat) -> Expr {
-    exprn(ExprKind::NDepApp(Box::new(f), nat.clone()))
+    Expr::new(ExprKind::NDepApp(Box::new(f), nat.clone()))
 }
 pub fn adep_app(f: Expr, aff: &AffQual) -> Expr {
-    exprn(ExprKind::ADepApp(Box::new(f), aff.clone()))
+    Expr::new(ExprKind::ADepApp(Box::new(f), aff.clone()))
 }
 pub fn mdep_app(f: Expr, mem: &Memory) -> Expr {
-    exprn(ExprKind::MDepApp(Box::new(f), mem.clone()))
+    Expr::new(ExprKind::MDepApp(Box::new(f), mem.clone()))
 }
 pub fn fdep_app(f: Expr, fty: &FnTy) -> Expr {
-    exprn(ExprKind::FDepApp(Box::new(f), fty.clone()))
+    Expr::new(ExprKind::FDepApp(Box::new(f), fty.clone()))
 }
 pub fn ldep_app(f: Expr, l: &Lifetime) -> Expr {
-    exprn(ExprKind::LDepApp(Box::new(f), l.clone()))
+    Expr::new(ExprKind::LDepApp(Box::new(f), l.clone()))
+}
+
+pub fn add(lhs: Expr, rhs: Expr) -> Expr {
+    bin_op(BinOp::Add, lhs, rhs)
+}
+pub fn sub(lhs: Expr, rhs: Expr) -> Expr {
+    bin_op(BinOp::Sub, lhs, rhs)
+}
+pub fn mul(lhs: Expr, rhs: Expr) -> Expr {
+    bin_op(BinOp::Mul, lhs, rhs)
+}
+pub fn div(lhs: Expr, rhs: Expr) -> Expr {
+    bin_op(BinOp::Div, lhs, rhs)
+}
+pub fn bin_op(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
+    Expr::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)))
 }
 
 // Array constructor
@@ -113,8 +175,8 @@ macro_rules! tuple {
     }
 }
 
-pub fn at(i: Expr, arr: Expr) -> Expr {
-    exprn(ExprKind::Index(Box::new(i), Box::new(arr)))
+pub fn at(arr: Expr, i: Expr) -> Expr {
+    Expr::new(ExprKind::Index(Box::new(i), Box::new(arr)))
 }
 
 pub fn r#let(
@@ -125,7 +187,7 @@ pub fn r#let(
     value: Expr,
     r#in: Expr,
 ) -> Expr {
-    exprn(ExprKind::Let(
+    Expr::new(ExprKind::Let(
         m,
         Ident::new(id_name, life),
         ident_type.clone(),
@@ -143,16 +205,16 @@ pub fn let_mut(id_name: &str, life: &Lifetime, ident_type: &Ty, value: Expr, r#i
 }
 
 pub fn assign(lhs: Expr, rhs: Expr) -> Expr {
-    exprn(ExprKind::Assign(Box::new(lhs), Box::new(rhs)))
+    Expr::new(ExprKind::Assign(Box::new(lhs), Box::new(rhs)))
 }
 
 pub fn borr(m: Mutability, expr: Expr) -> Expr {
-    exprn(ExprKind::Ref(m, Box::new(expr)))
+    Expr::new(ExprKind::Ref(m, Box::new(expr)))
 }
 
 pub fn fun<F: DescendLambda>(life: &Lifetime, f: F, exec: &ExecLoc) -> Expr {
     let (param_idents, body) = f.as_params_and_body(life);
-    exprn(ExprKind::Lambda(param_idents, exec.clone(), Box::new(body)))
+    Expr::new(ExprKind::Lambda(param_idents, exec.clone(), Box::new(body)))
 }
 
 pub fn dt_fun<F>(df: F, exec: ExecLoc) -> Expr
@@ -161,7 +223,7 @@ where
 {
     let ty_id = DataTy::new_ident(&fresh_name("dt"));
     let expr = df(DataTy::Ident(ty_id.clone()));
-    exprn(ExprKind::DepLambda(ty_id, exec, Box::new(expr)))
+    Expr::new(ExprKind::DepLambda(ty_id, exec, Box::new(expr)))
 }
 
 pub trait DescendLambda {
@@ -203,10 +265,6 @@ impl DescendLambda for dyn Fn(Expr, Expr, Expr) -> Expr {
     }
 }
 
-fn exprn(expr: ExprKind) -> Expr {
-    Expr { expr, ty: None }
-}
-
 // Literals
 #[inline]
 pub fn unit() -> Expr {
@@ -214,7 +272,7 @@ pub fn unit() -> Expr {
 }
 
 pub fn lit<T: DescendLiteral>(l: &T) -> Expr {
-    exprn(l.as_lit())
+    Expr::new(l.as_lit())
 }
 
 pub trait DescendLiteral {
@@ -262,6 +320,19 @@ pub static f32: Ty = Ty::Data(DataTy::Un(CopyData::Scalar(ScalarData::F32)));
 pub static bool: Ty = Ty::Data(DataTy::Un(CopyData::Scalar(ScalarData::Bool)));
 #[allow(non_upper_case_globals)]
 pub static unit_ty: Ty = Ty::Data(DataTy::Un(CopyData::Scalar(ScalarData::Unit)));
+
+pub fn dt_ident(name: &str) -> TyIdent {
+    DataTy::new_ident(name)
+}
+pub fn life_ident(name: &str) -> TyIdent {
+    Lifetime::new_ident(name)
+}
+pub fn fn_ident(name: &str) -> TyIdent {
+    FnTy::new_ident(name)
+}
+pub fn aff_ident(name: &str) -> TyIdent {
+    AffQual::new_ident(name)
+}
 
 pub fn ref_const_ty(lf: &Lifetime, mem: Memory, dt: &Ty) -> Ty {
     let dty = extract_dty(dt);
@@ -315,6 +386,11 @@ macro_rules! tuple_ty {
             )
         )
     }
+}
+
+pub fn fn_ty(aff: AffQual, param_tys: Vec<Ty>, exec: ExecLoc, ret_ty: Ty) -> Ty {
+    let dty = extract_dty(&ret_ty);
+    Ty::QualFnTy(aff, FnTy::Fn(param_tys, exec, dty))
 }
 
 // Affinity Qualifiers

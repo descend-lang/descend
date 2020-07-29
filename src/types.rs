@@ -52,6 +52,7 @@ impl IdentType for AffQual {
 pub enum Lifetime {
     L(String),
     Ident(TyIdent),
+    Static,
 }
 
 impl IdentType for Lifetime {
@@ -68,6 +69,7 @@ pub enum Memory {
     CpuHeap,
     GpuGlobal,
     GpuShared,
+    Local,
     Ident(TyIdent),
 }
 
@@ -149,7 +151,7 @@ impl IdentType for DataTy {
 
 #[derive(Debug, Clone)]
 pub enum FnTy {
-    Fn(Box<Ty>, DataTy, ExecLoc),
+    Fn(Vec<Ty>, ExecLoc, DataTy),
     GenFn(TyIdent, Box<Ty>, ExecLoc),
     Ident(TyIdent),
 }
