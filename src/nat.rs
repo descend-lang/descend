@@ -1,11 +1,11 @@
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Nat {
     Ident(String),
     Lit(u32),
     Binary(BinOpNat, Box<Nat>, Box<Nat>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum BinOpNat {
     Add,
     Sub,

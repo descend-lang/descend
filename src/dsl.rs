@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::nat::*;
-use crate::types::*;
+use crate::ty::*;
 use crate::utils::fresh_name;
 
 //
@@ -43,7 +43,7 @@ pub fn fdecl(
     ret_ty: &DataTy,
     frame: &FrameExpr,
     exec: ExecLoc,
-    prov_rel: Vec<ProvRel>,
+    prv_rels: Vec<PrvRel>,
     body: Expr,
 ) -> GlobalFunDef {
     let f_ty = fn_dty(
@@ -63,8 +63,8 @@ pub fn fdecl(
         params: param_list(params),
         ret_ty: ret_ty.clone(),
         exec,
-        prov_rel,
-        body,
+        prv_rels,
+        body_expr: body,
         fun_ty: genf_ty,
     }
 }
@@ -370,7 +370,7 @@ pub fn at_dty(dt: &DataTy, mem: &Memory) -> DataTy {
 #[macro_export]
 macro_rules! tuple_dty {
     ($($v:expr),*) => {
-        $crate::types::DataTy::Tuple(
+        $crate::ty::DataTy::Tuple(
             vec![$($v.clone()),*]
         )
     }

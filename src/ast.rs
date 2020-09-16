@@ -1,5 +1,5 @@
 use super::nat::*;
-use super::types::*;
+use super::ty::*;
 
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -20,14 +20,14 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, Nat),
     Deref(Box<PlaceExpr>),
     Var(Ident),
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Place {
     Proj(Box<Place>, Nat),
     Var(Ident),
@@ -103,7 +103,7 @@ pub enum ExprKind {
     Unary(UnOp, Box<Expr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Ident {
     pub name: String,
 }
@@ -131,7 +131,7 @@ pub enum Mutability {
     Const,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum Ownership {
     Shrd,
     Uniq,

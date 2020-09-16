@@ -5,8 +5,8 @@ extern crate descend;
 use descend::ast::Ownership::{Shrd, Uniq};
 use descend::dsl::*;
 use descend::nat::*;
-use descend::types::Memory::{GpuGlobal, GpuShared};
-use descend::types::*;
+use descend::ty::Memory::{GpuGlobal, GpuShared};
+use descend::ty::*;
 use descend::{arr, tuple, tuple_dty};
 
 #[test]
@@ -71,9 +71,9 @@ fn tuple_move_example() {
 #[test]
 #[rustfmt::skip]
 fn gpu_memory_alloc_move_example() {
-    // let x: i32 + gpu.global = copy_to_gpumem(5);
-    // let y: i32 + gpu.global = x;
-    // let z: i32 + gpu.global = x; // Error
+    // let x: i32 @ gpu.global = copy_to_gpumem(5);
+    // let y: i32 @ gpu.global = x;
+    // let z: i32 @ gpu.global = x; // Error
     //
     //      desugared:
     // let const x: i32 @ gpu.global = copy_to_gpumem<i32>(5);
@@ -173,7 +173,7 @@ fn shrd_ref_copy_example() {
     //
     //      desugared:
     // let const x: &r shrd gpu.global i32 = &r shrd g;
-    // let const y: &r shrd gpu.global i32 = x};
+    // let const y: &r shrd gpu.global i32 = x;
     // let const z: &r shrd gpu.global i32 = x;
     // ()
     use Memory::GpuGlobal;
@@ -308,7 +308,7 @@ fn function_decl_no_params_example() {
     // }
     use ExecLoc::CpuThread;
     
-    fdecl("host_f", vec![], vec![], &unit_dty, &FrameExpr::FrTy(FrameTyping::Nil),
+    fdecl("host_f", vec![], vec![], &unit_dty, &FrameExpr::FrTy(vec![]),
           CpuThread, vec![],
 
           let_const("x", &i32, lit(&5),
@@ -331,7 +331,7 @@ fn function_decl_params_example() {
     use ExecLoc::GpuThread;
 
     fdecl("gpu_thread_f", vec![], vec![("p1", &i32), ("p2", &i32)],
-          &unit_dty, &FrameExpr::FrTy(FrameTyping::Nil), GpuThread, vec![],
+          &unit_dty, &FrameExpr::FrTy(vec![]), GpuThread, vec![],
 
           let_const("x", &i32, add(var("p1"), var("p2")),
                   unit())
@@ -365,7 +365,7 @@ fn function_decl_reference_params_example() {
                 &ref_dty(&Provenance::Ident(r2), Uniq, &GpuGlobal,
                          &at_dty(&arr_dty(3, &i32), &GpuGlobal)))],
           &unit_dty,
-          &FrameExpr::FrTy(FrameTyping::Nil),
+          &FrameExpr::FrTy(vec![]),
           GpuGroup,
           vec![],
 
