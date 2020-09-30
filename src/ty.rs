@@ -206,15 +206,30 @@ pub type TypingCtx = Vec<FrameTyping>;
 // Provenance Relation: varrho_1:varrho_2
 pub type PrvRel = (TyIdent, TyIdent);
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum KindingCtxEntry {
     Ident(TyIdent),
-    ProvRel(PrvRel),
+    PrvRel(PrvRel),
 }
+// impl KindingCtxEntry {
+//     fn is_prv_rel(entry: &KindingCtxEntry) -> bool {
+//         match entry {
+//             KindingCtxEntry::PrvRel(_) => true,
+//             KindingCtxEntry::Ident(_) => false,
+//         }
+//     }
+//
+//     // fn is_ty_ident(&self) -> bool {
+//     //     match self {
+//     //         KindingCtxEntry::Ident(_) => true,
+//     //         KindingCtxEntry::ProvRel(_) => false,
+//     //     }
+//     // }
+// }
+
 pub struct KindCtx {
     vec: Vec<KindingCtxEntry>,
 }
-
 impl KindCtx {
     pub fn new() -> Self {
         KindCtx { vec: Vec::new() }
@@ -232,7 +247,7 @@ impl KindCtx {
 
     pub fn append_prv_rels(mut self, prv_rels: &Vec<PrvRel>) -> Self {
         for prv_rel in prv_rels {
-            self.vec.push(KindingCtxEntry::ProvRel(prv_rel.clone()));
+            self.vec.push(KindingCtxEntry::PrvRel(prv_rel.clone()));
         }
         KindCtx { vec: self.vec }
     }
@@ -252,6 +267,19 @@ impl KindCtx {
                 }
             })
             .collect()
+    }
+
+    pub fn outlives(&self, long: &TyIdent, short: &TyIdent) -> Result<(), String> {
+        use KindingCtxEntry::PrvRel;
+
+        if let Some(_) = self.vec.iter().find(|&entry| match entry {
+            PrvRel((l, s)) => l == long && s == short,
+            _ => false,
+        }) {
+            Ok(())
+        } else {
+            Err(format!("{} is not defined as outliving {}.", long, short))
+        }
     }
 }
 

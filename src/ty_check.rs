@@ -6,7 +6,10 @@ use super::ty::*;
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------
 //      ⊢ Σ
-pub fn ty_check(mut gl_ctx: GlobalCtx) -> Result<GlobalCtx, String> {
+
+type ErrMsg = String;
+
+pub fn ty_check(mut gl_ctx: GlobalCtx) -> Result<GlobalCtx, ErrMsg> {
     let (typed_gl_ctx, errs): (Vec<_>, Vec<_>) = gl_ctx
         .iter()
         .map(|gl_f| ty_check_global_fun_def(&gl_ctx, gl_f))
@@ -20,7 +23,7 @@ pub fn ty_check(mut gl_ctx: GlobalCtx) -> Result<GlobalCtx, String> {
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
-fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &GlobalFunDef) -> Result<GlobalFunDef, String> {
+fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &GlobalFunDef) -> Result<GlobalFunDef, ErrMsg> {
     let GlobalFunDef {
         name,
         ty_idents,
@@ -88,7 +91,7 @@ fn prv_rels_use_declared_idents(
 
 // TODO find out if Gamma is always correct by construction (similarly to Delta), also all 3 combined
 // e has type τ under Σ, Δ, and Γ, producing output context Γ
-// Σ; Δ; Γ ⊢ e : τ ⇒ Γ′
+// Σ; Δ; Γ ⊢ e :^exec τ ⇒ Γ′
 fn ty_check_expr(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
@@ -162,7 +165,7 @@ fn subty_check(
 
             // TODO find out why this is important (techniqually),
             //  and return a proper error if suitable
-            assert!(res_forw == res_back);
+            assert_eq!(res_forw, res_back);
             Ok(res_back)
         }
         // Δ; Γ ⊢ (τ1, ..., τn) ≲ (τ1′, ..., τn′) ⇒ Γn
@@ -182,7 +185,7 @@ fn subty_check(
             subty_check(kind_ctx, ty_ctx, sub, &Data(sup.clone()))
         }
         // Δ; Γ ⊢ τ1 ≲ τ3 ⇒ Γ''
-        // TODO case missing. needed?
+        // TODO case missing. is this needed?
         _ => panic!("Good error message not implemented yet."),
     }
 }
@@ -193,8 +196,36 @@ fn outlives(
     ty_ctx: &TypingCtx,
     longer_prv: &Provenance,
     shorter_prv: &Provenance,
-) -> Result<TypingCtx, String> {
-    panic!("Not yet implemented.")
+) -> Result<TypingCtx, ErrMsg> {
+    use Provenance::*;
+
+    match (longer_prv, shorter_prv) {
+        // Δ; Γ ⊢ ρ :> ρ ⇒ Γ
+        // OL-Refl
+        (l, s) if l == s => Ok(ty_ctx.clone()),
+        // Δ; Γ ⊢ \varρ1 :> \varρ2 ⇒ Γ
+        // OL-AbstractProvenances
+        (Ident(l), Ident(s)) => {
+            // TODO think about this: Oxide also checks that l and s are declared idents in the
+            //  kinding context. However, that should always be the case for a well-formed kinding
+            //  context. See ty_check_global_fun_def.
+            kind_ctx.outlives(l, s)?;
+            Ok(ty_ctx.clone())
+        }
+        // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
+        // OL-LocalProvenances
+        (Value(l), Value(s)) => {
+            // Oxide paper says variable of reference type should be place, but general places do
+            //  not exist in ty_ctx.
+
+            // CHECK:
+            //    NOT CLEAR WHY a. IS NECESSARY
+            // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan
+            //  dereferencing the variable for any provenance in ty_ctx.
+            // b. r1 occurs before r2 in Gamma (left to right)
+        }
+        _ => panic!("Good error message not implemented yet."),
+    }
 }
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
