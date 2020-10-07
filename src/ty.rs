@@ -110,8 +110,8 @@ pub enum ExecLoc {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Loan {
-    place_expr: PlaceExpr,
-    own_qual: Ownership,
+    pub place_expr: PlaceExpr,
+    pub own_qual: Ownership,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -154,14 +154,14 @@ pub enum Ty {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct IdentTyped {
-    ident: Ident,
-    ty: Ty,
+    pub ident: Ident,
+    pub ty: Ty,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct PrvMapping {
-    prv: String,
-    loans: Vec<Loan>,
+    pub prv: String,
+    pub loans: Vec<Loan>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

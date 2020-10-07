@@ -1,5 +1,6 @@
 use super::ast::*;
 use super::ty::*;
+use std::borrow::Borrow;
 
 //TODO call this Program or something comparable?
 
@@ -222,7 +223,66 @@ fn outlives(
             //    NOT CLEAR WHY a. IS NECESSARY
             // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan
             //  dereferencing the variable for any provenance in ty_ctx.
+            let existing_deref_loan = ty_ctx
+                .iter()
+                .flatten()
+                .filter_map(|fe| match fe {
+                    FrameEntry::Var(id_typed) => match &id_typed.ty {
+                        Ty::Data(DataTy::Ref(Value(prv), _, _, _)) if prv == l => {
+                            Some(id_typed.clone())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .find(|id_typed| {
+                    ty_ctx.iter().flatten().find(|fe| match fe {
+                        FrameEntry::Prov(prv_mapping) => {
+                            for loan in prv_mapping.loans.iter() {
+                                if let Loan {
+                                    place_expr: PlaceExpr::Deref(pl_expr),
+                                    own_qual,
+                                } = loan
+                                {
+                                    if let PlaceExpr::Var(ident) = *pl_expr.clone() {
+                                        if ident == id_typed.ident {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                            false
+                        }
+                        _ => false,
+                    });
+                    true
+                });
+
+            if existing_deref_loan.is_some() {
+                // TODO better error msg
+                return Err(String::from("first condition violated"));
+            }
+
             // b. r1 occurs before r2 in Gamma (left to right)
+            let mut found_long = false;
+            for prv in ty_ctx.iter().flatten().filter_map(|fe| {
+                if let FrameEntry::Prov(prov_mapping) = fe {
+                    Some(prov_mapping.prv.clone())
+                } else {
+                    None
+                }
+            }) {
+                if &prv == l {
+                    found_long = true;
+                } else if &prv == s && !found_long {
+                    return Err(format!("{} lives longer than {}.", s, l));
+                }
+            }
+
+            // Now r2 is theoretically allowed to point to loans in r1
+            // TODO substitute loan set of r2 with unified loan sets of r2 and r1
+
+            panic!("")
         }
         _ => panic!("Good error message not implemented yet."),
     }
