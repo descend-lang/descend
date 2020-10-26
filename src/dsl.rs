@@ -21,8 +21,8 @@ pub fn prv_id(name: &str) -> Provenance {
     Provenance::Ident(Provenance::new_ident(name))
 }
 
-#[allow(non_upper_case_globals)]
-pub static static_l: Provenance = Provenance::Static;
+// #[allow(non_upper_case_globals)]
+// pub static static_l: Provenance = Provenance::Static;
 
 // Variable
 pub fn var(name: &str) -> Expr {
@@ -297,7 +297,7 @@ pub trait DescendLiteral {
 
 impl DescendLiteral for i32 {
     fn as_lit(&self) -> ExprKind {
-        ExprKind::Lit(Lit::Integer(*self))
+        ExprKind::Lit(Lit::Int(*self))
     }
 }
 
@@ -316,12 +316,6 @@ impl DescendLiteral for bool {
 impl DescendLiteral for () {
     fn as_lit(&self) -> ExprKind {
         ExprKind::Lit(Lit::Unit)
-    }
-}
-
-impl DescendLiteral for String {
-    fn as_lit(&self) -> ExprKind {
-        ExprKind::Lit(Lit::String(self.clone()))
     }
 }
 

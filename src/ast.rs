@@ -20,23 +20,21 @@ impl Expr {
     }
 }
 
+pub type Path = Vec<Nat>;
+pub type Place = (Ident, Path);
+pub type TypedPlace = (Place, DataTy);
+
+pub enum PlaceCtx {
+    Proj(Box<PlaceCtx>, Nat),
+    Deref(Box<PlaceCtx>),
+    Hole,
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, Nat),
     Deref(Box<PlaceExpr>),
     Var(Ident),
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Place {
-    Proj(Box<Place>, Nat),
-    Var(Ident),
-}
-
-pub enum PlaceContext {
-    Proj(Box<PlaceContext>, Nat),
-    Deref(Box<PlaceContext>),
-    Hole,
 }
 
 impl PlaceExpr {
@@ -48,20 +46,28 @@ impl PlaceExpr {
         }
     }
 
-    pub fn to_place_context_and_largest_place(&self) -> (PlaceContext, Place) {
+    pub fn to_pl_ctx_and_most_specif_pl(&self) -> (PlaceCtx, Place) {
         match self {
             PlaceExpr::Deref(inner_ple) => {
-                let (pl_ctx, pl) = inner_ple.to_place_context_and_largest_place();
-                (PlaceContext::Deref(Box::new(pl_ctx)), pl)
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (PlaceCtx::Deref(Box::new(pl_ctx)), pl)
             }
             PlaceExpr::Proj(inner_ple, n) => {
-                let (pl_ctx, pl) = inner_ple.to_place_context_and_largest_place();
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
-                    PlaceContext::Hole => (pl_ctx, Place::Proj(Box::new(pl), n.clone())),
-                    _ => (PlaceContext::Proj(Box::new(pl_ctx), n.clone()), pl),
+                    PlaceCtx::Hole => (pl_ctx, (pl.0, vec![n.clone()])),
+                    _ => (PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
                 }
             }
-            PlaceExpr::Var(ident) => (PlaceContext::Hole, Place::Var(ident.clone())),
+            PlaceExpr::Var(ident) => (PlaceCtx::Hole, (ident.clone(), vec![])),
+        }
+    }
+
+    pub fn equiv(&self, place: &Place) -> bool {
+        if let (PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
+            &pl == place
+        } else {
+            false
         }
     }
 }
@@ -77,7 +83,8 @@ pub enum ExprKind {
     RefIndex(Provenance, Ownership, PlaceExpr, Nat),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
-    // Variable declaration and assignment
+    // Variable declaration, assignment and sequencing
+    // let x: dty = e1; e2
     Let(Mutability, Ident, DataTy, Box<Expr>, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),
@@ -120,9 +127,8 @@ impl Ident {
 pub enum Lit {
     Unit,
     Bool(bool),
-    Integer(i32),
+    Int(i32),
     Float(f32),
-    String(String),
 }
 
 #[derive(Debug, Copy, Clone)]
