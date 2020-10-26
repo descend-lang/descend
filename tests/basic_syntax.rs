@@ -7,6 +7,7 @@ use descend::dsl::*;
 use descend::nat::*;
 use descend::ty::Memory::{GpuGlobal, GpuShared};
 use descend::ty::*;
+use descend::ty_check::{ty_check, ty_check_expr};
 use descend::{arr, tuple, tuple_dty};
 
 #[test]
@@ -21,31 +22,35 @@ fn scalar_copy_example() {
     // let const y: i32 = x;
     // let const z: i32 = x;
     // ()
-    let _e =
+    let mut e =
         let_const("x", &i32, lit(&5),
         let_const("y", &i32, var("x"),
                   let_const("z", &i32, var("x"),
                             unit())));
+    
+    let gl_ctx = vec![];
+    let kind_ctx = KindCtx::new();
+    let ty_ctx = TypingCtx::new();
+    let ty_res = ty_check_expr(&gl_ctx, &kind_ctx, &ty_ctx, &mut e);
+    assert!(ty_res.is_ok(), "Scalar values should be copyable.")
 }
 
 #[test]
 #[rustfmt::skip]
-fn array_move_example() {
+fn array_copy_example() {
     // let x: 5.i32 = [1, 2, 3, 4, 5];
     // let y: 5.i32 = x;
-    // let z: 5.i32 = x; // Error
+    // let z: 5.i32 = x;
     //
     //      desugared:
     // let const x: 5.i32 = [1, 2, 3, 4, 5];
     // let const y: 5.i32 = x;
-    // let const z: 5.i32 = x; // Error
+    // let const z: 5.i32 = x;
     // ()
     let_const("x", &arr_dty(5, &i32), arr![1, 2, 3, 4, 5],
     let_const("y", &arr_dty(5, &i32), var("x"),
               let_const("z", &arr_dty(5, &i32), var("x"),
                         unit())));
-    
-    panic!("This shouldn't type check.")
 }
 
 #[test]
