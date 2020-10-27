@@ -3,7 +3,7 @@ mod subty_check;
 
 use crate::ast::Ownership;
 use crate::ast::*;
-use crate::ty::DataTy::Scalar;
+use crate::nat::*;
 use crate::ty::*;
 use borrow_check::borrowable;
 use subty_check::subty_check;
@@ -103,29 +103,25 @@ pub fn ty_check_expr(
     expr: &mut Expr,
 ) -> Result<(Ty, TypingCtx), String> {
     match &mut expr.expr {
-        // Move or copy depends on type.
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
-            borrowable(
-                kind_ctx,
-                ty_ctx,
-                vec![].as_slice(),
-                Ownership::Uniq,
-                pl_expr,
-            )?;
-            match ty_ctx.type_place(&pl_expr.to_pl_ctx_and_most_specif_pl().1) {
-                // TODO continue!!!
-                _ => panic!("todo"),
+            let place = pl_expr.to_place().unwrap();
+            let pl_ty = ty_ctx.type_place(&place)?;
+            if let Ty::Data(pl_dty) = pl_ty {
+                let (own, new_ty_ctx) = if pl_dty.copyable() {
+                    // TODO check whether the shared type checking of a place expr will be needed
+                    (Ownership::Shrd, ty_ctx.clone())
+                } else {
+                    (Ownership::Uniq, ty_ctx.kill_place(&place, &pl_dty))
+                };
+                borrowable(kind_ctx, ty_ctx, vec![].as_slice(), own, pl_expr)?;
+                Ok((Ty::Data(pl_dty), new_ty_ctx))
+            } else {
+                Err(String::from("This place has been moved out before."))
             }
         }
-        // Must be copyable because reference is included in path.
         ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
-            borrowable(
-                kind_ctx,
-                ty_ctx,
-                vec![].as_slice(),
-                Ownership::Shrd,
-                pl_expr,
-            )?;
+            let own = Ownership::Shrd;
+            borrowable(kind_ctx, ty_ctx, vec![].as_slice(), own, pl_expr)?;
             if let Ok(Ty::Data(dty)) =
                 ty_check_place_expr_under_own(kind_ctx, ty_ctx, Ownership::Shrd, pl_expr)
             {
@@ -142,13 +138,12 @@ pub fn ty_check_expr(
         ExprKind::Let(mutable, ident, dty, ref mut e1, ref mut e2) => {
             let (ty_e1, ty_ctx_e1) = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, e1)?;
             let ty_ctx_sub = subty_check(kind_ctx, &ty_ctx_e1, &ty_e1, &Ty::Data(dty.clone()))?;
-            let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(IdentTyped {
-                ident: ident.clone(),
-                ty: Ty::Data(dty.clone()),
-            });
+            let ident_with_annotated_ty = IdentTyped::new(ident.clone(), Ty::Data(dty.clone()));
+            let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
             // TODO gc_loans
-            // TODO check that x is dead, WHY?! copy types wouldn't be dead?
-            //  Yes they would, because the derivation needs to call T-Drop then.
+            // TODO check that x is dead,
+            //  the derivation needs to call T-Drop in case of copy types then.
+            //  Equivalent to saying that the variable must be used.
             let (ty_e2, ty_ctx_e2) = ty_check_expr(gl_ctx, kind_ctx, &ty_ctx_with_ident, e2)?;
             Ok((ty_e2, ty_ctx_e2))
         }
@@ -161,7 +156,34 @@ pub fn ty_check_expr(
             };
             Ok((Ty::Data(DataTy::Scalar(scalar_data)), ty_ctx.clone()))
         }
-        _ => panic!("Impl missing"),
+        ExprKind::Array(elems) => {
+            assert!(elems.len() > 0);
+            let mut tmp_ty_ctx = ty_ctx.clone();
+            let mut elem_tys = vec![];
+            for elem in elems {
+                let (elem_ty, res_ty_ctx) = ty_check_expr(gl_ctx, kind_ctx, &tmp_ty_ctx, elem)?;
+                tmp_ty_ctx = res_ty_ctx;
+                elem_tys.push(elem_ty);
+            }
+            if let Ty::Data(arr_elem_dty) = elem_tys[0].clone() {
+                if elem_tys.iter().any(|elem_ty| &elem_tys[0] != elem_ty) {
+                    Err(String::from(
+                        "Not all provided elements have the same type.",
+                    ))
+                } else {
+                    Ok((
+                        Ty::Data(DataTy::Array(
+                            Nat::Lit(elem_tys.len()),
+                            Box::new(arr_elem_dty),
+                        )),
+                        tmp_ty_ctx,
+                    ))
+                }
+            } else {
+                panic!("Array elements marked as dead")
+            }
+        }
+        e => panic!(format!("Impl missing for: {}", e)),
     }
 }
 

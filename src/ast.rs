@@ -1,5 +1,6 @@
 use super::nat::*;
 use super::ty::*;
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -14,14 +15,39 @@ impl Expr {
             ty: Some(ty.clone()),
         }
     }
-
     pub fn new(expr: ExprKind) -> Expr {
         Expr { expr, ty: None }
     }
 }
 
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", format!("{}", self.expr))
+    }
+}
+
 pub type Path = Vec<Nat>;
-pub type Place = (Ident, Path);
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct Place {
+    pub ident: Ident,
+    pub path: Path,
+}
+impl Place {
+    pub fn new(ident: Ident, path: Path) -> Self {
+        Place { ident, path }
+    }
+
+    pub fn prefix_of(&self, other: &Self) -> bool {
+        if self.ident == other.ident {
+            self.path
+                .iter()
+                .zip(other.path.iter())
+                .all(|(pe, peo)| pe == peo)
+        } else {
+            false
+        }
+    }
+}
 pub type TypedPlace = (Place, DataTy);
 
 pub enum PlaceCtx {
@@ -55,11 +81,19 @@ impl PlaceExpr {
             PlaceExpr::Proj(inner_ple, n) => {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
-                    PlaceCtx::Hole => (pl_ctx, (pl.0, vec![n.clone()])),
+                    PlaceCtx::Hole => (pl_ctx, Place::new(pl.ident, vec![n.clone()])),
                     _ => (PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
                 }
             }
-            PlaceExpr::Var(ident) => (PlaceCtx::Hole, (ident.clone(), vec![])),
+            PlaceExpr::Var(ident) => (PlaceCtx::Hole, Place::new(ident.clone(), vec![])),
+        }
+    }
+
+    pub fn to_place(&self) -> Option<Place> {
+        if self.is_place() {
+            Some(self.to_pl_ctx_and_most_specif_pl().1)
+        } else {
+            None
         }
     }
 
@@ -69,6 +103,17 @@ impl PlaceExpr {
         } else {
             false
         }
+    }
+}
+
+impl fmt::Display for PlaceExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Proj(pl_expr, n) => format!("{}.{}", pl_expr, n),
+            Self::Deref(pl_expr) => format!("{}", pl_expr),
+            Self::Var(ident) => format!("{}", ident),
+        };
+        write!(f, "{}", str)
     }
 }
 
@@ -110,6 +155,32 @@ pub enum ExprKind {
     Unary(UnOp, Box<Expr>),
 }
 
+impl fmt::Display for ExprKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Lit(l) => format!("{}", l),
+            Self::PlaceExpr(pl_expr) => format!("{}", pl_expr),
+            Self::Index(pl_expr, n) => format!("{}[{}]", pl_expr, n),
+            Self::Ref(prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
+            Self::RefIndex(prv, own, pl_expr, n) => format!("&{} {} {}[{}]", prv, own, pl_expr, n),
+            Self::Assign(pl_expr, e) => format!("{} = {}", pl_expr, e),
+            Self::Let(mutab, ident, dty, e1, e2) => {
+                format!("let {} {}: {} = {}; {}", mutab, ident, dty, e1, e2)
+            }
+            Self::Seq(e1, e2) => format!("{}; {}", e1, e2),
+            /*            Self::Lambda(params, exec, dty, e) => {
+                format!("|{}| [{}]-> {} {{ {} }}", params, exec, dty, e)
+            }
+            Self::DepLambda(ty_ident, exec, e) => {
+                format!("<{}> [{}]-> {{ {} }}", ty_ident, exec, e)
+            }
+            Self::App(f, arg) => format!("{}({})", f, arg),*/
+            _ => panic!("not yet implemented"),
+        };
+        write!(f, "{}", str)
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Ident {
     pub name: String,
@@ -123,6 +194,12 @@ impl Ident {
     }
 }
 
+impl fmt::Display for Ident {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Lit {
     Unit,
@@ -131,10 +208,32 @@ pub enum Lit {
     Float(f32),
 }
 
+impl fmt::Display for Lit {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Unit => String::from("()"),
+            Self::Bool(b) => format!("{}", b),
+            Self::Int(i) => format!("{}", i),
+            Self::Float(f) => format!("{}", f),
+        };
+        write!(f, "{}", str)
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum Mutability {
-    Mut,
     Const,
+    Mut,
+}
+
+impl fmt::Display for Mutability {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Const => "const",
+            Self::Mut => "mut",
+        };
+        write!(f, "{}", str)
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -143,11 +242,32 @@ pub enum Ownership {
     Uniq,
 }
 
+impl fmt::Display for Ownership {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Shrd => "shrd",
+            Self::Uniq => "uniq",
+        };
+        write!(f, "{}", str)
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum UnOp {
     Deref,
     Not,
     Neg,
+}
+
+impl fmt::Display for UnOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Deref => "*",
+            Self::Not => "!",
+            Self::Neg => "-",
+        };
+        write!(f, "{}", str)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -165,4 +285,25 @@ pub enum BinOp {
     Gt,
     Ge,
     Neq,
+}
+
+impl fmt::Display for BinOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Mod => "%",
+            Self::And => "&&",
+            Self::Or => "||",
+            Self::Eq => "=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+            Self::Neq => "!=",
+        };
+        write!(f, "{}", str)
+    }
 }

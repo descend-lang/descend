@@ -1,3 +1,4 @@
+use crate::ast::Lit::Unit;
 use crate::ast::*;
 use crate::nat::*;
 use crate::ty::*;
@@ -284,7 +285,7 @@ impl DescendLambda for dyn Fn(Expr, Expr, Expr) -> Expr {
 // Literals
 #[inline]
 pub fn unit() -> Expr {
-    tuple!()
+    Expr::new(ExprKind::Lit(Unit))
 }
 
 pub fn lit<T: DescendLiteral>(l: &T) -> Expr {
@@ -319,18 +320,6 @@ impl DescendLiteral for () {
     }
 }
 
-//
-// Types
-//
-#[allow(non_upper_case_globals)]
-pub static i32: DataTy = DataTy::Scalar(ScalarData::I32);
-#[allow(non_upper_case_globals)]
-pub static f32: DataTy = DataTy::Scalar(ScalarData::F32);
-#[allow(non_upper_case_globals)]
-pub static bool: DataTy = DataTy::Scalar(ScalarData::Bool);
-#[allow(non_upper_case_globals)]
-pub static unit_dty: DataTy = DataTy::Scalar(ScalarData::Unit);
-
 pub fn dt_ident(name: &str) -> TyIdent {
     DataTy::new_ident(name)
 }
@@ -343,7 +332,7 @@ pub fn ref_dty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &DataTy) -> D
     DataTy::Ref(prv.clone(), own, mem.clone(), Box::new(dt.clone()))
 }
 
-pub fn arr_dty(size: u32, dt: &DataTy) -> DataTy {
+pub fn arr_dty(size: usize, dt: &DataTy) -> DataTy {
     DataTy::Array(Nat::Lit(size), Box::new(dt.clone()))
 }
 
@@ -413,12 +402,24 @@ pub fn multi_arg_genfn_ty(
     }
 }
 
+//
+// Types
+//
+#[allow(non_upper_case_globals)]
+pub static i32_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::I32));
+#[allow(non_upper_case_globals)]
+pub static f32_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::F32));
+#[allow(non_upper_case_globals)]
+pub static bool_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::Bool));
+#[allow(non_upper_case_globals)]
+pub static unit_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::Unit));
+
 // Data Types
 #[allow(non_upper_case_globals)]
-pub static i32_dt: DataTy = DataTy::Scalar(ScalarData::I32);
+pub static i32: DataTy = DataTy::Scalar(ScalarData::I32);
 #[allow(non_upper_case_globals)]
-pub static f32_dt: DataTy = DataTy::Scalar(ScalarData::F32);
+pub static f32: DataTy = DataTy::Scalar(ScalarData::F32);
 #[allow(non_upper_case_globals)]
-pub static bool_dt: DataTy = DataTy::Scalar(ScalarData::Bool);
+pub static bool: DataTy = DataTy::Scalar(ScalarData::Bool);
 #[allow(non_upper_case_globals)]
-pub static unit_dt: DataTy = DataTy::Scalar(ScalarData::Unit);
+pub static unit_dty: DataTy = DataTy::Scalar(ScalarData::Unit);

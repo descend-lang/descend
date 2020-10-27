@@ -78,6 +78,16 @@ impl Kinded for Provenance {
     }
 }
 
+impl fmt::Display for Provenance {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Value(name) => name.clone(),
+            Self::Ident(ty_ident) => format!("{}", ty_ident),
+        };
+        write!(f, "{}", str)
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Memory {
     CpuStack,
@@ -160,6 +170,13 @@ impl Kinded for DataTy {
     }
 }
 
+impl fmt::Display for DataTy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        panic!("not yet implemented")
+        //        write!(f, "{}:{}", self.name, self.kind)
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum DeadTy {
     Tuple(Vec<DeadTy>),
@@ -177,6 +194,12 @@ pub enum Ty {
 pub struct IdentTyped {
     pub ident: Ident,
     pub ty: Ty,
+}
+
+impl IdentTyped {
+    pub fn new(ident: Ident, ty: Ty) -> Self {
+        IdentTyped { ident, ty }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -339,8 +362,8 @@ impl TypingCtx {
 
     fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<(Place, DataTy)> {
         fn proj(mut pl: Place, idx: Nat) -> Place {
-            pl.1.push(idx);
-            (pl.0, pl.1)
+            pl.path.push(idx);
+            pl
         }
 
         fn explode(pl: Place, dty: DataTy) -> Vec<(Place, DataTy)> {
@@ -357,22 +380,20 @@ impl TypingCtx {
                 | Ident(_) => vec![(pl, dty.clone())],
                 Tuple(dtys) => {
                     let mut place_frame = vec![(pl.clone(), dty.clone())];
-                    let mut index = 0;
-                    for proj_dty in dtys.iter() {
+                    for (index, proj_dty) in dtys.iter().enumerate() {
                         let mut exploded_index =
                             explode(proj(pl.clone(), Lit(index)), proj_dty.clone());
                         place_frame.append(&mut exploded_index);
-                        index += 1;
                     }
                     place_frame
                 }
             }
         }
 
-        explode((ident.clone(), vec![]), dty.clone())
+        explode(Place::new(ident.clone(), vec![]), dty.clone())
     }
 
-    pub fn type_place(&self, place: &Place) -> Option<Ty> {
+    pub fn type_place(&self, place: &Place) -> Result<Ty, String> {
         fn proj_dty(ty: &Ty, path: &Path) -> Ty {
             let mut res_ty = ty.clone();
             for n in path {
@@ -386,12 +407,19 @@ impl TypingCtx {
             res_ty
         }
 
-        let (ident, path) = place;
-        let ident_ty = self
+        let ident_ty = match self
             .get_idents_typed()
             .into_iter()
-            .find(|id_ty| &id_ty.ident == ident)?;
-        Some(proj_dty(&ident_ty.ty, &path))
+            .find(|id_ty| id_ty.ident == place.ident)
+        {
+            Some(id) => id,
+            None => return Err(format!("Identifier: {} not found in context.", place.ident)),
+        };
+        Ok(proj_dty(&ident_ty.ty, &place.path))
+    }
+
+    pub fn kill_place(&self, pl: &Place, dty: &DataTy) -> Self {
+        panic!("todo")
     }
 }
 

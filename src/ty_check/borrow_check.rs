@@ -13,7 +13,7 @@ pub fn borrowable(
     p: &PlaceExpr,
 ) -> Result<Vec<Loan>, String> {
     if p.is_place() {
-        if borrowable_under_existing_borrows(ty_ctx, reborrows, own, p) {
+        if borrowable_under_existing_loans(ty_ctx, reborrows, own, p) {
             Ok(vec![Loan {
                 place_expr: p.clone(),
                 own_qual: own,
@@ -26,7 +26,7 @@ pub fn borrowable(
     }
 }
 
-fn borrowable_under_existing_borrows(
+fn borrowable_under_existing_loans(
     ty_ctx: &TypingCtx,
     reborrows: &[PlaceExpr],
     own: Ownership,
@@ -43,8 +43,8 @@ fn no_uniq_loan_overlap(own: Ownership, place: &PlaceExpr, loans: &[Loan]) -> bo
     loans.iter().all(|loan| {
         !(own == Ownership::Uniq || loan.own_qual == Ownership::Uniq)
             || !overlap(
-                &loan.place_expr.to_pl_ctx_and_most_specif_pl().1,
-                &place.to_pl_ctx_and_most_specif_pl().1,
+                &loan.place_expr.to_place().unwrap(),
+                &place.to_place().unwrap(),
             )
     })
 }
@@ -79,5 +79,5 @@ fn exists_place_with_ref_to_prv_all_in_reborrow(
 }
 
 fn overlap(pl: &Place, pr: &Place) -> bool {
-    panic!("")
+    pl.prefix_of(pr) || pr.prefix_of(pl)
 }
