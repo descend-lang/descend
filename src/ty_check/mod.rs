@@ -183,7 +183,69 @@ pub fn ty_check_expr(
                 panic!("Array elements marked as dead")
             }
         }
-        e => panic!(format!("Impl missing for: {}", e)),
+        ExprKind::Tuple(elems) => {
+            let mut tmp_ty_ctx = ty_ctx.clone();
+            let mut elem_dtys = vec![];
+            for elem in elems {
+                if let (Ty::Data(elem_dty), res_ty_ctx) =
+                    ty_check_expr(gl_ctx, kind_ctx, &tmp_ty_ctx, elem)?
+                {
+                    tmp_ty_ctx = res_ty_ctx;
+                    elem_dtys.push(elem_dty);
+                } else {
+                    panic!("Unexpected.")
+                }
+            }
+            Ok((Ty::Data(DataTy::Tuple(elem_dtys)), tmp_ty_ctx))
+        }
+        ExprKind::App(f, args) => {
+            if let (Ty::Data(DataTy::Fn(param_dtys, _, _, out_dty)), f_ty_ctx) =
+                ty_check_expr(gl_ctx, kind_ctx, ty_ctx, f)?
+            {
+                let mut tmp_ty_ctx = f_ty_ctx.clone();
+                let mut arg_dtys = vec![];
+                for (arg, f_arg_dty) in args.iter_mut().zip(param_dtys) {
+                    if let (Ty::Data(arg_dty), args_ty_ctx) =
+                        ty_check_expr(gl_ctx, kind_ctx, ty_ctx, arg)?
+                    {
+                        if arg_dty != f_arg_dty {
+                            return Err(String::from("Argument types do not match."));
+                        }
+                        arg_dtys.push(arg_dty);
+                        tmp_ty_ctx = args_ty_ctx;
+                    } else {
+                        panic!("Unexpected.")
+                    }
+                }
+                Ok((Ty::Data(*out_dty), tmp_ty_ctx))
+            } else {
+                Err(String::from(
+                    "The provided function expression does not have a function type.",
+                ))
+            }
+        }
+        ExprKind::DepApp(df, kv) => {
+            match kv {
+                KindValue::Provenance(prv) => panic!("todo"),
+                KindValue::Data(dty) => {
+                    // Check that kv is well kinded.
+                    if let (Ty::Data(DataTy::GenFn(param, _, _, out_dty)), df_ty_ctx) =
+                        ty_check_expr(gl_ctx, kind_ctx, ty_ctx, df)?
+                    {
+                        if param.kind != Kind::Data {
+                            return Err(String::from("Trying to apply value of different kind."));
+                        }
+                        Ok((Ty::Data(*out_dty), df_ty_ctx))
+                    } else {
+                        panic!("Unexpected.")
+                    }
+                }
+                KindValue::Nat(n) => panic!("todo"),
+                KindValue::Memory(mem) => panic!("todo"),
+                KindValue::Frame(frm) => panic!("todo"),
+            }
+        }
+        e => panic!(format!("Impl missing for: {:?}", e)),
     }
 }
 

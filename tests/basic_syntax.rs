@@ -13,7 +13,7 @@ use descend::{arr, tuple, tuple_dty};
 
 #[test]
 #[rustfmt::skip]
-fn let_scalar_copy_example() {
+fn scalar_copy_example() {
     // let x: i32 = 5;
     // let y: i32 = x;
     // let z: i32 = x;
@@ -74,19 +74,28 @@ fn array_copy_example() {
 fn tuple_copy_example() {
     // let x: i32 x f32 = (1, 2.0f32);
     // let y: i32 x f32 = x;
-    // let z: i32 x f32 = x; // Error 
+    // let z: i32 x f32 = x;
     //
     //      desugared:
     // let const x: i32 x f32 = (1, 2.0f32);
     // let const y: i32 x f32 = x;
-    // let const z: i32 x f32 = x; // Error
+    // let const z: i32 x f32 = x;
     // ()
-    let_const("x", &tuple_dty!(&i32, &f32), tuple!(1, 2.0f32),
-    let_const("y", &tuple_dty!(&i32, &f32), var("x"),
-    let_const("z", &tuple_dty!(&i32, &f32), var("x"),
-    unit())));
-    
-    panic!("This shouldn't type check.")
+    let e =
+        let_const("x", &tuple_dty!(&i32, &f32), tuple!(1, 2.0f32),
+        let_const("y", &tuple_dty!(&i32, &f32), var("x"),
+        let_const("z", &tuple_dty!(&i32, &f32), var("x"),
+        unit())));
+
+    let x_ident = IdentTyped::new(Ident::new("x"), Ty::Data(tuple_dty!(i32, f32)));
+    let y_ident = IdentTyped::new(Ident::new("y"), Ty::Data(tuple_dty!(i32, f32)));
+    let z_ident = IdentTyped::new(Ident::new("z"), Ty::Data(tuple_dty!(i32, f32)));
+    let expected_ty_ctx = TypingCtx::new()
+        .append_ident_typed(x_ident)
+        .append_ident_typed(y_ident)
+        .append_ident_typed(z_ident);
+
+    assert_ty_checks_empty_ctxs(e, &unit_ty, &expected_ty_ctx);
 }
 
 #[test]
@@ -103,13 +112,20 @@ fn gpu_memory_alloc_move_example() {
     // ()
     use Memory::GpuGlobal;
 
-    let_const("x", &at_dty(&i32, &GpuGlobal),
-              app(ddep_app(var("copy_to_gpumem"), &i32), vec![lit(&5)]),
-              let_const("y", &at_dty(&i32, &GpuGlobal), var("x"),
-                        let_const("z", &at_dty(&i32, &GpuGlobal), var("x"),
-                                  unit())));
+    let e =
+        let_const("x", &at_dty(&i32, &GpuGlobal),
+                  app(ddep_app(var("copy_to_gpumem"), &i32), vec![lit(&5)]),
+        let_const("y", &at_dty(&i32, &GpuGlobal), var("x"),
+        let_const("z", &at_dty(&i32, &GpuGlobal), var("x"),
+        unit())));
+
+    let x_ident = IdentTyped::new(Ident::new("x"), Ty::Data(at_dty(&i32, &GpuGlobal)));
+    let y_ident = IdentTyped::new(Ident::new("y"), Ty::Data(at_dty(&i32, &GpuGlobal)));
+    let expected_ty_ctx = TypingCtx::new()
+        .append_ident_typed(x_ident)
+        .append_ident_typed(y_ident);
     
-    panic!("This shouldn't type check.")
+    assert_ty_checks_empty_ctxs(e, &unit_ty, &expected_ty_ctx);
 }
 
 #[test]

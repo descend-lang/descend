@@ -490,10 +490,8 @@ impl KindCtx {
             .collect()
     }
 
-    pub fn prv_ident_exists(&self, prv_ident_name: &TyIdent) -> bool {
-        self.get_ty_idents(Kind::Provenance)
-            .iter()
-            .any(|prv_ident| prv_ident_name == prv_ident)
+    pub fn ident_of_kind_exists(&self, ident_name: &TyIdent, kind: Kind) -> bool {
+        self.get_ty_idents(kind).iter().any(|id| ident_name == id)
     }
 
     pub fn outlives(&self, long: &TyIdent, short: &TyIdent) -> Result<(), String> {

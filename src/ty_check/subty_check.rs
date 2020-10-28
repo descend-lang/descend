@@ -253,7 +253,9 @@ fn outl_check_ident_val_prv(
     longer_ident: &TyIdent,
     shorter_val: &str,
 ) -> Result<TypingCtx, String> {
-    if kind_ctx.prv_ident_exists(longer_ident) && ty_ctx.prv_val_exists(shorter_val) {
+    if kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance)
+        && ty_ctx.prv_val_exists(shorter_val)
+    {
         Ok(ty_ctx.clone())
     } else {
         Err(format!(
