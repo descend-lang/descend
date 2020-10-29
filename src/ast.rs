@@ -48,7 +48,7 @@ impl Place {
         }
     }
 }
-pub type TypedPlace = (Place, DataTy);
+pub type TypedPlace = (Place, Ty);
 
 pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, Nat),
@@ -129,14 +129,14 @@ pub enum ExprKind {
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
     // Variable declaration, assignment and sequencing
-    // let x: dty = e1; e2
-    Let(Mutability, Ident, DataTy, Box<Expr>, Box<Expr>),
+    // let x: ty = e1; e2
+    Let(Mutability, Ident, Ty, Box<Expr>, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     // TODO: Add types for parameters.
-    Lambda(Vec<Ident>, ExecLoc, DataTy, Box<Expr>),
+    Lambda(Vec<Ident>, ExecLoc, Ty, Box<Expr>),
     // A function that accepts something of the specified kind as an argument.
     // (x : kind) [exec]-> { e }
     DepLambda(TyIdent, ExecLoc, Box<Expr>),
@@ -164,12 +164,12 @@ impl fmt::Display for ExprKind {
             Self::Ref(prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
             Self::RefIndex(prv, own, pl_expr, n) => format!("&{} {} {}[{}]", prv, own, pl_expr, n),
             Self::Assign(pl_expr, e) => format!("{} = {}", pl_expr, e),
-            Self::Let(mutab, ident, dty, e1, e2) => {
-                format!("let {} {}: {} = {}; {}", mutab, ident, dty, e1, e2)
+            Self::Let(mutab, ident, ty, e1, e2) => {
+                format!("let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
             }
             Self::Seq(e1, e2) => format!("{}; {}", e1, e2),
-            /*            Self::Lambda(params, exec, dty, e) => {
-                format!("|{}| [{}]-> {} {{ {} }}", params, exec, dty, e)
+            /*            Self::Lambda(params, exec, ty, e) => {
+                format!("|{}| [{}]-> {} {{ {} }}", params, exec, ty, e)
             }
             Self::DepLambda(ty_ident, exec, e) => {
                 format!("<{}> [{}]-> {{ {} }}", ty_ident, exec, e)

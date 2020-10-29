@@ -1,3 +1,4 @@
+use super::ty_ctx::{PrvMapping, TyCtx};
 use crate::ast::*;
 use crate::ty::*;
 
@@ -7,7 +8,7 @@ use crate::ty::*;
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
 pub fn borrowable(
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     reborrows: &[PlaceExpr],
     own: Ownership,
     p: &PlaceExpr,
@@ -27,7 +28,7 @@ pub fn borrowable(
 }
 
 fn borrowable_under_existing_loans(
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     reborrows: &[PlaceExpr],
     own: Ownership,
     p: &PlaceExpr,
@@ -51,20 +52,20 @@ fn no_uniq_loan_overlap(own: Ownership, place: &PlaceExpr, loans: &[Loan]) -> bo
 
 // Invariant: for all place_expr in reborrows. place_expr.is_place()
 fn exists_place_with_ref_to_prv_all_in_reborrow(
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     prv_name: &str,
     reborrows: &[PlaceExpr],
 ) -> bool {
     let all_places = ty_ctx.all_places();
-    let at_least_one = all_places.iter().any(|(place, dty)| {
-        if let DataTy::Ref(Provenance::Value(pn), _, _, _) = dty {
+    let at_least_one = all_places.iter().any(|(_, ty)| {
+        if let Ty::Ref(Provenance::Value(pn), _, _, _) = ty {
             prv_name == pn
         } else {
             false
         }
     });
-    let all_in_reborrows = all_places.iter().all(|(place, dty)| {
-        if let DataTy::Ref(Provenance::Value(pn), _, _, _) = dty {
+    let all_in_reborrows = all_places.iter().all(|(place, ty)| {
+        if let Ty::Ref(Provenance::Value(pn), _, _, _) = ty {
             if prv_name == pn {
                 reborrows.iter().any(|reb| reb.equiv(place))
             } else {

@@ -1,5 +1,6 @@
 mod borrow_check;
 mod subty_check;
+pub mod ty_ctx;
 
 use crate::ast::Ownership;
 use crate::ast::*;
@@ -7,6 +8,7 @@ use crate::nat::*;
 use crate::ty::*;
 use borrow_check::borrowable;
 use subty_check::subty_check;
+use ty_ctx::{IdentTyped, TyCtx};
 
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------
@@ -45,15 +47,8 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &GlobalFunDef) -> Result<Glob
     prv_rels_use_declared_idents(&prv_rels, &kind_ctx)?;
 
     // Build frame typing for this function
-    let glf_frame = append_idents_typed(
-        &vec![],
-        params
-            .clone()
-            .into_iter()
-            .map(|(ident, dty)| (ident, Ty::Data(dty)))
-            .collect(),
-    );
-    let ty_ctx = TypingCtx::from(glf_frame);
+    let glf_frame = append_idents_typed(&vec![], params.clone());
+    let ty_ctx = TyCtx::from(glf_frame);
     ty_check_expr(gl_ctx, &kind_ctx, &ty_ctx, &mut body_expr)?;
 
     // t <= t_f
@@ -61,7 +56,7 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &GlobalFunDef) -> Result<Glob
         &kind_ctx,
         &ty_ctx,
         &body_expr.ty.as_ref().unwrap(),
-        &Ty::Data(ret_ty.clone()),
+        &ret_ty.clone(),
     )?;
     assert!(empty_ty_ctx.is_empty(), "This should never happen.");
 
@@ -99,34 +94,31 @@ fn prv_rels_use_declared_idents(
 pub fn ty_check_expr(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     expr: &mut Expr,
-) -> Result<(Ty, TypingCtx), String> {
+) -> Result<(Ty, TyCtx), String> {
     match &mut expr.expr {
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
             let place = pl_expr.to_place().unwrap();
             let pl_ty = ty_ctx.type_place(&place)?;
-            if let Ty::Data(pl_dty) = pl_ty {
-                let (own, new_ty_ctx) = if pl_dty.copyable() {
-                    // TODO check whether the shared type checking of a place expr will be needed
-                    (Ownership::Shrd, ty_ctx.clone())
-                } else {
-                    (Ownership::Uniq, ty_ctx.kill_place(&place, &pl_dty))
-                };
-                borrowable(kind_ctx, ty_ctx, vec![].as_slice(), own, pl_expr)?;
-                Ok((Ty::Data(pl_dty), new_ty_ctx))
+            // TODO check if dead?
+            let (own, new_ty_ctx) = if pl_ty.copyable() {
+                // TODO check whether the shared type checking of a place expr will be needed
+                (Ownership::Shrd, ty_ctx.clone())
             } else {
-                Err(String::from("This place has been moved out before."))
-            }
+                (Ownership::Uniq, ty_ctx.kill_place(&place))
+            };
+            borrowable(kind_ctx, ty_ctx, vec![].as_slice(), own, pl_expr)?;
+            Ok((pl_ty, new_ty_ctx))
         }
         ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
             let own = Ownership::Shrd;
             borrowable(kind_ctx, ty_ctx, vec![].as_slice(), own, pl_expr)?;
-            if let Ok(Ty::Data(dty)) =
+            if let Ok(ty) =
                 ty_check_place_expr_under_own(kind_ctx, ty_ctx, Ownership::Shrd, pl_expr)
             {
-                if dty.copyable() {
-                    Ok((Ty::Data(dty), ty_ctx.clone()))
+                if ty.copyable() {
+                    Ok((ty, ty_ctx.clone()))
                 } else {
                     Err(String::from("Data type is not copyable."))
                 }
@@ -135,10 +127,10 @@ pub fn ty_check_expr(
             }
         }
         // TODO respect mutability
-        ExprKind::Let(mutable, ident, dty, ref mut e1, ref mut e2) => {
+        ExprKind::Let(mutable, ident, ty, ref mut e1, ref mut e2) => {
             let (ty_e1, ty_ctx_e1) = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, e1)?;
-            let ty_ctx_sub = subty_check(kind_ctx, &ty_ctx_e1, &ty_e1, &Ty::Data(dty.clone()))?;
-            let ident_with_annotated_ty = IdentTyped::new(ident.clone(), Ty::Data(dty.clone()));
+            let ty_ctx_sub = subty_check(kind_ctx, &ty_ctx_e1, &ty_e1, &ty)?;
+            let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone());
             let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
             // TODO gc_loans
             // TODO check that x is dead,
@@ -154,7 +146,7 @@ pub fn ty_check_expr(
                 Lit::Int(_) => ScalarData::I32,
                 Lit::Float(_) => ScalarData::F32,
             };
-            Ok((Ty::Data(DataTy::Scalar(scalar_data)), ty_ctx.clone()))
+            Ok((Ty::Scalar(scalar_data), ty_ctx.clone()))
         }
         ExprKind::Array(elems) => {
             assert!(elems.len() > 0);
@@ -165,96 +157,77 @@ pub fn ty_check_expr(
                 tmp_ty_ctx = res_ty_ctx;
                 elem_tys.push(elem_ty);
             }
-            if let Ty::Data(arr_elem_dty) = elem_tys[0].clone() {
-                if elem_tys.iter().any(|elem_ty| &elem_tys[0] != elem_ty) {
-                    Err(String::from(
-                        "Not all provided elements have the same type.",
-                    ))
-                } else {
-                    Ok((
-                        Ty::Data(DataTy::Array(
-                            Nat::Lit(elem_tys.len()),
-                            Box::new(arr_elem_dty),
-                        )),
-                        tmp_ty_ctx,
-                    ))
-                }
+            if elem_tys.iter().any(|elem_ty| &elem_tys[0] != elem_ty) {
+                Err(String::from(
+                    "Not all provided elements have the same type.",
+                ))
             } else {
-                panic!("Array elements marked as dead")
+                Ok((
+                    Ty::Array(Nat::Lit(elem_tys.len()), Box::new(elem_tys[0].clone())),
+                    tmp_ty_ctx,
+                ))
             }
         }
         ExprKind::Tuple(elems) => {
             let mut tmp_ty_ctx = ty_ctx.clone();
-            let mut elem_dtys = vec![];
+            let mut elem_tys = vec![];
             for elem in elems {
-                if let (Ty::Data(elem_dty), res_ty_ctx) =
-                    ty_check_expr(gl_ctx, kind_ctx, &tmp_ty_ctx, elem)?
-                {
-                    tmp_ty_ctx = res_ty_ctx;
-                    elem_dtys.push(elem_dty);
-                } else {
-                    panic!("Unexpected.")
-                }
+                let (elem_ty, res_ty_ctx) = ty_check_expr(gl_ctx, kind_ctx, &tmp_ty_ctx, elem)?;
+                tmp_ty_ctx = res_ty_ctx;
+                elem_tys.push(elem_ty);
             }
-            Ok((Ty::Data(DataTy::Tuple(elem_dtys)), tmp_ty_ctx))
+            Ok((Ty::Tuple(elem_tys), tmp_ty_ctx))
         }
         ExprKind::App(f, args) => {
-            if let (Ty::Data(DataTy::Fn(param_dtys, _, _, out_dty)), f_ty_ctx) =
+            if let (Ty::Fn(param_tys, _, _, out_ty), mut f_ty_ctx) =
                 ty_check_expr(gl_ctx, kind_ctx, ty_ctx, f)?
             {
-                let mut tmp_ty_ctx = f_ty_ctx.clone();
-                let mut arg_dtys = vec![];
-                for (arg, f_arg_dty) in args.iter_mut().zip(param_dtys) {
-                    if let (Ty::Data(arg_dty), args_ty_ctx) =
-                        ty_check_expr(gl_ctx, kind_ctx, ty_ctx, arg)?
-                    {
-                        if arg_dty != f_arg_dty {
-                            return Err(String::from("Argument types do not match."));
-                        }
-                        arg_dtys.push(arg_dty);
-                        tmp_ty_ctx = args_ty_ctx;
-                    } else {
-                        panic!("Unexpected.")
+                let mut arg_tys = vec![];
+                for (arg, f_arg_ty) in args.iter_mut().zip(param_tys) {
+                    let (arg_ty, args_ty_ctx) = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, arg)?;
+                    if arg_ty != f_arg_ty {
+                        return Err(String::from("Argument types do not match."));
                     }
+                    arg_tys.push(arg_ty);
+                    f_ty_ctx = args_ty_ctx;
                 }
-                Ok((Ty::Data(*out_dty), tmp_ty_ctx))
+                Ok((*out_ty, f_ty_ctx))
             } else {
                 Err(String::from(
                     "The provided function expression does not have a function type.",
                 ))
             }
         }
-        ExprKind::DepApp(df, kv) => {
-            match kv {
-                KindValue::Provenance(prv) => panic!("todo"),
-                KindValue::Data(dty) => {
-                    // Check that kv is well kinded.
-                    if let (Ty::Data(DataTy::GenFn(param, _, _, out_dty)), df_ty_ctx) =
-                        ty_check_expr(gl_ctx, kind_ctx, ty_ctx, df)?
-                    {
-                        if param.kind != Kind::Data {
-                            return Err(String::from("Trying to apply value of different kind."));
-                        }
-                        Ok((Ty::Data(*out_dty), df_ty_ctx))
-                    } else {
-                        panic!("Unexpected.")
+        ExprKind::DepApp(df, kv) => match kv {
+            KindValue::Provenance(prv) => panic!("todo"),
+            KindValue::Data(ty) => {
+                if let (Ty::GenFn(param, _, _, out_ty), df_ty_ctx) =
+                    ty_check_expr(gl_ctx, kind_ctx, ty_ctx, df)?
+                {
+                    if param.kind != Kind::Data {
+                        return Err(String::from("Trying to apply value of different kind."));
                     }
+                    Ok((*out_ty, df_ty_ctx))
+                } else {
+                    Err(String::from(
+                        "The provided dependent function expression does not have a function type.",
+                    ))
                 }
-                KindValue::Nat(n) => panic!("todo"),
-                KindValue::Memory(mem) => panic!("todo"),
-                KindValue::Frame(frm) => panic!("todo"),
             }
-        }
+            KindValue::Nat(n) => panic!("todo"),
+            KindValue::Memory(mem) => panic!("todo"),
+            KindValue::Frame(frm) => panic!("todo"),
+        },
         e => panic!(format!("Impl missing for: {:?}", e)),
     }
 }
 
 fn ty_check_place_expr_under_own(
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     own: Ownership,
     pl_expr: &PlaceExpr,
 ) -> Result<Ty, String> {
     // TODO implement
-    Ok(Ty::Data(DataTy::Scalar(ScalarData::Unit)))
+    Ok(Ty::Scalar(ScalarData::Unit))
 }

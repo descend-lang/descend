@@ -1,5 +1,6 @@
 use super::nat::Nat;
 use crate::ast::*;
+use crate::ty_check::ty_ctx::{IdentTyped, TyEntry};
 use std::fmt;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -28,9 +29,41 @@ impl fmt::Display for Kind {
 pub enum KindValue {
     Nat(Nat),
     Memory(Memory),
-    Data(DataTy),
+    Data(Ty),
     Provenance(Provenance),
     Frame(FrameExpr),
+}
+
+pub type FrameTyping = Vec<TyEntry>;
+
+pub fn append_idents_typed(frm: &FrameTyping, idents_typed: Vec<IdentTyped>) -> FrameTyping {
+    let mut new_frm = frm.clone();
+    new_frm.append(
+        &mut idents_typed
+            .into_iter()
+            .map(|id_typed| TyEntry::Var(id_typed))
+            .collect::<Vec<_>>(),
+    );
+    new_frm
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum FrameExpr {
+    FrTy(FrameTyping),
+    Ident(TyIdent),
+}
+
+impl Kinded for FrameExpr {
+    fn get_kind(&self) -> Kind {
+        Kind::Frame
+    }
+
+    fn new_ident(name: &str) -> TyIdent {
+        TyIdent {
+            name: String::from(name),
+            kind: Kind::Frame,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -124,21 +157,21 @@ pub struct Loan {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum DataTy {
+pub enum Ty {
     Scalar(ScalarData),
-    Tuple(Vec<DataTy>),
-    Array(Nat, Box<DataTy>),
-    At(Box<DataTy>, Memory),
-    Ref(Provenance, Ownership, Memory, Box<DataTy>),
-    Fn(Vec<DataTy>, Box<FrameExpr>, ExecLoc, Box<DataTy>),
-    GenFn(TyIdent, Box<FrameExpr>, ExecLoc, Box<DataTy>),
+    Tuple(Vec<Ty>),
+    Array(Nat, Box<Ty>),
+    At(Box<Ty>, Memory),
+    Ref(Provenance, Ownership, Memory, Box<Ty>),
+    Fn(Vec<Ty>, Box<FrameExpr>, ExecLoc, Box<Ty>),
+    GenFn(TyIdent, Box<FrameExpr>, ExecLoc, Box<Ty>),
     Ident(TyIdent),
+    Dead(Box<Ty>),
 }
 
-impl DataTy {
+impl Ty {
     pub fn non_copyable(&self) -> bool {
-        use DataTy::*;
-
+        use Ty::*;
         match self {
             Scalar(sc) => false,
             Ident(_) => true,
@@ -147,8 +180,9 @@ impl DataTy {
             Fn(_, _, _, _) => false,
             GenFn(_, _, _, _) => false,
             At(_, _) => true,
-            Tuple(elem_dtys) => elem_dtys.iter().any(|dty| dty.non_copyable()),
-            Array(_, dty) => dty.non_copyable(),
+            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
+            Array(_, ty) => ty.non_copyable(),
+            Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }
 
@@ -157,7 +191,7 @@ impl DataTy {
     }
 }
 
-impl Kinded for DataTy {
+impl Kinded for Ty {
     fn get_kind(&self) -> Kind {
         Kind::Data
     }
@@ -170,256 +204,10 @@ impl Kinded for DataTy {
     }
 }
 
-impl fmt::Display for DataTy {
+impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         panic!("not yet implemented")
         //        write!(f, "{}:{}", self.name, self.kind)
-    }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum DeadTy {
-    Tuple(Vec<DeadTy>),
-    Data(DataTy),
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Ty {
-    Data(DataTy),
-    Dead(DeadTy),
-    Tuple(Vec<Ty>),
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct IdentTyped {
-    pub ident: Ident,
-    pub ty: Ty,
-}
-
-impl IdentTyped {
-    pub fn new(ident: Ident, ty: Ty) -> Self {
-        IdentTyped { ident, ty }
-    }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct PrvMapping {
-    pub prv: String,
-    pub loans: Vec<Loan>,
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum FrameEntry {
-    Var(IdentTyped),
-    Prov(PrvMapping),
-}
-pub type FrameTyping = Vec<FrameEntry>;
-
-pub fn append_idents_typed(frm: &FrameTyping, idents_typed: Vec<(Ident, Ty)>) -> FrameTyping {
-    let mut new_frm = frm.clone();
-    new_frm.append(
-        &mut idents_typed
-            .into_iter()
-            .map(|(ident, ty)| FrameEntry::Var(IdentTyped { ident, ty }))
-            .collect::<Vec<_>>(),
-    );
-    new_frm
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum FrameExpr {
-    FrTy(FrameTyping),
-    Ident(TyIdent),
-}
-
-impl Kinded for FrameExpr {
-    fn get_kind(&self) -> Kind {
-        Kind::Frame
-    }
-
-    fn new_ident(name: &str) -> TyIdent {
-        TyIdent {
-            name: String::from(name),
-            kind: Kind::Frame,
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct TypingCtx {
-    frame_tys: Vec<FrameTyping>,
-}
-
-impl TypingCtx {
-    pub fn new() -> Self {
-        TypingCtx {
-            frame_tys: vec![vec![]],
-        }
-    }
-
-    pub fn from(fr_ty: FrameTyping) -> Self {
-        TypingCtx {
-            frame_tys: vec![fr_ty],
-        }
-    }
-
-    pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
-        if let Some(ref mut frame_typing) = self.frame_tys.iter_mut().last() {
-            frame_typing.push(FrameEntry::Var(id_typed));
-            self
-        } else {
-            panic!("This should never happen.")
-        }
-    }
-
-    // This function MUST keep the order in which the identifiers appear in the Typing Ctx
-    pub fn get_idents_typed(&self) -> Vec<IdentTyped> {
-        self.frame_tys
-            .iter()
-            .flatten()
-            .filter_map(|fe| {
-                if let FrameEntry::Var(ident_typed) = fe {
-                    Some(ident_typed.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    // This function MUST keep the order in which the PRVs appear in the Typing Ctx
-    pub fn get_prv_mappings(&self) -> Vec<PrvMapping> {
-        self.frame_tys
-            .iter()
-            .flatten()
-            .filter_map(|fe| {
-                if let FrameEntry::Prov(prv_mapping) = fe {
-                    Some(prv_mapping.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    pub fn update_loan_set(
-        mut self,
-        prv_val_name: &str,
-        loan_set: Vec<Loan>,
-    ) -> Result<Self, String> {
-        for fe in self.frame_tys.iter_mut().flatten() {
-            if let FrameEntry::Prov(prv_mapping) = fe {
-                if prv_mapping.prv == prv_val_name {
-                    prv_mapping.loans = loan_set;
-                    return Ok(self);
-                }
-            }
-        }
-        Err(format!(
-            "Typing Context is missing the provenance value {}",
-            prv_val_name
-        ))
-    }
-
-    pub fn get_loan_set(&self, prv_val_name: &str) -> Result<Vec<Loan>, String> {
-        match self
-            .get_prv_mappings()
-            .iter()
-            .find(|prv_mapping| prv_val_name == prv_mapping.prv)
-        {
-            Some(set) => Ok(set.loans.clone()),
-            None => Err(format!(
-                "Provenance with name '{}', not found in context.",
-                prv_val_name
-            )),
-        }
-    }
-
-    pub fn prv_val_exists(&self, prv_val_name: &str) -> bool {
-        self.get_prv_mappings()
-            .iter()
-            .any(|prv_mapping| prv_mapping.prv == prv_val_name)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        if let Some(frame_typing) = self.frame_tys.first() {
-            frame_typing.is_empty()
-        } else {
-            panic!("This should never happen.")
-        }
-    }
-
-    // ∀π:τ ∈ Γ
-    pub fn all_places(&self) -> Vec<TypedPlace> {
-        self.get_idents_typed()
-            .iter()
-            .flat_map(|IdentTyped { ident, ty }| match ty {
-                Ty::Data(dty) => TypingCtx::explode_places(ident, dty),
-                _ => vec![],
-            })
-            .collect()
-    }
-
-    fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<(Place, DataTy)> {
-        fn proj(mut pl: Place, idx: Nat) -> Place {
-            pl.path.push(idx);
-            pl
-        }
-
-        fn explode(pl: Place, dty: DataTy) -> Vec<(Place, DataTy)> {
-            use super::nat::Nat::Lit;
-            use DataTy::*;
-
-            match &dty {
-                Scalar(_)
-                | Array(_, _)
-                | At(_, _)
-                | Ref(_, _, _, _)
-                | Fn(_, _, _, _)
-                | GenFn(_, _, _, _)
-                | Ident(_) => vec![(pl, dty.clone())],
-                Tuple(dtys) => {
-                    let mut place_frame = vec![(pl.clone(), dty.clone())];
-                    for (index, proj_dty) in dtys.iter().enumerate() {
-                        let mut exploded_index =
-                            explode(proj(pl.clone(), Lit(index)), proj_dty.clone());
-                        place_frame.append(&mut exploded_index);
-                    }
-                    place_frame
-                }
-            }
-        }
-
-        explode(Place::new(ident.clone(), vec![]), dty.clone())
-    }
-
-    pub fn type_place(&self, place: &Place) -> Result<Ty, String> {
-        fn proj_dty(ty: &Ty, path: &Path) -> Ty {
-            let mut res_ty = ty.clone();
-            for n in path {
-                if let Ty::Tuple(elem_tys) = ty {
-                    let idx = n.eval();
-                    res_ty = elem_tys[idx].clone();
-                } else {
-                    panic!("Trying to project element data type of a non tuple type.");
-                }
-            }
-            res_ty
-        }
-
-        let ident_ty = match self
-            .get_idents_typed()
-            .into_iter()
-            .find(|id_ty| id_ty.ident == place.ident)
-        {
-            Some(id) => id,
-            None => return Err(format!("Identifier: {} not found in context.", place.ident)),
-        };
-        Ok(proj_dty(&ident_ty.ty, &place.path))
-    }
-
-    pub fn kill_place(&self, pl: &Place, dty: &DataTy) -> Self {
-        panic!("todo")
     }
 }
 
@@ -512,12 +300,12 @@ impl KindCtx {
 pub struct GlobalFunDef {
     pub name: String,
     pub ty_idents: Vec<TyIdent>,
-    pub params: Vec<(Ident, DataTy)>,
-    pub ret_ty: DataTy,
+    pub params: Vec<IdentTyped>,
+    pub ret_ty: Ty,
     pub exec: ExecLoc,
     pub prv_rels: Vec<PrvRel>,
     pub body_expr: Expr,
-    pub fun_ty: DataTy,
+    pub fun_ty: Ty,
 }
 
 pub type GlobalCtx = Vec<GlobalFunDef>;

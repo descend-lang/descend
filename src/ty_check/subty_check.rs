@@ -1,69 +1,45 @@
+use super::ty_ctx::TyCtx;
+
 //
 // Subtyping and Provenance Subtyping from Oxide
 //
 
 use super::ErrMsg;
-use crate::ast::{PlaceCtx, PlaceExpr};
+use crate::ast::PlaceExpr;
 use crate::ty::*;
 
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
 pub fn subty_check(
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     sub_ty: &Ty,
     super_ty: &Ty,
-) -> Result<TypingCtx, String> {
+) -> Result<TyCtx, String> {
     use super::Ownership::*;
-    use DataTy::*;
     use Ty::*;
 
     match (sub_ty, super_ty) {
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
         (sub, sup) if sub == sup => Ok(ty_ctx.clone()),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
-        (Data(Array(sub_size, sub_elem_dty)), Data(Array(sup_size, sup_elem_dty)))
-            if sub_size == sup_size =>
-        {
-            subty_check(
-                kind_ctx,
-                ty_ctx,
-                &Data((**sub_elem_dty).clone()),
-                &Data((**sup_elem_dty).clone()),
-            )
+        (Array(sub_size, sub_elem_ty), Array(sup_size, sup_elem_ty)) if sub_size == sup_size => {
+            subty_check(kind_ctx, ty_ctx, &sub_elem_ty, &sup_elem_ty)
         }
         // Δ; Γ ⊢ &ρ1 shrd τ1 ≲ &ρ2 shrd τ2 ⇒ Γ′′
-        (
-            Data(Ref(sub_prv, Shrd, sub_mem, sub_dty)),
-            Data(Ref(sup_prv, Shrd, sup_mem, sup_dty)),
-        ) if sub_mem == sup_mem => {
+        (Ref(sub_prv, Shrd, sub_mem, sub_ty), Ref(sup_prv, Shrd, sup_mem, sup_ty))
+            if sub_mem == sup_mem =>
+        {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            subty_check(
-                kind_ctx,
-                &res_outl_ty_ctx,
-                &Data((**sub_dty).clone()),
-                &Data((**sup_dty).clone()),
-            )
+            subty_check(kind_ctx, &res_outl_ty_ctx, &sub_ty, &sup_ty)
         }
         // Δ; Γ ⊢ &ρ1 uniq τ1 ≲ &ρ2 uniq τ2 ⇒ Γ''
-        (
-            Data(Ref(sub_prv, Uniq, sub_mem, sub_dty)),
-            Data(Ref(sup_prv, Uniq, sup_mem, sup_dty)),
-        ) if sub_mem == sup_mem => {
+        (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty))
+            if sub_mem == sup_mem =>
+        {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            let res_forw = subty_check(
-                kind_ctx,
-                &res_outl_ty_ctx,
-                &Data((**sub_dty).clone()),
-                &Data((**sup_dty).clone()),
-            )?;
-            let res_back = subty_check(
-                kind_ctx,
-                &res_outl_ty_ctx,
-                &Data((**sup_dty).clone()),
-                &Data((**sub_dty).clone()),
-            )?;
-
+            let res_forw = subty_check(kind_ctx, &res_outl_ty_ctx, &sub_ty, &sup_ty)?;
+            let res_back = subty_check(kind_ctx, &res_outl_ty_ctx, &sup_ty, &sub_ty)?;
             // TODO find out why this is important (techniqually),
             //  and return a proper error if suitable
             assert_eq!(res_forw, res_back);
@@ -78,9 +54,7 @@ pub fn subty_check(
             Ok(res_ctx.clone())
         }
         // Δ; Γ ⊢ \delta1 ≲ †\delta2 ⇒ Γ
-        (sub @ Data(_), Dead(DeadTy::Data(sup))) => {
-            subty_check(kind_ctx, ty_ctx, sub, &Data(sup.clone()))
-        }
+        (sub, Dead(sup)) => subty_check(kind_ctx, ty_ctx, sub, sup),
         //TODO add case for Transitiviy?
         // Δ; Γ ⊢ τ1 ≲ τ3 ⇒ Γ''
         _ => panic!("Good error message not implemented yet."),
@@ -91,10 +65,10 @@ pub fn subty_check(
 // Δ; Γ ⊢ ρ1 :> ρ2 ⇒ Γ′
 fn outlives(
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     longer_prv: &Provenance,
     shorter_prv: &Provenance,
-) -> Result<TypingCtx, ErrMsg> {
+) -> Result<TyCtx, ErrMsg> {
     use Provenance::*;
 
     match (longer_prv, shorter_prv) {
@@ -128,11 +102,7 @@ fn outlives(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs(
-    ty_ctx: &TypingCtx,
-    longer: &str,
-    shorter: &str,
-) -> Result<TypingCtx, String> {
+fn outl_check_val_prvs(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> Result<TyCtx, String> {
     // CHECK:
     //    NOT CLEAR WHY a. IS NECESSARY
     // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan
@@ -179,7 +149,7 @@ fn create_loan_set_err_msg(prv: &str, error_msg: &str) -> String {
     )
 }
 
-fn longer_occurs_before_shorter(ty_ctx: &TypingCtx, longer: &str, shorter: &str) -> bool {
+fn longer_occurs_before_shorter(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> bool {
     for prv in ty_ctx
         .get_prv_mappings()
         .into_iter()
@@ -194,12 +164,12 @@ fn longer_occurs_before_shorter(ty_ctx: &TypingCtx, longer: &str, shorter: &str)
     panic!("Neither provenance found in typing context")
 }
 
-fn exists_deref_loan_with_prv(ty_ctx: &TypingCtx, prv: &str) -> bool {
+fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
     ty_ctx
         .all_places()
         .into_iter()
-        .filter(|(_, dty)| match dty {
-            DataTy::Ref(Provenance::Value(prv_name), _, _, _) if prv_name == prv => true,
+        .filter(|(_, ty)| match ty {
+            Ty::Ref(Provenance::Value(prv_name), _, _, _) if prv_name == prv => true,
             _ => false,
         })
         .any(|(place, _)| {
@@ -220,10 +190,10 @@ fn exists_deref_loan_with_prv(ty_ctx: &TypingCtx, prv: &str) -> bool {
 
 fn outl_check_val_ident_prv(
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     longer_val: &str,
     shorter_ident: &TyIdent,
-) -> Result<TypingCtx, String> {
+) -> Result<TyCtx, String> {
     // TODO how could the set ever be empty?
     let loan_set = ty_ctx.get_loan_set(longer_val)?;
     if loan_set.is_empty() {
@@ -235,8 +205,8 @@ fn outl_check_val_ident_prv(
 }
 
 // FIXME Makes no sense!
-fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TypingCtx, loan_set: Vec<Loan>) -> bool {
-    ty_ctx.all_places().iter().any(|(pl, dty)| {
+fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: Vec<Loan>) -> bool {
+    ty_ctx.all_places().iter().any(|(pl, ty)| {
         loan_set.iter().any(|loan| {
             let Loan {
                 place_expr,
@@ -249,10 +219,10 @@ fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TypingCtx, loan_set: Vec<Loan
 
 fn outl_check_ident_val_prv(
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     longer_ident: &TyIdent,
     shorter_val: &str,
-) -> Result<TypingCtx, String> {
+) -> Result<TyCtx, String> {
     if kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance)
         && ty_ctx.prv_val_exists(shorter_val)
     {
@@ -268,9 +238,9 @@ fn outl_check_ident_val_prv(
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
 fn multiple_outlives(
     kind_ctx: &KindCtx,
-    ty_ctx: &TypingCtx,
+    ty_ctx: &TyCtx,
     prv_rels: &Vec<(Provenance, Provenance)>,
-) -> Result<TypingCtx, String> {
+) -> Result<TyCtx, String> {
     // TODO figure out how `fold` works
     let mut res_ty_ctx = ty_ctx.clone();
     for prv_rel in prv_rels {

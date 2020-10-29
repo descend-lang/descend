@@ -2,6 +2,7 @@ use crate::ast::Lit::Unit;
 use crate::ast::*;
 use crate::nat::*;
 use crate::ty::*;
+use crate::ty_check::ty_ctx::IdentTyped;
 use crate::utils::fresh_name;
 
 //
@@ -40,20 +41,20 @@ pub fn deref(pl_expr: Expr) -> Expr {
 pub fn fdecl(
     name: &str,
     ty_params: Vec<TyIdent>,
-    params: Vec<(&str, &DataTy)>,
-    ret_ty: &DataTy,
+    params: Vec<(&str, &Ty)>,
+    ret_ty: &Ty,
     frame: &FrameExpr,
     exec: ExecLoc,
     prv_rels: Vec<PrvRel>,
     body: Expr,
 ) -> GlobalFunDef {
-    let f_ty = fn_dty(
+    let f_ty = fn_ty(
         params
             .iter()
-            .map(|p: &(&str, &DataTy)| -> DataTy { p.1.clone() })
+            .map(|p: &(&str, &Ty)| -> Ty { p.1.clone() })
             .collect(),
         frame.clone(),
-        exec.clone(),
+        exec,
         ret_ty,
     );
     let genf_ty = multi_arg_genfn_ty(ty_params.as_slice(), frame, exec, &f_ty);
@@ -71,10 +72,10 @@ pub fn fdecl(
 }
 
 // creates a list of identifier expressions; every expression has a set type
-fn param_list(params: Vec<(&str, &DataTy)>) -> Vec<(Ident, DataTy)> {
+fn param_list(params: Vec<(&str, &Ty)>) -> Vec<IdentTyped> {
     params
         .into_iter()
-        .map(|p: (&str, &DataTy)| -> (Ident, DataTy) { (Ident::new(p.0), p.1.clone()) })
+        .map(|(ident_name, ty)| IdentTyped::new(Ident::new(ident_name), ty.clone()))
         .collect()
 }
 
@@ -87,7 +88,7 @@ pub fn app(f: Expr, arg: Vec<Expr>) -> Expr {
     Expr::new(ExprKind::App(Box::new(f), arg))
 }
 
-pub fn ddep_app(f: Expr, dt: &DataTy) -> Expr {
+pub fn ddep_app(f: Expr, dt: &Ty) -> Expr {
     Expr::new(ExprKind::DepApp(Box::new(f), KindValue::Data(dt.clone())))
 }
 pub fn ndep_app(f: Expr, nat: &Nat) -> Expr {
@@ -185,7 +186,7 @@ pub fn index(arr: Expr, i: Nat) -> Expr {
     Expr::new(ExprKind::Index(pl_expr, i))
 }
 
-pub fn r#let(m: Mutability, id_name: &str, ident_type: &DataTy, value: Expr, body: Expr) -> Expr {
+pub fn r#let(m: Mutability, id_name: &str, ident_type: &Ty, value: Expr, body: Expr) -> Expr {
     Expr::new(ExprKind::Let(
         m,
         Ident::new(id_name),
@@ -195,11 +196,11 @@ pub fn r#let(m: Mutability, id_name: &str, ident_type: &DataTy, value: Expr, bod
     ))
 }
 
-pub fn let_const(id_name: &str, ident_type: &DataTy, value: Expr, body: Expr) -> Expr {
+pub fn let_const(id_name: &str, ident_type: &Ty, value: Expr, body: Expr) -> Expr {
     r#let(constant, id_name, ident_type, value, body)
 }
 
-pub fn let_mut(id_name: &str, ident_type: &DataTy, value: Expr, body: Expr) -> Expr {
+pub fn let_mut(id_name: &str, ident_type: &Ty, value: Expr, body: Expr) -> Expr {
     r#let(mutable, id_name, ident_type, value, body)
 }
 
@@ -216,7 +217,7 @@ pub fn borr(prv: &Provenance, own: Ownership, expr: Expr) -> Expr {
     })
 }
 
-pub fn fun<F: DescendLambda>(f: F, exec: &ExecLoc, ret_ty: &DataTy) -> Expr {
+pub fn fun<F: DescendLambda>(f: F, exec: &ExecLoc, ret_ty: &Ty) -> Expr {
     let (param_idents, body) = f.as_params_and_body();
     Expr::new(ExprKind::Lambda(
         param_idents,
@@ -227,22 +228,21 @@ pub fn fun<F: DescendLambda>(f: F, exec: &ExecLoc, ret_ty: &DataTy) -> Expr {
 }
 
 fn expr_to_plexpr(e: Expr) -> PlaceExpr {
-    let pl_expr = match e {
+    match e {
         Expr {
             expr: ExprKind::PlaceExpr(pl),
             ..
         } => pl,
         _ => panic!("Not a place expression."),
-    };
-    pl_expr
+    }
 }
 
 pub fn dt_fun<F>(df: F, exec: ExecLoc) -> Expr
 where
-    F: Fn(DataTy) -> Expr,
+    F: Fn(Ty) -> Expr,
 {
-    let ty_id = DataTy::new_ident(&fresh_name("dt"));
-    let expr = df(DataTy::Ident(ty_id.clone()));
+    let ty_id = Ty::new_ident(&fresh_name("dt"));
+    let expr = df(Ty::Ident(ty_id.clone()));
     Expr::new(ExprKind::DepLambda(ty_id, exec, Box::new(expr)))
 }
 
@@ -321,29 +321,29 @@ impl DescendLiteral for () {
 }
 
 pub fn dt_ident(name: &str) -> TyIdent {
-    DataTy::new_ident(name)
+    Ty::new_ident(name)
 }
 
 pub fn prov_ident(name: &str) -> TyIdent {
     Provenance::new_ident(name)
 }
 
-pub fn ref_dty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &DataTy) -> DataTy {
-    DataTy::Ref(prv.clone(), own, mem.clone(), Box::new(dt.clone()))
+pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
+    Ty::Ref(prv.clone(), own, mem.clone(), Box::new(dt.clone()))
 }
 
-pub fn arr_dty(size: usize, dt: &DataTy) -> DataTy {
-    DataTy::Array(Nat::Lit(size), Box::new(dt.clone()))
+pub fn arr_ty(size: usize, dt: &Ty) -> Ty {
+    Ty::Array(Nat::Lit(size), Box::new(dt.clone()))
 }
 
-pub fn at_dty(dt: &DataTy, mem: &Memory) -> DataTy {
-    DataTy::At(Box::new(dt.clone()), mem.clone())
+pub fn at_ty(dt: &Ty, mem: &Memory) -> Ty {
+    Ty::At(Box::new(dt.clone()), mem.clone())
 }
 
 //
-// pub fn extract_dty(ty: &Ty) -> DataTy {
+// pub fn extract_ty(ty: &Ty) -> DataTy {
 //     match ty {
-//         Ty::Data(dty) => dty.clone(),
+//         Ty::Data(ty) => ty.clone(),
 //         Ty::QualFnTy(_, _) => {
 //             panic!("Extracting data type failed. Function type is not a data type.");
 //         }
@@ -351,21 +351,16 @@ pub fn at_dty(dt: &DataTy, mem: &Memory) -> DataTy {
 // }
 
 #[macro_export]
-macro_rules! tuple_dty {
+macro_rules! tuple_ty {
     ($($v:expr),*) => {
-        $crate::ty::DataTy::Tuple(
+        $crate::ty::Ty::Tuple(
             vec![$($v.clone()),*]
         )
     }
 }
 
-pub fn fn_dty(
-    param_tys: Vec<DataTy>,
-    frame_expr: FrameExpr,
-    exec: ExecLoc,
-    ret_ty: &DataTy,
-) -> DataTy {
-    DataTy::Fn(
+pub fn fn_ty(param_tys: Vec<Ty>, frame_expr: FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
+    Ty::Fn(
         param_tys,
         Box::new(frame_expr),
         exec,
@@ -373,8 +368,8 @@ pub fn fn_dty(
     )
 }
 
-pub fn genfn_dty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &DataTy) -> DataTy {
-    DataTy::GenFn(
+pub fn genfn_ty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
+    Ty::GenFn(
         param.clone(),
         Box::new(frame.clone()),
         exec,
@@ -382,18 +377,13 @@ pub fn genfn_dty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Dat
     )
 }
 
-pub fn multi_arg_genfn_ty(
-    params: &[TyIdent],
-    frame: &FrameExpr,
-    exec: ExecLoc,
-    ret_ty: &DataTy,
-) -> DataTy {
+pub fn multi_arg_genfn_ty(params: &[TyIdent], frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
     match params.split_first() {
         None => {
             panic!("To create a generic function type, at least one parameter must be provided")
         }
-        Some((head, &[])) => genfn_dty(head, frame, exec, ret_ty),
-        Some((head, tail)) => genfn_dty(
+        Some((head, &[])) => genfn_ty(head, frame, exec, ret_ty),
+        Some((head, tail)) => genfn_ty(
             head,
             frame,
             exec,
@@ -402,24 +392,12 @@ pub fn multi_arg_genfn_ty(
     }
 }
 
-//
-// Types
-//
+// Scalar Types
 #[allow(non_upper_case_globals)]
-pub static i32_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::I32));
+pub static i32: Ty = Ty::Scalar(ScalarData::I32);
 #[allow(non_upper_case_globals)]
-pub static f32_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::F32));
+pub static f32: Ty = Ty::Scalar(ScalarData::F32);
 #[allow(non_upper_case_globals)]
-pub static bool_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::Bool));
+pub static bool: Ty = Ty::Scalar(ScalarData::Bool);
 #[allow(non_upper_case_globals)]
-pub static unit_ty: Ty = Ty::Data(DataTy::Scalar(ScalarData::Unit));
-
-// Data Types
-#[allow(non_upper_case_globals)]
-pub static i32: DataTy = DataTy::Scalar(ScalarData::I32);
-#[allow(non_upper_case_globals)]
-pub static f32: DataTy = DataTy::Scalar(ScalarData::F32);
-#[allow(non_upper_case_globals)]
-pub static bool: DataTy = DataTy::Scalar(ScalarData::Bool);
-#[allow(non_upper_case_globals)]
-pub static unit_dty: DataTy = DataTy::Scalar(ScalarData::Unit);
+pub static unit_ty: Ty = Ty::Scalar(ScalarData::Unit);
