@@ -6,7 +6,10 @@ use crate::ast::nat::*;
 use crate::ast::ty::*;
 use crate::ast::Ownership;
 use crate::ast::*;
-use borrow_check::borrowable;
+use crate::ty_check::ty_ctx::PrvMapping;
+use borrow_check::borrow;
+use std::any::Any;
+use std::ops::Deref;
 use subty_check::subty_check;
 use ty_ctx::{IdentTyped, TyCtx};
 
@@ -116,6 +119,9 @@ pub fn ty_check_expr(
         ExprKind::Tuple(elems) => ty_check_tuple(gl_ctx, kind_ctx, ty_ctx, elems)?,
         ExprKind::App(ef, args) => ty_check_app(gl_ctx, kind_ctx, ty_ctx, ef, args)?,
         ExprKind::DepApp(df, kv) => ty_check_dep_app(gl_ctx, kind_ctx, ty_ctx, df, kv)?,
+        ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
+            ty_check_ref(gl_ctx, kind_ctx, ty_ctx, prv_val_name, *own, pl_expr)?
+        }
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
@@ -123,6 +129,7 @@ pub fn ty_check_expr(
     Ok(res_ty_ctx)
 }
 
+// TODO bring functions in order of the pattern matching
 fn ty_check_dep_app(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
@@ -251,12 +258,14 @@ fn ty_check_place_with_deref(
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     let own = Ownership::Shrd;
-    borrowable(kind_ctx, &ty_ctx, vec![].as_slice(), own, pl_expr)?;
-    if let Ok(ty) = ty_check_place_expr_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr) {
+    borrow(kind_ctx, &ty_ctx, vec![].as_slice(), own, pl_expr)?;
+    if let Ok(ty) = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr) {
         if !ty.is_fully_alive() {
             return Err(String::from("Place was moved before."));
         }
         if ty.copyable() {
+            // this line is a trick to release a life time that is connected to ty_ctx
+            let ty = ty.clone();
             Ok((ty_ctx, ty))
         } else {
             Err(String::from("Data type is not copyable."))
@@ -272,13 +281,14 @@ fn ty_check_place_without_deref(
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     let place = pl_expr.to_place().unwrap();
-    // TODO reintroduce Dead Type syntax for Frame Entries and return type of type_place.
-    let pl_ty = ty_ctx.type_place(&place)?;
+    // TODO think about:
+    //  reintroduce Dead Type syntax for Frame Entries and return type of type_place.
+    let pl_ty = ty_ctx.place_ty(&place)?;
     if !pl_ty.is_fully_alive() {
         return Err(String::from("Place was moved before."));
     }
     let res_ty_ctx = if pl_ty.copyable() {
-        borrowable(
+        borrow(
             kind_ctx,
             &ty_ctx,
             vec![].as_slice(),
@@ -288,7 +298,7 @@ fn ty_check_place_without_deref(
         // TODO check whether the shared type checking of a place expr will be needed
         ty_ctx
     } else {
-        borrowable(
+        borrow(
             kind_ctx,
             &ty_ctx,
             vec![].as_slice(),
@@ -300,13 +310,65 @@ fn ty_check_place_without_deref(
     Ok((res_ty_ctx, pl_ty.clone()))
 }
 
-fn ty_check_place_expr_under_own(
+fn ty_check_ref(
+    gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: TyCtx,
+    prv_val_name: &str,
+    own: Ownership,
+    pl_expr: &mut PlaceExpr,
+) -> Result<(TyCtx, Ty), String> {
+    if !ty_ctx.loans_for_prv(prv_val_name)?.is_empty() {
+        return Err(String::from(
+            "Trying to borrow with a provenance that is used in a different borrow.",
+        ));
+    }
+    let loans = borrow(kind_ctx, &ty_ctx, vec![].as_slice(), own, pl_expr)?;
+    let ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, own, pl_expr)?;
+    if !ty.is_fully_alive() {
+        return Err(String::from(
+            "The place was at least partially moved before.",
+        ));
+    }
+    let (reffed_ty, mem) = match &ty {
+        Ty::Dead(_) => panic!("Cannot happen because of the alive check."),
+        Ty::At(inner_ty, m) => (inner_ty.deref().clone(), m.clone()),
+        _ => (ty.clone(), Memory::CpuStack),
+    };
+    let res_ty = Ty::Ref(
+        Provenance::Value(prv_val_name.to_string()),
+        own,
+        mem,
+        Box::new(reffed_ty),
+    );
+    let res_ty_ctx = ty_ctx.extend_loans_for_prv(prv_val_name, loans)?;
+    Ok((res_ty_ctx, res_ty))
+}
+
+fn place_expr_ty_under_own<'a>(
+    kind_ctx: &KindCtx,
+    ty_ctx: &'a TyCtx,
     own: Ownership,
     pl_expr: &PlaceExpr,
-    // TODO return reference to type
-) -> Result<Ty, String> {
-    // TODO implement
-    Ok(Ty::Scalar(ScalarData::Unit))
+) -> Result<&'a Ty, String> {
+    let (ty, _) = place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, pl_expr)?;
+    Ok(ty)
+}
+
+fn place_expr_ty_and_passed_prvs_under_own<'a>(
+    kind_ctx: &KindCtx,
+    ty_ctx: &'a TyCtx,
+    own: Ownership,
+    pl_expr: &PlaceExpr,
+) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
+    match pl_expr {
+        PlaceExpr::Var(ident) => {
+            let ty = ty_ctx.ident_ty(&ident)?;
+            if !ty.is_fully_alive() {
+                return Err("The value in this identifier has been moved out.".to_string());
+            }
+            Ok((ty, vec![]))
+        }
+        _ => panic!("todo"),
+    }
 }

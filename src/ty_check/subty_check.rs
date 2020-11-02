@@ -58,7 +58,10 @@ pub fn subty_check(
         (sub, Dead(sup)) => subty_check(kind_ctx, ty_ctx, sub, sup),
         //TODO add case for Transitiviy?
         // Δ; Γ ⊢ τ1 ≲ τ3 ⇒ Γ''
-        _ => panic!("Good error message not implemented yet."),
+        (sub, sup) => panic!(format!(
+            "No case implemented for, \n sub: {:?}\n sup: {:?}\n",
+            sub, sup
+        )),
     }
 }
 
@@ -120,7 +123,8 @@ fn outl_check_val_prvs(mut ty_ctx: TyCtx, longer: &str, shorter: &str) -> Result
     }
 
     // Create output Ctx
-    let res_ty_ctx = ty_ctx.extend_loans_for_prv_with_prv_loans(longer, shorter)?;
+    let longer_loans = ty_ctx.loans_for_prv(longer)?.clone();
+    let res_ty_ctx = ty_ctx.extend_loans_for_prv(shorter, longer_loans)?;
     Ok(res_ty_ctx)
 }
 

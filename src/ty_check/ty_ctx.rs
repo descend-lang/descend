@@ -25,7 +25,7 @@ pub struct PrvMapping {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum TyEntry {
     Var(IdentTyped),
-    Prov(PrvMapping),
+    PrvMapping(PrvMapping),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -33,6 +33,9 @@ pub struct TyCtx {
     frame_tys: Vec<FrameTyping>,
 }
 
+// TODO more use of Iterators for construction of new Ctxts (Iterators representing Ctxts)
+//  and to pass values to the ctx.
+//  Maybe just return more references.
 impl TyCtx {
     pub fn new() -> Self {
         TyCtx {
@@ -47,12 +50,15 @@ impl TyCtx {
     }
 
     pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
-        if let Some(ref mut frame_typing) = self.frame_tys.iter_mut().last() {
-            frame_typing.push(TyEntry::Var(id_typed));
-            self
-        } else {
-            panic!("This should never happen.")
-        }
+        let frame_typing = self.frame_tys.iter_mut().last().unwrap();
+        frame_typing.push(TyEntry::Var(id_typed));
+        self
+    }
+
+    pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
+        let frame_typing = self.frame_tys.iter_mut().last().unwrap();
+        frame_typing.push(TyEntry::PrvMapping(prv_mapping));
+        self
     }
 
     pub fn idents_typed(&self) -> impl Iterator<Item = &'_ IdentTyped> {
@@ -77,7 +83,7 @@ impl TyCtx {
 
     pub fn prv_mappings(&self) -> impl Iterator<Item = &'_ PrvMapping> {
         self.frame_tys.iter().flatten().filter_map(|fe| {
-            if let TyEntry::Prov(prv_mapping) = fe {
+            if let TyEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
                 None
@@ -87,7 +93,7 @@ impl TyCtx {
 
     pub fn prv_mappings_mut(&mut self) -> impl Iterator<Item = &'_ mut PrvMapping> {
         self.frame_tys.iter_mut().flatten().filter_map(|fe| {
-            if let TyEntry::Prov(prv_mapping) = fe {
+            if let TyEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
                 None
@@ -102,7 +108,7 @@ impl TyCtx {
         loan_set: HashSet<Loan>,
     ) -> Result<Self, String> {
         for fe in self.frame_tys.iter_mut().flatten() {
-            if let TyEntry::Prov(prv_mapping) = fe {
+            if let TyEntry::PrvMapping(prv_mapping) = fe {
                 if prv_mapping.prv == prv_val_name {
                     prv_mapping.loans = loan_set;
                     return Ok(self);
@@ -115,14 +121,12 @@ impl TyCtx {
         ))
     }
 
-    pub fn extend_loans_for_prv_with_prv_loans(
-        mut self,
-        base: &str,
-        extension: &str,
-    ) -> Result<TyCtx, String> {
-        let ext_loans = self.loans_for_prv(extension)?.clone();
+    pub fn extend_loans_for_prv<I>(mut self, base: &str, extension: I) -> Result<TyCtx, String>
+    where
+        I: IntoIterator<Item = Loan>,
+    {
         let base_loans = self.loans_for_prv_mut(base)?;
-        base_loans.extend(ext_loans);
+        base_loans.extend(extension);
         Ok(self)
     }
 
@@ -202,7 +206,14 @@ impl TyCtx {
         explode(Place::new(ident.clone(), vec![]), ty.clone())
     }
 
-    pub fn type_place(&self, place: &Place) -> Result<Ty, String> {
+    pub fn ident_ty(&self, ident: &Ident) -> Result<&Ty, String> {
+        match self.idents_typed().find(|id_ty| &id_ty.ident == ident) {
+            Some(id) => Ok(&id.ty),
+            None => return Err(format!("Identifier: {} not found in context.", ident)),
+        }
+    }
+
+    pub fn place_ty(&self, place: &Place) -> Result<Ty, String> {
         fn proj_ty(ty: Ty, path: &Path) -> Ty {
             let mut res_ty = ty;
             for n in path {
@@ -217,12 +228,8 @@ impl TyCtx {
             }
             res_ty
         }
-
-        let ident_ty = match self.idents_typed().find(|id_ty| id_ty.ident == place.ident) {
-            Some(id) => id,
-            None => return Err(format!("Identifier: {} not found in context.", place.ident)),
-        };
-        Ok(proj_ty(ident_ty.ty.clone(), &place.path))
+        let ident_ty = self.ident_ty(&place.ident)?;
+        Ok(proj_ty(ident_ty.clone(), &place.path))
     }
 
     pub fn kill_place(mut self, pl: &Place) -> Self {

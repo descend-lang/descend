@@ -186,22 +186,23 @@ pub fn index(arr: Expr, i: Nat) -> Expr {
     Expr::new(ExprKind::Index(pl_expr, i))
 }
 
-pub fn r#let(m: Mutability, id_name: &str, ident_type: &Ty, value: Expr, body: Expr) -> Expr {
+// TODO let with optional type declaration
+pub fn r#let(m: Mutability, id_name: &str, ident_ty: &Ty, value: Expr, body: Expr) -> Expr {
     Expr::new(ExprKind::Let(
         m,
         Ident::new(id_name),
-        ident_type.clone(),
+        ident_ty.clone(),
         Box::new(value),
         Box::new(body),
     ))
 }
 
-pub fn let_const(id_name: &str, ident_type: &Ty, value: Expr, body: Expr) -> Expr {
-    r#let(constant, id_name, ident_type, value, body)
+pub fn let_const(id_name: &str, ident_ty: &Ty, value: Expr, body: Expr) -> Expr {
+    r#let(constant, id_name, ident_ty, value, body)
 }
 
-pub fn let_mut(id_name: &str, ident_type: &Ty, value: Expr, body: Expr) -> Expr {
-    r#let(mutable, id_name, ident_type, value, body)
+pub fn let_mut(id_name: &str, ident_ty: &Ty, value: Expr, body: Expr) -> Expr {
+    r#let(mutable, id_name, ident_ty, value, body)
 }
 
 pub fn assign(lhs: Expr, rhs: Expr) -> Expr {
@@ -332,12 +333,12 @@ pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
     Ty::Ref(prv.clone(), own, mem.clone(), Box::new(dt.clone()))
 }
 
-pub fn arr_ty(size: usize, dt: &Ty) -> Ty {
-    Ty::Array(Nat::Lit(size), Box::new(dt.clone()))
+pub fn arr_ty(size: usize, ty: &Ty) -> Ty {
+    Ty::Array(Nat::Lit(size), Box::new(ty.clone()))
 }
 
-pub fn at_ty(dt: &Ty, mem: &Memory) -> Ty {
-    Ty::At(Box::new(dt.clone()), mem.clone())
+pub fn at_ty(ty: &Ty, mem: &Memory) -> Ty {
+    Ty::At(Box::new(ty.clone()), mem.clone())
 }
 
 //
