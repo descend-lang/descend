@@ -1,9 +1,9 @@
+use crate::ast::nat::*;
+use crate::ast::ty::*;
+use crate::ast::utils::fresh_name;
 use crate::ast::Lit::Unit;
 use crate::ast::*;
-use crate::nat::*;
-use crate::ty::*;
 use crate::ty_check::ty_ctx::IdentTyped;
-use crate::utils::fresh_name;
 
 //
 // Syntax
@@ -48,12 +48,12 @@ pub fn fdecl(
     prv_rels: Vec<PrvRel>,
     body: Expr,
 ) -> GlobalFunDef {
-    let f_ty = fn_ty(
+    let f_ty = fun_ty(
         params
             .iter()
             .map(|p: &(&str, &Ty)| -> Ty { p.1.clone() })
             .collect(),
-        frame.clone(),
+        frame,
         exec,
         ret_ty,
     );
@@ -217,11 +217,11 @@ pub fn borr(prv: &Provenance, own: Ownership, expr: Expr) -> Expr {
     })
 }
 
-pub fn fun<F: DescendLambda>(f: F, exec: &ExecLoc, ret_ty: &Ty) -> Expr {
+pub fn fun<F: DescendLambda>(f: F, exec: ExecLoc, ret_ty: &Ty) -> Expr {
     let (param_idents, body) = f.as_params_and_body();
     Expr::new(ExprKind::Lambda(
         param_idents,
-        exec.clone(),
+        exec,
         ret_ty.clone(),
         Box::new(body),
     ))
@@ -237,7 +237,7 @@ fn expr_to_plexpr(e: Expr) -> PlaceExpr {
     }
 }
 
-pub fn dt_fun<F>(df: F, exec: ExecLoc) -> Expr
+pub fn dep_fun<F>(df: F, exec: ExecLoc) -> Expr
 where
     F: Fn(Ty) -> Expr,
 {
@@ -320,7 +320,7 @@ impl DescendLiteral for () {
     }
 }
 
-pub fn dt_ident(name: &str) -> TyIdent {
+pub fn ty_ident(name: &str) -> TyIdent {
     Ty::new_ident(name)
 }
 
@@ -353,23 +353,23 @@ pub fn at_ty(dt: &Ty, mem: &Memory) -> Ty {
 #[macro_export]
 macro_rules! tuple_ty {
     ($($v:expr),*) => {
-        $crate::ty::Ty::Tuple(
+        $crate::ast::ty::Ty::Tuple(
             vec![$($v.clone()),*]
         )
     }
 }
 
-pub fn fn_ty(param_tys: Vec<Ty>, frame_expr: FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
+pub fn fun_ty(param_tys: Vec<Ty>, frame_expr: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
     Ty::Fn(
         param_tys,
-        Box::new(frame_expr),
+        Box::new(frame_expr.clone()),
         exec,
         Box::new(ret_ty.clone()),
     )
 }
 
-pub fn genfn_ty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
-    Ty::GenFn(
+pub fn genfun_ty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
+    Ty::DepFn(
         param.clone(),
         Box::new(frame.clone()),
         exec,
@@ -382,8 +382,8 @@ pub fn multi_arg_genfn_ty(params: &[TyIdent], frame: &FrameExpr, exec: ExecLoc, 
         None => {
             panic!("To create a generic function type, at least one parameter must be provided")
         }
-        Some((head, &[])) => genfn_ty(head, frame, exec, ret_ty),
-        Some((head, tail)) => genfn_ty(
+        Some((head, &[])) => genfun_ty(head, frame, exec, ret_ty),
+        Some((head, tail)) => genfun_ty(
             head,
             frame,
             exec,

@@ -5,14 +5,15 @@ use super::ty_ctx::TyCtx;
 //
 
 use super::ErrMsg;
+use crate::ast::ty::*;
 use crate::ast::PlaceExpr;
-use crate::ty::*;
+use std::collections::HashSet;
 
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
 pub fn subty_check(
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: TyCtx,
     sub_ty: &Ty,
     super_ty: &Ty,
 ) -> Result<TyCtx, String> {
@@ -21,7 +22,7 @@ pub fn subty_check(
 
     match (sub_ty, super_ty) {
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
-        (sub, sup) if sub == sup => Ok(ty_ctx.clone()),
+        (sub, sup) if sub == sup => Ok(ty_ctx),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
         (Array(sub_size, sub_elem_ty), Array(sup_size, sup_elem_ty)) if sub_size == sup_size => {
             subty_check(kind_ctx, ty_ctx, &sub_elem_ty, &sup_elem_ty)
@@ -31,15 +32,15 @@ pub fn subty_check(
             if sub_mem == sup_mem =>
         {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            subty_check(kind_ctx, &res_outl_ty_ctx, &sub_ty, &sup_ty)
+            subty_check(kind_ctx, res_outl_ty_ctx, &sub_ty, &sup_ty)
         }
         // Δ; Γ ⊢ &ρ1 uniq τ1 ≲ &ρ2 uniq τ2 ⇒ Γ''
         (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty))
             if sub_mem == sup_mem =>
         {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            let res_forw = subty_check(kind_ctx, &res_outl_ty_ctx, &sub_ty, &sup_ty)?;
-            let res_back = subty_check(kind_ctx, &res_outl_ty_ctx, &sup_ty, &sub_ty)?;
+            let res_forw = subty_check(kind_ctx, res_outl_ty_ctx.clone(), &sub_ty, &sup_ty)?;
+            let res_back = subty_check(kind_ctx, res_outl_ty_ctx, &sup_ty, &sub_ty)?;
             // TODO find out why this is important (techniqually),
             //  and return a proper error if suitable
             assert_eq!(res_forw, res_back);
@@ -47,11 +48,11 @@ pub fn subty_check(
         }
         // Δ; Γ ⊢ (τ1, ..., τn) ≲ (τ1′, ..., τn′) ⇒ Γn
         (Ty::Tuple(sub_elems), Ty::Tuple(sup_elems)) => {
-            let mut res_ctx = ty_ctx.clone();
+            let mut res_ctx = ty_ctx;
             for (sub, sup) in sub_elems.iter().zip(sup_elems) {
-                res_ctx = subty_check(kind_ctx, &res_ctx, sub, sup)?;
+                res_ctx = subty_check(kind_ctx, res_ctx, sub, sup)?;
             }
-            Ok(res_ctx.clone())
+            Ok(res_ctx)
         }
         // Δ; Γ ⊢ \delta1 ≲ †\delta2 ⇒ Γ
         (sub, Dead(sup)) => subty_check(kind_ctx, ty_ctx, sub, sup),
@@ -65,7 +66,7 @@ pub fn subty_check(
 // Δ; Γ ⊢ ρ1 :> ρ2 ⇒ Γ′
 fn outlives(
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: TyCtx,
     longer_prv: &Provenance,
     shorter_prv: &Provenance,
 ) -> Result<TyCtx, ErrMsg> {
@@ -102,44 +103,25 @@ fn outlives(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> Result<TyCtx, String> {
+fn outl_check_val_prvs(mut ty_ctx: TyCtx, longer: &str, shorter: &str) -> Result<TyCtx, String> {
     // CHECK:
     //    NOT CLEAR WHY a. IS NECESSARY
     // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan
     //  dereferencing the variable for any provenance in ty_ctx.
 
-    if exists_deref_loan_with_prv(ty_ctx, longer) {
+    if exists_deref_loan_with_prv(&ty_ctx, longer) {
         // TODO better error msg
         return Err(String::from("first condition violated"));
     }
 
     // b. r1 occurs before r2 in Gamma (left to right)
-    if !longer_occurs_before_shorter(ty_ctx, longer, shorter) {
+    if !longer_occurs_before_shorter(&ty_ctx, longer, shorter) {
         return Err(format!("{} lives longer than {}.", shorter, longer));
     }
 
     // Create output Ctx
-    let unifed_loan_set = match (ty_ctx.get_loan_set(longer), ty_ctx.get_loan_set(shorter)) {
-        (Ok(mut set_longer), Ok(mut set_shorter)) => {
-            set_longer.append(&mut set_shorter);
-            set_longer
-        }
-        (set_longer, set_shorter) => {
-            let mut err_msg = String::new();
-            if let Err(msg_longer) = set_longer {
-                err_msg = create_loan_set_err_msg(longer, &msg_longer);
-            }
-            if let Err(msg_shorter) = set_shorter {
-                err_msg = format!(
-                    "{}\n{}",
-                    err_msg,
-                    create_loan_set_err_msg(shorter, &msg_shorter)
-                )
-            }
-            return Err(err_msg);
-        }
-    };
-    Ok(ty_ctx.clone().update_loan_set(shorter, unifed_loan_set)?)
+    let res_ty_ctx = ty_ctx.extend_loans_for_prv_with_prv_loans(longer, shorter)?;
+    Ok(res_ty_ctx)
 }
 
 fn create_loan_set_err_msg(prv: &str, error_msg: &str) -> String {
@@ -151,9 +133,8 @@ fn create_loan_set_err_msg(prv: &str, error_msg: &str) -> String {
 
 fn longer_occurs_before_shorter(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> bool {
     for prv in ty_ctx
-        .get_prv_mappings()
-        .into_iter()
-        .map(|prv_mappings| prv_mappings.prv)
+        .prv_mappings()
+        .map(|prv_mappings| prv_mappings.prv.clone())
     {
         if prv == longer {
             return true;
@@ -173,7 +154,7 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
             _ => false,
         })
         .any(|(place, _)| {
-            ty_ctx.get_prv_mappings().into_iter().any(|prv_mapping| {
+            ty_ctx.prv_mappings().into_iter().any(|prv_mapping| {
                 for loan in prv_mapping.loans.iter() {
                     if let Loan {
                         place_expr: PlaceExpr::Deref(pl_expr),
@@ -190,22 +171,22 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
 
 fn outl_check_val_ident_prv(
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: TyCtx,
     longer_val: &str,
     shorter_ident: &TyIdent,
 ) -> Result<TyCtx, String> {
     // TODO how could the set ever be empty?
-    let loan_set = ty_ctx.get_loan_set(longer_val)?;
+    let loan_set = ty_ctx.loans_for_prv(longer_val)?;
     if loan_set.is_empty() {
         return Err(format!("No loans bound to provenance."));
     }
 
-    borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx, loan_set);
+    borrowed_pl_expr_no_ref_to_existing_pl(&ty_ctx, loan_set);
     panic!("Not yet implemented.")
 }
 
 // FIXME Makes no sense!
-fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: Vec<Loan>) -> bool {
+fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: &HashSet<Loan>) -> bool {
     ty_ctx.all_places().iter().any(|(pl, ty)| {
         loan_set.iter().any(|loan| {
             let Loan {
@@ -219,7 +200,7 @@ fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: Vec<Loan>) -
 
 fn outl_check_ident_val_prv(
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: TyCtx,
     longer_ident: &TyIdent,
     shorter_val: &str,
 ) -> Result<TyCtx, String> {
@@ -238,14 +219,14 @@ fn outl_check_ident_val_prv(
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
 fn multiple_outlives(
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: TyCtx,
     prv_rels: &Vec<(Provenance, Provenance)>,
 ) -> Result<TyCtx, String> {
     // TODO figure out how `fold` works
     let mut res_ty_ctx = ty_ctx.clone();
     for prv_rel in prv_rels {
         let (longer, shorter) = prv_rel;
-        res_ty_ctx = outlives(kind_ctx, &res_ty_ctx, longer, shorter)?;
+        res_ty_ctx = outlives(kind_ctx, res_ty_ctx, longer, shorter)?;
     }
     Ok(res_ty_ctx)
 }

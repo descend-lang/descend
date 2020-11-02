@@ -1,6 +1,10 @@
-use super::nat::*;
-use super::ty::*;
+pub mod nat;
+pub mod ty;
+pub mod utils;
+
+use nat::*;
 use std::fmt;
+use ty::*;
 
 #[derive(Debug, Clone)]
 pub struct Expr {
@@ -56,7 +60,7 @@ pub enum PlaceCtx {
     Hole,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, Nat),
     Deref(Box<PlaceExpr>),
@@ -181,7 +185,7 @@ impl fmt::Display for ExprKind {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Ident {
     pub name: String,
 }
@@ -236,7 +240,7 @@ impl fmt::Display for Mutability {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum Ownership {
     Shrd,
     Uniq,

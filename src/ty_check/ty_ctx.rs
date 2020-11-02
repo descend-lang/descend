@@ -1,11 +1,10 @@
+use crate::ast::nat::Nat;
+use crate::ast::ty::{FrameTyping, Loan, ScalarData, Ty};
 use crate::ast::{Ident, Path, Place, TypedPlace};
-use crate::nat::Nat;
-use crate::ty::{FrameTyping, Loan, Ty};
-use std::iter::Flatten;
-use std::slice::{Iter, IterMut};
-use std::vec::IntoIter;
+use std::collections::HashSet;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
+// TODO only store references?
 pub struct IdentTyped {
     pub ident: Ident,
     pub ty: Ty,
@@ -20,7 +19,7 @@ impl IdentTyped {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct PrvMapping {
     pub prv: String,
-    pub loans: Vec<Loan>,
+    pub loans: HashSet<Loan>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -56,40 +55,51 @@ impl TyCtx {
         }
     }
 
-    // This function MUST keep the order in which the identifiers appear in the Typing Ctx
-    pub fn get_idents_typed(&self) -> Vec<IdentTyped> {
-        self.frame_tys
-            .iter()
-            .flatten()
-            .filter_map(|fe| {
-                if let TyEntry::Var(ident_typed) = fe {
-                    Some(ident_typed.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub fn idents_typed(&self) -> impl Iterator<Item = &'_ IdentTyped> {
+        self.frame_tys.iter().flatten().filter_map(|fe| {
+            if let TyEntry::Var(ident_typed) = fe {
+                Some(ident_typed)
+            } else {
+                None
+            }
+        })
     }
 
-    // This function MUST keep the order in which the PRVs appear in the Typing Ctx
-    pub fn get_prv_mappings(&self) -> Vec<PrvMapping> {
-        self.frame_tys
-            .iter()
-            .flatten()
-            .filter_map(|fe| {
-                if let TyEntry::Prov(prv_mapping) = fe {
-                    Some(prv_mapping.clone())
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub fn idents_typed_mut(&mut self) -> impl Iterator<Item = &'_ mut IdentTyped> {
+        self.frame_tys.iter_mut().flatten().filter_map(|fe| {
+            if let TyEntry::Var(ident_typed) = fe {
+                Some(ident_typed)
+            } else {
+                None
+            }
+        })
     }
 
+    pub fn prv_mappings(&self) -> impl Iterator<Item = &'_ PrvMapping> {
+        self.frame_tys.iter().flatten().filter_map(|fe| {
+            if let TyEntry::Prov(prv_mapping) = fe {
+                Some(prv_mapping)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn prv_mappings_mut(&mut self) -> impl Iterator<Item = &'_ mut PrvMapping> {
+        self.frame_tys.iter_mut().flatten().filter_map(|fe| {
+            if let TyEntry::Prov(prv_mapping) = fe {
+                Some(prv_mapping)
+            } else {
+                None
+            }
+        })
+    }
+
+    // TODO make this add and remove function
     pub fn update_loan_set(
         mut self,
         prv_val_name: &str,
-        loan_set: Vec<Loan>,
+        loan_set: HashSet<Loan>,
     ) -> Result<Self, String> {
         for fe in self.frame_tys.iter_mut().flatten() {
             if let TyEntry::Prov(prv_mapping) = fe {
@@ -105,13 +115,36 @@ impl TyCtx {
         ))
     }
 
-    pub fn get_loan_set(&self, prv_val_name: &str) -> Result<Vec<Loan>, String> {
+    pub fn extend_loans_for_prv_with_prv_loans(
+        mut self,
+        base: &str,
+        extension: &str,
+    ) -> Result<TyCtx, String> {
+        let ext_loans = self.loans_for_prv(extension)?.clone();
+        let base_loans = self.loans_for_prv_mut(base)?;
+        base_loans.extend(ext_loans);
+        Ok(self)
+    }
+
+    pub fn loans_for_prv(&self, prv_val_name: &str) -> Result<&HashSet<Loan>, String> {
         match self
-            .get_prv_mappings()
-            .iter()
+            .prv_mappings()
             .find(|prv_mapping| prv_val_name == prv_mapping.prv)
         {
-            Some(set) => Ok(set.loans.clone()),
+            Some(set) => Ok(&set.loans),
+            None => Err(format!(
+                "Provenance with name '{}', not found in context.",
+                prv_val_name
+            )),
+        }
+    }
+
+    pub fn loans_for_prv_mut(&mut self, prv_val_name: &str) -> Result<&mut HashSet<Loan>, String> {
+        match self
+            .prv_mappings_mut()
+            .find(|prv_mapping| prv_val_name == prv_mapping.prv)
+        {
+            Some(set) => Ok(&mut set.loans),
             None => Err(format!(
                 "Provenance with name '{}', not found in context.",
                 prv_val_name
@@ -120,35 +153,29 @@ impl TyCtx {
     }
 
     pub fn prv_val_exists(&self, prv_val_name: &str) -> bool {
-        self.get_prv_mappings()
-            .iter()
+        self.prv_mappings()
             .any(|prv_mapping| prv_mapping.prv == prv_val_name)
     }
 
     pub fn is_empty(&self) -> bool {
-        if let Some(frame_typing) = self.frame_tys.first() {
-            frame_typing.is_empty()
-        } else {
-            panic!("This should never happen.")
-        }
+        self.frame_tys.first().unwrap().is_empty()
     }
 
     // ∀π:τ ∈ Γ
     pub fn all_places(&self) -> Vec<TypedPlace> {
-        self.get_idents_typed()
-            .iter()
+        self.idents_typed()
             .flat_map(|IdentTyped { ident, ty }| TyCtx::explode_places(ident, ty))
             .collect()
     }
 
-    fn explode_places(ident: &Ident, ty: &Ty) -> Vec<(Place, Ty)> {
+    fn explode_places(ident: &Ident, ty: &Ty) -> Vec<TypedPlace> {
         fn proj(mut pl: Place, idx: Nat) -> Place {
             pl.path.push(idx);
             pl
         }
 
-        fn explode(pl: Place, ty: Ty) -> Vec<(Place, Ty)> {
-            use crate::nat::Nat::Lit;
+        fn explode(pl: Place, ty: Ty) -> Vec<TypedPlace> {
+            use crate::ast::nat::Nat::Lit;
             use Ty::*;
 
             match &ty {
@@ -157,7 +184,7 @@ impl TyCtx {
                 | At(_, _)
                 | Ref(_, _, _, _)
                 | Fn(_, _, _, _)
-                | GenFn(_, _, _, _)
+                | DepFn(_, _, _, _)
                 | Ident(_)
                 | Dead(_) => vec![(pl, ty.clone())],
                 Tuple(tys) => {
@@ -176,10 +203,12 @@ impl TyCtx {
     }
 
     pub fn type_place(&self, place: &Place) -> Result<Ty, String> {
-        fn proj_ty(ty: &Ty, path: &Path) -> Ty {
-            let mut res_ty = ty.clone();
+        fn proj_ty(ty: Ty, path: &Path) -> Ty {
+            let mut res_ty = ty;
             for n in path {
-                if let Ty::Tuple(elem_tys) = ty {
+                if let Ty::Tuple(elem_tys) = res_ty {
+                    // TODO should probably use usize here and not Nat, because Nat is not always
+                    //  evaluable.
                     let idx = n.eval();
                     res_ty = elem_tys[idx].clone();
                 } else {
@@ -189,112 +218,49 @@ impl TyCtx {
             res_ty
         }
 
-        let ident_ty = match self
-            .get_idents_typed()
-            .into_iter()
-            .find(|id_ty| id_ty.ident == place.ident)
-        {
+        let ident_ty = match self.idents_typed().find(|id_ty| id_ty.ident == place.ident) {
             Some(id) => id,
             None => return Err(format!("Identifier: {} not found in context.", place.ident)),
         };
-        Ok(proj_ty(&ident_ty.ty, &place.path))
+        Ok(proj_ty(ident_ty.ty.clone(), &place.path))
     }
 
-    pub fn kill_place(&self, pl: &Place) -> Self {
-        /*        fn kill_path_in_ty(ty: &Ty, path: &Path) -> Ty {
+    pub fn kill_place(mut self, pl: &Place) -> Self {
+        fn kill_path_in_ty(ty: Ty, path: &[Nat]) -> Ty {
             if path.is_empty() {
                 Ty::Dead(Box::new(ty.clone()))
+            } else if let Ty::Tuple(mut elem_tys) = ty {
+                let idx = path.first().unwrap().eval();
+                elem_tys[idx] = kill_path_in_ty(elem_tys[idx].clone(), &path[1..]);
+                Ty::Tuple(elem_tys)
             } else {
-                if let Ty::Tuple(elem_tys) = ty {
-                    kill_path_in_ty(elem_tys[path.first().unwrap()], path.remove(0))
-                } else {
-                    panic!("Path not compatible with type.")
-                }
+                // TODO make this an Error?
+                panic!("Path not compatible with type.")
             }
         }
 
-        if let Some(ident_typed) = self
-            .get_idents_typed()
-            .iter()
+        let mut ident_typed = self
+            .idents_typed_mut()
             .find(|ident_typed| ident_typed.ident == pl.ident)
-        {
-            let dead_ty = kill_path_in_ty(&ident_typed.ty, &pl.path);
-            let mut res_ty_ctx = self.clone();
-            res_ty_ctx.frame_tys.iter_mut()
+            .unwrap();
+        let dead_ty = kill_path_in_ty(ident_typed.ty.clone(), pl.path.as_slice());
+        ident_typed.ty = dead_ty;
+        self
+    }
+}
+
+#[test]
+fn test_kill_place_ident() {
+    let mut ty_ctx = TyCtx::new();
+    let x = IdentTyped::new(Ident::new("x"), Ty::Scalar(ScalarData::I32));
+    let place = Place::new(x.ident.clone(), vec![]);
+    ty_ctx = ty_ctx.append_ident_typed(x);
+    ty_ctx = ty_ctx.kill_place(&place);
+    assert!(
+        if let Ty::Dead(_) = ty_ctx.idents_typed().next().unwrap().ty {
+            true
         } else {
-            panic!("Tyring to kill a place which does not exist in this context.")
-        }*/
-        panic!("todo")
-    }
-
-    pub fn iter(&self) -> TyIter {
-        TyIter {
-            inner: self.frame_tys.iter().flatten(),
+            false
         }
-    }
-
-    pub fn iter_mut(&mut self) -> TyIterMut {
-        TyIterMut {
-            inner: self.frame_tys.iter_mut().flatten(),
-        }
-    }
-}
-
-pub struct TyIter<'a> {
-    inner: Flatten<Iter<'a, Vec<TyEntry>>>,
-}
-
-impl<'a> Iterator for TyIter<'a> {
-    type Item = &'a TyEntry;
-    fn next(&mut self) -> Option<&'a TyEntry> {
-        self.inner.next()
-    }
-}
-
-pub struct TyIterMut<'a> {
-    inner: Flatten<IterMut<'a, Vec<TyEntry>>>,
-}
-
-impl<'a> Iterator for TyIterMut<'a> {
-    type Item = &'a mut TyEntry;
-    fn next(&mut self) -> Option<&'a mut TyEntry> {
-        self.inner.next()
-    }
-}
-
-pub struct TyIntoIter {
-    inner: Flatten<IntoIter<Vec<TyEntry>>>,
-}
-
-impl Iterator for TyIntoIter {
-    type Item = TyEntry;
-    fn next(&mut self) -> Option<TyEntry> {
-        self.inner.next()
-    }
-}
-
-impl IntoIterator for TyCtx {
-    type Item = TyEntry;
-    type IntoIter = TyIntoIter;
-    fn into_iter(self) -> TyIntoIter {
-        TyIntoIter {
-            inner: self.frame_tys.into_iter().flatten(),
-        }
-    }
-}
-
-impl<'a> IntoIterator for &'a TyCtx {
-    type Item = &'a TyEntry;
-    type IntoIter = TyIter<'a>;
-    fn into_iter(self) -> TyIter<'a> {
-        self.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut TyCtx {
-    type Item = &'a mut TyEntry;
-    type IntoIter = TyIterMut<'a>;
-    fn into_iter(self) -> TyIterMut<'a> {
-        self.iter_mut()
-    }
+    );
 }

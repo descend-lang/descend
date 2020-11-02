@@ -1,6 +1,6 @@
 use core::fmt;
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Nat {
     Ident(String),
     Lit(usize),

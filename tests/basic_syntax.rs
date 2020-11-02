@@ -2,12 +2,12 @@
 
 extern crate descend;
 
+use descend::ast::nat::*;
+use descend::ast::ty::Memory::{GpuGlobal, GpuShared};
+use descend::ast::ty::*;
 use descend::ast::Ownership::{Shrd, Uniq};
 use descend::ast::*;
 use descend::dsl::*;
-use descend::nat::*;
-use descend::ty::Memory::{GpuGlobal, GpuShared};
-use descend::ty::*;
 use descend::ty_check::ty_check_expr;
 use descend::ty_check::ty_ctx::{IdentTyped, TyCtx};
 use descend::{arr, tuple, tuple_ty};
@@ -30,13 +30,13 @@ fn scalar_copy_example() {
         let_const("z", &i32, var("x"),
         unit())));
 
-    let x_ident = IdentTyped::new(Ident::new("x"), i32.clone());
-    let y_ident = IdentTyped::new(Ident::new("y"), i32.clone());
-    let z_ident = IdentTyped::new(Ident::new("z"), i32.clone());
+    let x = IdentTyped::new(Ident::new("x"), i32.clone());
+    let y = IdentTyped::new(Ident::new("y"), i32.clone());
+    let z = IdentTyped::new(Ident::new("z"), i32.clone());
     let expected_ty_ctx = TyCtx::new()
-        .append_ident_typed(x_ident)
-        .append_ident_typed(y_ident)
-        .append_ident_typed(z_ident);
+        .append_ident_typed(x)
+        .append_ident_typed(y)
+        .append_ident_typed(z);
     
     assert_ty_checks_empty_ctxs(e, &unit_ty, &expected_ty_ctx);
 }
@@ -59,13 +59,13 @@ fn array_copy_example() {
         let_const("z", &arr_ty(5, &i32), var("x"),
         unit())));
 
-    let x_ident = IdentTyped::new(Ident::new("x"), arr_ty(5, &i32));
-    let y_ident = IdentTyped::new(Ident::new("y"), arr_ty(5, &i32));
-    let z_ident = IdentTyped::new(Ident::new("z"), arr_ty(5, &i32));
+    let x = IdentTyped::new(Ident::new("x"), arr_ty(5, &i32));
+    let y = IdentTyped::new(Ident::new("y"), arr_ty(5, &i32));
+    let z = IdentTyped::new(Ident::new("z"), arr_ty(5, &i32));
     let expected_ty_ctx = TyCtx::new()
-        .append_ident_typed(x_ident)
-        .append_ident_typed(y_ident)
-        .append_ident_typed(z_ident);
+        .append_ident_typed(x)
+        .append_ident_typed(y)
+        .append_ident_typed(z);
     
     assert_ty_checks_empty_ctxs(e, &unit_ty, &expected_ty_ctx);
 }
@@ -88,20 +88,20 @@ fn tuple_copy_example() {
         let_const("z", &tuple_ty!(&i32, &f32), var("x"),
         unit())));
 
-    let x_ident = IdentTyped::new(Ident::new("x"), tuple_ty!(i32, f32));
-    let y_ident = IdentTyped::new(Ident::new("y"), tuple_ty!(i32, f32));
-    let z_ident = IdentTyped::new(Ident::new("z"), tuple_ty!(i32, f32));
+    let x = IdentTyped::new(Ident::new("x"), tuple_ty!(i32, f32));
+    let y = IdentTyped::new(Ident::new("y"), tuple_ty!(i32, f32));
+    let z = IdentTyped::new(Ident::new("z"), tuple_ty!(i32, f32));
     let expected_ty_ctx = TyCtx::new()
-        .append_ident_typed(x_ident)
-        .append_ident_typed(y_ident)
-        .append_ident_typed(z_ident);
+        .append_ident_typed(x)
+        .append_ident_typed(y)
+        .append_ident_typed(z);
 
     assert_ty_checks_empty_ctxs(e, &unit_ty, &expected_ty_ctx);
 }
 
 #[test]
 #[rustfmt::skip]
-fn at_type_move_example() {
+fn at_type_fail_move_example() {
     // let y: i32 @ gpu.global = x;
     // let z: i32 @ gpu.global = x; // Error
     //
@@ -116,20 +116,77 @@ fn at_type_move_example() {
         let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
         unit()));
 
-    let x_ident = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
-    let ty_ctx = TyCtx::new().append_ident_typed(x_ident);
-    let y_ident = IdentTyped::new(Ident::new("y"), at_ty(&i32, &GpuGlobal));
-
+    let x = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = KindCtx::new();
-    if ty_check_expr(&gl_ctx, &kind_ctx, &ty_ctx, &mut e).is_ok() {
+    let ty_ctx = TyCtx::new().append_ident_typed(x);
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_ok() {
        panic!("Moving a value twice is forbidden and should not type check.") 
     }
 }
 
 #[test]
 #[rustfmt::skip]
+fn at_type_move_example() {
+    // let y: i32 @ gpu.global = x;
+    // let z: i32 @ gpu.global = y;
+    //
+    //      desugared:
+    // let const y: i32 @ gpu.global = x;
+    // let const z: i32 @ gpu.global = y;
+    // ()
+    use Memory::GpuGlobal;
+
+    let mut e =
+        let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
+        let_const("z", &at_ty(&i32, &GpuGlobal), var("y"),
+        unit()));
+
+    let x = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
+    let gl_ctx = GlobalCtx::new();
+    let kind_ctx = KindCtx::new();
+    let ty_ctx = TyCtx::new().append_ident_typed(x);
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+        panic!(msg)
+    };
+}
+
+#[test]
+#[rustfmt::skip]
 fn gpu_memory_alloc_move_example() {
+    // let x: i32 @ gpu.global = copy_to_gpumem(5);
+    // let y: i32 @ gpu.global = x;
+    // let z: i32 @ gpu.global = y;
+    //
+    //      desugared:
+    // let const x: i32 @ gpu.global = copy_to_gpumem<i32>(5);
+    // let const y: i32 @ gpu.global = x;
+    // let const z: i32 @ gpu.global = y;
+    // ()
+    use Memory::GpuGlobal;
+
+    let mut e =
+        let_const("x", &at_ty(&i32, &GpuGlobal),
+        app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
+        let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
+        let_const("z", &at_ty(&i32, &GpuGlobal), var("y"),
+        unit())));
+
+    // TODO new_ident not public. why does this work??!!!
+    //  use dsl function ty_ident instead
+
+
+    let gl_ctx = GlobalCtx::new();
+    let kind_ctx = copy_to_gpu::kind_ctx();
+    let ty_ctx = TyCtx::new().append_ident_typed(copy_to_gpu::decl_and_ty());
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e)  {
+        panic!(msg)
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn gpu_memory_alloc_move_fail_example() {
     // let x: i32 @ gpu.global = copy_to_gpumem(5);
     // let y: i32 @ gpu.global = x;
     // let z: i32 @ gpu.global = x; // Error
@@ -141,25 +198,33 @@ fn gpu_memory_alloc_move_example() {
     // ()
     use Memory::GpuGlobal;
 
-    let e =
+    let mut e =
         let_const("x", &at_ty(&i32, &GpuGlobal),
-                  app(ddep_app(var("copy_to_gpumem"), &i32), vec![lit(&5)]),
-                  let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
-                            let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
-                                      unit())));
+        app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
+        let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
+        let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
+        unit())));
 
-    let x_ident = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
-    let y_ident = IdentTyped::new(Ident::new("y"), at_ty(&i32, &GpuGlobal));
-    let expected_ty_ctx = TyCtx::new()
-        .append_ident_typed(x_ident)
-        .append_ident_typed(y_ident);
-    
-    assert_ty_checks_empty_ctxs(e, &unit_ty, &expected_ty_ctx);
+    // TODO new_ident not public. why does this work??!!!
+    //  use dsl function ty_ident instead
+    let elem_ty_ident = Ty::new_ident("elem_ty");
+    let empty_frame_expr = FrameExpr::FrTy(FrameTyping::new());
+    let fun_ret_ty = at_ty(&i32, &GpuGlobal);
+    let fun_ty = fun_ty(vec![i32.clone()], &empty_frame_expr, ExecLoc::CpuThread, &fun_ret_ty);
+    let cp_gpu_ty = genfun_ty(&elem_ty_ident, &empty_frame_expr, ExecLoc::CpuThread, &fun_ty);
+    let copy_to_gpumem = IdentTyped::new(Ident::new("copy_to_gpu"), cp_gpu_ty);
+
+    let gl_ctx = GlobalCtx::new();
+    let kind_ctx = KindCtx::new().append_ty_idents(vec![elem_ty_ident]);
+    let ty_ctx = TyCtx::new().append_ident_typed(copy_to_gpumem);
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_ok()  {
+        panic!("Moving a value twice is forbidden and should not type check.")
+    }
 }
 
 #[test]
 #[rustfmt::skip]
-fn gpu_memory_alloc_borrow_example() {
+fn gpu_memory_alloc_borrow_fail_example() {
     // let x: i32 @ gpu.global = copy_to_gpumem(5);
     // let y: &a mut gpu.global i32 = &mut x;
     // let z: i32 @ gpu.global = x; // Error
@@ -202,6 +267,8 @@ fn gpu_memory_alloc_immediate_borrow_example() {
               let_const("x", &ref_ty(r, Uniq, &GpuGlobal, &i32),
                         borr(r, Uniq, var("tmp")),
                         unit()));
+    
+    panic!("todo: typecheck")
 }
 
 #[test]
@@ -252,6 +319,8 @@ fn shrd_ref_copy_example() {
                         let_const("z", &ref_ty(r, Shrd, &GpuGlobal, &i32),
                                   var("x"),
                                   unit())));
+
+    panic!("todo: typecheck")
 }
 
 #[test]
@@ -273,6 +342,8 @@ fn function_app_copy_example() {
         let_const("y", &i32, var("x"),
                   unit())
     ));
+
+    panic!("todo: typecheck")
 }
 
 #[test]
@@ -322,6 +393,7 @@ fn function_app_borrow_example() {
         let_mut("y", &arr_ty(3, &i32), var("x"),
                 unit())
     ));
+    panic!("todo: typecheck")
 }
 
 #[test]
@@ -363,9 +435,13 @@ fn assert_ty_checks_empty_ctxs(mut e: Expr, expected_ty: &Ty, expected_ty_ctx: &
     let gl_ctx = vec![];
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new();
-    match ty_check_expr(&gl_ctx, &kind_ctx, &ty_ctx, &mut e) {
-        Ok((ty, res_ty_ctx)) => {
-            assert_eq!(expected_ty, &ty, "Did not find expected type.");
+    match ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+        Ok(res_ty_ctx) => {
+            assert_eq!(
+                expected_ty,
+                e.ty.as_ref().unwrap(),
+                "Did not find expected type."
+            );
             assert_eq!(
                 expected_ty_ctx, &res_ty_ctx,
                 "Input and output typing contexts should be the same."
@@ -455,4 +531,32 @@ fn function_decl_reference_params_example() {
                     add(deref(var("p1")), index(deref(var("p2")), Nat::Lit(0))),
                     unit())
     );
+    panic!("todo: typecheck")
+}
+
+mod copy_to_gpu {
+    use descend::ast::ty::Memory::GpuGlobal;
+    use descend::ast::ty::{ExecLoc, FrameExpr, FrameTyping, KindCtx, Kinded, Ty, TyIdent};
+    use descend::ast::*;
+    use descend::dsl::*;
+    use descend::ty_check::ty_ctx::IdentTyped;
+
+    pub fn ty_ident() -> TyIdent {
+        Ty::new_ident("elem_ty")
+    }
+    pub fn kind_ctx() -> KindCtx {
+        KindCtx::new().append_ty_idents(vec![ty_ident()])
+    }
+    pub fn decl_and_ty() -> IdentTyped {
+        let empty_frame_expr = FrameExpr::FrTy(FrameTyping::new());
+        let fun_ret_ty = at_ty(&i32, &GpuGlobal);
+        let fun_ty = fun_ty(
+            vec![i32.clone()],
+            &empty_frame_expr,
+            ExecLoc::CpuThread,
+            &fun_ret_ty,
+        );
+        let cp_gpu_ty = genfun_ty(&ty_ident(), &empty_frame_expr, ExecLoc::CpuThread, &fun_ty);
+        IdentTyped::new(Ident::new("copy_to_gpu"), cp_gpu_ty)
+    }
 }

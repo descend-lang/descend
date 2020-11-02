@@ -1,4 +1,4 @@
-use super::nat::Nat;
+use crate::ast::nat::Nat;
 use crate::ast::*;
 use crate::ty_check::ty_ctx::{IdentTyped, TyEntry};
 use std::fmt;
@@ -7,7 +7,7 @@ use std::fmt;
 pub enum Kind {
     Nat,
     Memory,
-    Data,
+    Ty,
     Provenance,
     Frame,
 }
@@ -17,7 +17,7 @@ impl fmt::Display for Kind {
         let str = match self {
             Kind::Nat => "nat",
             Kind::Memory => "mem",
-            Kind::Data => "data",
+            Kind::Ty => "type",
             Kind::Provenance => "prv",
             Kind::Frame => "frm",
         };
@@ -41,7 +41,7 @@ pub fn append_idents_typed(frm: &FrameTyping, idents_typed: Vec<IdentTyped>) -> 
     new_frm.append(
         &mut idents_typed
             .into_iter()
-            .map(|id_typed| TyEntry::Var(id_typed))
+            .map(TyEntry::Var)
             .collect::<Vec<_>>(),
     );
     new_frm
@@ -70,7 +70,13 @@ impl Kinded for FrameExpr {
 // A type identifier is uniquely identified by its name (every name has exactly one kind)
 pub struct TyIdent {
     pub name: String,
-    pub kind: Kind,
+    kind: Kind,
+}
+
+impl TyIdent {
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
 }
 
 impl fmt::Display for TyIdent {
@@ -150,7 +156,7 @@ pub enum ExecLoc {
     GpuThread,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Loan {
     pub place_expr: PlaceExpr,
     pub own_qual: Ownership,
@@ -164,7 +170,7 @@ pub enum Ty {
     At(Box<Ty>, Memory),
     Ref(Provenance, Ownership, Memory, Box<Ty>),
     Fn(Vec<Ty>, Box<FrameExpr>, ExecLoc, Box<Ty>),
-    GenFn(TyIdent, Box<FrameExpr>, ExecLoc, Box<Ty>),
+    DepFn(TyIdent, Box<FrameExpr>, ExecLoc, Box<Ty>),
     Ident(TyIdent),
     Dead(Box<Ty>),
 }
@@ -178,7 +184,7 @@ impl Ty {
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
             Fn(_, _, _, _) => false,
-            GenFn(_, _, _, _) => false,
+            DepFn(_, _, _, _) => false,
             At(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(_, ty) => ty.non_copyable(),
@@ -189,17 +195,34 @@ impl Ty {
     pub fn copyable(&self) -> bool {
         !self.non_copyable()
     }
+
+    pub fn is_fully_alive(&self) -> bool {
+        use Ty::*;
+        match self {
+            Scalar(_)
+            | Ident(_)
+            | Ref(_, _, _, _)
+            | Fn(_, _, _, _)
+            | DepFn(_, _, _, _)
+            | At(_, _)
+            | Array(_, _) => true,
+            Tuple(elem_tys) => elem_tys
+                .iter()
+                .fold(true, |acc, ty| acc & ty.is_fully_alive()),
+            Dead(_) => false,
+        }
+    }
 }
 
 impl Kinded for Ty {
     fn get_kind(&self) -> Kind {
-        Kind::Data
+        Kind::Ty
     }
 
     fn new_ident(name: &str) -> TyIdent {
         TyIdent {
             name: String::from(name),
-            kind: Kind::Data,
+            kind: Kind::Ty,
         }
     }
 }
@@ -244,10 +267,10 @@ impl KindCtx {
         KindCtx { vec: Vec::new() }
     }
 
-    pub fn append_ty_idents(mut self, ty_idents: &Vec<TyIdent>) -> Self {
+    pub fn append_ty_idents(mut self, ty_idents: Vec<TyIdent>) -> Self {
         let mut entries: Vec<_> = ty_idents
-            .iter()
-            .map(|tyi| KindingCtxEntry::Ident(tyi.clone()))
+            .into_iter()
+            .map(|tyi| KindingCtxEntry::Ident(tyi))
             .collect();
         self.vec.append(&mut entries);
 
@@ -285,7 +308,7 @@ impl KindCtx {
     pub fn outlives(&self, long: &TyIdent, short: &TyIdent) -> Result<(), String> {
         use KindingCtxEntry::PrvRel;
 
-        if let Some(_) = self.vec.iter().find(|&entry| match entry {
+        if self.vec.iter().any(|entry| match entry {
             PrvRel((l, s)) => l == long && s == short,
             _ => false,
         }) {

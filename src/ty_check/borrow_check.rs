@@ -1,6 +1,7 @@
 use super::ty_ctx::{PrvMapping, TyCtx};
+use crate::ast::ty::*;
 use crate::ast::*;
-use crate::ty::*;
+use std::collections::HashSet;
 
 //
 // Ownership Safety
@@ -33,14 +34,14 @@ fn borrowable_under_existing_loans(
     own: Ownership,
     p: &PlaceExpr,
 ) -> bool {
-    ty_ctx.get_prv_mappings().iter().all(|prv_mapping| {
+    ty_ctx.prv_mappings().all(|prv_mapping| {
         let PrvMapping { prv, loans } = prv_mapping;
         no_uniq_loan_overlap(own, p, loans)
             || exists_place_with_ref_to_prv_all_in_reborrow(ty_ctx, prv, reborrows)
     })
 }
 
-fn no_uniq_loan_overlap(own: Ownership, place: &PlaceExpr, loans: &[Loan]) -> bool {
+fn no_uniq_loan_overlap(own: Ownership, place: &PlaceExpr, loans: &HashSet<Loan>) -> bool {
     loans.iter().all(|loan| {
         !(own == Ownership::Uniq || loan.own_qual == Ownership::Uniq)
             || !overlap(
@@ -79,6 +80,6 @@ fn exists_place_with_ref_to_prv_all_in_reborrow(
     at_least_one && all_in_reborrows
 }
 
-fn overlap(pl: &Place, pr: &Place) -> bool {
-    pl.prefix_of(pr) || pr.prefix_of(pl)
+fn overlap(pll: &Place, plr: &Place) -> bool {
+    pll.prefix_of(plr) || plr.prefix_of(pll)
 }
