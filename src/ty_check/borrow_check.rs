@@ -7,7 +7,7 @@ use std::collections::HashSet;
 // Ownership Safety
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
-pub fn borrow(
+pub fn ownership_safe(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     reborrows: &[PlaceExpr],
@@ -15,22 +15,31 @@ pub fn borrow(
     p: &PlaceExpr,
 ) -> Result<HashSet<Loan>, String> {
     if p.is_place() {
-        if borrowable_under_existing_loans(ty_ctx, reborrows, own, p) {
-            let mut loan_set = HashSet::new();
-            loan_set.insert(Loan {
-                place_expr: p.clone(),
-                own_qual: own,
-            });
-            Ok(loan_set)
-        } else {
-            Err(String::from("A borrow is being violated."))
-        }
+        safe_place(ty_ctx, reborrows, own, p)
     } else {
         panic!("Reborrowing not implemented yet.")
     }
 }
 
-fn borrowable_under_existing_loans(
+fn safe_place(
+    ty_ctx: &TyCtx,
+    reborrows: &[PlaceExpr],
+    own: Ownership,
+    p: &PlaceExpr,
+) -> Result<HashSet<Loan>, String> {
+    if ownership_safe_under_existing_loans(ty_ctx, reborrows, own, p) {
+        let mut loan_set = HashSet::new();
+        loan_set.insert(Loan {
+            place_expr: p.clone(),
+            own_qual: own,
+        });
+        Ok(loan_set)
+    } else {
+        Err(String::from("A borrow is being violated."))
+    }
+}
+
+fn ownership_safe_under_existing_loans(
     ty_ctx: &TyCtx,
     reborrows: &[PlaceExpr],
     own: Ownership,

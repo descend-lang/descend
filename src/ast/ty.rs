@@ -339,13 +339,13 @@ impl KindCtx {
 }
 
 #[derive(Debug, Clone)]
-pub enum ProgramItem {
-    PreDecl(PreDeclaredGlobalFun),
-    Def(GlobalFunDef),
+pub enum GlobalItem {
+    PreDecl(Box<PreDeclaredGlobalFun>),
+    Def(Box<GlobalFunDef>),
 }
 
 pub trait IntoProgramItem {
-    fn into_item(self) -> ProgramItem;
+    fn into_item(self) -> GlobalItem;
 }
 
 #[derive(Debug, Clone)]
@@ -355,8 +355,8 @@ pub struct PreDeclaredGlobalFun {
 }
 
 impl IntoProgramItem for PreDeclaredGlobalFun {
-    fn into_item(self) -> ProgramItem {
-        ProgramItem::PreDecl(self)
+    fn into_item(self) -> GlobalItem {
+        GlobalItem::PreDecl(Box::new(self))
     }
 }
 
@@ -373,19 +373,19 @@ pub struct GlobalFunDef {
 }
 
 impl IntoProgramItem for GlobalFunDef {
-    fn into_item(self) -> ProgramItem {
-        ProgramItem::Def(self)
+    fn into_item(self) -> GlobalItem {
+        GlobalItem::Def(Box::new(self))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Program {
-    items: Vec<ProgramItem>,
+pub struct GlobalCtx {
+    items: Vec<GlobalItem>,
 }
 
-impl Program {
+impl GlobalCtx {
     pub fn new() -> Self {
-        Program { items: vec![] }
+        GlobalCtx { items: vec![] }
     }
 
     pub fn append_items<T, I>(mut self, new_items: I) -> Self
@@ -400,12 +400,28 @@ impl Program {
 
     pub fn fun_defs_mut(&mut self) -> impl Iterator<Item = &mut GlobalFunDef> {
         self.items.iter_mut().filter_map(|item| match item {
-            ProgramItem::PreDecl(_) => None,
-            ProgramItem::Def(gl_fun_def) => Some(gl_fun_def),
+            GlobalItem::PreDecl(_) => None,
+            GlobalItem::Def(gl_fun_def) => Some(gl_fun_def.as_mut()),
         })
     }
-    
+
     // pub fn pre_declared_funs(&self) -> impl Iterator<Item = &PreDeclaredGlobalFun> {
     //     panic!("todo")
     // }
+
+    pub fn fun_ty_by_name(&self, name: &str) -> Result<&Ty, String> {
+        let fun = self.items.iter().find(|item| match item {
+            GlobalItem::PreDecl(fun_decl) => fun_decl.name == name,
+            // TODO
+            GlobalItem::Def(fun_def) => false,
+        });
+        match fun {
+            Some(GlobalItem::PreDecl(fun_decl)) => Ok(&fun_decl.fun_ty),
+            Some(GlobalItem::Def(fun_def)) => Ok(&fun_def.fun_ty),
+            None => Err(format!(
+                "Function `{}` does not exist in global environment.",
+                name
+            )),
+        }
+    }
 }

@@ -31,6 +31,10 @@ pub fn var(name: &str) -> Expr {
     Expr::new(ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new(name))))
 }
 
+pub fn fun_name(name: &str) -> Expr {
+    Expr::new(ExprKind::GlobalFunIdent(name.to_string()))
+}
+
 pub fn deref(pl_expr: Expr) -> Expr {
     Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
         expr_to_plexpr(pl_expr),

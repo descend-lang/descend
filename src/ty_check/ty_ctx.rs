@@ -254,6 +254,11 @@ impl TyCtx {
         ident_typed.ty = dead_ty;
         self
     }
+
+    pub fn garbage_collect_loans(self) -> Self {
+        // TODO!!!!
+        self
+    }
 }
 
 #[test]

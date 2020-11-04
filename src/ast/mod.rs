@@ -123,6 +123,7 @@ impl fmt::Display for PlaceExpr {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
+    GlobalFunIdent(String),
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
     PlaceExpr(PlaceExpr),
