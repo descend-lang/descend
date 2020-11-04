@@ -6,9 +6,8 @@ use crate::ast::nat::*;
 use crate::ast::ty::*;
 use crate::ast::Ownership;
 use crate::ast::*;
-use crate::ty_check::ty_ctx::PrvMapping;
+use crate::ty_check::subty_check::multiple_outlives;
 use borrow_check::borrow;
-use std::any::Any;
 use std::ops::Deref;
 use subty_check::subty_check;
 use ty_ctx::{IdentTyped, TyCtx};
@@ -19,76 +18,56 @@ use ty_ctx::{IdentTyped, TyCtx};
 
 type ErrMsg = String;
 
-pub fn ty_check(mut gl_ctx: GlobalCtx) -> Result<GlobalCtx, ErrMsg> {
-    let (typed_gl_ctx, errs): (Vec<_>, Vec<_>) = gl_ctx
-        .iter()
-        .map(|gl_f| ty_check_global_fun_def(&gl_ctx, gl_f))
-        .partition(Result::is_ok);
+pub fn ty_check(gl_ctx: &mut Program) -> Result<(), ErrMsg> {
+    let gl_ctx_copy_for_fun_defs = gl_ctx.clone();
+    let errs = gl_ctx
+        .fun_defs_mut()
+        .fold(
+            Vec::<ErrMsg>::new(),
+            |mut err_msgs, gl_f| match ty_check_global_fun_def(&gl_ctx_copy_for_fun_defs, gl_f) {
+                Ok(()) => err_msgs,
+                Err(msg) => {
+                    err_msgs.push(msg);
+                    err_msgs
+                }
+            },
+        );
 
     if errs.is_empty() {
-        Ok(typed_gl_ctx.into_iter().map(Result::unwrap).collect())
+        Ok(())
     } else {
-        Err(errs.into_iter().map(Result::unwrap_err).collect())
+        Err(errs.into_iter().collect::<String>())
     }
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
-fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &GlobalFunDef) -> Result<GlobalFunDef, ErrMsg> {
-    let GlobalFunDef {
-        name,
-        ty_idents,
-        params,
-        ret_ty,
-        exec,
-        prv_rels,
-        mut body_expr,
-        fun_ty,
-    } = gf.clone();
-    let kind_ctx: KindCtx = KindCtx::new()
-        .append_prv_rels(&prv_rels)
-        .append_ty_idents(ty_idents.clone());
-    prv_rels_use_declared_idents(&prv_rels, &kind_ctx)?;
+fn ty_check_global_fun_def(gl_ctx: &Program, gf: &mut GlobalFunDef) -> Result<(), ErrMsg> {
+    let kind_ctx = KindCtx::from(gf.ty_idents.clone(), gf.prv_rels.clone())?;
 
     // Build frame typing for this function
-    let glf_frame = append_idents_typed(&vec![], params.clone());
+    let glf_frame = append_idents_typed(&vec![], gf.params.clone());
     let ty_ctx = TyCtx::from(glf_frame);
-    ty_check_expr(gl_ctx, &kind_ctx, ty_ctx.clone(), &mut body_expr)?;
+
+    ty_check_expr(gl_ctx, &kind_ctx, ty_ctx.clone(), &mut gf.body_expr)?;
 
     // t <= t_f
     let empty_ty_ctx = subty_check(
         &kind_ctx,
-        ty_ctx,
-        &body_expr.ty.as_ref().unwrap(),
-        &ret_ty.clone(),
+        TyCtx::new(),
+        gf.body_expr.ty.as_ref().unwrap(),
+        &gf.ret_ty,
     )?;
-    assert!(empty_ty_ctx.is_empty(), "This should never happen.");
+    //TODO why is this the case?
+    assert!(
+        empty_ty_ctx.is_empty(),
+        format!(
+            "Expected typing context to be empty. But TyCtx:\n {:?}",
+            empty_ty_ctx
+        )
+    );
 
-    Ok(GlobalFunDef {
-        name,
-        ty_idents,
-        params,
-        ret_ty,
-        exec,
-        prv_rels,
-        body_expr,
-        fun_ty,
-    })
-}
-
-fn prv_rels_use_declared_idents(
-    prv_rels: &Vec<(TyIdent, TyIdent)>,
-    kind_ctx: &KindCtx,
-) -> Result<(), String> {
-    let prv_idents = kind_ctx.get_ty_idents(Kind::Provenance);
-    for prv_rel in prv_rels {
-        if !prv_idents.contains(&prv_rel.0) {
-            return Err(format!("{} is not declared", prv_rel.0));
-        }
-        if !prv_idents.contains(&prv_rel.1) {
-            return Err(format!("{} is not declared", prv_rel.1));
-        }
-    }
     Ok(())
+    // TODO IMPORTANT write function that computes the function type for a global fun
 }
 
 // TODO find out if Gamma is always correct by construction (similarly to Delta), also all 3 combined
@@ -98,7 +77,7 @@ fn prv_rels_use_declared_idents(
 // Σ; Δ; Γ ⊢ e :^exec τ ⇒ Γ′
 // This never returns a dead type, because typing an expression with a dead type is not possible.
 pub fn ty_check_expr(
-    gl_ctx: &GlobalCtx,
+    gl_ctx: &Program,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     expr: &mut Expr,
@@ -122,6 +101,9 @@ pub fn ty_check_expr(
         ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
             ty_check_ref(gl_ctx, kind_ctx, ty_ctx, prv_val_name, *own, pl_expr)?
         }
+        ExprKind::Binary(bin_op, lhs, rhs) => {
+            ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, bin_op, lhs, rhs)?
+        }
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
@@ -129,9 +111,34 @@ pub fn ty_check_expr(
     Ok(res_ty_ctx)
 }
 
+fn ty_check_binary_op(
+    gl_ctx: &Program,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    bin_op: &BinOp,
+    lhs: &mut Expr,
+    rhs: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    let lhs_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, lhs)?;
+    let rhs_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, lhs_ty_ctx, rhs)?;
+
+    let lhs_ty = lhs.ty.as_ref().unwrap();
+    let rhs_ty = rhs.ty.as_ref().unwrap();
+    match (lhs_ty, rhs_ty) {
+        (Ty::Scalar(ScalarData::F32), Ty::Scalar(ScalarData::F32))
+        | (Ty::Scalar(ScalarData::I32), Ty::Scalar(ScalarData::I32)) => {
+            Ok((rhs_ty_ctx, lhs_ty.clone()))
+        }
+        _ => Err(format!(
+            "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+            bin_op, lhs, rhs
+        )),
+    }
+}
+
 // TODO bring functions in order of the pattern matching
 fn ty_check_dep_app(
-    gl_ctx: &GlobalCtx,
+    gl_ctx: &Program,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     df: &mut Expr,
@@ -143,13 +150,14 @@ fn ty_check_dep_app(
             let df_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, df)?;
             if let Ty::DepFn(param, _, _, out_ty) = df.ty.as_ref().unwrap() {
                 if param.kind() != Kind::Ty {
-                    return Err(String::from("Trying to apply value of different kind."));
+                    return Err("Trying to apply value of different kind.".to_string());
                 }
                 Ok((df_ty_ctx, *out_ty.clone()))
             } else {
-                Err(String::from(
-                    "The provided dependent function expression does not have a function type.",
-                ))
+                Err(
+                    "The provided dependent function expression does not have a function type."
+                        .to_string(),
+                )
             }
         }
         KindValue::Nat(n) => panic!("todo"),
@@ -159,7 +167,7 @@ fn ty_check_dep_app(
 }
 
 fn ty_check_app(
-    gl_ctx: &GlobalCtx,
+    gl_ctx: &Program,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     ef: &mut Expr,
@@ -177,14 +185,12 @@ fn ty_check_app(
         }
         Ok((res_ty_ctx, *out_ty.clone()))
     } else {
-        Err(String::from(
-            "The provided function expression does not have a function type.",
-        ))
+        Err("The provided function expression does not have a function type.".to_string())
     }
 }
 
 fn ty_check_tuple(
-    gl_ctx: &Vec<GlobalFunDef>,
+    gl_ctx: &Program,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     elems: &mut [Expr],
@@ -198,7 +204,7 @@ fn ty_check_tuple(
 }
 
 fn ty_check_array(
-    gl_ctx: &Vec<GlobalFunDef>,
+    gl_ctx: &Program,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     elems: &mut Vec<Expr>,
@@ -210,9 +216,7 @@ fn ty_check_array(
     }
     let ty = elems.first().unwrap().ty.clone();
     if elems.iter().any(|elem| ty != elem.ty) {
-        Err(String::from(
-            "Not all provided elements have the same type.",
-        ))
+        Err("Not all provided elements have the same type.".to_string())
     } else {
         Ok((
             tmp_ty_ctx,
@@ -232,7 +236,7 @@ fn ty_check_literal(ty_ctx: TyCtx, l: &mut Lit) -> (TyCtx, Ty) {
 }
 
 fn ty_check_let(
-    gl_ctx: &GlobalCtx,
+    gl_ctx: &Program,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     ident: &mut Ident,
@@ -261,17 +265,17 @@ fn ty_check_place_with_deref(
     borrow(kind_ctx, &ty_ctx, vec![].as_slice(), own, pl_expr)?;
     if let Ok(ty) = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr) {
         if !ty.is_fully_alive() {
-            return Err(String::from("Place was moved before."));
+            return Err("Place was moved before.".to_string());
         }
         if ty.copyable() {
             // this line is a trick to release a life time that is connected to ty_ctx
             let ty = ty.clone();
             Ok((ty_ctx, ty))
         } else {
-            Err(String::from("Data type is not copyable."))
+            Err("Data type is not copyable.".to_string())
         }
     } else {
-        Err(String::from("Place expression does not have correct type."))
+        Err("Place expression does not have correct type.".to_string())
     }
 }
 
@@ -285,7 +289,7 @@ fn ty_check_place_without_deref(
     //  reintroduce Dead Type syntax for Frame Entries and return type of type_place.
     let pl_ty = ty_ctx.place_ty(&place)?;
     if !pl_ty.is_fully_alive() {
-        return Err(String::from("Place was moved before."));
+        return Err("Place was moved before.".to_string());
     }
     let res_ty_ctx = if pl_ty.copyable() {
         borrow(
@@ -311,7 +315,7 @@ fn ty_check_place_without_deref(
 }
 
 fn ty_check_ref(
-    gl_ctx: &GlobalCtx,
+    gl_ctx: &Program,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     prv_val_name: &str,
@@ -319,16 +323,14 @@ fn ty_check_ref(
     pl_expr: &mut PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     if !ty_ctx.loans_for_prv(prv_val_name)?.is_empty() {
-        return Err(String::from(
-            "Trying to borrow with a provenance that is used in a different borrow.",
-        ));
+        return Err(
+            "Trying to borrow with a provenance that is used in a different borrow.".to_string(),
+        );
     }
     let loans = borrow(kind_ctx, &ty_ctx, vec![].as_slice(), own, pl_expr)?;
     let ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, own, pl_expr)?;
     if !ty.is_fully_alive() {
-        return Err(String::from(
-            "The place was at least partially moved before.",
-        ));
+        return Err("The place was at least partially moved before.".to_string());
     }
     let (reffed_ty, mem) = match &ty {
         Ty::Dead(_) => panic!("Cannot happen because of the alive check."),
@@ -345,6 +347,8 @@ fn ty_check_ref(
     Ok((res_ty_ctx, res_ty))
 }
 
+// Δ; Γ ⊢ω p:τ
+// p in an ω context has type τ under Δ and Γ
 fn place_expr_ty_under_own<'a>(
     kind_ctx: &KindCtx,
     ty_ctx: &'a TyCtx,
@@ -355,6 +359,8 @@ fn place_expr_ty_under_own<'a>(
     Ok(ty)
 }
 
+// Δ; Γ ⊢ω p:τ,{ρ}
+// p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
 fn place_expr_ty_and_passed_prvs_under_own<'a>(
     kind_ctx: &KindCtx,
     ty_ctx: &'a TyCtx,
@@ -362,6 +368,7 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
     pl_expr: &PlaceExpr,
 ) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
     match pl_expr {
+        // TC-Var
         PlaceExpr::Var(ident) => {
             let ty = ty_ctx.ident_ty(&ident)?;
             if !ty.is_fully_alive() {
@@ -369,6 +376,38 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
             }
             Ok((ty, vec![]))
         }
-        _ => panic!("todo"),
+        // TC-Proj
+        PlaceExpr::Proj(tuple_expr, n) => {
+            let (pl_expr_ty, passed_prvs) =
+                place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, tuple_expr)?;
+            if let Ty::Tuple(elem_tys) = pl_expr_ty {
+                if let Some(ty) = elem_tys.get(n.eval()) {
+                    Ok((ty, passed_prvs))
+                } else {
+                    Err("Trying to access non existing tuple element.".to_string())
+                }
+            } else {
+                Err("Trying to project from a non tuple type.".to_string())
+            }
+        }
+        // TC-Deref
+        // TODO respect memory
+        PlaceExpr::Deref(ref_expr) => {
+            let (pl_expr_ty, mut passed_prvs) =
+                place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, ref_expr)?;
+            if let Ty::Ref(prv, ref_own, mem, ty) = pl_expr_ty {
+                if ref_own <= &own {
+                    return Err(
+                        "Trying to dereference and mutably use a shrd reference.".to_string()
+                    );
+                }
+                let outl_rels = passed_prvs.iter().map(|&passed_prv| (prv, passed_prv));
+                multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
+                passed_prvs.push(prv);
+                Ok((ty, passed_prvs))
+            } else {
+                Err("Trying to dereference non reference type.".to_string())
+            }
+        }
     }
 }

@@ -211,7 +211,7 @@ fn outl_check_ident_val_prv(
     if kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance)
         && ty_ctx.prv_val_exists(shorter_val)
     {
-        Ok(ty_ctx.clone())
+        Ok(ty_ctx)
     } else {
         Err(format!(
             "{} or {} not found in contexts.",
@@ -221,16 +221,18 @@ fn outl_check_ident_val_prv(
 }
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
-fn multiple_outlives(
+pub fn multiple_outlives<'a, I>(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    prv_rels: &Vec<(Provenance, Provenance)>,
-) -> Result<TyCtx, String> {
-    // TODO figure out how `fold` works
-    let mut res_ty_ctx = ty_ctx.clone();
-    for prv_rel in prv_rels {
-        let (longer, shorter) = prv_rel;
-        res_ty_ctx = outlives(kind_ctx, res_ty_ctx, longer, shorter)?;
-    }
-    Ok(res_ty_ctx)
+    prv_rels: I,
+) -> Result<TyCtx, String>
+where
+    I: IntoIterator<Item = (&'a Provenance, &'a Provenance)>,
+{
+    prv_rels
+        .into_iter()
+        .try_fold(ty_ctx, |res_ty_ctx, prv_rel| {
+            let (longer, shorter) = prv_rel;
+            outlives(kind_ctx, res_ty_ctx, longer, shorter)
+        })
 }

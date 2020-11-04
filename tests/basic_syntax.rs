@@ -8,9 +8,10 @@ use descend::ast::ty::*;
 use descend::ast::Ownership::{Shrd, Uniq};
 use descend::ast::*;
 use descend::dsl::*;
-use descend::ty_check::ty_check_expr;
-use descend::ty_check::ty_ctx::{IdentTyped, TyCtx};
+use descend::ty_check::ty_ctx::{IdentTyped, PrvMapping, TyCtx};
+use descend::ty_check::{ty_check, ty_check_expr};
 use descend::{arr, tuple, tuple_ty};
+use std::collections::HashSet;
 
 #[test]
 #[rustfmt::skip]
@@ -117,7 +118,7 @@ fn at_type_fail_move_example() {
         unit()));
 
     let x = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
-    let gl_ctx = GlobalCtx::new();
+    let gl_ctx = Program::new();
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new().append_ident_typed(x);
     if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_ok() {
@@ -143,7 +144,7 @@ fn at_type_move_example() {
         unit()));
 
     let x = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
-    let gl_ctx = GlobalCtx::new();
+    let gl_ctx = Program::new();
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new().append_ident_typed(x);
     if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
@@ -172,11 +173,7 @@ fn gpu_memory_alloc_move_example() {
         let_const("z", &at_ty(&i32, &GpuGlobal), var("y"),
         unit())));
 
-    // TODO new_ident not public. why does this work??!!!
-    //  use dsl function ty_ident instead
-
-
-    let gl_ctx = GlobalCtx::new();
+    let gl_ctx = Program::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
     let ty_ctx = TyCtx::new().append_ident_typed(copy_to_gpu::decl_and_ty());
     if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e)  {
@@ -187,12 +184,12 @@ fn gpu_memory_alloc_move_example() {
 #[test]
 #[rustfmt::skip]
 fn gpu_memory_alloc_move_fail_example() {
-    // let x: i32 @ gpu.global = copy_to_gpumem(5);
+    // let x: i32 @ gpu.global = copy_to_gpu(5);
     // let y: i32 @ gpu.global = x;
     // let z: i32 @ gpu.global = x; // Error
     //
     //      desugared:
-    // let const x: i32 @ gpu.global = copy_to_gpumem<i32>(5);
+    // let const x: i32 @ gpu.global = copy_to_gpu<i32>(5);
     // let const y: i32 @ gpu.global = x;
     // let const z: i32 @ gpu.global = x; // Error
     // ()
@@ -205,70 +202,120 @@ fn gpu_memory_alloc_move_fail_example() {
         let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
         unit())));
 
-    // TODO new_ident not public. why does this work??!!!
-    //  use dsl function ty_ident instead
-    let elem_ty_ident = Ty::new_ident("elem_ty");
-    let empty_frame_expr = FrameExpr::FrTy(FrameTyping::new());
-    let fun_ret_ty = at_ty(&i32, &GpuGlobal);
-    let fun_ty = fun_ty(vec![i32.clone()], &empty_frame_expr, ExecLoc::CpuThread, &fun_ret_ty);
-    let cp_gpu_ty = genfun_ty(&elem_ty_ident, &empty_frame_expr, ExecLoc::CpuThread, &fun_ty);
-    let copy_to_gpumem = IdentTyped::new(Ident::new("copy_to_gpu"), cp_gpu_ty);
-
-    let gl_ctx = GlobalCtx::new();
-    let kind_ctx = KindCtx::new().append_ty_idents(vec![elem_ty_ident]);
-    let ty_ctx = TyCtx::new().append_ident_typed(copy_to_gpumem);
-    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_ok()  {
+    let gl_ctx = Program::new();
+    let kind_ctx = copy_to_gpu::kind_ctx();
+    let ty_ctx = TyCtx::new().append_ident_typed(copy_to_gpu::decl_and_ty());
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e)  {
+        assert_eq!(msg, "Place was moved before.")
+    } else {
         panic!("Moving a value twice is forbidden and should not type check.")
     }
 }
 
 #[test]
 #[rustfmt::skip]
-fn gpu_memory_alloc_borrow_fail_example() {
-    // let x: i32 @ gpu.global = copy_to_gpumem(5);
+fn gpu_memory_alloc_borrow_example() {
+    // let x: i32 @ gpu.global = copy_to_gpu(5);
+    // &uniq x
+    
+    //      desugared:
+    // let const x: i32 @ gpu.global = copy_to_gpu<i32>(5);
+    // &r uniq x
+    use Memory::GpuGlobal;
+
+    let prv = &prv("r");
+    let mut e =
+        let_const("x", &at_ty(&i32, &GpuGlobal),
+                  app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
+        borr(prv, Uniq, var("x")));
+
+    let gl_ctx = Program::new();
+    let kind_ctx = copy_to_gpu::kind_ctx();
+    let prv_mapping = PrvMapping { prv: "r".to_string(), loans: HashSet::new() };
+    let ty_ctx = TyCtx::new()
+        .append_ident_typed(copy_to_gpu::decl_and_ty())
+        .append_prv_mapping(prv_mapping);
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_ok() {
+        match e.ty.unwrap() {
+            Ty::Ref(Provenance::Value(r_prv), Uniq, GpuGlobal, r_ty) if r_prv == "r" => {
+                match *r_ty {
+                    Ty::Scalar(ScalarData::I32) => {}
+                    _ => panic!("Wrong type.")
+                }
+            }
+            _ => panic!("Wrong type.")
+        }
+    } else {
+        panic!("It should be possible to borrow from an at type.")
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn gpu_memory_alloc_move_after_borrow_fail_example() {
+    // let x: i32 @ gpu.global = copy_to_gpu(5);
     // let y: &a mut gpu.global i32 = &mut x;
     // let z: i32 @ gpu.global = x; // Error
     // // do_something(y);
     //
     //      desugared:
-    // let const x: i32 @ gpu.global = copy_to_gpumem<i32>(5);
+    // let const x: i32 @ gpu.global = copy_to_gpu<i32>(5);
     // let const y: &r uniq gpu.global i32 = &r uniq x;
     // let const z: i32 @ gpu.global = x; // Error
     // // do_something(y);
     // ()
     use Memory::GpuGlobal;
 
-    let l = &prv("r");
-    let_const("x", &at_ty(&i32, &GpuGlobal),
-              app(ddep_app(var("copy_to_gpumem"), &i32), vec![lit(&5)]),
-              let_const("y", &ref_ty(l, Uniq, &GpuGlobal, &i32),
-                        borr(l, Uniq, var("x")),
-                        let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
-                                  unit())));
-    
-    panic!("This shouldn't type check.")
+    let prv = &prv("r");
+    let mut e =
+        let_const("x", &at_ty(&i32, &GpuGlobal),
+                  app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
+        let_const("y", &ref_ty(prv, Uniq, &GpuGlobal, &i32), borr(prv, Uniq, var("x")),
+                  let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
+        unit())));
+
+    let gl_ctx = Program::new();
+    let kind_ctx = copy_to_gpu::kind_ctx();
+    let prv_mapping = PrvMapping { prv: "r".to_string(), loans: HashSet::new() };
+    let ty_ctx = TyCtx::new()
+        .append_ident_typed(copy_to_gpu::decl_and_ty())
+        .append_prv_mapping(prv_mapping);
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+        assert_eq!(msg, "A borrow is being violated.")
+    } else {
+        panic!("Illegal move of borrowed value.")
+    }
 }
 
-#[test]
+//#[test]
 #[rustfmt::skip]
-fn gpu_memory_alloc_immediate_borrow_example() {
-    // let x: &a const gpu.global i32 = &const copy_to_gpumem(5);
+fn gpu_mem_alloc_copy_shrd_ref_immediate_borrow_example() {
+    // let x: &shrd gpu.global i32 = &shrd copy_to_gpumem(5);
+    // let y: &shrd gpu.global i32 = x;
     //
     //      desugared:
-    // let const tmp: i32 @ gpu.global =
-    //      copy_to_gpumem<i32>(5);
-    // let const x: &r const gpu.global i32 = &r const tmp;
+    // let const x: &r shrd gpu.global i32 = &r shrd copy_to_gpumem<i32>(5);
+    // let const y: &r shrd gpu.global i32 = x;
     // ()
     use Memory::GpuGlobal;
 
-    let r = &prv("r");
-    let_const("tmp", &at_ty(&i32, &GpuGlobal),
-              app(ddep_app(var("copy_to_gpumem"), &i32), vec![lit(&5)]),
-              let_const("x", &ref_ty(r, Uniq, &GpuGlobal, &i32),
-                        borr(r, Uniq, var("tmp")),
-                        unit()));
-    
-    panic!("todo: typecheck")
+    let prv = &prv("r");
+    let mut e =
+        let_const("x", &ref_ty(prv, Shrd, &GpuGlobal, &i32),
+                  borr(prv, Uniq, app(ddep_app(var("copy_to_gpumem"), &i32), vec![lit(&5)])),
+        let_const("y", &ref_ty(prv, Shrd, &GpuGlobal, &i32),
+                  var("x"),
+        unit()));
+
+    let gl_ctx = Program::new();
+    let kind_ctx = copy_to_gpu::kind_ctx();
+    let prv_mapping = PrvMapping { prv: "r".to_string(), loans: HashSet::new() };
+    let ty_ctx = TyCtx::new()
+        .append_ident_typed(copy_to_gpu::decl_and_ty())
+        .append_prv_mapping(prv_mapping);
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_err() {
+        panic!("Directly borrowing and copying a shared value should be allowed.")
+    }
 }
 
 #[test]
@@ -285,16 +332,26 @@ fn uniq_ref_movement_example() {
     // ()
     use Memory::GpuGlobal;
 
-    let r = &prv("r");
-    let_const("x", &ref_ty(r, Uniq, &GpuGlobal, &i32),
-              borr(r, Uniq, var("g")),
-              let_const("y", &ref_ty(r, Uniq, &GpuGlobal, &i32),
-                        var("x"),
-                        let_const("z", &ref_ty(&r, Uniq, &GpuGlobal, &i32),
-                                  var("x"),
-                                  unit())));
+    let prv = &prv("r");
+    let mut e =
+        let_const("x", &ref_ty(prv, Uniq, &GpuGlobal, &i32),
+                  borr(prv, Uniq, var("g")),
+        let_const("y", &ref_ty(prv, Uniq, &GpuGlobal, &i32),
+                  var("x"),
+        let_const("z", &ref_ty(&prv, Uniq, &GpuGlobal, &i32),
+                  var("x"),
+        unit())));
 
-    panic!("This shouldn't type check.")
+    let gl_ctx = Program::new();
+    let kind_ctx = copy_to_gpu::kind_ctx();
+    let prv_mapping = PrvMapping { prv: "r".to_string(), loans: HashSet::new() };
+    let g = IdentTyped::new(Ident::new("g"), at_ty(&i32, &GpuGlobal));
+    let ty_ctx = TyCtx::new().append_prv_mapping(prv_mapping).append_ident_typed(g);
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+        assert_eq!(msg, "Place was moved before.")
+    } else {
+        panic!("Illegal move of borrowed value.")
+    }
 }
 
 #[test]
@@ -312,15 +369,23 @@ fn shrd_ref_copy_example() {
     use Memory::GpuGlobal;
 
     let r = &prv("r");
-    let_const("x", &ref_ty(r, Shrd, &GpuGlobal, &i32),
-              borr(r, Shrd, var("g")),
-              let_const("y", &ref_ty(r, Shrd, &GpuGlobal, &i32),
-                        var("x"),
-                        let_const("z", &ref_ty(r, Shrd, &GpuGlobal, &i32),
-                                  var("x"),
-                                  unit())));
+    let mut e =
+        let_const("x", &ref_ty(r, Shrd, &GpuGlobal, &i32),
+                  borr(r, Shrd, var("g")),
+        let_const("y", &ref_ty(r, Shrd, &GpuGlobal, &i32),
+                  var("x"),
+        let_const("z", &ref_ty(r, Shrd, &GpuGlobal, &i32),
+                  var("x"),
+        unit())));
 
-    panic!("todo: typecheck")
+    let gl_ctx = Program::new();
+    let kind_ctx = copy_to_gpu::kind_ctx();
+    let prv_mapping = PrvMapping { prv: "r".to_string(), loans: HashSet::new() };
+    let g = IdentTyped::new(Ident::new("g"), at_ty(&i32, &GpuGlobal));
+    let ty_ctx = TyCtx::new().append_prv_mapping(prv_mapping).append_ident_typed(g);
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_err() {
+        panic!("Shared refernece should be copyable.");
+    }
 }
 
 #[test]
@@ -336,13 +401,15 @@ fn function_app_copy_example() {
     // (f(x);
     // let const y: un i32 = x;
     // ())
-    let_const("x", &i32, lit(&5),
-    seq(
-        app(var("f"), vec![var("x")]),
-        let_const("y", &i32, var("x"),
-                  unit())
-    ));
-
+    let mut e =
+        let_const("x", &i32, lit(&5),
+        seq(
+            app(var("f"), vec![var("x")]),
+            let_const("y", &i32, var("x"),
+            unit())
+        ));
+    
+    let gl_ctx = Program::new();
     panic!("todo: typecheck")
 }
 
@@ -359,13 +426,14 @@ fn function_app_move_example() {
     // (f(x);
     // let const y: 3.i32 = x; // Error
     // ())
-    let_const("x", &arr_ty(3, &i32), arr![1, 2, 3],
-              seq(
-        app(var("f"), vec![var("x")]),
-        let_const("y", &arr_ty(3, &i32),
-                  var("x"),
-                  unit())
-    ));
+    let mut e =
+        let_const("x", &arr_ty(3, &i32), arr![1, 2, 3], 
+        seq(
+            app(var("f"), vec![var("x")]),
+            let_const("y", &arr_ty(3, &i32),
+                      var("x"),
+            unit())
+        ));
 
     panic!("This shouldn't type check.")
 }
@@ -432,7 +500,7 @@ fn function_app_move_attype_example() {
 }
 
 fn assert_ty_checks_empty_ctxs(mut e: Expr, expected_ty: &Ty, expected_ty_ctx: &TyCtx) {
-    let gl_ctx = vec![];
+    let gl_ctx = Program::new();
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new();
     match ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
@@ -453,7 +521,7 @@ fn assert_ty_checks_empty_ctxs(mut e: Expr, expected_ty: &Ty, expected_ty_ctx: &
 
 #[test]
 #[rustfmt::skip]
-fn function_decl_no_params_example() {
+fn function_def_no_params_example() {
     // fn host_f() ->[cpu.thread] () {
     //   let x: i32 = 5;
     //   ()
@@ -466,17 +534,23 @@ fn function_decl_no_params_example() {
     // }
     use ExecLoc::CpuThread;
     
-    fdecl("host_f", vec![], vec![], &unit_ty, &FrameExpr::FrTy(vec![]),
-          CpuThread, vec![],
-
-          let_const("x", &i32, lit(&5),
-                  unit())
+    let host_f =
+        fdef("host_f", vec![], vec![], &unit_ty, CpuThread, vec![],
+            let_const("x", &i32, lit(&5),
+            unit())
+        );
+    let mut program = Program::new().append_items(vec![host_f]);
+    
+    assert!(ty_check(&mut program).is_ok());
+    assert_eq!(
+        program.fun_defs_mut().next().unwrap().body_expr.ty.as_ref().unwrap(),
+        &Ty::Scalar(ScalarData::Unit)
     );
 }
 
 #[test]
 #[rustfmt::skip]
-fn function_decl_params_example() {
+fn function_def_params_example() {
     // fn gpu_thread_f(p1: i32, p2: i32) ->[gpu.thread] () {
     //   let x: i32 = p1 + p2;    
     // }
@@ -488,11 +562,20 @@ fn function_decl_params_example() {
     // }
     use ExecLoc::GpuThread;
 
-    fdecl("gpu_thread_f", vec![], vec![("p1", &i32), ("p2", &i32)],
-          &unit_ty, &FrameExpr::FrTy(vec![]), GpuThread, vec![],
+    let gpu_thread_f =
+        fdef("gpu_thread_f", vec![], vec![("p1", &i32), ("p2", &i32)],
+             &unit_ty, GpuThread, vec![],
 
-          let_const("x", &i32, add(var("p1"), var("p2")),
-                  unit())
+            let_const("x", &i32, add(var("p1"), var("p2")),
+            unit())
+    );
+    
+    let mut program = Program::new().append_items(vec![gpu_thread_f]);
+
+    assert!(ty_check(&mut program).is_ok());
+    assert_eq!(
+        program.fun_defs_mut().next().unwrap().body_expr.ty.as_ref().unwrap(),
+        &Ty::Scalar(ScalarData::Unit)
     );
 }
 
@@ -515,19 +598,18 @@ fn function_decl_reference_params_example() {
 
     let r1 = prov_ident("'r1");
     let r2 = prov_ident("'r2");
-    fdecl("gpu_group_f",
-          vec![r1.clone(), r2.clone()],
-          vec![("p1",
+    fdef("gpu_group_f",
+         vec![r1.clone(), r2.clone()],
+         vec![("p1",
                 &ref_ty(&Provenance::Ident(r1), Shrd, &GpuShared, &i32)),
                ("p2",
                 &ref_ty(&Provenance::Ident(r2), Uniq, &GpuGlobal,
                         &at_ty(&arr_ty(3, &i32), &GpuGlobal)))],
-          &unit_ty,
-          &FrameExpr::FrTy(vec![]),
-          GpuGroup,
-          vec![],
+         &unit_ty,
+         GpuGroup,
+         vec![],
 
-          let_const("x", &i32,
+         let_const("x", &i32,
                     add(deref(var("p1")), index(deref(var("p2")), Nat::Lit(0))),
                     unit())
     );

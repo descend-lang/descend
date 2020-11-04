@@ -38,27 +38,27 @@ pub fn deref(pl_expr: Expr) -> Expr {
 }
 
 // Function Declaration
-pub fn fdecl(
+pub fn fdef(
     name: &str,
     ty_params: Vec<TyIdent>,
     params: Vec<(&str, &Ty)>,
     ret_ty: &Ty,
-    frame: &FrameExpr,
     exec: ExecLoc,
     prv_rels: Vec<PrvRel>,
     body: Expr,
 ) -> GlobalFunDef {
-    let f_ty = fun_ty(
+    let mut f_ty = fun_ty(
         params
             .iter()
             .map(|p: &(&str, &Ty)| -> Ty { p.1.clone() })
             .collect(),
-        frame,
+        &FrameExpr::FrTy(vec![]),
         exec,
         ret_ty,
     );
-    let genf_ty = multi_arg_genfn_ty(ty_params.as_slice(), frame, exec, &f_ty);
-
+    if !ty_params.is_empty() {
+        f_ty = multi_arg_genfn_ty(ty_params.as_slice(), exec, &f_ty);
+    }
     GlobalFunDef {
         name: String::from(name),
         ty_idents: ty_params,
@@ -67,7 +67,7 @@ pub fn fdecl(
         exec,
         prv_rels,
         body_expr: body,
-        fun_ty: genf_ty,
+        fun_ty: f_ty,
     }
 }
 
@@ -378,17 +378,18 @@ pub fn genfun_ty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty)
     )
 }
 
-pub fn multi_arg_genfn_ty(params: &[TyIdent], frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
+pub fn multi_arg_genfn_ty(params: &[TyIdent], exec: ExecLoc, ret_ty: &Ty) -> Ty {
+    let empty_frame = FrameExpr::FrTy(vec![]);
     match params.split_first() {
         None => {
             panic!("To create a generic function type, at least one parameter must be provided")
         }
-        Some((head, &[])) => genfun_ty(head, frame, exec, ret_ty),
+        Some((head, &[])) => genfun_ty(head, &empty_frame, exec, ret_ty),
         Some((head, tail)) => genfun_ty(
             head,
-            frame,
+            &empty_frame,
             exec,
-            &multi_arg_genfn_ty(tail, frame, exec, ret_ty),
+            &multi_arg_genfn_ty(tail, exec, ret_ty),
         ),
     }
 }

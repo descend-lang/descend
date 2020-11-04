@@ -240,10 +240,19 @@ impl fmt::Display for Mutability {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Copy, Clone)]
 pub enum Ownership {
     Shrd,
     Uniq,
+}
+
+#[test]
+fn test_ownership_ordering() {
+    use Ownership::*;
+    assert!(Shrd <= Shrd);
+    assert!(Shrd <= Uniq);
+    assert!(Uniq <= Uniq);
+    assert!(!(Uniq <= Shrd))
 }
 
 impl fmt::Display for Ownership {
