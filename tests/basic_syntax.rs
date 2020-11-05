@@ -123,7 +123,7 @@ fn at_type_fail_move_example() {
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new().append_ident_typed(x);
     
-    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_ok() {
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e).is_ok() {
        panic!("Moving a value twice is forbidden and should not type check.") 
     }
 }
@@ -150,7 +150,7 @@ fn at_type_move_example() {
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new().append_ident_typed(x);
     
-    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e) {
         panic!(msg)
     };
 }
@@ -180,7 +180,7 @@ fn gpu_memory_alloc_move_example() {
     let kind_ctx = copy_to_gpu::kind_ctx();
     let ty_ctx = TyCtx::new().append_ident_typed(copy_to_gpu::decl_and_ty());
     
-    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e)  {
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e)  {
         panic!(msg)
     }
 }
@@ -210,7 +210,7 @@ fn gpu_memory_alloc_move_fail_example() {
     let kind_ctx = copy_to_gpu::kind_ctx();
     let ty_ctx = TyCtx::new().append_ident_typed(copy_to_gpu::decl_and_ty());
     
-    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e)  {
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e)  {
         assert_eq!(msg, "Place was moved before.")
     } else {
         panic!("Moving a value twice is forbidden and should not type check.")
@@ -241,7 +241,7 @@ fn gpu_memory_alloc_borrow_example() {
         .append_ident_typed(copy_to_gpu::decl_and_ty())
         .append_prv_mapping(prv_mapping);
     
-    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_ok() {
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e).is_ok() {
         match e.ty.unwrap() {
             Ty::Ref(Provenance::Value(r_prv), Uniq, GpuGlobal, r_ty) if r_prv == "r" => {
                 match *r_ty {
@@ -287,7 +287,7 @@ fn gpu_memory_alloc_move_after_borrow_fail_example() {
         .append_ident_typed(copy_to_gpu::decl_and_ty())
         .append_prv_mapping(prv_mapping);
     
-    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e) {
         assert_eq!(msg, "A borrow is being violated.")
     } else {
         panic!("Illegal move of borrowed value.")
@@ -321,7 +321,7 @@ fn gpu_mem_alloc_copy_shrd_ref_immediate_borrow_example() {
         .append_ident_typed(copy_to_gpu::decl_and_ty())
         .append_prv_mapping(prv_mapping);
     
-    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_err() {
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e).is_err() {
         panic!("Directly borrowing and copying a shared value should be allowed.")
     }
 }
@@ -356,7 +356,7 @@ fn uniq_ref_movement_example() {
     let g = IdentTyped::new(Ident::new("g"), at_ty(&i32, &GpuGlobal));
     let ty_ctx = TyCtx::new().append_prv_mapping(prv_mapping).append_ident_typed(g);
     
-    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e) {
         assert_eq!(msg, "Place was moved before.")
     } else {
         panic!("Illegal move of borrowed value.")
@@ -393,7 +393,7 @@ fn shrd_ref_copy_example() {
     let g = IdentTyped::new(Ident::new("g"), at_ty(&i32, &GpuGlobal));
     let ty_ctx = TyCtx::new().append_prv_mapping(prv_mapping).append_ident_typed(g);
 
-    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e).is_err() {
+    if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e).is_err() {
         panic!("Shared refernece should be copyable.");
     }
 }
@@ -428,7 +428,7 @@ fn function_app_copy_example() {
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new();
     
-    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e) {
         panic!(format!("Typechecking failed with:\n {}", msg));
     }
 }
@@ -524,7 +524,7 @@ fn assert_ty_checks_empty_ctxs(mut e: Expr, expected_ty: &Ty, expected_ty_ctx: &
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = KindCtx::new();
     let ty_ctx = TyCtx::new();
-    match ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, &mut e) {
+    match ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e) {
         Ok(res_ty_ctx) => {
             assert_eq!(
                 expected_ty,
