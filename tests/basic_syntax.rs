@@ -603,16 +603,16 @@ fn function_def_params_example() {
 #[test]
 #[rustfmt::skip]
 fn function_decl_reference_params_example() {
-    // fn gpu_group_f(p1: &gpu.shared i32, p2: &uniq gpu.global 3.i32) ->[gpu.group] () {
-    //    let x: i32 = *p1 + *p2[0];
+    // fn gpu_group_f(p1: &shrd gpu.shared i32, p2: 3.i32 @ gpu.global) ->[gpu.group] () {
+    //    let x: i32 = *p1 + p2[0];
     // }
     //
     //      desugared:
     // fn gpu_group_f<'r1: life, 'r2: life>(
     //   p1: &'r1 shrd gpu.shared i32,
-    //   p2: &'r2 uniq gpu.global 3.i32
+    //   p2: 3.i32 @ gpu.global
     // ) ->[gpu.group] () {
-    //   let const x: i32 = *p1 + *p2[0];
+    //   let const x: i32 = *p1 + p2[0];
     //   ()
     // }
     use ExecLoc::GpuGroup;
@@ -625,20 +625,23 @@ fn function_decl_reference_params_example() {
              vec![("p1",
                     &ref_ty(&Provenance::Ident(r1), Shrd, &GpuShared, &i32)),
                    ("p2",
-                    &ref_ty(&Provenance::Ident(r2), Uniq, &GpuGlobal,
-                            &at_ty(&arr_ty(3, &i32), &GpuGlobal)))],
+                    &at_ty(&arr_ty(3, &i32), &GpuGlobal))],
              &unit_ty,
              GpuGroup,
              vec![],
 
              let_const("x", &i32,
-                        add(deref(var("p1")), index(deref(var("p2")), Nat::Lit(0))),
-                        unit())
+                       add(deref(var("p1")), index(var("p2"), Nat::Lit(0))),
+                       unit())
     );
 
     let mut program = GlobalCtx::new().append_items(vec![gpu_group_f]);
 
-    assert!(ty_check(&mut program).is_ok());
+    let ty_check_res = ty_check(&mut program);
+    match ty_check_res {
+        Ok(_) => (),
+        Err(msg) => panic!("Test failed with: {}", msg),
+    };
     assert_eq!(
         program.fun_defs_mut().next().unwrap().body_expr.ty.as_ref().unwrap(),
         &Ty::Scalar(ScalarData::Unit)

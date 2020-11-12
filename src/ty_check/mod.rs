@@ -108,11 +108,46 @@ pub fn ty_check_expr(
         ExprKind::Binary(bin_op, lhs, rhs) => {
             ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
         }
+        ExprKind::Index(pl_expr, index) => {
+            ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
+        }
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
     expr.ty = Some(ty);
     Ok(res_ty_ctx)
+}
+
+fn ty_check_index_copy(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    pl_expr: &mut PlaceExpr,
+    index: &mut Nat,
+) -> Result<(TyCtx, Ty), String> {
+    // If more general expressions are allowed for indices, then we need to check their
+    // appropriate type here
+    ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
+    let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr)?;
+    let elem_ty = match pl_expr_ty {
+        Ty::Array(n, elem_ty) => elem_ty,
+        Ty::At(arr_ty, _) => {
+            if let Ty::Array(n, elem_ty) = arr_ty.as_ref() {
+                elem_ty
+            } else {
+                return Err("Trying to index into non array type.".to_string());
+            }
+        }
+        _ => return Err("Trying to index into non array type.".to_string()),
+    };
+    // TODO check that index is smaller than n here!?
+    if elem_ty.copyable() {
+        let res_ty = *elem_ty.clone();
+        Ok((ty_ctx, res_ty))
+    } else {
+        Err("Cannot move out of array type.".to_string())
+    }
 }
 
 fn ty_check_binary_op(
@@ -369,7 +404,7 @@ fn ty_check_ref(
 
 // Δ; Γ ⊢ω p:τ
 // p in an ω context has type τ under Δ and Γ
-fn place_expr_ty_under_own<'a>(
+pub fn place_expr_ty_under_own<'a>(
     kind_ctx: &KindCtx,
     ty_ctx: &'a TyCtx,
     own: Ownership,
@@ -389,7 +424,7 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
 ) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
     match pl_expr {
         // TC-Var
-        PlaceExpr::Var(ident) => var_expr_ty_and_empyt_prvs_under_own(ty_ctx, &ident),
+        PlaceExpr::Var(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
         // TC-Proj
         PlaceExpr::Proj(tuple_expr, n) => {
             proj_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, tuple_expr, n)
@@ -397,12 +432,12 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
         // TC-Deref
         // TODO respect memory
         PlaceExpr::Deref(ref_expr) => {
-            deref_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, ref_expr)
+            ref_pl_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, ref_expr)
         }
     }
 }
 
-fn var_expr_ty_and_empyt_prvs_under_own<'a>(
+fn var_expr_ty_and_empty_prvs_under_own<'a>(
     ty_ctx: &'a TyCtx,
     ident: &Ident,
 ) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
@@ -433,7 +468,7 @@ fn proj_expr_ty_and_passed_prvs_under_own<'a>(
     }
 }
 
-fn deref_expr_ty_and_passed_prvs_under_own<'a>(
+fn ref_pl_expr_ty_and_passed_prvs_under_own<'a>(
     kind_ctx: &KindCtx,
     ty_ctx: &'a TyCtx,
     own: Ownership,
@@ -442,7 +477,7 @@ fn deref_expr_ty_and_passed_prvs_under_own<'a>(
     let (pl_expr_ty, mut passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, ref_expr)?;
     if let Ty::Ref(prv, ref_own, mem, ty) = pl_expr_ty {
-        if ref_own <= &own {
+        if ref_own < &own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
         }
         let outl_rels = passed_prvs.iter().map(|&passed_prv| (prv, passed_prv));
