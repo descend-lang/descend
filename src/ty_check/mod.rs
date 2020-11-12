@@ -87,10 +87,10 @@ pub fn ty_check_expr(
     let (res_ty_ctx, ty) = match &mut expr.expr {
         ExprKind::GlobalFunIdent(name) => (ty_ctx, gl_ctx.fun_ty_by_name(name)?.clone()),
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
-            ty_check_place_without_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+            ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, exec, pl_expr)?
         }
         ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
-            ty_check_place_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+            ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
         }
         // TODO respect mutability
         ExprKind::Let(mutable, ident, ty, ref mut e1, ref mut e2) => {
@@ -320,7 +320,7 @@ fn ty_check_seq(
     Ok((ty_ctx_e2, e2.ty.as_ref().unwrap().clone()))
 }
 
-fn ty_check_place_with_deref(
+fn ty_check_pl_expr_with_deref(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: ExecLoc,
@@ -344,7 +344,7 @@ fn ty_check_place_with_deref(
     }
 }
 
-fn ty_check_place_without_deref(
+fn ty_check_pl_expr_without_deref(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: ExecLoc,
@@ -365,7 +365,7 @@ fn ty_check_place_without_deref(
         ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)?;
         ty_ctx.kill_place(&place)
     };
-    Ok((res_ty_ctx, pl_ty.clone()))
+    Ok((res_ty_ctx, pl_ty))
 }
 
 fn ty_check_ref(

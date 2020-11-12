@@ -208,7 +208,7 @@ impl TyCtx {
     pub fn ident_ty(&self, ident: &Ident) -> Result<&Ty, String> {
         match self.idents_typed().find(|id_ty| &id_ty.ident == ident) {
             Some(id) => Ok(&id.ty),
-            None => return Err(format!("Identifier: {} not found in context.", ident)),
+            None => Err(format!("Identifier: {} not found in context.", ident)),
         }
     }
 

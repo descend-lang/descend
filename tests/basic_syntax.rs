@@ -294,7 +294,7 @@ fn gpu_memory_alloc_move_after_borrow_fail_example() {
     }
 }
 
-//#[test]
+#[test]
 #[rustfmt::skip]
 fn gpu_mem_alloc_copy_shrd_ref_immediate_borrow_example() {
     // let x: &shrd gpu.global i32 = &shrd copy_to_gpumem(5);
@@ -435,27 +435,39 @@ fn function_app_copy_example() {
 
 #[test]
 #[rustfmt::skip]
-fn function_app_move_example() {
+fn function_app_copy_array_example() {
     // let x: 3.i32 = [1, 2, 3];
-    // //f: (3.i32) ->[host] i32
+    // //f: (3.i32) ->[cpu.thread] i32
     // f(x);
-    // let y: 3.i32 = x; // Error
+    // let y: 3.i32 = x;
     //
     //      desugared:
     // let const x: 3.i32 = [1, 2, 3];
     // (f(x);
-    // let const y: 3.i32 = x; // Error
+    // let const y: 3.i32 = x;
     // ())
     let mut e =
         let_const("x", &arr_ty(3, &i32), arr![1, 2, 3], 
         seq(
-            app(var("f"), vec![var("x")]),
+            app(fun_name("f"), vec![var("x")]),
             let_const("y", &arr_ty(3, &i32),
                       var("x"),
             unit())
         ));
 
-    panic!("This shouldn't type check.")
+    let f_decl = PreDeclaredGlobalFun{
+        name: "f".to_string(),
+        fun_ty: Ty::Fn(vec![arr_ty(3, &i32)],
+                       Box::new(FrameExpr::FrTy(FrameTyping::new())),
+                       CpuThread, Box::new(i32.clone()))
+    };
+    let gl_ctx = GlobalCtx::new().append_items(vec![f_decl]);
+    let kind_ctx = KindCtx::new();
+    let ty_ctx = TyCtx::new();
+    
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e) {
+        panic!("{}", msg);
+    }
 }
 
 #[test]
@@ -472,13 +484,13 @@ fn function_app_borrow_example() {
     // (f<a>(&a mut x);
     // let mut y: 3.i32 = x;
     // ())
-    let a = &prv("a");
+    let r = &prv("r");
     let e =
         let_mut("x", &arr_ty(3, &i32), arr![1, 2, 3],
             seq(
                 app(
-                    pdep_app(var("f"), a),
-                    vec![borr(a, Uniq, var("x"))]),
+                    pdep_app(fun_name("f"), r),
+                    vec![borr(r, Uniq, var("x"))]),
                 let_mut("y", &arr_ty(3, &i32), var("x"),
                         unit())
         ));
@@ -488,7 +500,7 @@ fn function_app_borrow_example() {
 #[test]
 #[rustfmt::skip]
 fn function_app_move_attype_example() {
-    // let x: 3.i32 @ gpu.global = copy_to_gpumem(&[1, 2, 3]);
+    // let x: 3.i32 @ gpu.global = copy_to_gpu(&[1, 2, 3]);
     // // f: (3.i32) @ gpu.global ->[host] i32
     // f(x);
     // let y: 3.i32 @ gpu.global = x; // Error
@@ -496,28 +508,46 @@ fn function_app_move_attype_example() {
     //      desugared:
     // let const tmp: 3.i32 = [1, 2, 3];
     // let const x: 3.i32 @ gpu.global =
-    //      copy_to_gpumem<3.i32><a>(&tmp);
+    //      copy_to_gpu<3.i32><r>(&r shrd tmp);
     // (f(x);
     // let const y: 3.i32 @ gpu.global = x; // Error
     // ())
     use Memory::GpuGlobal;
 
-    let a = &prv("a");
-    let_const("tmp", &arr_ty(3, &i32), arr![1, 2, 3],
-              let_const("x", &at_ty(&arr_ty(3, &i32), &GpuGlobal),
-                        ddep_app(
-            pdep_app(
-                app(var("copy_to_gpumem"),
+    let r = &prv("r");
+    let mut e =
+        let_const("tmp", &arr_ty(3, &i32), arr![1, 2, 3],
+        let_const("x", &at_ty(&arr_ty(3, &i32), &GpuGlobal),
+                  ddep_app(pdep_app(
+                    app(fun_name("copy_to_gpu"),
                     vec![var("x")]),
-                a),
-            &arr_ty(3, &i32)),
-                        seq(
-        app(var("f"), vec![var("x")]),
+                    r),
+                           &arr_ty(3, &i32)),
+        seq(
+        app(fun_name("f"), vec![var("x")]),
         let_const("y", &at_ty(&arr_ty(3, &i32), &GpuGlobal), var("x"),
-                  unit())
+        unit())
     )));
 
-    panic!("This should not type check.")
+    let f_decl = PreDeclaredGlobalFun{
+        name: "f".to_string(),
+        fun_ty: Ty::Fn(vec![arr_ty(3, &i32)],
+                       Box::new(FrameExpr::FrTy(FrameTyping::new())),
+                       CpuThread, Box::new(i32.clone()))
+    };
+    let copy_to_gpu_id_ty = copy_to_gpu::decl_and_ty();
+    let copy_to_gpu_gl_f = PreDeclaredGlobalFun{
+        name: copy_to_gpu_id_ty.ident.name,
+        fun_ty: copy_to_gpu_id_ty.ty,
+    };
+    let gl_ctx = GlobalCtx::new().append_items(vec![f_decl, copy_to_gpu_gl_f]);
+    let kind_ctx = KindCtx::new();
+    let prv_mapping = PrvMapping { prv: "r".to_string(), loans: HashSet::new() };
+    let ty_ctx = TyCtx::new().append_prv_mapping(prv_mapping);
+
+    if let Err(msg) = ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e) {
+        panic!("{}", msg);
+    }
 }
 
 fn assert_ty_checks_empty_ctxs(mut e: Expr, expected_ty: &Ty, expected_ty_ctx: &TyCtx) {
