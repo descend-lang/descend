@@ -111,11 +111,26 @@ pub fn ty_check_expr(
         ExprKind::Index(pl_expr, index) => {
             ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
         }
+        ExprKind::Assign(pl_expr, e) if pl_expr.is_place() => {
+            ty_check_assign(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
+        }
+        ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => unimplemented!(),
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
     expr.ty = Some(ty);
     Ok(res_ty_ctx)
+}
+
+fn ty_check_assign(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    pl_expr: &mut PlaceExpr,
+    e: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    unimplemented!()
 }
 
 fn ty_check_index_copy(
