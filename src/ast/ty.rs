@@ -159,7 +159,7 @@ pub enum ExecLoc {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Loan {
     pub place_expr: PlaceExpr,
-    pub own_qual: Ownership,
+    pub own: Ownership,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -213,6 +213,34 @@ impl Ty {
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
             Dead(_) => false,
+        }
+    }
+
+    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
+        use Ty::*;
+        match self {
+            Scalar(_) | Ident(_) | Dead(_) => false,
+            Ref(prv, _, _, ty) => {
+                let found_reference = if let Provenance::Value(prv_val_n) = prv {
+                    prv_val_name == prv_val_n
+                } else {
+                    false
+                };
+                found_reference || ty.contains_ref_to_prv(prv_val_name)
+            }
+            // TODO Probably need to scan frame_expr as well
+            Fn(param_tys, frame_expr, _, ret_ty) => {
+                param_tys
+                    .iter()
+                    .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
+                    || ret_ty.contains_ref_to_prv(prv_val_name)
+            }
+            DepFn(_, frame_expr, _, ret_ty) => ret_ty.contains_ref_to_prv(prv_val_name),
+            At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            Array(_, ty) => ty.contains_ref_to_prv(prv_val_name),
+            Tuple(elem_tys) => elem_tys
+                .iter()
+                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
         }
     }
 }

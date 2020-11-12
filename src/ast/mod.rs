@@ -31,7 +31,7 @@ impl fmt::Display for Expr {
 }
 
 pub type Path = Vec<Nat>;
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Place {
     pub ident: Ident,
     pub path: Path,
@@ -41,15 +41,12 @@ impl Place {
         Place { ident, path }
     }
 
-    pub fn prefix_of(&self, other: &Self) -> bool {
-        if self.ident == other.ident {
-            self.path
-                .iter()
-                .zip(other.path.iter())
-                .all(|(pe, peo)| pe == peo)
-        } else {
-            false
-        }
+    pub fn to_place_expr(&self) -> PlaceExpr {
+        self.path
+            .iter()
+            .fold(PlaceExpr::Var(self.ident.clone()), |pl_expr, path_entry| {
+                PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone())
+            })
     }
 }
 pub type TypedPlace = (Place, Ty);
@@ -58,6 +55,40 @@ pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, Nat),
     Deref(Box<PlaceCtx>),
     Hole,
+}
+
+impl PlaceCtx {
+    pub fn insert_pl_expr(&self, pl_expr: PlaceExpr) -> PlaceExpr {
+        match self {
+            Self::Hole => pl_expr,
+            Self::Proj(pl_ctx, n) => {
+                PlaceExpr::Proj(Box::new(pl_ctx.insert_pl_expr(pl_expr)), n.clone())
+            }
+            Self::Deref(pl_ctx) => PlaceExpr::Deref(Box::new(pl_ctx.insert_pl_expr(pl_expr))),
+        }
+    }
+
+    // Assumes the PlaceCtx HAS an innermost deref, meaning the Hole is wrapped by a Deref.
+    // This is always true for PlaceCtxs created by PlaceExpr.to_pl_ctx_and_most_specif_pl
+    pub fn without_innermost_deref(&self) -> Self {
+        match self {
+            Self::Hole => Self::Hole,
+            Self::Proj(pl_ctx, _) => {
+                if let Self::Hole = **pl_ctx {
+                    panic!("There must an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
+                } else {
+                    pl_ctx.without_innermost_deref()
+                }
+            }
+            Self::Deref(pl_ctx) => {
+                if let Self::Hole = **pl_ctx {
+                    Self::Hole
+                } else {
+                    pl_ctx.without_innermost_deref()
+                }
+            }
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -101,7 +132,19 @@ impl PlaceExpr {
         }
     }
 
-    pub fn equiv(&self, place: &Place) -> bool {
+    pub fn prefix_of(&self, other: &Self) -> bool {
+        if self != other {
+            match other {
+                Self::Proj(pl_expr, _) => self.prefix_of(pl_expr),
+                Self::Deref(pl_expr) => self.prefix_of(pl_expr),
+                Self::Var(_) => false,
+            }
+        } else {
+            true
+        }
+    }
+
+    pub fn equiv(&'_ self, place: &'_ Place) -> bool {
         if let (PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
             &pl == place
         } else {

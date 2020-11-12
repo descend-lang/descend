@@ -292,7 +292,7 @@ fn ty_check_place_with_deref(
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     let own = Ownership::Shrd;
-    ownership_safe(kind_ctx, &ty_ctx, vec![].as_slice(), own, pl_expr)?;
+    ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)?;
     if let Ok(ty) = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr) {
         if !ty.is_fully_alive() {
             return Err("Place was moved before.".to_string());
@@ -323,23 +323,11 @@ fn ty_check_place_without_deref(
         return Err("Place was moved before.".to_string());
     }
     let res_ty_ctx = if pl_ty.copyable() {
-        ownership_safe(
-            kind_ctx,
-            &ty_ctx,
-            vec![].as_slice(),
-            Ownership::Shrd,
-            pl_expr,
-        )?;
+        ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
         // TODO check whether the shared type checking of a place expr will be needed
         ty_ctx
     } else {
-        ownership_safe(
-            kind_ctx,
-            &ty_ctx,
-            vec![].as_slice(),
-            Ownership::Uniq,
-            pl_expr,
-        )?;
+        ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)?;
         ty_ctx.kill_place(&place)
     };
     Ok((res_ty_ctx, pl_ty.clone()))
@@ -359,7 +347,7 @@ fn ty_check_ref(
             "Trying to borrow with a provenance that is used in a different borrow.".to_string(),
         );
     }
-    let loans = ownership_safe(kind_ctx, &ty_ctx, vec![].as_slice(), own, pl_expr)?;
+    let loans = ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)?;
     let ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, own, pl_expr)?;
     if !ty.is_fully_alive() {
         return Err("The place was at least partially moved before.".to_string());

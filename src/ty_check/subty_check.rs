@@ -195,7 +195,7 @@ fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: &HashSet<Loa
         loan_set.iter().any(|loan| {
             let Loan {
                 place_expr,
-                own_qual,
+                own: own_qual,
             } = loan;
             place_expr.equiv(pl)
         })

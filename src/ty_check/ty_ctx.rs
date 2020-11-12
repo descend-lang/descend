@@ -101,7 +101,6 @@ impl TyCtx {
         })
     }
 
-    // TODO make this add and remove function
     pub fn update_loan_set(
         mut self,
         prv_val_name: &str,
@@ -256,8 +255,25 @@ impl TyCtx {
     }
 
     pub fn garbage_collect_loans(self) -> Self {
-        // TODO!!!!
-        self
+        let invalid_prvs: Vec<_> = self
+            .prv_mappings()
+            .map(|prv_mapping| &prv_mapping.prv)
+            .filter(|prv| {
+                self.idents_typed()
+                    .map(|id_ty| &id_ty.ty)
+                    .all(|ty| !ty.contains_ref_to_prv(prv.as_str()))
+            })
+            .cloned()
+            .collect();
+        self.invalidate_prvs(invalid_prvs)
+    }
+
+    fn invalidate_prvs(self, prv_names: Vec<String>) -> Self {
+        prv_names.iter().fold(self, |ty_ctx, prv| {
+            ty_ctx
+                .update_loan_set(prv.as_str(), HashSet::new())
+                .unwrap()
+        })
     }
 }
 
