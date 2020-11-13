@@ -407,12 +407,12 @@ fn ty_check_ref(
         Ty::At(inner_ty, m) => (inner_ty.deref().clone(), m.clone()),
         _ => (ty.clone(), Memory::CpuStack),
     };
-    let res_ty = Ty::Ref(
+    let res_ty = Ty::Borrow(BorrowTy::Ref(
         Provenance::Value(prv_val_name.to_string()),
         own,
         mem,
         Box::new(reffed_ty),
-    );
+    ));
     let res_ty_ctx = ty_ctx.extend_loans_for_prv(prv_val_name, loans)?;
     Ok((res_ty_ctx, res_ty))
 }
@@ -491,7 +491,7 @@ fn ref_pl_expr_ty_and_passed_prvs_under_own<'a>(
 ) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
     let (pl_expr_ty, mut passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, ref_expr)?;
-    if let Ty::Ref(prv, ref_own, mem, ty) = pl_expr_ty {
+    if let Ty::Borrow(BorrowTy::Ref(prv, ref_own, mem, ty)) = pl_expr_ty {
         if ref_own < &own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
         }

@@ -334,7 +334,12 @@ pub fn prov_ident(name: &str) -> TyIdent {
 }
 
 pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
-    Ty::Ref(prv.clone(), own, mem.clone(), Box::new(dt.clone()))
+    Ty::Borrow(BorrowTy::Ref(
+        prv.clone(),
+        own,
+        mem.clone(),
+        Box::new(dt.clone()),
+    ))
 }
 
 pub fn arr_ty(size: usize, ty: &Ty) -> Ty {

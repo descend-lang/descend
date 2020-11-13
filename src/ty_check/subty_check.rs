@@ -28,16 +28,18 @@ pub fn subty_check(
             subty_check(kind_ctx, ty_ctx, &sub_elem_ty, &sup_elem_ty)
         }
         // Δ; Γ ⊢ &ρ1 shrd τ1 ≲ &ρ2 shrd τ2 ⇒ Γ′′
-        (Ref(sub_prv, Shrd, sub_mem, sub_ty), Ref(sup_prv, Shrd, sup_mem, sup_ty))
-            if sub_mem == sup_mem =>
-        {
+        (
+            Borrow(BorrowTy::Ref(sub_prv, Shrd, sub_mem, sub_ty)),
+            Borrow(BorrowTy::Ref(sup_prv, Shrd, sup_mem, sup_ty)),
+        ) if sub_mem == sup_mem => {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
             subty_check(kind_ctx, res_outl_ty_ctx, &sub_ty, &sup_ty)
         }
         // Δ; Γ ⊢ &ρ1 uniq τ1 ≲ &ρ2 uniq τ2 ⇒ Γ''
-        (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty))
-            if sub_mem == sup_mem =>
-        {
+        (
+            Borrow(BorrowTy::Ref(sub_prv, Uniq, sub_mem, sub_ty)),
+            Borrow(BorrowTy::Ref(sup_prv, Uniq, sup_mem, sup_ty)),
+        ) if sub_mem == sup_mem => {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
             let res_forw = subty_check(kind_ctx, res_outl_ty_ctx.clone(), &sub_ty, &sup_ty)?;
             let res_back = subty_check(kind_ctx, res_outl_ty_ctx, &sup_ty, &sub_ty)?;
@@ -154,7 +156,9 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         .all_places()
         .into_iter()
         .filter(|(_, ty)| match ty {
-            Ty::Ref(Provenance::Value(prv_name), _, _, _) if prv_name == prv => true,
+            Ty::Borrow(BorrowTy::Ref(Provenance::Value(prv_name), _, _, _)) if prv_name == prv => {
+                true
+            }
             _ => false,
         })
         .any(|(place, _)| {

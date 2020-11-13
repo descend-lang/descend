@@ -172,8 +172,6 @@ pub enum ExprKind {
     PlaceExpr(PlaceExpr),
     // Index into array, e.g., arr[i]
     Index(PlaceExpr, Nat),
-    Ref(Provenance, Ownership, PlaceExpr),
-    RefIndex(Provenance, Ownership, PlaceExpr, Nat),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
     // Variable declaration, assignment and sequencing
@@ -201,6 +199,11 @@ pub enum ExprKind {
     For(Ident, Box<Expr>, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Unary(UnOp, Box<Expr>),
+    // Borrow Expressions
+    Ref(Provenance, Ownership, PlaceExpr),
+    RefIndex(Provenance, Ownership, PlaceExpr, Nat),
+    Group(Nat, Provenance, Ownership, PlaceExpr),
+    Split(Nat, Provenance, Ownership, PlaceExpr),
 }
 
 impl fmt::Display for ExprKind {
