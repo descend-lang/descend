@@ -1,5 +1,5 @@
 use crate::ast::nat::Nat;
-use crate::ast::ty::{BorrowTy, FrameTyping, Loan, ScalarData, Ty};
+use crate::ast::ty::{FrameTyping, Loan, ScalarData, Ty};
 use crate::ast::{Ident, Path, Place, TypedPlace};
 use std::collections::HashSet;
 
@@ -185,7 +185,7 @@ impl TyCtx {
                 Scalar(_)
                 | Array(_, _)
                 | At(_, _)
-                | Borrow(_)
+                | Borrow(_, _, _, _, _)
                 | Fn(_, _, _, _)
                 | DepFn(_, _, _, _)
                 | Ident(_)

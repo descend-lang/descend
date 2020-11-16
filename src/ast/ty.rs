@@ -163,14 +163,6 @@ pub struct Loan {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-// TODO add redundant information to Ty::Borrow. What does that mean intuitively?
-pub enum BorrowTy {
-    Ref(Provenance, Ownership, Memory, Box<Ty>),
-    Group(Nat, Provenance, Ownership, Memory, Nat, Box<Ty>),
-    //    Split(Nat, Provenance, Ownership, Memory, Nat, Box<Ty>),
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Ty {
     Scalar(ScalarData),
     Tuple(Vec<Ty>),
@@ -183,19 +175,17 @@ pub enum Ty {
     //  but this requires a better understanding of where a type can be dead in order to be done
     //  without too much boilerplate.
     Dead(Box<Ty>),
-    Borrow(BorrowTy),
+    Borrow(BorrowKind, Provenance, Ownership, Memory, Box<Ty>),
 }
 
 impl Ty {
     pub fn non_copyable(&self) -> bool {
         use Ty::*;
         match self {
-            Scalar(sc) => false,
+            Scalar(_) => false,
             Ident(_) => true,
-            Borrow(BorrowTy::Ref(_, Ownership::Uniq, _, _)) => true,
-            Borrow(BorrowTy::Ref(_, Ownership::Shrd, _, _)) => false,
-            Borrow(BorrowTy::Group(_, _, Ownership::Uniq, _, _, _)) => true,
-            Borrow(BorrowTy::Group(_, _, Ownership::Shrd, _, _, _)) => false,
+            Borrow(_, _, Ownership::Uniq, _, _) => true,
+            Borrow(_, _, Ownership::Shrd, _, _) => false,
             Fn(_, _, _, _) => false,
             DepFn(_, _, _, _) => false,
             At(_, _) => true,
@@ -214,7 +204,7 @@ impl Ty {
         match self {
             Scalar(_)
             | Ident(_)
-            | Borrow(_)
+            | Borrow(_, _, _, _, _)
             | Fn(_, _, _, _)
             | DepFn(_, _, _, _)
             | At(_, _)
@@ -230,7 +220,7 @@ impl Ty {
         use Ty::*;
         match self {
             Scalar(_) | Ident(_) | Dead(_) => false,
-            Borrow(BorrowTy::Ref(prv, _, _, ty)) | Borrow(BorrowTy::Group(_, prv, _, _, _, ty)) => {
+            Borrow(_, prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
                 } else {

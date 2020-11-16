@@ -164,6 +164,20 @@ impl fmt::Display for PlaceExpr {
     }
 }
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum BorrowKind {
+    Ref,
+    SplitSingle,
+    // Group,
+    // SplitAt
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum ParIndex {
+    GroupId,
+    ThreadId,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     GlobalFunIdent(String),
@@ -200,10 +214,9 @@ pub enum ExprKind {
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Unary(UnOp, Box<Expr>),
     // Borrow Expressions
-    Ref(Provenance, Ownership, PlaceExpr),
-    RefIndex(Provenance, Ownership, PlaceExpr, Nat),
-    Group(Nat, Provenance, Ownership, PlaceExpr),
-    Split(Nat, Provenance, Ownership, PlaceExpr),
+    Borrow(BorrowKind, Provenance, Ownership, PlaceExpr),
+    BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
+    ParIndex(PlaceExpr, ParIndex),
 }
 
 impl fmt::Display for ExprKind {
@@ -212,8 +225,11 @@ impl fmt::Display for ExprKind {
             Self::Lit(l) => format!("{}", l),
             Self::PlaceExpr(pl_expr) => format!("{}", pl_expr),
             Self::Index(pl_expr, n) => format!("{}[{}]", pl_expr, n),
-            Self::Ref(prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
-            Self::RefIndex(prv, own, pl_expr, n) => format!("&{} {} {}[{}]", prv, own, pl_expr, n),
+            // TODO display kind
+            Self::Borrow(kind, prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
+            Self::BorrowIndex(prv, own, pl_expr, n) => {
+                format!("&{} {} {}[{}]", prv, own, pl_expr, n)
+            }
             Self::Assign(pl_expr, e) => format!("{} = {}", pl_expr, e),
             Self::Let(mutab, ident, ty, e1, e2) => {
                 format!("let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
