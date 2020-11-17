@@ -102,17 +102,8 @@ pub fn ty_check_expr(
         ExprKind::Tuple(elems) => ty_check_tuple(gl_ctx, kind_ctx, ty_ctx, exec, elems)?,
         ExprKind::App(ef, args) => ty_check_app(gl_ctx, kind_ctx, ty_ctx, exec, ef, args)?,
         ExprKind::DepApp(df, kv) => ty_check_dep_app(gl_ctx, kind_ctx, ty_ctx, exec, df, kv)?,
-        ExprKind::Borrow(borr_kind, Provenance::Value(prv_val_name), own, pl_expr) => {
-            ty_check_borrow(
-                gl_ctx,
-                kind_ctx,
-                ty_ctx,
-                exec,
-                borr_kind,
-                prv_val_name,
-                *own,
-                pl_expr,
-            )?
+        ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
+            ty_check_ref(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
         }
         ExprKind::Binary(bin_op, lhs, rhs) => {
             ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
@@ -124,25 +115,11 @@ pub fn ty_check_expr(
             ty_check_assign(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
         }
         ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => unimplemented!(),
-        ExprKind::ParIndex(pl_expr, par_idx) => {
-            ty_check_ref_par_idx(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, par_idx)?
-        }
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
     expr.ty = Some(ty);
     Ok(res_ty_ctx)
-}
-
-fn ty_check_ref_par_idx(
-    gl_ctx: &GlobalCtx,
-    kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
-    exec: ExecLoc,
-    pl_expr: &mut PlaceExpr,
-    par_idx: &mut ParIndex,
-) -> Result<(TyCtx, Ty), String> {
-    unimplemented!()
 }
 
 fn ty_check_assign(
@@ -406,12 +383,11 @@ fn ty_check_pl_expr_without_deref(
     Ok((res_ty_ctx, pl_ty))
 }
 
-fn ty_check_borrow(
+fn ty_check_ref(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: ExecLoc,
-    borrow_kind: &BorrowKind,
     prv_val_name: &str,
     own: Ownership,
     pl_expr: &mut PlaceExpr,
@@ -431,8 +407,8 @@ fn ty_check_borrow(
         Ty::At(inner_ty, m) => (inner_ty.deref().clone(), m.clone()),
         _ => (ty.clone(), Memory::CpuStack),
     };
-    let res_ty = Ty::Borrow(
-        borrow_kind.clone(),
+    let res_ty = Ty::Ref(
+        RefKind::Ptr,
         Provenance::Value(prv_val_name.to_string()),
         own,
         mem,
@@ -516,7 +492,7 @@ fn borr_pl_expr_ty_and_passed_prvs_under_own<'a>(
 ) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
     let (pl_expr_ty, mut passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)?;
-    if let Ty::Borrow(_, prv, ref_own, mem, ty) = pl_expr_ty {
+    if let Ty::Ref(_, prv, ref_own, mem, ty) = pl_expr_ty {
         if ref_own < &own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
         }

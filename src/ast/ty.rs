@@ -163,6 +163,12 @@ pub struct Loan {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
+pub enum RefKind {
+    Ptr,
+    View,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Ty {
     Scalar(ScalarData),
     Tuple(Vec<Ty>),
@@ -175,7 +181,7 @@ pub enum Ty {
     //  but this requires a better understanding of where a type can be dead in order to be done
     //  without too much boilerplate.
     Dead(Box<Ty>),
-    Borrow(BorrowKind, Provenance, Ownership, Memory, Box<Ty>),
+    Ref(RefKind, Provenance, Ownership, Memory, Box<Ty>),
 }
 
 impl Ty {
@@ -184,8 +190,8 @@ impl Ty {
         match self {
             Scalar(_) => false,
             Ident(_) => true,
-            Borrow(_, _, Ownership::Uniq, _, _) => true,
-            Borrow(_, _, Ownership::Shrd, _, _) => false,
+            Ref(_, _, Ownership::Uniq, _, _) => true,
+            Ref(_, _, Ownership::Shrd, _, _) => false,
             Fn(_, _, _, _) => false,
             DepFn(_, _, _, _) => false,
             At(_, _) => true,
@@ -204,7 +210,7 @@ impl Ty {
         match self {
             Scalar(_)
             | Ident(_)
-            | Borrow(_, _, _, _, _)
+            | Ref(_, _, _, _, _)
             | Fn(_, _, _, _)
             | DepFn(_, _, _, _)
             | At(_, _)
@@ -220,7 +226,7 @@ impl Ty {
         use Ty::*;
         match self {
             Scalar(_) | Ident(_) | Dead(_) => false,
-            Borrow(_, prv, _, _, ty) => {
+            Ref(_, prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
                 } else {

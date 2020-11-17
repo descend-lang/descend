@@ -217,9 +217,7 @@ pub fn assign(lhs: Expr, rhs: Expr) -> Expr {
 pub fn borr(prv: &Provenance, own: Ownership, expr: Expr) -> Expr {
     Expr::new(match expr.expr {
         ExprKind::Index(pl_expr, idx) => ExprKind::BorrowIndex(prv.clone(), own, pl_expr, idx),
-        ExprKind::PlaceExpr(pl_expr) => {
-            ExprKind::Borrow(BorrowKind::Ref, prv.clone(), own, pl_expr)
-        }
+        ExprKind::PlaceExpr(pl_expr) => ExprKind::Ref(prv.clone(), own, pl_expr),
         _ => panic!("Cannot borrow from this expression: ${:?}", expr.expr),
     })
 }
@@ -336,8 +334,8 @@ pub fn prov_ident(name: &str) -> TyIdent {
 }
 
 pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
-    Ty::Borrow(
-        BorrowKind::Ref,
+    Ty::Ref(
+        RefKind::Ptr,
         prv.clone(),
         own,
         mem.clone(),

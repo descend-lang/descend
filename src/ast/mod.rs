@@ -95,6 +95,7 @@ impl PlaceCtx {
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, Nat),
     Deref(Box<PlaceExpr>),
+    //ParIndex(PlaceExpr, ParIndex),
     Var(Ident),
 }
 
@@ -165,14 +166,6 @@ impl fmt::Display for PlaceExpr {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum BorrowKind {
-    Ref,
-    SplitSingle,
-    // Group,
-    // SplitAt
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ParIndex {
     GroupId,
     ThreadId,
@@ -214,9 +207,8 @@ pub enum ExprKind {
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Unary(UnOp, Box<Expr>),
     // Borrow Expressions
-    Borrow(BorrowKind, Provenance, Ownership, PlaceExpr),
+    Ref(Provenance, Ownership, PlaceExpr),
     BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
-    ParIndex(PlaceExpr, ParIndex),
 }
 
 impl fmt::Display for ExprKind {
@@ -226,7 +218,7 @@ impl fmt::Display for ExprKind {
             Self::PlaceExpr(pl_expr) => format!("{}", pl_expr),
             Self::Index(pl_expr, n) => format!("{}[{}]", pl_expr, n),
             // TODO display kind
-            Self::Borrow(kind, prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
+            Self::Ref(prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
             Self::BorrowIndex(prv, own, pl_expr, n) => {
                 format!("&{} {} {}[{}]", prv, own, pl_expr, n)
             }
