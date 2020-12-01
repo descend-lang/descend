@@ -149,9 +149,9 @@ fn ty_check_index_copy(
     ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
     let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr)?;
     let elem_ty = match pl_expr_ty {
-        Ty::Array(n, elem_ty) => elem_ty,
+        Ty::Array(elem_ty, n) => elem_ty,
         Ty::At(arr_ty, _) => {
-            if let Ty::Array(n, elem_ty) = arr_ty.as_ref() {
+            if let Ty::Array(elem_ty, n) = arr_ty.as_ref() {
                 elem_ty
             } else {
                 return Err("Trying to index into non array type.".to_string());
@@ -281,7 +281,7 @@ fn ty_check_array(
     } else {
         Ok((
             tmp_ty_ctx,
-            Ty::Array(Nat::Lit(elems.len()), Box::new(ty.unwrap())),
+            Ty::Array(Box::new(ty.unwrap()), Nat::Lit(elems.len())),
         ))
     }
 }

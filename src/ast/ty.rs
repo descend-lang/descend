@@ -164,7 +164,7 @@ pub struct Loan {
 pub enum Ty {
     Scalar(ScalarData),
     Tuple(Vec<Ty>),
-    Array(Nat, Box<Ty>),
+    Array(Box<Ty>, Nat),
     At(Box<Ty>, Memory),
     Fn(Vec<Ty>, Box<FrameExpr>, ExecLoc, Box<Ty>),
     DepFn(TyIdent, Box<FrameExpr>, ExecLoc, Box<Ty>),
@@ -188,7 +188,7 @@ impl Ty {
             DepFn(_, _, _, _) => false,
             At(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Array(_, ty) => ty.non_copyable(),
+            Array(ty, _) => ty.non_copyable(),
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }
@@ -235,7 +235,7 @@ impl Ty {
             }
             DepFn(_, frame_expr, _, ret_ty) => ret_ty.contains_ref_to_prv(prv_val_name),
             At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
-            Array(_, ty) => ty.contains_ref_to_prv(prv_val_name),
+            Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),

@@ -352,7 +352,7 @@ pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
 }
 
 pub fn arr_ty(size: Nat, ty: &Ty) -> Ty {
-    Ty::Array(size, Box::new(ty.clone()))
+    Ty::Array(Box::new(ty.clone()), size)
 }
 
 pub fn at_ty(ty: &Ty, mem: &Memory) -> Ty {
