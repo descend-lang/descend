@@ -184,7 +184,7 @@ impl TyCtx {
                 Scalar(_)
                 | Array(_, _)
                 | At(_, _)
-                | Ref(_, _, _, _, _)
+                | Ref(_, _, _, _)
                 | Fn(_, _, _, _)
                 | DepFn(_, _, _, _)
                 | Ident(_)

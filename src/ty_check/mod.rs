@@ -411,7 +411,6 @@ fn ty_check_ref(
         _ => (ty.clone(), Memory::CpuStack),
     };
     let res_ty = Ty::Ref(
-        RefKind::Ref,
         Provenance::Value(prv_val_name.to_string()),
         own,
         mem,
@@ -495,7 +494,7 @@ fn borr_pl_expr_ty_and_passed_prvs_under_own<'a>(
 ) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
     let (pl_expr_ty, mut passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)?;
-    if let Ty::Ref(_, prv, ref_own, mem, ty) = pl_expr_ty {
+    if let Ty::Ref(prv, ref_own, mem, ty) = pl_expr_ty {
         if ref_own < &own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
         }

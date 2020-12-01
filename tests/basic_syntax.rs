@@ -306,7 +306,7 @@ fn gpu_memory_alloc_borrow_example() {
     
     if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e).is_ok() {
         match e.ty.unwrap() {
-            Ty::Ref(RefKind::Ref, Provenance::Value(r_prv), Uniq, GpuGlobal, r_ty)
+            Ty::Ref(Provenance::Value(r_prv), Uniq, GpuGlobal, r_ty)
                 if r_prv == "r" => {
                 match *r_ty {
                     Ty::Scalar(ScalarData::I32) => {}
