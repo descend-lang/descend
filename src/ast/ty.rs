@@ -1,9 +1,8 @@
-use crate::ast::nat::Nat;
 use crate::ast::*;
 use crate::ty_check::ty_ctx::{IdentTyped, TyEntry};
 use std::fmt;
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum Kind {
     Nat,
     Memory,
@@ -66,8 +65,7 @@ impl Kinded for FrameExpr {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
-// A type identifier is uniquely identified by its name (every name has exactly one kind)
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct TyIdent {
     pub name: String,
     kind: Kind,
@@ -164,8 +162,8 @@ pub struct Loan {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum RefKind {
-    Ptr,
-    View,
+    View(Box<RefKind>),
+    Ref,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -280,21 +278,6 @@ pub enum KindingCtxEntry {
     Ident(TyIdent),
     PrvRel(PrvRel),
 }
-// impl KindingCtxEntry {
-//     fn is_prv_rel(entry: &KindingCtxEntry) -> bool {
-//         match entry {
-//             KindingCtxEntry::PrvRel(_) => true,
-//             KindingCtxEntry::Ident(_) => false,
-//         }
-//     }
-//
-//     // fn is_ty_ident(&self) -> bool {
-//     //     match self {
-//     //         KindingCtxEntry::Ident(_) => true,
-//     //         KindingCtxEntry::ProvRel(_) => false,
-//     //     }
-//     // }
-// }
 
 pub struct KindCtx {
     vec: Vec<KindingCtxEntry>,
@@ -458,4 +441,50 @@ impl GlobalCtx {
             )),
         }
     }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum Nat {
+    Ident(TyIdent),
+    Lit(usize),
+    //    Binary(BinOpNat, Box<Nat>, Box<Nat>),
+}
+
+impl Nat {
+    pub fn eval(&self) -> usize {
+        panic!("not implemented yet")
+    }
+}
+
+impl Kinded for Nat {
+    fn get_kind(&self) -> Kind {
+        Kind::Nat
+    }
+
+    fn new_ident(name: &str) -> TyIdent {
+        TyIdent {
+            name: name.to_string(),
+            kind: Kind::Nat,
+        }
+    }
+}
+
+impl fmt::Display for Nat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Self::Ident(ident) => format!("{}", ident),
+            Self::Lit(n) => format!("{}", n),
+            //Self::Binary(ident) => format!("{}", ident),
+        };
+        write!(f, "{}", str)
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum BinOpNat {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
 }

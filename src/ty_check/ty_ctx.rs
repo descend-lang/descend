@@ -1,5 +1,4 @@
-use crate::ast::nat::Nat;
-use crate::ast::ty::{FrameTyping, Loan, ScalarData, Ty};
+use crate::ast::ty::{FrameTyping, Loan, Nat, ScalarData, Ty};
 use crate::ast::{Ident, Path, Place, TypedPlace};
 use std::collections::HashSet;
 
@@ -178,7 +177,7 @@ impl TyCtx {
         }
 
         fn explode(pl: Place, ty: Ty) -> Vec<TypedPlace> {
-            use crate::ast::nat::Nat::Lit;
+            use super::ty::Nat;
             use Ty::*;
 
             match &ty {
@@ -194,7 +193,7 @@ impl TyCtx {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index =
-                            explode(proj(pl.clone(), Lit(index)), proj_ty.clone());
+                            explode(proj(pl.clone(), Nat::Lit(index)), proj_ty.clone());
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame

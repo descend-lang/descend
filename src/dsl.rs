@@ -1,4 +1,3 @@
-use crate::ast::nat::*;
 use crate::ast::ty::*;
 use crate::ast::utils::fresh_name;
 use crate::ast::Lit::Unit;
@@ -26,8 +25,14 @@ pub fn prv_id(name: &str) -> Provenance {
 // #[allow(non_upper_case_globals)]
 // pub static static_l: Provenance = Provenance::Static;
 
+// Nat
+
+pub fn nat_id(name: &str) -> Nat {
+    Nat::Ident(Nat::new_ident(name))
+}
+
 // Variable
-pub fn var(name: &str) -> Expr {
+pub fn ident(name: &str) -> Expr {
     Expr::new(ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new(name))))
 }
 
@@ -44,7 +49,7 @@ pub fn deref(pl_expr: Expr) -> Expr {
 // Function Declaration
 pub fn fdef(
     name: &str,
-    ty_params: Vec<TyIdent>,
+    ty_params: Vec<(&str, Kind)>,
     params: Vec<(&str, &Ty)>,
     ret_ty: &Ty,
     exec: ExecLoc,
@@ -60,12 +65,25 @@ pub fn fdef(
         exec,
         ret_ty,
     );
-    if !ty_params.is_empty() {
-        f_ty = multi_arg_genfn_ty(ty_params.as_slice(), exec, &f_ty);
+
+    let ty_idents: Vec<_> = ty_params
+        .iter()
+        .map(|(name, kind)| match kind {
+            Kind::Nat => Nat::new_ident(name),
+            Kind::Provenance => Provenance::new_ident(name),
+            Kind::Memory => unimplemented!(),
+            Kind::Frame => unimplemented!(),
+            Kind::Ty => Ty::new_ident(name),
+        })
+        .collect();
+
+    if !ty_idents.is_empty() {
+        f_ty = multi_arg_genfn_ty(ty_idents.as_slice(), exec, &f_ty);
     }
+
     GlobalFunDef {
         name: String::from(name),
-        ty_idents: ty_params,
+        ty_idents,
         params: param_list(params),
         ret_ty: ret_ty.clone(),
         exec,
@@ -260,7 +278,7 @@ impl DescendLambda for dyn Fn(Expr) -> Expr {
     fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
         let name = &fresh_name("p");
         //TODO: Add mutable paramters.
-        let param_ident = var(name);
+        let param_ident = ident(name);
         let param_idents = vec![Ident::new(name)];
         let body = self(param_ident);
         (param_idents, body)
@@ -270,7 +288,7 @@ impl DescendLambda for dyn Fn(Expr) -> Expr {
 impl DescendLambda for dyn Fn(Expr, Expr) -> Expr {
     fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
         let (name1, name2) = (&fresh_name("p"), &fresh_name("p"));
-        let (param_ident1, param_ident2) = (var(name1), var(name2));
+        let (param_ident1, param_ident2) = (ident(name1), ident(name2));
         let param_idents = vec![Ident::new(name1), Ident::new(name2)];
         let body = self(param_ident1, param_ident2);
         (param_idents, body)
@@ -280,7 +298,7 @@ impl DescendLambda for dyn Fn(Expr, Expr) -> Expr {
 impl DescendLambda for dyn Fn(Expr, Expr, Expr) -> Expr {
     fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
         let (name1, name2, name3) = (&fresh_name("p"), &fresh_name("p"), &fresh_name("p"));
-        let (param_ident1, param_ident2, param_ident3) = (var(name1), var(name2), var(name3));
+        let (param_ident1, param_ident2, param_ident3) = (ident(name1), ident(name2), ident(name3));
         let param_idents = vec![Ident::new(name1), Ident::new(name2), Ident::new(name3)];
         let body = self(param_ident1, param_ident2, param_ident3);
         (param_idents, body)
@@ -325,17 +343,13 @@ impl DescendLiteral for () {
     }
 }
 
-pub fn ty_ident(name: &str) -> TyIdent {
-    Ty::new_ident(name)
-}
-
 pub fn prov_ident(name: &str) -> TyIdent {
     Provenance::new_ident(name)
 }
 
 pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
     Ty::Ref(
-        RefKind::Ptr,
+        RefKind::Ref,
         prv.clone(),
         own,
         mem.clone(),
@@ -343,8 +357,8 @@ pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
     )
 }
 
-pub fn arr_ty(size: usize, ty: &Ty) -> Ty {
-    Ty::Array(Nat::Lit(size), Box::new(ty.clone()))
+pub fn arr_ty(size: Nat, ty: &Ty) -> Ty {
+    Ty::Array(size, Box::new(ty.clone()))
 }
 
 pub fn at_ty(ty: &Ty, mem: &Memory) -> Ty {

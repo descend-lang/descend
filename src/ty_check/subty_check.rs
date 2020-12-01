@@ -108,7 +108,7 @@ fn outlives(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs(mut ty_ctx: TyCtx, longer: &str, shorter: &str) -> Result<TyCtx, String> {
+fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> Result<TyCtx, String> {
     // CHECK:
     //    NOT CLEAR WHY a. IS NECESSARY
     // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan

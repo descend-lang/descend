@@ -1,8 +1,6 @@
-pub mod nat;
 pub mod ty;
 pub mod utils;
 
-use nat::*;
 use std::fmt;
 use ty::*;
 

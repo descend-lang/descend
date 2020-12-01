@@ -2,7 +2,6 @@ mod borrow_check;
 mod subty_check;
 pub mod ty_ctx;
 
-use crate::ast::nat::*;
 use crate::ast::ty::*;
 use crate::ast::Ownership;
 use crate::ast::*;
@@ -72,10 +71,10 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<
 }
 
 // TODO find out if Gamma is always correct by construction (similarly to Delta), also all 3 combined
-// TODO think about this: currently every subexpression is annotated with a non-dead type, even if
-//  the type is killed in the context.
-// e has type τ under Σ, Δ, and Γ, producing output context Γ
-// Σ; Δ; Γ ⊢ e :^exec τ ⇒ Γ′
+// e has type τ under Σ, Δ, and Γ, producing output context Γ'
+// sideconditions: Global Function Context Σ, Kinding context Δ and typing context are well-formed and
+//   type τ is well-formed under well-formed GlFunCtxt, kinding ctx, output context Γ'.
+// Σ; Δ; Γ ⊢ e :^exec τ ⇒ Γ′, side conditions:  ⊢ Σ;Δ;Γ and Σ;Δ;Γ′ ⊢ τ
 // This never returns a dead type, because typing an expression with a dead type is not possible.
 pub fn ty_check_expr(
     gl_ctx: &GlobalCtx,
@@ -84,6 +83,8 @@ pub fn ty_check_expr(
     exec: ExecLoc,
     expr: &mut Expr,
 ) -> Result<TyCtx, String> {
+    // TODO input contexts are well-formed
+    //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
     let (res_ty_ctx, ty) = match &mut expr.expr {
         ExprKind::GlobalFunIdent(name) => (ty_ctx, gl_ctx.fun_ty_by_name(name)?.clone()),
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
@@ -117,6 +118,8 @@ pub fn ty_check_expr(
         ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => unimplemented!(),
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
+
+    // TODO type well formed under output contexts
 
     expr.ty = Some(ty);
     Ok(res_ty_ctx)
@@ -408,7 +411,7 @@ fn ty_check_ref(
         _ => (ty.clone(), Memory::CpuStack),
     };
     let res_ty = Ty::Ref(
-        RefKind::Ptr,
+        RefKind::Ref,
         Provenance::Value(prv_val_name.to_string()),
         own,
         mem,

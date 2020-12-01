@@ -2,7 +2,7 @@
 
 extern crate descend;
 
-use descend::ast::nat::*;
+use crate::copy_to_gpu::ty_ident;
 use descend::ast::ty::ExecLoc::CpuThread;
 use descend::ast::ty::Memory::{GpuGlobal, GpuShared};
 use descend::ast::ty::*;
@@ -13,6 +13,69 @@ use descend::ty_check::ty_ctx::{IdentTyped, PrvMapping, TyCtx};
 use descend::ty_check::{ty_check, ty_check_expr};
 use descend::{arr, tuple, tuple_ty};
 use std::collections::HashSet;
+
+fn inplace_vector_add_example() {
+    // fn inplace_vector_add<n: nat, 'a: prv, 'b: prv>(
+    //   ha_array: &Ref 'a uniq cpu.heap [i32; n], hb_array: &Ref 'b shrd cpu.stack [i32; n]
+    // ) ->[cpu.thread] () {
+    //     // 'a must live shorter or equally as along as 'b
+    //     let zipped: &View(Ref, Ref) 'a =
+    //       zip<Ref, 'a, uniq, cpu.heap, i32, Ref, 'b, shrd, cpu.stack n>(&ha_array, &hb_array);
+    //     for t in zipped {
+    //       let a: &Ref 'a uniq cpu.heap i32 = t.1;
+    //       let b: &Ref 'a shrd cpu.stack i32 = t.2;
+    //       *a = *a + *b;
+    //     }
+    //     *ha_array = to_hostmem<[i32; n]>(a_array);
+    //   }
+    // }
+}
+
+#[test]
+#[rustfmt::skip]
+fn inplace_vector_add_parallel_example() {
+    // fn inplace_vector_add<n: nat, 'a: prv, 'b: prv>(
+    //   ha_array: &'a uniq [i32; n], hb_array: &'b shrd [i32; n]
+    // ) ->[cpu.thread] () {
+    //   letprov <a, b, c, g> {
+    //     let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, [i32; n]>(&c shrd *ha_array);
+    //     let b_array: [i32; n] @ gpu.global = copy_to_gpu<'b, [i32; n]>(hb_array);
+    //
+    //     let gpu: GPU = gpu<... /* information about the GPU */>
+    //     let gpu_grid: Grid = create_gpu_grid<64, 1, 1, 1024, 1, 1>(&g shrd gpu);
+    //
+    //     let view_a = to_view<Ref, a, uniq, gpu.global, n, i32>(&a uniq a_array);
+    //     let view_b = to_view<Ref, b, shrd, gpu.global, n, i32>(&b shrd a_array);
+    //     // hoisted runtime check: n == 64 * 1024
+    //     par_threads_for_sync[gpu, 1024 * 64] (a_elem, b_elem) in (view_a, view_b) {
+    //       *a = *a + *b;
+    //     }
+    //     *ha_array = to_hostmem<[i32; n]>(a_array);
+    //   }
+    // }
+    use Kind;
+    use Memory::{CpuHeap, CpuStack};
+
+    let array_ty = arr_ty(nat_id("n"), &i32);
+    let reborrow_ha_array = borr(&prv("c"), Ownership::Shrd, deref(ident("ha_array")));
+    let copy_to_gpu = | prv: &Provenance, expr: Expr | -> Expr {
+        app(ddep_app(pdep_app(ident("copy_to_gpu"), prv), &array_ty), vec![expr])
+    };
+
+    let inplace_vector_add =
+      fdef("inplace_vector_add",
+           vec![("n", Kind::Nat), ("'a", Kind::Provenance), ("'b", Kind::Provenance)],
+           vec![("ha_array", &ref_ty(&prv_id("'a"), Ownership::Uniq, &CpuHeap, &array_ty)),
+                ("hb_array", &ref_ty(&prv_id("'b"), Ownership::Shrd, &CpuStack, &array_ty))],
+                &unit_ty,
+                CpuThread,
+                vec![],
+
+          let_mut("a_array", &at_ty(&array_ty, &GpuGlobal),
+                  copy_to_gpu(&prv_id("'a"), reborrow_ha_array),
+          unit())
+      );
+}
 
 #[test]
 #[rustfmt::skip]
@@ -28,9 +91,9 @@ fn scalar_copy_example() {
     // ()
     let e =
         let_const("x", &i32, lit(&5),
-        let_const("y", &i32, var("x"),
-        let_const("z", &i32, var("x"),
-        unit())));
+        let_const("y", &i32, ident("x"),
+                  let_const("z", &i32, ident("x"),
+                            unit())));
 
     let x = IdentTyped::new(Ident::new("x"), i32.clone());
     let y = IdentTyped::new(Ident::new("y"), i32.clone());
@@ -56,14 +119,14 @@ fn array_copy_example() {
     // let const z: 5.i32 = x;
     // ()
     let e =
-        let_const("x", &arr_ty(5, &i32), arr![1, 2, 3, 4, 5],
-        let_const("y", &arr_ty(5, &i32), var("x"),
-        let_const("z", &arr_ty(5, &i32), var("x"),
-        unit())));
+        let_const("x", &arr_ty(Nat::Lit(5), &i32), arr![1, 2, 3, 4, 5],
+        let_const("y", &arr_ty(Nat::Lit(5), &i32), ident("x"),
+                  let_const("z", &arr_ty(Nat::Lit(5), &i32), ident("x"),
+                            unit())));
 
-    let x = IdentTyped::new(Ident::new("x"), arr_ty(5, &i32));
-    let y = IdentTyped::new(Ident::new("y"), arr_ty(5, &i32));
-    let z = IdentTyped::new(Ident::new("z"), arr_ty(5, &i32));
+    let x = IdentTyped::new(Ident::new("x"), arr_ty(Nat::Lit(5), &i32));
+    let y = IdentTyped::new(Ident::new("y"), arr_ty(Nat::Lit(5), &i32));
+    let z = IdentTyped::new(Ident::new("z"), arr_ty(Nat::Lit(5), &i32));
     let expected_ty_ctx = TyCtx::new()
         .append_ident_typed(x)
         .append_ident_typed(y)
@@ -86,9 +149,9 @@ fn tuple_copy_example() {
     // ()
     let e =
         let_const("x", &tuple_ty!(&i32, &f32), tuple!(1, 2.0f32),
-        let_const("y", &tuple_ty!(&i32, &f32), var("x"),
-        let_const("z", &tuple_ty!(&i32, &f32), var("x"),
-        unit())));
+        let_const("y", &tuple_ty!(&i32, &f32), ident("x"),
+                  let_const("z", &tuple_ty!(&i32, &f32), ident("x"),
+                            unit())));
 
     let x = IdentTyped::new(Ident::new("x"), tuple_ty!(i32, f32));
     let y = IdentTyped::new(Ident::new("y"), tuple_ty!(i32, f32));
@@ -114,9 +177,9 @@ fn at_type_fail_move_example() {
     use Memory::GpuGlobal;
 
     let mut e =
-        let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
-        let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
-        unit()));
+        let_const("y", &at_ty(&i32, &GpuGlobal), ident("x"),
+                  let_const("z", &at_ty(&i32, &GpuGlobal), ident("x"),
+                            unit()));
 
     let x = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
     let gl_ctx = GlobalCtx::new();
@@ -141,9 +204,9 @@ fn at_type_move_example() {
     use Memory::GpuGlobal;
 
     let mut e =
-        let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
-        let_const("z", &at_ty(&i32, &GpuGlobal), var("y"),
-        unit()));
+        let_const("y", &at_ty(&i32, &GpuGlobal), ident("x"),
+                  let_const("z", &at_ty(&i32, &GpuGlobal), ident("y"),
+                            unit()));
 
     let x = IdentTyped::new(Ident::new("x"), at_ty(&i32, &GpuGlobal));
     let gl_ctx = GlobalCtx::new();
@@ -171,10 +234,10 @@ fn gpu_memory_alloc_move_example() {
 
     let mut e =
         let_const("x", &at_ty(&i32, &GpuGlobal),
-        app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
-        let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
-        let_const("z", &at_ty(&i32, &GpuGlobal), var("y"),
-        unit())));
+                  app(ddep_app(ident("copy_to_gpu"), &i32), vec![lit(&5)]),
+                  let_const("y", &at_ty(&i32, &GpuGlobal), ident("x"),
+                            let_const("z", &at_ty(&i32, &GpuGlobal), ident("y"),
+                                      unit())));
 
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
@@ -201,10 +264,10 @@ fn gpu_memory_alloc_move_fail_example() {
 
     let mut e =
         let_const("x", &at_ty(&i32, &GpuGlobal),
-        app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
-        let_const("y", &at_ty(&i32, &GpuGlobal), var("x"),
-        let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
-        unit())));
+                  app(ddep_app(ident("copy_to_gpu"), &i32), vec![lit(&5)]),
+                  let_const("y", &at_ty(&i32, &GpuGlobal), ident("x"),
+                            let_const("z", &at_ty(&i32, &GpuGlobal), ident("x"),
+                                      unit())));
 
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
@@ -231,8 +294,8 @@ fn gpu_memory_alloc_borrow_example() {
     let prv = &prv("r");
     let mut e =
         let_const("x", &at_ty(&i32, &GpuGlobal),
-                  app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
-        borr(prv, Uniq, var("x")));
+                  app(ddep_app(ident("copy_to_gpu"), &i32), vec![lit(&5)]),
+                  borr(prv, Uniq, ident("x")));
 
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
@@ -243,7 +306,7 @@ fn gpu_memory_alloc_borrow_example() {
     
     if ty_check_expr(&gl_ctx, &kind_ctx, ty_ctx, ExecLoc::CpuThread, &mut e).is_ok() {
         match e.ty.unwrap() {
-            Ty::Ref(RefKind::Ptr, Provenance::Value(r_prv), Uniq, GpuGlobal, r_ty)
+            Ty::Ref(RefKind::Ref, Provenance::Value(r_prv), Uniq, GpuGlobal, r_ty)
                 if r_prv == "r" => {
                 match *r_ty {
                     Ty::Scalar(ScalarData::I32) => {}
@@ -276,10 +339,10 @@ fn gpu_memory_alloc_move_after_borrow_fail_example() {
     let prv = &prv("r");
     let mut e =
         let_const("x", &at_ty(&i32, &GpuGlobal),
-                  app(ddep_app(var("copy_to_gpu"), &i32), vec![lit(&5)]),
-        let_const("y", &ref_ty(prv, Uniq, &GpuGlobal, &i32), borr(prv, Uniq, var("x")),
-                  let_const("z", &at_ty(&i32, &GpuGlobal), var("x"),
-        unit())));
+                  app(ddep_app(ident("copy_to_gpu"), &i32), vec![lit(&5)]),
+                  let_const("y", &ref_ty(prv, Uniq, &GpuGlobal, &i32), borr(prv, Uniq, ident("x")),
+                            let_const("z", &at_ty(&i32, &GpuGlobal), ident("x"),
+                                      unit())));
 
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
@@ -310,10 +373,10 @@ fn gpu_mem_alloc_copy_shrd_ref_immediate_borrow_example() {
     let prv = &prv("r");
     let mut e =
         let_const("x", &ref_ty(prv, Shrd, &GpuGlobal, &i32),
-                  borr(prv, Uniq, app(ddep_app(var("copy_to_gpumem"), &i32), vec![lit(&5)])),
-        let_const("y", &ref_ty(prv, Shrd, &GpuGlobal, &i32),
-                  var("x"),
-        unit()));
+                  borr(prv, Uniq, app(ddep_app(ident("copy_to_gpumem"), &i32), vec![lit(&5)])),
+                  let_const("y", &ref_ty(prv, Shrd, &GpuGlobal, &i32),
+                            ident("x"),
+                            unit()));
 
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
@@ -344,12 +407,12 @@ fn uniq_ref_movement_example() {
     let prv = &prv("r");
     let mut e =
         let_const("x", &ref_ty(prv, Uniq, &GpuGlobal, &i32),
-                  borr(prv, Uniq, var("g")),
-        let_const("y", &ref_ty(prv, Uniq, &GpuGlobal, &i32),
-                  var("x"),
-        let_const("z", &ref_ty(&prv, Uniq, &GpuGlobal, &i32),
-                  var("x"),
-        unit())));
+                  borr(prv, Uniq, ident("g")),
+                  let_const("y", &ref_ty(prv, Uniq, &GpuGlobal, &i32),
+                            ident("x"),
+                            let_const("z", &ref_ty(&prv, Uniq, &GpuGlobal, &i32),
+                                      ident("x"),
+                                      unit())));
 
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
@@ -381,12 +444,12 @@ fn shrd_ref_copy_example() {
     let r = &prv("r");
     let mut e =
         let_const("x", &ref_ty(r, Shrd, &GpuGlobal, &i32),
-                  borr(r, Shrd, var("g")),
-        let_const("y", &ref_ty(r, Shrd, &GpuGlobal, &i32),
-                  var("x"),
-        let_const("z", &ref_ty(r, Shrd, &GpuGlobal, &i32),
-                  var("x"),
-        unit())));
+                  borr(r, Shrd, ident("g")),
+                  let_const("y", &ref_ty(r, Shrd, &GpuGlobal, &i32),
+                            ident("x"),
+                            let_const("z", &ref_ty(r, Shrd, &GpuGlobal, &i32),
+                                      ident("x"),
+                                      unit())));
 
     let gl_ctx = GlobalCtx::new();
     let kind_ctx = copy_to_gpu::kind_ctx();
@@ -415,9 +478,9 @@ fn function_app_copy_example() {
     let mut e =
         let_const("x", &i32, lit(&5),
         seq(
-            app(fun_name("f"), vec![var("x")]),
-            let_const("y", &i32, var("x"),
-            unit())
+            app(fun_name("f"), vec![ident("x")]),
+            let_const("y", &i32, ident("x"),
+                      unit())
         ));
 
     let f_decl = PreDeclaredGlobalFun{
@@ -448,17 +511,17 @@ fn function_app_copy_array_example() {
     // let const y: 3.i32 = x;
     // ())
     let mut e =
-        let_const("x", &arr_ty(3, &i32), arr![1, 2, 3], 
+        let_const("x", &arr_ty(Nat::Lit(3), &i32), arr![1, 2, 3], 
         seq(
-            app(fun_name("f"), vec![var("x")]),
-            let_const("y", &arr_ty(3, &i32),
-                      var("x"),
-            unit())
+            app(fun_name("f"), vec![ident("x")]),
+            let_const("y", &arr_ty(Nat::Lit(3), &i32),
+                      ident("x"),
+                      unit())
         ));
 
     let f_decl = PreDeclaredGlobalFun{
         name: "f".to_string(),
-        fun_ty: Ty::Fn(vec![arr_ty(3, &i32)],
+        fun_ty: Ty::Fn(vec![arr_ty(Nat::Lit(3), &i32)],
                        Box::new(FrameExpr::FrTy(FrameTyping::new())),
                        CpuThread, Box::new(i32.clone()))
     };
@@ -487,12 +550,12 @@ fn function_app_borrow_example() {
     // ())
     let r = &prv("r");
     let e =
-        let_mut("x", &arr_ty(3, &i32), arr![1, 2, 3],
+        let_mut("x", &arr_ty(Nat::Lit(3), &i32), arr![1, 2, 3],
             seq(
                 app(
                     pdep_app(fun_name("f"), r),
-                    vec![borr(r, Uniq, var("x"))]),
-                let_mut("y", &arr_ty(3, &i32), var("x"),
+                    vec![borr(r, Uniq, ident("x"))]),
+                let_mut("y", &arr_ty(Nat::Lit(3), &i32), ident("x"),
                         unit())
         ));
     panic!("todo: typecheck")
@@ -517,22 +580,22 @@ fn function_app_move_attype_example() {
 
     let r = &prv("r");
     let mut e =
-        let_const("tmp", &arr_ty(3, &i32), arr![1, 2, 3],
-        let_const("x", &at_ty(&arr_ty(3, &i32), &GpuGlobal),
+        let_const("tmp", &arr_ty(Nat::Lit(3), &i32), arr![1, 2, 3],
+        let_const("x", &at_ty(&arr_ty(Nat::Lit(3), &i32), &GpuGlobal),
                   ddep_app(pdep_app(
-                    app(fun_name("copy_to_gpu"),
-                    vec![var("x")]),
-                    r),
-                           &arr_ty(3, &i32)),
+                      app(fun_name("copy_to_gpu"),
+                    vec![ident("x")]),
+                      r),
+                           &arr_ty(Nat::Lit(3), &i32)),
         seq(
-        app(fun_name("f"), vec![var("x")]),
-        let_const("y", &at_ty(&arr_ty(3, &i32), &GpuGlobal), var("x"),
-        unit())
+            app(fun_name("f"), vec![ident("x")]),
+            let_const("y", &at_ty(&arr_ty(Nat::Lit(3), &i32), &GpuGlobal), ident("x"),
+                      unit())
     )));
 
     let f_decl = PreDeclaredGlobalFun{
         name: "f".to_string(),
-        fun_ty: Ty::Fn(vec![arr_ty(3, &i32)],
+        fun_ty: Ty::Fn(vec![arr_ty(Nat::Lit(3), &i32)],
                        Box::new(FrameExpr::FrTy(FrameTyping::new())),
                        CpuThread, Box::new(i32.clone()))
     };
@@ -618,8 +681,8 @@ fn function_def_params_example() {
         fdef("gpu_thread_f", vec![], vec![("p1", &i32), ("p2", &i32)],
              &unit_ty, GpuThread, vec![],
 
-            let_const("x", &i32, add(var("p1"), var("p2")),
-            unit())
+            let_const("x", &i32, add(ident("p1"), ident("p2")),
+                      unit())
     );
     
     let mut program = GlobalCtx::new().append_items(vec![gpu_thread_f]);
@@ -652,17 +715,17 @@ fn function_decl_reference_params_example() {
     let r2 = prov_ident("'r2");
     let gpu_group_f =
         fdef("gpu_group_f",
-             vec![r1.clone(), r2.clone()],
+             vec![("'r1", Kind::Provenance), ("'r2", Kind::Provenance)],
              vec![("p1",
                     &ref_ty(&Provenance::Ident(r1), Shrd, &GpuShared, &i32)),
                    ("p2",
-                    &at_ty(&arr_ty(3, &i32), &GpuGlobal))],
+                    &at_ty(&arr_ty(Nat::Lit(3), &i32), &GpuGlobal))],
              &unit_ty,
              GpuGroup,
              vec![],
 
              let_const("x", &i32,
-                       add(deref(var("p1")), index(var("p2"), Nat::Lit(0))),
+                       add(deref(ident("p1")), index(ident("p2"), Nat::Lit(0))),
                        unit())
     );
 
