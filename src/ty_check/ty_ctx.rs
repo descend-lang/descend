@@ -32,9 +32,6 @@ pub struct TyCtx {
     frame_tys: Vec<FrameTyping>,
 }
 
-// TODO more use of Iterators for construction of new Ctxts (Iterators representing Ctxts)
-//  and to pass values to the ctx.
-//  Maybe just return more references.
 impl TyCtx {
     pub fn new() -> Self {
         TyCtx {
@@ -52,6 +49,21 @@ impl TyCtx {
         let frame_typing = self.frame_tys.iter_mut().last().unwrap();
         frame_typing.push(TyEntry::Var(id_typed));
         self
+    }
+
+    pub fn drop_ident(mut self, ident: &Ident) -> Option<Self> {
+        for frame in self.frame_tys.iter_mut().rev() {
+            let rev_pos_if_exists = frame.iter().rev().position(|ty_entry| match ty_entry {
+                TyEntry::Var(ident_typed) => &ident_typed.ident == ident,
+                _ => false,
+            });
+            if let Some(rev_pos) = rev_pos_if_exists {
+                let pos = frame.len() - (rev_pos + 1);
+                frame.remove(pos);
+                return Some(self);
+            }
+        }
+        None
     }
 
     pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
@@ -177,18 +189,20 @@ impl TyCtx {
         }
 
         fn explode(pl: Place, ty: Ty) -> Vec<TypedPlace> {
-            use super::ty::Nat;
             use Ty::*;
 
             match &ty {
                 Scalar(_)
                 | Array(_, _)
+                // TODO maybe introduce places for this type
+                | ArrayView(_, _)
                 | At(_, _)
                 | Ref(_, _, _, _)
                 | Fn(_, _, _, _)
                 | DepFn(_, _, _, _)
                 | Ident(_)
-                | Dead(_) => vec![(pl, ty.clone())],
+                | Dead(_)
+                | GPU => vec![(pl, ty.clone())],
                 Tuple(tys) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {

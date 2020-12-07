@@ -177,6 +177,9 @@ pub enum ExprKind {
     PlaceExpr(PlaceExpr),
     // Index into array, e.g., arr[i]
     Index(PlaceExpr, Nat),
+    // Borrow Expressions
+    Ref(Provenance, Ownership, PlaceExpr),
+    BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
     // Variable declaration, assignment and sequencing
@@ -202,11 +205,12 @@ pub enum ExprKind {
     // For-each loop.
     // for x in e_1 { e_2 }
     For(Ident, Box<Expr>, Box<Expr>),
+    // TODO for-each is probably not a good term, at least if we stick to the notion that amount of
+    //  elements and amount of threads need to be equal.
+    // Parallel for-each (global) thread with input, syncing at the end.
+    ParForGlobalSync(Box<Expr>, Nat, Ident, Box<Expr>, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Unary(UnOp, Box<Expr>),
-    // Borrow Expressions
-    Ref(Provenance, Ownership, PlaceExpr),
-    BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
 }
 
 impl fmt::Display for ExprKind {

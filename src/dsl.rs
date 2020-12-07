@@ -111,7 +111,7 @@ pub fn app(f: Expr, arg: Vec<Expr>) -> Expr {
 }
 
 pub fn ddep_app(f: Expr, dt: &Ty) -> Expr {
-    Expr::new(ExprKind::DepApp(Box::new(f), KindValue::Data(dt.clone())))
+    Expr::new(ExprKind::DepApp(Box::new(f), KindValue::Ty(dt.clone())))
 }
 pub fn ndep_app(f: Expr, nat: &Nat) -> Expr {
     Expr::new(ExprKind::DepApp(Box::new(f), KindValue::Nat(nat.clone())))

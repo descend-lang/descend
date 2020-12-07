@@ -125,6 +125,45 @@ pub fn ty_check_expr(
     Ok(res_ty_ctx)
 }
 
+fn ty_check_par_for_global(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    gpu_expr: &mut Expr,
+    n: &Nat,
+    ident: &Ident,
+    array_view: &mut Expr,
+    body: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    let gpu_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, gpu_expr)?;
+    if !matches!(gpu_expr.ty, Some(Ty::GPU)) {
+        return Err(format!(
+            "Expected an expression of type GPU, instead found an expression of type {:?}",
+            gpu_expr.ty
+        ));
+    }
+    let array_view_ctx = ty_check_expr(gl_ctx, kind_ctx, gpu_ty_ctx, exec, array_view)?;
+    if let Some(Ty::ArrayView(elem_ty, m)) = &array_view.ty {
+        if m != n {
+            return Err("The amount of started threads is not equal to the amount of elements passed to the function.".to_string());
+        }
+
+        // TODO fresh ident
+        let ctx_with_ident = array_view_ctx
+            .append_ident_typed(IdentTyped::new(ident.clone(), elem_ty.deref().clone()));
+        let body_ctx = ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
+        // TODO check that type of ident is dead?
+        let res_ctx = body_ctx.drop_ident(ident).unwrap();
+        Ok((res_ctx, Ty::Scalar(ScalarData::Unit)))
+    } else {
+        Err(format!(
+            "Expected array type, but found {:?}",
+            array_view.ty.clone().unwrap()
+        ))
+    }
+}
+
 fn ty_check_assign(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
@@ -144,8 +183,6 @@ fn ty_check_index_copy(
     pl_expr: &mut PlaceExpr,
     index: &mut Nat,
 ) -> Result<(TyCtx, Ty), String> {
-    // If more general expressions are allowed for indices, then we need to check their
-    // appropriate type here
     ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
     let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr)?;
     let elem_ty = match pl_expr_ty {
@@ -194,34 +231,36 @@ fn ty_check_binary_op(
     }
 }
 
-// TODO bring functions in order of the pattern matching
 fn ty_check_dep_app(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: ExecLoc,
     df: &mut Expr,
-    kv: &mut KindValue,
+    kv: &KindValue,
 ) -> Result<(TyCtx, Ty), String> {
-    match kv {
-        KindValue::Provenance(prv) => unimplemented!(),
-        KindValue::Data(ty) => {
-            let df_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, df)?;
-            if let Ty::DepFn(param, _, _, out_ty) = df.ty.as_ref().unwrap() {
-                if param.kind() != Kind::Ty {
-                    return Err("Trying to apply value of different kind.".to_string());
-                }
-                Ok((df_ty_ctx, *out_ty.clone()))
-            } else {
-                Err(
-                    "The provided dependent function expression does not have a function type."
-                        .to_string(),
-                )
-            }
+    fn check_arg_has_correct_kind(expected: &Kind, kv: &KindValue) -> Result<(), String> {
+        match kv {
+            KindValue::Provenance(_) if expected == &Kind::Provenance => Ok(()),
+            KindValue::Ty(_) if expected == &Kind::Ty => Ok(()),
+            KindValue::Nat(_) if expected == &Kind::Nat => Ok(()),
+            KindValue::Memory(_) if expected == &Kind::Memory => Ok(()),
+            KindValue::Frame(_) if expected == &Kind::Frame => Ok(()),
+            _ => Err(format!(
+                "expected argument of kind {:?}, but the provided argument has another kind",
+                expected
+            )),
         }
-        KindValue::Nat(n) => unimplemented!(),
-        KindValue::Memory(mem) => unimplemented!(),
-        KindValue::Frame(frm) => unimplemented!(),
+    }
+    let df_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, df)?;
+    if let Ty::DepFn(param, _, _, out_ty) = df.ty.as_ref().unwrap() {
+        check_arg_has_correct_kind(&param.kind(), kv)?;
+        Ok((df_ty_ctx, *out_ty.clone()))
+    } else {
+        Err(
+            "The provided dependent function expression does not have a dependent function type."
+                .to_string(),
+        )
     }
 }
 
@@ -244,7 +283,10 @@ fn ty_check_app(
         }
         Ok((res_ty_ctx, *out_ty.clone()))
     } else {
-        Err("The provided function expression does not have a function type.".to_string())
+        Err(format!(
+            "The provided function expression\n {:?}\n does not have a function type.",
+            ef
+        ))
     }
 }
 
@@ -316,7 +358,8 @@ fn ty_check_let(
     //  the derivation needs to call T-Drop in case of copy types then.
     //  Equivalent to saying that the variable must be used.
     let ty_ctx_e2 = ty_check_expr(gl_ctx, kind_ctx, garbage_coll_ty_ctx_with_ident, exec, e2)?;
-    Ok((ty_ctx_e2, e2.ty.as_ref().unwrap().clone()))
+    let ty_ctx_e2_no_ident = ty_ctx_e2.drop_ident(ident).unwrap();
+    Ok((ty_ctx_e2_no_ident, e2.ty.as_ref().unwrap().clone()))
 }
 
 fn ty_check_seq(

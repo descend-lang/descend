@@ -28,7 +28,7 @@ impl fmt::Display for Kind {
 pub enum KindValue {
     Nat(Nat),
     Memory(Memory),
-    Data(Ty),
+    Ty(Ty),
     Provenance(Provenance),
     Frame(FrameExpr),
 }
@@ -165,6 +165,7 @@ pub enum Ty {
     Scalar(ScalarData),
     Tuple(Vec<Ty>),
     Array(Box<Ty>, Nat),
+    ArrayView(Box<Ty>, Nat),
     At(Box<Ty>, Memory),
     Fn(Vec<Ty>, Box<FrameExpr>, ExecLoc, Box<Ty>),
     DepFn(TyIdent, Box<FrameExpr>, ExecLoc, Box<Ty>),
@@ -174,6 +175,7 @@ pub enum Ty {
     //  without too much boilerplate.
     Dead(Box<Ty>),
     Ref(Provenance, Ownership, Memory, Box<Ty>),
+    GPU,
 }
 
 impl Ty {
@@ -189,6 +191,8 @@ impl Ty {
             At(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
+            ArrayView(ty, _) => ty.non_copyable(),
+            GPU => true,
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }
@@ -206,7 +210,9 @@ impl Ty {
             | Fn(_, _, _, _)
             | DepFn(_, _, _, _)
             | At(_, _)
-            | Array(_, _) => true,
+            | Array(_, _)
+            | ArrayView(_, _)
+            | GPU => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -217,7 +223,7 @@ impl Ty {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use Ty::*;
         match self {
-            Scalar(_) | Ident(_) | Dead(_) => false,
+            Scalar(_) | Ident(_) | GPU | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -236,6 +242,7 @@ impl Ty {
             DepFn(_, frame_expr, _, ret_ty) => ret_ty.contains_ref_to_prv(prv_val_name),
             At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            ArrayView(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
