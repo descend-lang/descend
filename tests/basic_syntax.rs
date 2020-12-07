@@ -98,10 +98,6 @@ fn scalar_copy_example() {
                   let_const("z", &i32, ident("x"),
                             unit())));
 
-    let x = IdentTyped::new(Ident::new("x"), i32.clone());
-    let y = IdentTyped::new(Ident::new("y"), i32.clone());
-    let z = IdentTyped::new(Ident::new("z"), i32.clone());
-
     assert_ty_checks_empty_ctxs(e, &unit_ty);
 }
 
@@ -122,11 +118,7 @@ fn array_copy_example() {
         let_const("y", &arr_ty(Nat::Lit(5), &i32), ident("x"),
                   let_const("z", &arr_ty(Nat::Lit(5), &i32), ident("x"),
                             unit())));
-
-    let x = IdentTyped::new(Ident::new("x"), arr_ty(Nat::Lit(5), &i32));
-    let y = IdentTyped::new(Ident::new("y"), arr_ty(Nat::Lit(5), &i32));
-    let z = IdentTyped::new(Ident::new("z"), arr_ty(Nat::Lit(5), &i32));
-    
+   
     assert_ty_checks_empty_ctxs(e, &unit_ty);
 }
 
@@ -147,10 +139,6 @@ fn tuple_copy_example() {
         let_const("y", &tuple_ty!(&i32, &f32), ident("x"),
                   let_const("z", &tuple_ty!(&i32, &f32), ident("x"),
                             unit())));
-
-    let x = IdentTyped::new(Ident::new("x"), tuple_ty!(i32, f32));
-    let y = IdentTyped::new(Ident::new("y"), tuple_ty!(i32, f32));
-    let z = IdentTyped::new(Ident::new("z"), tuple_ty!(i32, f32));
 
     assert_ty_checks_empty_ctxs(e, &unit_ty);
 }
@@ -680,7 +668,6 @@ fn function_decl_reference_params_example() {
     use ExecLoc::GpuGroup;
 
     let r1 = prov_ident("'r1");
-    let r2 = prov_ident("'r2");
     let gpu_group_f =
         fdef("gpu_group_f",
              vec![("'r1", Kind::Provenance), ("'r2", Kind::Provenance)],
