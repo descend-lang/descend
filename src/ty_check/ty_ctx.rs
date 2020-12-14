@@ -244,16 +244,15 @@ impl TyCtx {
         Ok(proj_ty(ident_ty.clone(), &place.path))
     }
 
-    pub fn kill_place(mut self, pl: &Place) -> Self {
-        fn kill_path_in_ty(ty: Ty, path: &[Nat]) -> Ty {
+    pub fn set_place_ty(mut self, pl: &Place, pl_ty: Ty) -> Self {
+        fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[Nat], part_ty: Ty) -> Ty {
             if path.is_empty() {
-                Ty::Dead(Box::new(ty.clone()))
-            } else if let Ty::Tuple(mut elem_tys) = ty {
+                part_ty
+            } else if let Ty::Tuple(mut elem_tys) = orig_ty {
                 let idx = path.first().unwrap().eval();
-                elem_tys[idx] = kill_path_in_ty(elem_tys[idx].clone(), &path[1..]);
+                elem_tys[idx] = set_ty_for_path_in_ty(elem_tys[idx].clone(), &path[1..], part_ty);
                 Ty::Tuple(elem_tys)
             } else {
-                // TODO make this an Error?
                 panic!("Path not compatible with type.")
             }
         }
@@ -262,9 +261,17 @@ impl TyCtx {
             .idents_typed_mut()
             .find(|ident_typed| ident_typed.ident == pl.ident)
             .unwrap();
-        let dead_ty = kill_path_in_ty(ident_typed.ty.clone(), pl.path.as_slice());
-        ident_typed.ty = dead_ty;
+        let updated_ty = set_ty_for_path_in_ty(ident_typed.ty.clone(), pl.path.as_slice(), pl_ty);
+        ident_typed.ty = updated_ty;
         self
+    }
+
+    pub fn kill_place(mut self, pl: &Place) -> Self {
+        if let Ok(pl_ty) = self.place_ty(pl) {
+            self.set_place_ty(pl, Ty::Dead(Box::new(pl_ty)))
+        } else {
+            panic!("Trying to kill the type of a place that doesn't exist.")
+        }
     }
 
     pub fn garbage_collect_loans(self) -> Self {

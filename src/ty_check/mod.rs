@@ -113,14 +113,13 @@ pub fn ty_check_expr(
             ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
         }
         ExprKind::Assign(pl_expr, e) if pl_expr.is_place() => {
-            ty_check_assign(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
+            ty_check_assign_place(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
         }
         ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => unimplemented!(),
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
     // TODO type well formed under output contexts
-
     expr.ty = Some(ty);
     Ok(res_ty_ctx)
 }
@@ -146,16 +145,20 @@ fn ty_check_par_for_global(
     let array_view_ctx = ty_check_expr(gl_ctx, kind_ctx, gpu_ty_ctx, exec, array_view)?;
     if let Some(Ty::ArrayView(elem_ty, m)) = &array_view.ty {
         if m != n {
-            return Err("The amount of started threads is not equal to the amount of elements passed to the function.".to_string());
+            return Err(
+                "The amount of started threads is not equal to the amount of elements passed to the function."
+                    .to_string());
         }
 
         // TODO fresh ident
-        let ctx_with_ident = array_view_ctx
+        // Use a new context to disable capturing variables.
+        // In the long run, capturing places of copy data types and allowing shared borrowing
+        // should probably be the goal.
+        let ctx_with_ident = TyCtx::new()
             .append_ident_typed(IdentTyped::new(ident.clone(), elem_ty.deref().clone()));
+        // TODO check that type of the identifier is dead? Meaning that it has been used in the loop.
         let body_ctx = ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
-        // TODO check that type of ident is dead?
-        let res_ctx = body_ctx.drop_ident(ident).unwrap();
-        Ok((res_ctx, Ty::Scalar(ScalarData::Unit)))
+        Ok((array_view_ctx, Ty::Scalar(ScalarData::Unit)))
     } else {
         Err(format!(
             "Expected array type, but found {:?}",
@@ -164,7 +167,7 @@ fn ty_check_par_for_global(
     }
 }
 
-fn ty_check_assign(
+fn ty_check_assign_place(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
@@ -172,7 +175,36 @@ fn ty_check_assign(
     pl_expr: &mut PlaceExpr,
     e: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    unimplemented!()
+    let assigned_val_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
+    let place = pl_expr.to_place().unwrap();
+    let place_ty = assigned_val_ty_ctx.place_ty(&place)?;
+
+    if !matches!(place_ty, Ty::Dead(_)) {
+        let pl_uniq_loans = ownership_safe(
+            kind_ctx,
+            &assigned_val_ty_ctx,
+            &[],
+            Ownership::Uniq,
+            pl_expr,
+        )?;
+        // This block of code asserts that nothing unexpected happens.
+        // May not necessarily be needed.
+        assert_eq!(pl_uniq_loans.len(), 1);
+        let place_loan = Loan {
+            place_expr: pl_expr.clone(),
+            own: Ownership::Uniq,
+        };
+        matches!(pl_uniq_loans.get(&place_loan), Some(_));
+    }
+
+    let after_subty_ctx = subty_check(
+        kind_ctx,
+        assigned_val_ty_ctx,
+        &e.ty.as_ref().unwrap(),
+        &place_ty,
+    )?;
+    let res_ty_ctx = after_subty_ctx.set_place_ty(&place, e.ty.as_ref().unwrap().clone());
+    Err("missing last operation".to_string())
 }
 
 fn ty_check_index_copy(
@@ -412,8 +444,6 @@ fn ty_check_pl_expr_without_deref(
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     let place = pl_expr.to_place().unwrap();
-    // TODO think about:
-    //  reintroduce Dead Type syntax for Frame Entries and return type of type_place.
     let pl_ty = ty_ctx.place_ty(&place)?;
     if !pl_ty.is_fully_alive() {
         return Err("Place was moved before.".to_string());
