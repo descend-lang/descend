@@ -1,4 +1,5 @@
 use crate::ast::ty::{Nat, Ty, ScalarData};
+use crate::*;
 
 peg::parser!{
     pub(crate) grammar descent() for str {
@@ -31,9 +32,18 @@ peg::parser!{
             // TODO: missing type @ memory_location rule
             // TODO: missing reference rule
 
-        /// Reserved keywords
+
+
+        rule identifier() -> String
+        = s:$(!keyword()
+            /['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']* 
+            / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*
+            / "'" identifier()
+            )
+        {String::from(s)}
+
         rule keyword() -> ()
-            =
+        = "crate"/"super"/"self"/"Self"
 
         /// Potential whitespace
         rule _() -> ()
