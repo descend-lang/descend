@@ -33,12 +33,12 @@ peg::parser!{
             // TODO: missing reference rule
 
         rule ownership() -> ast::Ownership
-        = &"Shrd" {ast::Ownership::Shrd}
-        / &"Uniq" {ast::Ownership::Uniq}
+        = "shrd" { ast::Ownership::Shrd }
+        / "uniq" { ast::Ownership::Uniq }
 
         rule mutability() -> ast::Mutability
-        = &"Const" {ast::Mutability::Const}
-        / &"Mut" {ast::Mutability::Mut}
+        = "const" { ast::Mutability::Const }
+        / "mut" { ast::Mutability::Mut }
 
         rule ident() -> ast::Ident
         = i:$(identifier()) {
@@ -56,7 +56,7 @@ peg::parser!{
         }
 
         rule keyword() -> ()
-        = "crate"/"super"/"self"/"Self"
+        = "crate" / "super" / "self" / "Self"
 
         /// Potential whitespace
         rule _() -> ()
