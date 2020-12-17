@@ -9,6 +9,7 @@ pub enum Kind {
     Ty,
     Provenance,
     Frame,
+    Own,
 }
 
 impl fmt::Display for Kind {
@@ -19,6 +20,7 @@ impl fmt::Display for Kind {
             Kind::Ty => "type",
             Kind::Provenance => "prv",
             Kind::Frame => "frm",
+            Kind::Own => "own",
         };
         write!(f, "{}", str)
     }
@@ -31,6 +33,7 @@ pub enum KindValue {
     Ty(Ty),
     Provenance(Provenance),
     Frame(FrameExpr),
+    Own(Ownership),
 }
 
 pub type FrameTyping = Vec<TyEntry>;

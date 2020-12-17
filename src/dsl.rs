@@ -74,6 +74,7 @@ pub fn fdef(
             Kind::Memory => unimplemented!(),
             Kind::Frame => unimplemented!(),
             Kind::Ty => Ty::new_ident(name),
+            Kind::Own => unimplemented!(),
         })
         .collect();
 
