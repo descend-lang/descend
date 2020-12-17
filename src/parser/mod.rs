@@ -32,14 +32,23 @@ peg::parser!{
             // TODO: missing type @ memory_location rule
             // TODO: missing reference rule
 
+        rule ownership() -> ast::Ownership
+        = &"Shrd" {ast::Ownership::Shrd}
+        / &"Uniq" {ast::Ownership::Uniq}
 
+        rule mutability() -> ast::Mutability
+        = &"Const" {ast::Mutability::Const}
+        / &"Mut" {ast::Mutability::Mut}
+
+        rule ident() -> ast::Ident
+        = i:$(identifier()) {
+            ast::Ident{name: i.to_string()}
+        }
 
         rule identifier() -> String
-        = s:$(!keyword()
-            /['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']* 
+        = s:$(!keyword() (['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']* 
             / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*
-            / "'" identifier()
-            )
+            / "'" identifier()))
         {String::from(s)}
 
         rule keyword() -> ()
