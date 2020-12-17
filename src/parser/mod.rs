@@ -45,11 +45,15 @@ peg::parser!{
             ast::Ident{name: i.to_string()}
         }
 
+        rule ty_identifier() -> String
+        = s:$(identifier() / ("'" identifier())) { s.into() }
+
         rule identifier() -> String
         = s:$(!keyword() (['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']* 
-            / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*
-            / "'" identifier()))
-        {String::from(s)}
+            / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*))
+        {
+            s.into()
+        }
 
         rule keyword() -> ()
         = "crate"/"super"/"self"/"Self"
