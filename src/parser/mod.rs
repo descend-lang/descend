@@ -1,8 +1,19 @@
 use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance, Kind};
-use crate::ast::{Ownership, Mutability, Ident, Lit};
+use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr};
 
 peg::parser!{
     pub(crate) grammar descent() for str {
+
+        /// Place expression
+        pub(crate) rule place_expression() -> PlaceExpr
+            = derefs:("*" _)* name:identifier() _ ns:("." _ n:nat() _ {n})* {
+                let root = PlaceExpr::Var(Ident::new(&name));
+                // . operator binds stronger
+                let proj = ns.into_iter().fold(root, |prev,n| PlaceExpr::Proj(Box::new(prev), n));
+                // * operator binds weaker
+                derefs.iter().fold(proj, |prev,_| PlaceExpr::Deref(Box::new(prev)))
+                // TODO: Allow parentheses for priority override?
+            }
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat 
@@ -23,12 +34,7 @@ peg::parser!{
         /// Parse a type token
         pub(crate) rule ty() -> Ty
             = first:ty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
-                if mems.is_empty() {
-                    first
-                }
-                else {
-                    mems.into_iter().fold(first, |prev,mem| Ty::At(Box::new(prev), mem))
-                }
+                mems.into_iter().fold(first, |prev,mem| Ty::At(Box::new(prev), mem))
             }
 
         /// Helper for "type @ memory" left-recursion
@@ -343,5 +349,24 @@ mod tests {
             "does not recognize prv kind");
         assert_eq!(descent::kind("frm"), Ok(Kind::Frame), 
             "does not recognize frm kind");
+    }
+
+    #[test]
+    fn place_expression() {
+        assert_eq!(descent::place_expression("*x"), Ok(
+            PlaceExpr::Deref(Box::new(
+                PlaceExpr::Var(Ident::new("x"))
+            ))), "does not recognize place expression *x");
+        assert_eq!(descent::place_expression("x.0"), Ok(
+            PlaceExpr::Proj(
+                Box::new(PlaceExpr::Var(Ident::new("x"))),
+                Nat::Lit(0)
+            )), "does not recognize place expression *x");
+        assert_eq!(descent::place_expression("*x.0"), Ok(
+            PlaceExpr::Deref(Box::new(
+                PlaceExpr::Proj(
+                    Box::new(PlaceExpr::Var(Ident::new("x"))),
+                    Nat::Lit(0)
+            )))), "does not recognize place expression *x.0");
     }
 }
