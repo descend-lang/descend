@@ -1,4 +1,6 @@
-use crate::ast::ty::{Nat, Ty, ScalarData};
+use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance};
+#[allow(unused_imports)]
+use crate::ast::{Ownership, Mutability};
 use crate::*;
 
 peg::parser!{
@@ -14,40 +16,71 @@ peg::parser!{
                     Err(_) => { Err("Cannot parse natural number") }
                 }
             }
-            // TODO: missing identifier rule
+            / name:identifier() {
+                Nat::Ident(Nat::new_ident(&name))
+            }
             // TODO: binary operations are currently disabled
             // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
 
-        /// Parse type token
+        /// Parse a type token
         pub(crate) rule ty() -> Ty
-            =  // TODO: missing identifer rule
-            "f32" { Ty::Scalar(ScalarData::F32) }
+            = first:ty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
+                if mems.is_empty() {
+                    first
+                }
+                else {
+                    mems.into_iter().fold(first, |prev,mem| Ty::At(Box::new(prev), mem))
+                }
+            }
+
+        /// Helper for "type @ memory" left-recursion
+        rule ty_term() -> Ty
+            = "f32" { Ty::Scalar(ScalarData::F32) }
             / "i32" { Ty::Scalar(ScalarData::I32) }
             / "bool" { Ty::Scalar(ScalarData::Bool) }
             / "()" { Ty::Scalar(ScalarData::Unit) }
             / "GPU" { Ty::GPU }
+            / name:identifier() { Ty::Ident(Ty::new_ident(&name)) }
             / "(" _ types:ty() ** ( _ "," _ ) _ ")" { Ty::Tuple(types) }
             / "[" _ t:ty() _ ";" _ n:nat() _ "]" { Ty::Array(Box::new(t), n) }
             / "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { Ty::ArrayView(Box::new(t), n) }
-            // TODO: missing type @ memory_location rule
-            // TODO: missing reference rule
+            / "&" _ prov:prov_identifier() _ own:ownership() _ mem:memory_kind() _ ty:ty() {
+                Ty::Ref(
+                    Provenance::Ident(Provenance::new_ident(&prov)), // TODO: When should this be Provenance::Value?
+                    own, mem, Box::new(ty)
+                )
+            }
 
-        rule ownership() -> ast::Ownership
+        pub(crate) rule ownership() -> ast::Ownership
         = "shrd" { ast::Ownership::Shrd }
         / "uniq" { ast::Ownership::Uniq }
 
-        rule mutability() -> ast::Mutability
+        pub(crate) rule mutability() -> ast::Mutability
         = "const" { ast::Mutability::Const }
         / "mut" { ast::Mutability::Mut }
 
-        rule ident() -> ast::Ident
-        = i:$(identifier()) {
-            ast::Ident{name: i.to_string()}
-        }
+        pub(crate) rule memory_kind() -> Memory
+            = "cpu.stack" { Memory::CpuStack }
+            / "cpu.heap" { Memory::CpuHeap }
+            / "gpu.global" { Memory::GpuGlobal }
+            / "gpu.shared" { Memory::GpuShared }
+            / name:identifier() { Memory::Ident(Memory::new_ident(&name)) }
 
-        rule ty_identifier() -> String
+        pub(crate) rule execution_location() -> ExecLoc
+            = "cpu.thread" { ExecLoc::CpuThread }
+            / "gpu.group" { ExecLoc::GpuGroup }
+            / "gpu.thread" { ExecLoc::GpuThread }
+
+        rule ident() -> ast::Ident
+            = i:$(identifier()) {
+                ast::Ident{name: i.to_string()}
+            }
+
+        /// Identifier, but also allows leading ' for provenance names
+        rule prov_identifier() -> String
         = s:$(identifier() / ("'" identifier())) { s.into() }
 
+        /// Parse an identifier
         rule identifier() -> String
         = s:$(!keyword() (['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']* 
             / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*))
@@ -56,7 +89,8 @@ peg::parser!{
         }
 
         rule keyword() -> ()
-        = "crate" / "super" / "self" / "Self"
+            = "crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
+            / "f32" / "i32" / "bool" / "GPU"
 
         /// Potential whitespace
         rule _() -> ()
@@ -81,14 +115,16 @@ mod tests {
         assert_eq!(descent::nat("42"), Ok(Nat::Lit(42)), "cannot parse 42");
         assert!(descent::nat("100000000000000000000").is_err(), "overflow not handled");
         assert!(descent::nat("-1").is_err(), "negative numbers not handled");
-        assert!(descent::nat("abc").is_err(), "garbage not handled");
+        assert!(descent::nat("3abc").is_err(), "garbage not handled");
         assert!(descent::nat("").is_err(), "matches empty");
     }
 
     #[test]
     #[ignore = "Unimplemented"]
     fn nat_identifier() {
-        todo!()
+        assert_eq!(descent::nat("N"), Ok(Nat::Ident(Nat::new_ident("N"))), "cannot parse N");
+        assert_eq!(descent::nat("my_long_ident"), Ok(Nat::Ident(Nat::new_ident("my_long_ident"))),
+            "cannot parse long identifer");
     }
 
     #[test]
@@ -144,5 +180,84 @@ mod tests {
             Ty::Scalar(ScalarData::I32)),
             Nat::Lit(24)
         )), "does not recognize [[f32;24]] type");
+    }
+
+    #[test]
+    fn ty_identifier() {
+        assert_eq!(descent::ty("T"), Ok(Ty::Ident(Ty::new_ident("T"))), 
+            "does not recognize T type");
+    }
+
+    #[test]
+    fn ty_reference() {
+        assert_eq!(descent::ty("&'a uniq cpu.heap i32"), Ok(Ty::Ref(
+                Provenance::Ident(Provenance::new_ident("'a")),
+                Ownership::Uniq,
+                Memory::CpuHeap,
+                Box::new(Ty::Scalar(ScalarData::I32))
+            )), "does not recognize type of unique i32 reference in cpu heap with provenance 'a");
+        assert_eq!(descent::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::Ref(
+                Provenance::Ident(Provenance::new_ident("b")),
+                Ownership::Shrd,
+                Memory::GpuGlobal,
+                Box::new(Ty::Array(
+                    Box::new(Ty::Scalar(ScalarData::F32)),
+                    Nat::Ident(Nat::new_ident("N"))
+                ))
+            )), "does not recognize type of shared [f32] reference in gpu global memory with provenance b");
+    }
+
+    #[test]
+    fn ty_memory_kind() {
+        assert_eq!(descent::ty("i32 @ cpu.stack"), Ok(Ty::At(
+            Box::new(Ty::Scalar(ScalarData::I32)),
+            Memory::CpuStack
+        )), "does not recognize f32 @ cpu.stack type");
+        assert_eq!(descent::ty("[f32;42] @ gpu.global"), Ok(Ty::At(
+            Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarData::F32)), Nat::Lit(42))),
+            Memory::GpuGlobal
+        )), "does not recognize [f32;42] @ gpu.global type");
+    }
+
+    #[test]
+    fn ownership() {
+        assert_eq!(descent::ownership("shrd"), Ok(Ownership::Shrd), 
+            "does not recognize shrd ownership qualifier");
+        assert_eq!(descent::ownership("uniq"), Ok(Ownership::Uniq), 
+            "does not recognize uniq ownership qualifier");
+    }
+
+    #[test]
+    #[ignore = "Mutability does not implement Eq"]
+    fn mutability() {
+        // TODO: Missing Eq implementation in AST
+        // assert_eq!(descent::mutability("const"), Ok(Mutability::Const), 
+        //     "does not recognize const mutability qualifier");
+        // assert_eq!(descent::mutability("mut"), Ok(Mutability::Mut), 
+        //     "does not recognize mut mutability qualifier");
+    }
+
+    #[test]
+    fn memory_kind() {
+        assert_eq!(descent::memory_kind("cpu.stack"), Ok(Memory::CpuStack), 
+            "does not recognize cpu.stack memory kind");
+        assert_eq!(descent::memory_kind("cpu.heap"), Ok(Memory::CpuHeap), 
+            "does not recognize cpu.heap memory kind");
+        assert_eq!(descent::memory_kind("gpu.global"), Ok(Memory::GpuGlobal), 
+            "does not recognize gpu.global memory kind");
+        assert_eq!(descent::memory_kind("gpu.shared"), Ok(Memory::GpuShared), 
+            "does not recognize gpu.shared memory kind");
+        assert_eq!(descent::memory_kind("M"), Ok(Memory::Ident(Memory::new_ident("M"))), 
+            "does not recognize M memory kind");
+    }
+
+    #[test]
+    fn execution_location() {
+        assert_eq!(descent::execution_location("cpu.thread"), Ok(ExecLoc::CpuThread), 
+            "does not recognize cpu.stack memory kind");
+        assert_eq!(descent::execution_location("gpu.group"), Ok(ExecLoc::GpuGroup), 
+            "does not recognize cpu.heap memory kind");
+        assert_eq!(descent::execution_location("gpu.thread"), Ok(ExecLoc::GpuThread), 
+            "does not recognize gpu.global memory kind");
     }
 }
