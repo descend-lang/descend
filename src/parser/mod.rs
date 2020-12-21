@@ -1,6 +1,5 @@
-use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance};
+use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance, Kind};
 use crate::ast::{Ownership, Mutability, Ident, Lit};
-
 
 peg::parser!{
     pub(crate) grammar descent() for str {
@@ -70,6 +69,14 @@ peg::parser!{
             / "gpu.group" { ExecLoc::GpuGroup }
             / "gpu.thread" { ExecLoc::GpuThread }
 
+        pub(crate) rule kind() -> Kind
+            = "nat" { Kind::Nat }
+            / "mem" { Kind::Memory }
+            / "ty" { Kind::Ty }
+            / "prv" { Kind::Provenance }
+            / "frm" { Kind::Frame }
+            /// "own" { } // TODO: Unimplemented in AST
+
         rule ident() -> Ident
             = i:$(identifier()) {
                 Ident{name: i.to_string()}
@@ -89,7 +96,7 @@ peg::parser!{
 
         rule keyword() -> ()
             = "crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
-            / "f32" / "i32" / "bool" / "GPU"
+            / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
 
         
         // Literal may be one of Unit, bool, i32, f32
@@ -322,5 +329,19 @@ mod tests {
         assert_eq!(descent::literal("12345ad").is_err(), true, "incorrectly parsing invalid literal");
         assert_eq!(descent::literal("e54").is_err(), true, "incorrectly parsing e-notation only to literal");
         assert_eq!(descent::literal("-i32").is_err(), true, "incorrectly parsing 'negative data type' to literal");
+    }
+
+    #[test]
+    fn kind() {
+        assert_eq!(descent::kind("nat"), Ok(Kind::Nat), 
+            "does not recognize nat kind");
+        assert_eq!(descent::kind("mem"), Ok(Kind::Memory), 
+            "does not recognize mem kind");
+        assert_eq!(descent::kind("ty"), Ok(Kind::Ty), 
+            "does not recognize ty kind");
+        assert_eq!(descent::kind("prv"), Ok(Kind::Provenance), 
+            "does not recognize prv kind");
+        assert_eq!(descent::kind("frm"), Ok(Kind::Frame), 
+            "does not recognize frm kind");
     }
 }
