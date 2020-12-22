@@ -261,7 +261,7 @@ impl fmt::Display for Ident {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Lit {
     Unit,
     Bool(bool),
