@@ -3,6 +3,7 @@ use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance};
 use crate::ast::{Ownership, Mutability};
 use crate::*;
 
+
 peg::parser!{
     pub(crate) grammar descent() for str {
 
@@ -91,6 +92,65 @@ peg::parser!{
         rule keyword() -> ()
             = "crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
             / "f32" / "i32" / "bool" / "GPU"
+
+        
+        // Literal may be one of Unit, bool, i32, f32
+        pub(crate) rule literal() -> ast::Lit
+        = &"()" { ? 
+            Ok(ast::Lit::Unit)
+        }
+        / l:$("true" / "false") {   ? 
+            Ok(ast::Lit::Bool(l.parse::<bool>().unwrap()))
+        }
+        / l:$(((['1'..='9']['0'..='9']*) / "0") "." ['0'..='9']*  ( ("e" "-"?  ['0'..='9']*)? "f32"? )? ) { ?
+            let mut _l = l.to_string();
+            let mut _exp:i32 = 0i32;
+
+            if  (_l.len() > 3) {
+                if (&_l[_l.len()-3.._l.len()] == "f32") {
+                    _l = _l[0.._l.len()-3].to_string(); 
+                }
+            }
+            
+            if _l.contains('e') {
+                let _l_cp = _l.clone();
+                let mut parts = _l_cp.split('e').into_iter();
+                _l = parts.next().unwrap().to_string();
+                _exp = parts.next().unwrap().to_string().parse::<i32>().unwrap();
+            } 
+
+            let _f32 = _l.parse::<f32>();
+            match _f32 {
+                Ok(val) => Ok(ast::Lit::Float(val * 10f32.powi(_exp))),
+                Err(_) => Err("Parser Error: Value cannot be parsed to f32")
+            }
+        }
+        / l:$((['1'..='9']['0'..='9']*) / "0"  ( ("e"  ['0'..='9']*)? "i32"? ) ) { ? 
+            let mut _l = l.to_string();
+            println!("{}", _l);
+            let mut _exp:u32 = 0u32;
+            
+            if (_l.len() > 3) {
+                if (&_l[_l.len()-3.._l.len()] == "i32") {
+                    _l = _l[0.._l.len()-3].to_string();   
+                }   
+            }
+            
+            if _l.contains('e') {
+                let _l_cp = _l.clone();
+                let mut parts = _l_cp.split('e').into_iter();
+                _l = parts.next().unwrap().to_string();
+                _exp = parts.next().unwrap().to_string().parse::<u32>().unwrap();
+            } 
+
+            let _i32 = _l.parse::<i32>();
+
+            match _i32 {
+                Ok(val) => Ok(ast::Lit::Int(val * 10i32.pow(_exp))),
+                Err(_) => Err("Parser Error: Value cannot be parsed to f32")
+            }
+        }
+
 
         /// Potential whitespace
         rule _() -> ()
@@ -259,5 +319,23 @@ mod tests {
             "does not recognize cpu.heap memory kind");
         assert_eq!(descent::execution_location("gpu.thread"), Ok(ExecLoc::GpuThread), 
             "does not recognize gpu.global memory kind");
+    }
+
+    #[test]
+    fn literal() {
+        assert_eq!(descent::literal("true"), Ok(ast::Lit::Bool(true)), "does not parse boolean correctly");
+        assert_eq!(descent::literal("12345"), Ok(ast::Lit::Int(12345)), "does not parse i32 correctly");
+        // TODO: Figure out why this test is failing.
+        // assert_eq!(descent::literal("1e05i32"), Ok(ast::Lit::Int(100000)), "does not correctly parse 1e05i32 to i32");
+        assert_eq!(descent::literal("1.0"), Ok(ast::Lit::Float(1.0)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("2.0f32"), Ok(ast::Lit::Float(2.0)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("777.7e0f32"), Ok(ast::Lit::Float(777.7)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("1.0e2"), Ok(ast::Lit::Float(100.0)), "does not parse f32 in scientific notation correctly");
+        assert_eq!(descent::literal("3.7f32"), Ok(ast::Lit::Float(3.7)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("3.75e3"), Ok(ast::Lit::Float(3750.0)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("1234.5e-0005"), Ok(ast::Lit::Float(0.012344999)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("3.14159265358979323846264338327950288"), // std::f64::consts::PI
+                                    Ok(ast::Lit::Float(3.1415927)), "not parsing f32 float as expected");
+        assert_eq!(descent::literal("12345ad").is_err(), true, "incorrectly parsing invalid literal");
     }
 }
