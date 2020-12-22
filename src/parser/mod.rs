@@ -102,51 +102,37 @@ peg::parser!{
         / l:$("true" / "false") {   ? 
             Ok(ast::Lit::Bool(l.parse::<bool>().unwrap()))
         }
-        / l:$(((['1'..='9']['0'..='9']*) / "0") "." ['0'..='9']*  ( ("e" "-"?  ['0'..='9']*)? "f32"? )? ) { ?
+        / l:$( ("-"? ((['1'..='9']['0'..='9']*) / "0") "." ['0'..='9']*)  (['e'|'E'] "-"?  ['0'..='9']*)? "f32"? ) { ?
             let mut _l = l.to_string();
-            let mut _exp:i32 = 0i32;
+            let mut exp:i32 = 0i32;
 
-            if  (_l.len() > 3) {
-                if (&_l[_l.len()-3.._l.len()] == "f32") {
-                    _l = _l[0.._l.len()-3].to_string(); 
-                }
+            if  (_l.len() > 3) && (&_l[_l.len()-3.._l.len()] == "f32") {
+                _l = _l[0.._l.len()-3].to_string(); 
             }
-            
             if _l.contains('e') {
                 let _l_cp = _l.clone();
                 let mut parts = _l_cp.split('e').into_iter();
                 _l = parts.next().unwrap().to_string();
-                _exp = parts.next().unwrap().to_string().parse::<i32>().unwrap();
+                exp = parts.next().unwrap().to_string().parse::<i32>().unwrap();
             } 
 
             let _f32 = _l.parse::<f32>();
             match _f32 {
-                Ok(val) => Ok(ast::Lit::Float(val * 10f32.powi(_exp))),
+                Ok(val) => Ok(ast::Lit::Float(val * 10f32.powi(exp))),
                 Err(_) => Err("Parser Error: Value cannot be parsed to f32")
             }
         }
-        / l:$((['1'..='9']['0'..='9']*) / "0"  ( ("e"  ['0'..='9']*)? "i32"? ) ) { ? 
+        / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") "i32"?  ) { ? 
             let mut _l = l.to_string();
-            println!("{}", _l);
-            let mut _exp:u32 = 0u32;
             
-            if (_l.len() > 3) {
-                if (&_l[_l.len()-3.._l.len()] == "i32") {
-                    _l = _l[0.._l.len()-3].to_string();   
-                }   
+            if (_l.len() > 3) && (&_l[_l.len()-3.._l.len()] == "i32") {
+                _l = _l[0.._l.len()-3].to_string();   
             }
-            
-            if _l.contains('e') {
-                let _l_cp = _l.clone();
-                let mut parts = _l_cp.split('e').into_iter();
-                _l = parts.next().unwrap().to_string();
-                _exp = parts.next().unwrap().to_string().parse::<u32>().unwrap();
-            } 
 
             let _i32 = _l.parse::<i32>();
 
             match _i32 {
-                Ok(val) => Ok(ast::Lit::Int(val * 10i32.pow(_exp))),
+                Ok(val) => Ok(ast::Lit::Int(val)),
                 Err(_) => Err("Parser Error: Value cannot be parsed to f32")
             }
         }
@@ -324,18 +310,24 @@ mod tests {
     #[test]
     fn literal() {
         assert_eq!(descent::literal("true"), Ok(ast::Lit::Bool(true)), "does not parse boolean correctly");
+        assert_eq!(descent::literal("False").is_err(), true, "wrongfully parses misspelled boolean");
         assert_eq!(descent::literal("12345"), Ok(ast::Lit::Int(12345)), "does not parse i32 correctly");
+        assert_eq!(descent::literal("789i32"), Ok(ast::Lit::Int(789)), "does not parse i32 correctly");
         // TODO: Figure out why this test is failing.
-        // assert_eq!(descent::literal("1e05i32"), Ok(ast::Lit::Int(100000)), "does not correctly parse 1e05i32 to i32");
+        assert_eq!(descent::literal("-1i32"), Ok(ast::Lit::Int(-1)), "does not correctly parse 1e05i32 to i32");
         assert_eq!(descent::literal("1.0"), Ok(ast::Lit::Float(1.0)), "does not parse f32 correctly");
         assert_eq!(descent::literal("2.0f32"), Ok(ast::Lit::Float(2.0)), "does not parse f32 correctly");
         assert_eq!(descent::literal("777.7e0f32"), Ok(ast::Lit::Float(777.7)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("777.7e01f32"), Ok(ast::Lit::Float(7777.0)), "does not parse f32 correctly");
         assert_eq!(descent::literal("1.0e2"), Ok(ast::Lit::Float(100.0)), "does not parse f32 in scientific notation correctly");
+        assert_eq!(descent::literal("1.0e-2"), Ok(ast::Lit::Float(0.01)), "does not parse f32 in scientific notation correctly");
         assert_eq!(descent::literal("3.7f32"), Ok(ast::Lit::Float(3.7)), "does not parse f32 correctly");
-        assert_eq!(descent::literal("3.75e3"), Ok(ast::Lit::Float(3750.0)), "does not parse f32 correctly");
-        assert_eq!(descent::literal("1234.5e-0005"), Ok(ast::Lit::Float(0.012344999)), "does not parse f32 correctly");
+        assert_eq!(descent::literal("3.75e3"), Ok(ast::Lit::Float(3750.0)), "does not parse scientific notation f32 correctly");
+        assert_eq!(descent::literal("-1234.5e-0005"), Ok(ast::Lit::Float(-0.012344999)), "does not parse negative scientific notation f32 correctly");
         assert_eq!(descent::literal("3.14159265358979323846264338327950288"), // std::f64::consts::PI
                                     Ok(ast::Lit::Float(3.1415927)), "not parsing f32 float as expected");
         assert_eq!(descent::literal("12345ad").is_err(), true, "incorrectly parsing invalid literal");
+        assert_eq!(descent::literal("e54").is_err(), true, "incorrectly parsing e-notation only to literal");
+        assert_eq!(descent::literal("-i32").is_err(), true, "incorrectly parsing 'negative data type' to literal");
     }
 }
