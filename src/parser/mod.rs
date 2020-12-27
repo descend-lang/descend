@@ -1,8 +1,107 @@
+mod helpers;
+
 use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance, Kind};
-use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr};
+use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp};
 
 peg::parser!{
     pub(crate) grammar descent() for str {
+
+        /// Parse a sequence of expressions (might also just be one)
+        pub(crate) rule expression_seq() -> Expr
+            = head:expression() _ ";" _ tail:expression_seq()? {
+                match tail{
+                    None => head,
+                    Some(tail) => {
+                        let tail_ty = tail.ty.clone();
+                        Expr{expr: ExprKind::Seq(Box::new(head), Box::new(tail)), ty: tail_ty}
+                    }
+                }
+            }
+            / "let" __ m:mutability() __ ident:ident() _ ":" ty:ty() _ "=" _ expr:expression() _ ";" _
+                tail:expression_seq()
+            {
+                let tail_ty = tail.ty.clone();
+                Expr{expr:ExprKind::Let(m, ident, ty, Box::new(expr), Box::new(tail)), ty: tail_ty}
+            }
+            / expr:expression() { expr }
+
+        /// Parse an expression
+        pub(crate) rule expression() -> Expr = precedence!{
+            x:(@) "&&" y:@ { helpers::make_binary(BinOp::And, x, y) }
+            x:(@) "||" y:@ { helpers::make_binary(BinOp::Or, x, y) }
+            --
+            x:(@) "==" y:@ { helpers::make_binary(BinOp::Eq, x, y) }
+            x:(@) "!=" y:@ { helpers::make_binary(BinOp::Neq, x, y) }
+            x:(@) "<" y:@ { helpers::make_binary(BinOp::Lt, x, y) }
+            x:(@) "<=" y:@ { helpers::make_binary(BinOp::Le, x, y) }
+            x:(@) ">" y:@ { helpers::make_binary(BinOp::Gt, x, y) }
+            x:(@) ">=" y:@ { helpers::make_binary(BinOp::Ge, x, y) }
+            --
+            x:(@) "+" y:@ { helpers::make_binary(BinOp::Add, x, y) }
+            x:(@) "-" y:@ { helpers::make_binary(BinOp::Sub, x, y) }
+            --
+            x:(@) "*" y:@ { helpers::make_binary(BinOp::Mul, x, y) }
+            x:(@) "/" y:@ { helpers::make_binary(BinOp::Div, x, y) }
+            x:(@) "%" y:@ { helpers::make_binary(BinOp::Mod, x, y) }
+            --
+            @ "-" x:(@) { helpers::make_unary(UnOp::Neg, x) }
+            @ "!" x:(@) { helpers::make_unary(UnOp::Not, x) }
+            --
+            l:literal() { 
+                let ty = Some(helpers::type_from_lit(&l));
+                Expr {expr: ExprKind::Lit(l), ty}
+            }
+            p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? expr:(_ "=" _ e:expression() {e})? {
+                match expr {
+                    None => match idx {
+                        None => Expr{expr: ExprKind::PlaceExpr(p), ty: None},
+                        Some(idx) => Expr{expr: ExprKind::Index(p,idx), ty: None}
+                    },
+                    Some(expr) => match idx {
+                        None => Expr{expr: ExprKind::Assign(p, Box::new(expr)), ty: None},
+                        Some(_) => unimplemented!() // TODO: Implement array assignment
+                    }
+                }
+
+            }
+            "&" _ prov:provenance() __ own:ownership() __ p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? {
+                match idx {
+                    None => Expr{expr: ExprKind::Ref(prov, own, p), ty: None},
+                    Some(idx) => Expr{expr: ExprKind::BorrowIndex(prov, own, p,idx), ty: None}
+                }
+            }
+            "[" _ expressions:expression() ** (_ "," _) _ "]" {
+                Expr {expr: ExprKind::Array(expressions), ty: None}
+            }
+            "(" _ expressions:(e:expression() _ "," _ {e})* _ ")" {
+                Expr {expr: ExprKind::Tuple(expressions), ty: None}
+            }
+            "if" _ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
+                Expr {
+                    expr: ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse)),
+                    ty: None
+                }
+            }
+            sync_threads:("sync_threads" _ "[" _ gpu_expr:expression() _ ";" _ threads:nat() _ "]" _ {(gpu_expr, threads)})?
+                "for" _ ident:ident() _ "in" _ collection:expression() "{" _ body:expression_seq() _ "}"
+            {
+                match sync_threads {
+                    None => Expr {
+                            expr: ExprKind::For(ident, Box::new(collection), Box::new(body)),
+                            ty: None
+                        },
+                    Some((gpu_expr, threads)) => Expr {
+                        expr: ExprKind::ParForGlobalSync(
+                            Box::new(gpu_expr), threads,
+                            ident, Box::new(collection), Box::new(body)),
+                        ty: None
+                    },
+                }
+
+            }
+            // Parentheses to override precedence
+            "(" _ expression:expression() _ ")" { expression }
+        } 
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
@@ -48,11 +147,8 @@ peg::parser!{
             / "(" _ types:ty() ** ( _ "," _ ) _ ")" { Ty::Tuple(types) }
             / "[" _ t:ty() _ ";" _ n:nat() _ "]" { Ty::Array(Box::new(t), n) }
             / "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { Ty::ArrayView(Box::new(t), n) }
-            / "&" _ prov:prov_identifier() _ own:ownership() _ mem:memory_kind() _ ty:ty() {
-                Ty::Ref(
-                    Provenance::Ident(Provenance::new_ident(&prov)), // TODO: When should this be Provenance::Value?
-                    own, mem, Box::new(ty)
-                )
+            / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ ty:ty() {
+                Ty::Ref(prov, own, mem, Box::new(ty))
             }
 
         pub(crate) rule ownership() -> Ownership
@@ -88,6 +184,11 @@ peg::parser!{
                 Ident{name: i.to_string()}
             }
 
+        rule provenance() -> Provenance
+            = prov:prov_identifier() {
+                Provenance::Ident(Provenance::new_ident(&prov)) // TODO: When should this be Provenance::Value?
+            }
+
         /// Identifier, but also allows leading ' for provenance names
         rule prov_identifier() -> String
         = s:$(identifier() / ("'" identifier())) { s.into() }
@@ -103,6 +204,7 @@ peg::parser!{
         rule keyword() -> ()
             = "crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
             / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
+            / "if" / "else" / "for" / "in" / "sync_threads"
 
         
         // Literal may be one of Unit, bool, i32, f32
