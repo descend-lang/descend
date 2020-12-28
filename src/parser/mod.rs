@@ -209,42 +209,37 @@ peg::parser!{
         
         // Literal may be one of Unit, bool, i32, f32
         pub(crate) rule literal() -> Lit
-        = &"()" { ? 
-            Ok(Lit::Unit)
-        }
-        / l:$("true" / "false") {   ? 
-            Ok(Lit::Bool(l.parse::<bool>().unwrap()))
-        }
-        / l:$( ("-"? ((['1'..='9']['0'..='9']*) / "0") "." ['0'..='9']*)  (['e'|'E'] "-"?  ['0'..='9']*)? "f32"? ) { ?
-            if  (l.ends_with("f32")) {
-                match l[0..l.len()-3].parse::<f32>() {
+            = &"()" {
+                Lit::Unit
+            }
+            / l:$("true" / "false") { ?
+                match l.parse::<bool>() {
+                    Ok(b) => Ok(Lit::Bool(b)),
+                    Err(_) => Err("Error while parsing boolean literal")
+                }
+            }
+            / l:$( ("-"? ((['1'..='9']['0'..='9']*) / "0") "." ['0'..='9']*)  (['e'|'E'] "-"?  ['0'..='9']*)? "f32"? ) { ?
+                let literal = if (l.ends_with("f32")) {&l[0..l.len()-3]} else {l};
+                match literal.parse::<f32>() {
                     Ok(val) => Ok(Lit::Float(val)),
-                    Err(_) => Err("Parser Error: Value cannot be parsed to f32")
-                } 
-            }
-            else {
-                match l.parse::<f32>() {
-                    Ok(val) => Ok(Lit::Float(val)),
-                    Err(_) => Err("Parser Error: Value cannot be parsed to f32")
+                    Err(_) => Err("Error while parsing f32 literal")
                 }
             }
-            
-        }
-        / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") "i32"?  ) { ? 
-            if (l.ends_with("i32")) {
-                match l[0..l.len()-3].parse::<i32>() {
-                    Ok(val) => Ok(Lit::Int(val)),
-                    Err(_) => Err("Parser Error: Value cannot be parsed to f32")
+            / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") ("i32" / "f32")?  ) { ?
+                let literal = if (l.ends_with("i32") || l.ends_with("f32")) {&l[0..l.len()-3]} else {l};
+                if (l.ends_with("f32")) {
+                    match literal.parse::<f32>() {
+                        Ok(val) => Ok(Lit::Float(val)),
+                        Err(_) => Err("Error while parsing f32 literal")
+                    }
+                }
+                else {
+                    match literal.parse::<i32>() {
+                        Ok(val) => Ok(Lit::Int(val)),
+                        Err(_) => Err("Error while parsing i32 literal")
+                    }
                 }
             }
-            else {
-                match l.parse::<i32>() {
-                    Ok(val) => Ok(Lit::Int(val)),
-                    Err(_) => Err("Parser Error: Value cannot be parsed to f32")
-                }
-            }
-        }
-
 
         /// Potential whitespace
         rule _() -> ()
@@ -421,8 +416,9 @@ mod tests {
         assert_eq!(descent::literal("False").is_err(), true, "wrongfully parses misspelled boolean");
         assert_eq!(descent::literal("12345"), Ok(Lit::Int(12345)), "does not parse i32 correctly");
         assert_eq!(descent::literal("789i32"), Ok(Lit::Int(789)), "does not parse i32 correctly");
-        // TODO: Figure out why this test is failing.
         assert_eq!(descent::literal("-1i32"), Ok(Lit::Int(-1)), "does not correctly parse 1e05i32 to i32");
+        assert_eq!(descent::literal("1f32"), Ok(Lit::Float(1.)), "does not correctly parse 1f32 to f32");
+        // TODO: Do proper float comparison (test error against threshold)
         assert_eq!(descent::literal("1.0"), Ok(Lit::Float(1.0)), "does not parse f32 correctly");
         assert_eq!(descent::literal("2.0f32"), Ok(Lit::Float(2.0)), "does not parse f32 correctly");
         assert_eq!(descent::literal("777.7e0f32"), Ok(Lit::Float(777.7)), "does not parse f32 correctly");
