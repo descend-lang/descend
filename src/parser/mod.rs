@@ -1,10 +1,59 @@
 mod helpers;
 
-use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance, Kind};
+use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance, Kind, GlobalItem, GlobalFunDef, TyIdent, FrameExpr};
+use crate::ty_check::ty_ctx::IdentTyped;
 use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp};
+
+use crate::dsl::fun_ty;
 
 peg::parser!{
     pub(crate) grammar descent() for str {
+
+        // TODO: PreDeclaredGlobalFun missing Syntax
+        pub(crate) rule global_item() -> GlobalItem
+            = "fn" __ name:identifier() _ "<" _ ty_idents:(kind_parameter() ** (_ "," _)) _ ">" _
+            "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
+            "-[" _ exec:execution_location() _ "]->" _ ret_ty:ty() _
+            "{" _ "letprov" _ "<" _ identifier() ** (_ "," _) /* TODO: ast structure for letprov? */ _ ">" _
+            "{" _ body_expr:expression_seq() _"}" _ "}" {
+                // TODO: Kick this out of the AST?
+                let mut f_ty = fun_ty(
+                    params
+                        .iter()
+                        .map(|ident| -> Ty { ident.ty.clone() })
+                        .collect(),
+                    &FrameExpr::FrTy(vec![]),
+                    exec,
+                    &ret_ty,
+                );
+                GlobalItem::Def(Box::new(GlobalFunDef{
+                  name,
+                  ty_idents,
+                  params,
+                  ret_ty,
+                  exec,
+                  prv_rels: vec![], // TODO: What even is this?
+                  body_expr,
+                  fun_ty: f_ty
+                }))
+            }
+
+        rule kind_parameter() -> TyIdent
+            = name:prov_identifier() _ ":" _ kind:kind() {
+                let name = &name;
+                match kind {
+                    Kind::Nat => Nat::new_ident(name),
+                    Kind::Memory => Memory::new_ident(name),
+                    Kind::Ty => Ty::new_ident(name),
+                    Kind::Provenance => Provenance::new_ident(name),
+                    Kind::Frame => FrameExpr::new_ident(name),
+                }
+            }
+
+        rule fun_parameter() -> IdentTyped
+            = ident:ident() _ ":" _ ty:ty() {
+                IdentTyped { ident, ty }
+            }
 
         /// Parse a sequence of expressions (might also just be one)
         pub(crate) rule expression_seq() -> Expr
