@@ -66,7 +66,7 @@ peg::parser!{
                     }
                 }
             }
-            / "let" __ m:mutability() __ ident:ident() _ ":" ty:ty() _ "=" _ expr:expression() _ ";" _
+            / "let" __ m:mutability() __ ident:ident() _ ":" _ ty:ty() _ "=" _ expr:expression() _ ";" _
                 tail:expression_seq()
             {
                 let tail_ty = tail.ty.clone();
