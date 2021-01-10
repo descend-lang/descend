@@ -516,4 +516,99 @@ mod tests {
                     Nat::Lit(0)
             )))), "does not recognize place expression *x.0");
     }
+
+    #[test]
+    fn expression() {
+        assert_eq!(descent::expression("if 7+8 {let mut x : f32 = 17.123; true} else {15/3}"), Ok(Expr{
+            expr: ExprKind::IfElse(
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(7)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        }), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(8)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                }),
+                Box::new(Expr{
+                    expr: ExprKind::Let(Mutability::Mut, Ident::new("x"), Ty::Scalar(ScalarData::F32), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Float(17.123)),
+                            ty: Some(Ty::Scalar(ScalarData::F32))
+                        }), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Bool(true)),
+                            ty: Some(Ty::Scalar(ScalarData::Bool))
+                        })),
+                    ty: Some(Ty::Scalar(ScalarData::Bool))
+                }),
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Div, Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(15)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        }), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(3)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                })),
+            ty: None
+        }));
+    }
+    #[test]
+    fn expression_if_else() {
+        assert_eq!(descent::expression("if 7<8 {7+8} else {7*8}"), Ok(Expr{
+            expr: ExprKind::IfElse(
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Lt, Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(7)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        }), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(8)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                }),
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(7)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        }), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(8)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                }),
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Mul, Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(7)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        }), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(8)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                })),
+            ty: None
+        }));
+    }
+    #[test]
+    fn expression_addition() {
+        assert_eq!(descent::expression("7+8"), Ok(Expr{
+            expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                    expr: ExprKind::Lit(Lit::Int(7)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
+                }), Box::new(Expr{
+                    expr: ExprKind::Lit(Lit::Int(8)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
+                })),
+            ty: None
+        }));
+    }
+    #[test]
+    fn expression_literal() {
+        assert_eq!(descent::expression("7"), Ok(Expr{
+            expr: ExprKind::Lit(Lit::Int(7)),
+            ty: Some(Ty::Scalar(ScalarData::I32))
+        }));
+    }
 }

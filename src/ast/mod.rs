@@ -4,7 +4,7 @@ pub mod utils;
 use std::fmt;
 use ty::*;
 
-#[derive(Debug, Clone)]
+#[derive(Eq ,Debug, Clone)]
 pub struct Expr {
     pub expr: ExprKind,
     pub ty: Option<Ty>,
@@ -19,6 +19,12 @@ impl Expr {
     }
     pub fn new(expr: ExprKind) -> Expr {
         Expr { expr, ty: None }
+    }
+}
+
+impl PartialEq for Expr {
+    fn eq(&self, other:&Self) -> bool {
+        self.expr == other.expr
     }
 }
 
@@ -169,7 +175,7 @@ pub enum ParIndex {
     ThreadId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ExprKind {
     GlobalFunIdent(String),
     Lit(Lit),
@@ -261,13 +267,28 @@ impl fmt::Display for Ident {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Lit {
     Unit,
     Bool(bool),
     Int(i32),
     Float(f32),
 }
+
+impl PartialEq for Lit{
+    fn eq(&self, other:&Self) -> bool {
+        let b = match (self, other) {
+            (Self::Unit, Self::Unit) => true,
+            (Self::Bool(x), Self::Bool(y)) => if x == y {true} else {false},
+            (Self::Int(x), Self::Int(y)) => if x == y {true} else {false},
+            (Self::Float(x), Self::Float(y)) => if x == y {true} else {false},
+            _ => false
+        };
+        b
+    }
+}
+
+impl Eq for Lit{}
 
 impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -281,7 +302,7 @@ impl fmt::Display for Lit {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Mutability {
     Const,
     Mut,
@@ -322,7 +343,7 @@ impl fmt::Display for Ownership {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum UnOp {
     Deref,
     Not,
@@ -340,7 +361,7 @@ impl fmt::Display for UnOp {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Add,
     Sub,

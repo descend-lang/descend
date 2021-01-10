@@ -24,7 +24,7 @@ impl fmt::Display for Kind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KindValue {
     Nat(Nat),
     Memory(Memory),
