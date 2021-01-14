@@ -286,7 +286,7 @@ fn ty_check_dep_app(
     }
     let df_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, df)?;
     if let Ty::DepFn(param, _, _, out_ty) = df.ty.as_ref().unwrap() {
-        check_arg_has_correct_kind(&param.kind(), kv)?;
+        check_arg_has_correct_kind(&param.kind, kv)?;
         Ok((df_ty_ctx, *out_ty.clone()))
     } else {
         Err(

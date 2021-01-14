@@ -52,43 +52,7 @@ pub fn append_idents_typed(frm: &FrameTyping, idents_typed: Vec<IdentTyped>) -> 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum FrameExpr {
     FrTy(FrameTyping),
-    Ident(TyIdent),
-}
-
-impl Kinded for FrameExpr {
-    fn get_kind(&self) -> Kind {
-        Kind::Frame
-    }
-
-    fn new_ident(name: &str) -> TyIdent {
-        TyIdent {
-            name: String::from(name),
-            kind: Kind::Frame,
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct TyIdent {
-    pub name: String,
-    kind: Kind,
-}
-
-impl TyIdent {
-    pub fn kind(&self) -> Kind {
-        self.kind
-    }
-}
-
-impl fmt::Display for TyIdent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.name, self.kind)
-    }
-}
-
-pub trait Kinded {
-    fn get_kind(&self) -> Kind;
-    fn new_ident(name: &str) -> TyIdent;
+    Ident(Ident),
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -102,20 +66,7 @@ pub enum ScalarData {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Provenance {
     Value(String),
-    Ident(TyIdent),
-}
-
-impl Kinded for Provenance {
-    fn get_kind(&self) -> Kind {
-        Kind::Provenance
-    }
-
-    fn new_ident(name: &str) -> TyIdent {
-        TyIdent {
-            name: String::from(name),
-            kind: Kind::Provenance,
-        }
-    }
+    Ident(Ident),
 }
 
 impl fmt::Display for Provenance {
@@ -134,20 +85,7 @@ pub enum Memory {
     CpuHeap,
     GpuGlobal,
     GpuShared,
-    Ident(TyIdent),
-}
-
-impl Kinded for Memory {
-    fn get_kind(&self) -> Kind {
-        Kind::Memory
-    }
-
-    fn new_ident(name: &str) -> TyIdent {
-        TyIdent {
-            name: String::from(name),
-            kind: Kind::Memory,
-        }
-    }
+    Ident(Ident),
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -171,8 +109,8 @@ pub enum Ty {
     ArrayView(Box<Ty>, Nat),
     At(Box<Ty>, Memory),
     Fn(Vec<Ty>, Box<FrameExpr>, ExecLoc, Box<Ty>),
-    DepFn(TyIdent, Box<FrameExpr>, ExecLoc, Box<Ty>),
-    Ident(TyIdent),
+    DepFn(IdentKinded, Box<FrameExpr>, ExecLoc, Box<Ty>),
+    Ident(Ident),
     // TODO better syntactical support for dead and maybe dead types would maybe be safer for prgramming,
     //  but this requires a better understanding of where a type can be dead in order to be done
     //  without too much boilerplate.
@@ -253,19 +191,6 @@ impl Ty {
     }
 }
 
-impl Kinded for Ty {
-    fn get_kind(&self) -> Kind {
-        Kind::Ty
-    }
-
-    fn new_ident(name: &str) -> TyIdent {
-        TyIdent {
-            name: String::from(name),
-            kind: Kind::Ty,
-        }
-    }
-}
-
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         panic!("not yet implemented")
@@ -273,13 +198,31 @@ impl fmt::Display for Ty {
     }
 }
 
-// TODO: make sure TyIdent can only be of kind Provenance
 // Provenance Relation: varrho_1:varrho_2
-pub type PrvRel = (TyIdent, TyIdent);
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct PrvRel {
+    longer: Ident,
+    shorter: Ident,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct IdentKinded {
+    pub ident: Ident,
+    pub kind: Kind,
+}
+
+impl IdentKinded {
+    pub fn new(ident: &Ident, kind: Kind) -> Self {
+        IdentKinded {
+            ident: ident.clone(),
+            kind: kind.clone(),
+        }
+    }
+}
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum KindingCtxEntry {
-    Ident(TyIdent),
+    TyIdent(IdentKinded),
     PrvRel(PrvRel),
 }
 
@@ -291,17 +234,17 @@ impl KindCtx {
         KindCtx { vec: Vec::new() }
     }
 
-    pub fn from(
-        ty_idents: Vec<TyIdent>,
-        prv_rels: Vec<(TyIdent, TyIdent)>,
-    ) -> Result<Self, String> {
+    pub fn from(ty_idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> Result<Self, String> {
         let kind_ctx: Self = Self::new().append_ty_idents(ty_idents);
         kind_ctx.well_kinded_prv_rels(&prv_rels)?;
         Ok(kind_ctx.append_prv_rels(prv_rels))
     }
 
-    pub fn append_ty_idents(mut self, ty_idents: Vec<TyIdent>) -> Self {
-        let mut entries: Vec<_> = ty_idents.into_iter().map(KindingCtxEntry::Ident).collect();
+    pub fn append_ty_idents(mut self, ty_idents: Vec<IdentKinded>) -> Self {
+        let mut entries: Vec<_> = ty_idents
+            .into_iter()
+            .map(|id_kinded| KindingCtxEntry::TyIdent(id_kinded))
+            .collect();
         self.vec.append(&mut entries);
         self
     }
@@ -313,11 +256,11 @@ impl KindCtx {
         self
     }
 
-    pub fn get_ty_idents(&self, kind: Kind) -> impl Iterator<Item = &TyIdent> {
+    pub fn get_ty_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
         self.vec.iter().filter_map(move |entry| {
-            if let KindingCtxEntry::Ident(ty_ident) = entry {
-                if ty_ident.kind == kind {
-                    Some(ty_ident)
+            if let KindingCtxEntry::TyIdent(IdentKinded { ident, kind: k }) = entry {
+                if k == &kind {
+                    Some(ident)
                 } else {
                     None
                 }
@@ -327,34 +270,31 @@ impl KindCtx {
         })
     }
 
-    pub fn ident_of_kind_exists(&self, ident_name: &TyIdent, kind: Kind) -> bool {
-        self.get_ty_idents(kind).any(|id| ident_name == id)
+    pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {
+        self.get_ty_idents(kind).any(|id| ident == id)
     }
 
-    pub fn well_kinded_prv_rels(&self, prv_rels: &Vec<(TyIdent, TyIdent)>) -> Result<(), String> {
+    pub fn well_kinded_prv_rels(&self, prv_rels: &Vec<PrvRel>) -> Result<(), String> {
         let mut prv_idents = self.get_ty_idents(Kind::Provenance);
         for prv_rel in prv_rels {
-            if !prv_idents.any(|prv_ident| &prv_rel.0 == prv_ident) {
-                return Err(format!("{} is not declared", prv_rel.0));
+            if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
+                return Err(format!("{} is not declared", prv_rel.longer));
             }
-            if !prv_idents.any(|prv_ident| &prv_rel.1 == prv_ident) {
-                return Err(format!("{} is not declared", prv_rel.1));
+            if !prv_idents.any(|prv_ident| &prv_rel.shorter == prv_ident) {
+                return Err(format!("{} is not declared", prv_rel.shorter));
             }
         }
         Ok(())
     }
 
-    pub fn outlives(&self, long: &TyIdent, short: &TyIdent) -> Result<(), String> {
-        use KindingCtxEntry::PrvRel;
-        assert!(long.kind == Kind::Provenance && short.kind == Kind::Provenance);
-
+    pub fn outlives(&self, l: &Ident, s: &Ident) -> Result<(), String> {
         if self.vec.iter().any(|entry| match entry {
-            PrvRel((l, s)) => l == long && s == short,
+            KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
         }) {
             Ok(())
         } else {
-            Err(format!("{} is not defined as outliving {}.", long, short))
+            Err(format!("{} is not defined as outliving {}.", l, s))
         }
     }
 }
@@ -384,7 +324,7 @@ impl IntoProgramItem for PreDeclaredGlobalFun {
 #[derive(Debug, Clone)]
 pub struct GlobalFunDef {
     pub name: String,
-    pub ty_idents: Vec<TyIdent>,
+    pub ty_idents: Vec<IdentKinded>,
     pub params: Vec<IdentTyped>,
     pub ret_ty: Ty,
     pub exec: ExecLoc,
@@ -449,7 +389,7 @@ impl GlobalCtx {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Nat {
-    Ident(TyIdent),
+    Ident(Ident),
     Lit(usize),
     //    Binary(BinOpNat, Box<Nat>, Box<Nat>),
 }
@@ -457,19 +397,6 @@ pub enum Nat {
 impl Nat {
     pub fn eval(&self) -> usize {
         panic!("not implemented yet")
-    }
-}
-
-impl Kinded for Nat {
-    fn get_kind(&self) -> Kind {
-        Kind::Nat
-    }
-
-    fn new_ident(name: &str) -> TyIdent {
-        TyIdent {
-            name: name.to_string(),
-            kind: Kind::Nat,
-        }
     }
 }
 

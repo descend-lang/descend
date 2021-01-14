@@ -19,7 +19,7 @@ pub fn prv(name: &str) -> Provenance {
 }
 
 pub fn prv_id(name: &str) -> Provenance {
-    Provenance::Ident(Provenance::new_ident(name))
+    Provenance::Ident(Ident::new(name))
 }
 
 // #[allow(non_upper_case_globals)]
@@ -28,7 +28,7 @@ pub fn prv_id(name: &str) -> Provenance {
 // Nat
 
 pub fn nat_id(name: &str) -> Nat {
-    Nat::Ident(Nat::new_ident(name))
+    Nat::Ident(Ident::new(name))
 }
 
 // Variable
@@ -68,14 +68,7 @@ pub fn fdef(
 
     let ty_idents: Vec<_> = ty_params
         .iter()
-        .map(|(name, kind)| match kind {
-            Kind::Nat => Nat::new_ident(name),
-            Kind::Provenance => Provenance::new_ident(name),
-            Kind::Memory => unimplemented!(),
-            Kind::Frame => unimplemented!(),
-            Kind::Ty => Ty::new_ident(name),
-            Kind::Own => unimplemented!(),
-        })
+        .map(|(name, kind)| IdentKinded::new(&Ident::new(name), *kind))
         .collect();
 
     if !ty_idents.is_empty() {
@@ -265,8 +258,8 @@ pub fn dep_fun<F>(df: F, exec: ExecLoc) -> Expr
 where
     F: Fn(Ty) -> Expr,
 {
-    let ty_id = Ty::new_ident(&fresh_name("dt"));
-    let expr = df(Ty::Ident(ty_id.clone()));
+    let ty_id = IdentKinded::new(&Ident::new(&fresh_name("dt")), Kind::Ty);
+    let expr = df(Ty::Ident(ty_id.ident.clone()));
     Expr::new(ExprKind::DepLambda(ty_id, exec, Box::new(expr)))
 }
 
@@ -344,8 +337,8 @@ impl DescendLiteral for () {
     }
 }
 
-pub fn prov_ident(name: &str) -> TyIdent {
-    Provenance::new_ident(name)
+pub fn prov_ident(name: &str) -> IdentKinded {
+    IdentKinded::new(&Ident::new(name), Kind::Provenance)
 }
 
 pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
@@ -388,7 +381,7 @@ pub fn fun_ty(param_tys: Vec<Ty>, frame_expr: &FrameExpr, exec: ExecLoc, ret_ty:
     )
 }
 
-pub fn genfun_ty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
+pub fn genfun_ty(param: &IdentKinded, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
     Ty::DepFn(
         param.clone(),
         Box::new(frame.clone()),
@@ -397,7 +390,7 @@ pub fn genfun_ty(param: &TyIdent, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty)
     )
 }
 
-pub fn multi_arg_genfn_ty(params: &[TyIdent], exec: ExecLoc, ret_ty: &Ty) -> Ty {
+pub fn multi_arg_genfn_ty(params: &[IdentKinded], exec: ExecLoc, ret_ty: &Ty) -> Ty {
     let empty_frame = FrameExpr::FrTy(vec![]);
     match params.split_first() {
         None => {
