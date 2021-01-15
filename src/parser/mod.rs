@@ -1,6 +1,6 @@
 mod helpers;
 
-use crate::ast::ty::{Nat, Ty, ScalarData, Kinded, ExecLoc, Memory, Provenance, Kind, GlobalItem, GlobalFunDef, TyIdent, FrameExpr};
+use crate::ast::ty::{Nat, Ty, ScalarData, ExecLoc, Memory, Provenance, Kind, GlobalItem, GlobalFunDef, FrameExpr, IdentKinded};
 use crate::ty_check::ty_ctx::IdentTyped;
 use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp};
 
@@ -38,16 +38,9 @@ peg::parser!{
                 }))
             }
 
-        rule kind_parameter() -> TyIdent
+        rule kind_parameter() -> IdentKinded
             = name:prov_identifier() _ ":" _ kind:kind() {
-                let name = &name;
-                match kind {
-                    Kind::Nat => Nat::new_ident(name),
-                    Kind::Memory => Memory::new_ident(name),
-                    Kind::Ty => Ty::new_ident(name),
-                    Kind::Provenance => Provenance::new_ident(name),
-                    Kind::Frame => FrameExpr::new_ident(name),
-                }
+                IdentKinded::new(&Ident::new(&name), kind)
             }
 
         rule fun_parameter() -> IdentTyped
@@ -174,7 +167,7 @@ peg::parser!{
                 }
             }
             / name:identifier() {
-                Nat::Ident(Nat::new_ident(&name))
+                Nat::Ident(Ident::new(&name))
             }
             // TODO: binary operations are currently disabled
             // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
@@ -192,7 +185,7 @@ peg::parser!{
             / "bool" { Ty::Scalar(ScalarData::Bool) }
             / "()" { Ty::Scalar(ScalarData::Unit) }
             / "GPU" { Ty::GPU }
-            / name:identifier() { Ty::Ident(Ty::new_ident(&name)) }
+            / name:identifier() { Ty::Ident(Ident::new(&name)) }
             / "(" _ types:ty() ** ( _ "," _ ) _ ")" { Ty::Tuple(types) }
             / "[" _ t:ty() _ ";" _ n:nat() _ "]" { Ty::Array(Box::new(t), n) }
             / "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { Ty::ArrayView(Box::new(t), n) }
@@ -213,7 +206,7 @@ peg::parser!{
             / "cpu.heap" { Memory::CpuHeap }
             / "gpu.global" { Memory::GpuGlobal }
             / "gpu.shared" { Memory::GpuShared }
-            / name:identifier() { Memory::Ident(Memory::new_ident(&name)) }
+            / name:identifier() { Memory::Ident(Ident::new(&name)) }
 
         pub(crate) rule execution_location() -> ExecLoc
             = "cpu.thread" { ExecLoc::CpuThread }
@@ -235,7 +228,7 @@ peg::parser!{
 
         rule provenance() -> Provenance
             = prov:prov_identifier() {
-                Provenance::Ident(Provenance::new_ident(&prov)) // TODO: When should this be Provenance::Value?
+                Provenance::Ident(Ident::new(&prov)) // TODO: When should this be Provenance::Value?
             }
 
         /// Identifier, but also allows leading ' for provenance names
@@ -320,8 +313,8 @@ mod tests {
     #[test]
     #[ignore = "Unimplemented"]
     fn nat_identifier() {
-        assert_eq!(descent::nat("N"), Ok(Nat::Ident(Nat::new_ident("N"))), "cannot parse N");
-        assert_eq!(descent::nat("my_long_ident"), Ok(Nat::Ident(Nat::new_ident("my_long_ident"))),
+        assert_eq!(descent::nat("N"), Ok(Nat::Ident(Ident::new("N"))), "cannot parse N");
+        assert_eq!(descent::nat("my_long_ident"), Ok(Nat::Ident(Ident::new("my_long_ident"))),
             "cannot parse long identifer");
     }
 
@@ -382,25 +375,25 @@ mod tests {
 
     #[test]
     fn ty_identifier() {
-        assert_eq!(descent::ty("T"), Ok(Ty::Ident(Ty::new_ident("T"))), 
+        assert_eq!(descent::ty("T"), Ok(Ty::Ident(Ident::new("T"))), 
             "does not recognize T type");
     }
 
     #[test]
     fn ty_reference() {
         assert_eq!(descent::ty("&'a uniq cpu.heap i32"), Ok(Ty::Ref(
-                Provenance::Ident(Provenance::new_ident("'a")),
+                Provenance::Ident(Ident::new("'a")),
                 Ownership::Uniq,
                 Memory::CpuHeap,
                 Box::new(Ty::Scalar(ScalarData::I32))
             )), "does not recognize type of unique i32 reference in cpu heap with provenance 'a");
         assert_eq!(descent::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::Ref(
-                Provenance::Ident(Provenance::new_ident("b")),
+                Provenance::Ident(Ident::new("b")),
                 Ownership::Shrd,
                 Memory::GpuGlobal,
                 Box::new(Ty::Array(
                     Box::new(Ty::Scalar(ScalarData::F32)),
-                    Nat::Ident(Nat::new_ident("N"))
+                    Nat::Ident(Ident::new("N"))
                 ))
             )), "does not recognize type of shared [f32] reference in gpu global memory with provenance b");
     }
@@ -445,7 +438,7 @@ mod tests {
             "does not recognize gpu.global memory kind");
         assert_eq!(descent::memory_kind("gpu.shared"), Ok(Memory::GpuShared), 
             "does not recognize gpu.shared memory kind");
-        assert_eq!(descent::memory_kind("M"), Ok(Memory::Ident(Memory::new_ident("M"))), 
+        assert_eq!(descent::memory_kind("M"), Ok(Memory::Ident(Ident::new("M"))), 
             "does not recognize M memory kind");
     }
 

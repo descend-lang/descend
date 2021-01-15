@@ -6,7 +6,7 @@ use super::ty_ctx::TyCtx;
 
 use super::ErrMsg;
 use crate::ast::ty::*;
-use crate::ast::PlaceExpr;
+use crate::ast::{Ident, PlaceExpr};
 use std::collections::HashSet;
 
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
@@ -173,7 +173,7 @@ fn outl_check_val_ident_prv(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     longer_val: &str,
-    shorter_ident: &TyIdent,
+    shorter_ident: &Ident,
 ) -> Result<TyCtx, String> {
     // TODO how could the set ever be empty?
     let loan_set = ty_ctx.loans_for_prv(longer_val)?;
@@ -201,7 +201,7 @@ fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: &HashSet<Loa
 fn outl_check_ident_val_prv(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    longer_ident: &TyIdent,
+    longer_ident: &Ident,
     shorter_val: &str,
 ) -> Result<TyCtx, String> {
     if kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance)

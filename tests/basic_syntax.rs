@@ -602,12 +602,11 @@ fn function_decl_reference_params_example() {
     // }
     use ExecLoc::GpuGroup;
 
-    let r1 = prov_ident("'r1");
     let gpu_group_f =
         fdef("gpu_group_f",
              vec![("'r1", Kind::Provenance), ("'r2", Kind::Provenance)],
              vec![("p1",
-                    &ref_ty(&Provenance::Ident(r1), Shrd, &GpuShared, &i32)),
+                    &ref_ty(&Provenance::Ident(Ident::new("'r1")), Shrd, &GpuShared, &i32)),
                    ("p2",
                     &at_ty(&arr_ty(Nat::Lit(3), &i32), &GpuGlobal))],
              &unit_ty,
@@ -634,13 +633,13 @@ fn function_decl_reference_params_example() {
 
 mod copy_to_gpu {
     use descend::ast::ty::Memory::GpuGlobal;
-    use descend::ast::ty::{ExecLoc, FrameExpr, FrameTyping, KindCtx, Kinded, Ty, TyIdent};
+    use descend::ast::ty::{ExecLoc, FrameExpr, FrameTyping, IdentKinded, Kind, KindCtx, Ty};
     use descend::ast::*;
     use descend::dsl::*;
     use descend::ty_check::ty_ctx::IdentTyped;
 
-    pub fn ty_ident() -> TyIdent {
-        Ty::new_ident("elem_ty")
+    pub fn ty_ident() -> IdentKinded {
+        IdentKinded::new(&Ident::new("elem_ty"), Kind::Ty)
     }
     pub fn kind_ctx() -> KindCtx {
         KindCtx::new().append_ty_idents(vec![ty_ident()])

@@ -199,7 +199,7 @@ pub enum ExprKind {
     Lambda(Vec<Ident>, ExecLoc, Ty, Box<Expr>),
     // A function that accepts something of the specified kind as an argument.
     // (x : kind) [exec]-> { e }
-    DepLambda(TyIdent, ExecLoc, Box<Expr>),
+    DepLambda(IdentKinded, ExecLoc, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<Expr>),
