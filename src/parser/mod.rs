@@ -93,8 +93,8 @@ peg::parser!{
             x:(@) "/" y:@ { helpers::make_binary(BinOp::Div, x, y) }
             x:(@) "%" y:@ { helpers::make_binary(BinOp::Mod, x, y) }
             --
-            @ "-" x:(@) { helpers::make_unary(UnOp::Neg, x) }
-            @ "!" x:(@) { helpers::make_unary(UnOp::Not, x) }
+            "-" x:(@) { helpers::make_unary(UnOp::Neg, x) }
+            "!" x:(@) { helpers::make_unary(UnOp::Not, x) }
             --
             l:literal() { 
                 let ty = Some(helpers::type_from_lit(&l));
