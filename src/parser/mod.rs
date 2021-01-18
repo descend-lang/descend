@@ -176,7 +176,7 @@ peg::parser!{
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat 
-            = s:$("0" / (['1'..='9']['0'..='9']+)) { ?
+            = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
                 // TODO: Getting the cause of the parse error is unstable for now. Fix this once 
                 // int_error_matching becomes stable
                 match s.parse::<usize>() {
