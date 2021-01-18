@@ -269,15 +269,20 @@ fn ty_check_dep_app(
     ty_ctx: TyCtx,
     exec: ExecLoc,
     df: &mut Expr,
-    kv: &KindValue,
+    kv: &KindedArg,
 ) -> Result<(TyCtx, Ty), String> {
-    fn check_arg_has_correct_kind(expected: &Kind, kv: &KindValue) -> Result<(), String> {
+    fn check_arg_has_correct_kind(
+        kind_ctx: &KindCtx,
+        expected: &Kind,
+        kv: &KindedArg,
+    ) -> Result<(), String> {
         match kv {
-            KindValue::Provenance(_) if expected == &Kind::Provenance => Ok(()),
-            KindValue::Ty(_) if expected == &Kind::Ty => Ok(()),
-            KindValue::Nat(_) if expected == &Kind::Nat => Ok(()),
-            KindValue::Memory(_) if expected == &Kind::Memory => Ok(()),
-            KindValue::Frame(_) if expected == &Kind::Frame => Ok(()),
+            KindedArg::Provenance(_) if expected == &Kind::Provenance => Ok(()),
+            KindedArg::Ty(_) if expected == &Kind::Ty => Ok(()),
+            KindedArg::Nat(_) if expected == &Kind::Nat => Ok(()),
+            KindedArg::Memory(_) if expected == &Kind::Memory => Ok(()),
+            KindedArg::Frame(_) if expected == &Kind::Frame => Ok(()),
+            KindedArg::Ident(k_ident) if expected == kind_ctx.get_kind(k_ident)? => Ok(()),
             _ => Err(format!(
                 "expected argument of kind {:?}, but the provided argument has another kind",
                 expected
@@ -286,7 +291,7 @@ fn ty_check_dep_app(
     }
     let df_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, df)?;
     if let Ty::DepFn(param, _, _, out_ty) = df.ty.as_ref().unwrap() {
-        check_arg_has_correct_kind(&param.kind, kv)?;
+        check_arg_has_correct_kind(kind_ctx, &param.kind, kv)?;
         Ok((df_ty_ctx, *out_ty.clone()))
     } else {
         Err(
