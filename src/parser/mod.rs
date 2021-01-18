@@ -89,11 +89,13 @@ peg::parser!{
             "-" x:(@) { helpers::make_unary(UnOp::Neg, x) }
             "!" x:(@) { helpers::make_unary(UnOp::Not, x) }
             --
-            func:(@) _ kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+            // TODO: Integrate this properly into the precedence parser (irrelevant for now
+            // since there are no lambda functions yet)
+            func:place_expression() _ kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" {
-                    helpers::make_function_application(func, kind_args, args)
+                    helpers::make_function_application(
+                        Expr{expr: ExprKind::PlaceExpr(func), ty: None}, kind_args, args)
                 }
-            --
             l:literal() { 
                 let ty = Some(helpers::type_from_lit(&l));
                 Expr {expr: ExprKind::Lit(l), ty}
@@ -152,11 +154,13 @@ peg::parser!{
 
         /// Parse a kind argument
         pub(crate) rule kind_argument() -> KindedArg
-            = n:nat() { KindedArg::Nat(n) }
-            / o:ownership() { KindedArg::Own(o) }
-            / !identifier() mem:memory_kind() { KindedArg::Memory(mem) }
-            / !identifier() ty:ty() { KindedArg::Ty(ty) }
-            / !identifier() prov:provenance() { KindedArg::Provenance(prov) }
+            = o:ownership() { KindedArg::Own(o) }
+            / !identifier() result:(
+                n:nat() { KindedArg::Nat(n) }
+                / mem:memory_kind() { KindedArg::Memory(mem) }
+                / ty:ty() { KindedArg::Ty(ty) }
+                / prov:provenance() { KindedArg::Provenance(prov) }
+            ) { result }
             / ident:identifier() { KindedArg::Ident(Ident::new(&ident))}
 
         /// Place expression
@@ -261,11 +265,13 @@ peg::parser!{
         }
 
         rule keyword() -> ()
-            = ("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
-            / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
-            / "let" / "if" / "else" / "for" / "in" / "sync_threads" / "fn" / "letprov")
-            !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
-
+            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
+                / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
+                / "let" / "if" / "else" / "for" / "in" / "sync_threads" / "fn" / "letprov")
+                !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
+            )
+            / "cpu.stack" / "cpu.heap" / "gpu.global" / "gpu.shared"
+            / "cpu.thread" / "gpu.group" / "gpu.thread"
         
         // Literal may be one of Unit, bool, i32, f32
         pub(crate) rule literal() -> Lit
