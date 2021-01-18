@@ -89,6 +89,11 @@ peg::parser!{
             "-" x:(@) { helpers::make_unary(UnOp::Neg, x) }
             "!" x:(@) { helpers::make_unary(UnOp::Not, x) }
             --
+            func:(@) _ kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "(" _ args:expression() ** (_ "," _) _ ")" {
+                    helpers::make_function_application(func, kind_args, args)
+                }
+            --
             l:literal() { 
                 let ty = Some(helpers::type_from_lit(&l));
                 Expr {expr: ExprKind::Lit(l), ty}
@@ -144,6 +149,15 @@ peg::parser!{
             // Parentheses to override precedence
             "(" _ expression:expression() _ ")" { expression }
         } 
+
+        /// Parse a kind argument
+        pub(crate) rule kind_argument() -> KindedArg
+            = n:nat() { KindedArg::Nat(n) }
+            / o:ownership() { KindedArg::Own(o) }
+            / !identifier() mem:memory_kind() { KindedArg::Memory(mem) }
+            / !identifier() ty:ty() { KindedArg::Ty(ty) }
+            / !identifier() prov:provenance() { KindedArg::Provenance(prov) }
+            / ident:identifier() { KindedArg::Ident(Ident::new(&ident))}
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
