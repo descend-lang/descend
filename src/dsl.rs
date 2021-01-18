@@ -105,21 +105,21 @@ pub fn app(f: Expr, arg: Vec<Expr>) -> Expr {
 }
 
 pub fn ddep_app(f: Expr, dt: &Ty) -> Expr {
-    Expr::new(ExprKind::DepApp(Box::new(f), KindValue::Ty(dt.clone())))
+    Expr::new(ExprKind::DepApp(Box::new(f), KindedArg::Ty(dt.clone())))
 }
 pub fn ndep_app(f: Expr, nat: &Nat) -> Expr {
-    Expr::new(ExprKind::DepApp(Box::new(f), KindValue::Nat(nat.clone())))
+    Expr::new(ExprKind::DepApp(Box::new(f), KindedArg::Nat(nat.clone())))
 }
 pub fn mdep_app(f: Expr, mem: &Memory) -> Expr {
     Expr::new(ExprKind::DepApp(
         Box::new(f),
-        KindValue::Memory(mem.clone()),
+        KindedArg::Memory(mem.clone()),
     ))
 }
 pub fn pdep_app(f: Expr, prv: &Provenance) -> Expr {
     Expr::new(ExprKind::DepApp(
         Box::new(f),
-        KindValue::Provenance(prv.clone()),
+        KindedArg::Provenance(prv.clone()),
     ))
 }
 

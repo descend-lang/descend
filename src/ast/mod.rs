@@ -197,7 +197,7 @@ pub enum ExprKind {
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<Expr>),
-    DepApp(Box<Expr>, KindValue),
+    DepApp(Box<Expr>, KindedArg),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),

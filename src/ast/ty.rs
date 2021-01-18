@@ -27,7 +27,8 @@ impl fmt::Display for Kind {
 }
 
 #[derive(Debug, Clone)]
-pub enum KindValue {
+pub enum KindedArg {
+    Ident(Ident),
     Nat(Nat),
     Memory(Memory),
     Ty(Ty),
@@ -222,7 +223,7 @@ impl IdentKinded {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum KindingCtxEntry {
-    TyIdent(IdentKinded),
+    Ident(IdentKinded),
     PrvRel(PrvRel),
 }
 
@@ -243,7 +244,7 @@ impl KindCtx {
     pub fn append_ty_idents(mut self, ty_idents: Vec<IdentKinded>) -> Self {
         let mut entries: Vec<_> = ty_idents
             .into_iter()
-            .map(|id_kinded| KindingCtxEntry::TyIdent(id_kinded))
+            .map(|id_kinded| KindingCtxEntry::Ident(id_kinded))
             .collect();
         self.vec.append(&mut entries);
         self
@@ -258,7 +259,7 @@ impl KindCtx {
 
     pub fn get_ty_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
         self.vec.iter().filter_map(move |entry| {
-            if let KindingCtxEntry::TyIdent(IdentKinded { ident, kind: k }) = entry {
+            if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
                     Some(ident)
                 } else {
@@ -268,6 +269,28 @@ impl KindCtx {
                 None
             }
         })
+    }
+
+    pub fn get_kind(&self, ident: &Ident) -> Result<&Kind, String> {
+        let res = self.vec.iter().find_map(|entry| {
+            if let KindingCtxEntry::Ident(IdentKinded { ident: id, kind }) = entry {
+                if id == ident {
+                    Some(kind)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        if let Some(kind) = res {
+            Ok(kind)
+        } else {
+            Err(format!(
+                "Cannot find identifier {} in kinding context",
+                ident
+            ))
+        }
     }
 
     pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {
