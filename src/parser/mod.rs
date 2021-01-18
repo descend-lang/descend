@@ -629,4 +629,32 @@ mod tests {
             ty: Some(Ty::Scalar(ScalarData::I32))
         }));
     }
+
+    #[test]
+    fn vector_add() {
+        let src = r#"fn inplace_vector_add<n: nat, a: prv, b: prv>(
+    ha_array: &'a uniq cpu.heap [i32; n],
+    hb_array: &'b shrd cpu.heap [i32; n]
+    ) -[cpu.thread]-> () {
+        letprov <a, b, c, d, e, f, g, h> {
+            let gpu: GPU = gpu(/* GPU info */);
+        
+            let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
+            let b_array: [i32; n] @ gpu.global = copy_to_gpu<[i32; n]>(&d uniq gpu, hb_array);
+        
+            let view_a: [[&a uniq gpu.global i32; n]] = to_view<a, uniq, gpu.global, n, i32>(&a uniq a_array);
+            let view_b: [[&b shrd gpu.global i32; n]] = to_view<b, shrd, gpu.global, n, i32>(&b shrd b_array);
+            let elems_grouped_for_threads: [[(&a uniq gpu.global i32, &b shrd gpu.global i32); n]] =
+            zip<n, &a uniq gpu.global i32, &b shrd gpu.global i32>(view_a, view_b);
+            // hoisted runtime check: n == 64 * 1024
+            sync_threads[gpu; 1024] for elems in elems_grouped_for_threads { // elems: (&a uniq gpu.global i32, &b uniq gpu.global i32)
+                *elems.0 = *elems.0 + *elems.1; // elems.0: &a uniq gpu.global i32
+            };
+            copy_to_host<n, g, 'a, i32>(&g shrd a_array, ha_array);
+        }
+    }"#;
+    let result = descent::global_item(src);
+    // TODO: Do proper check against expected AST
+    assert!(result.is_ok());
+    }
 }
