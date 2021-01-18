@@ -9,7 +9,7 @@ inline void checkCudaErr(cudaError_t err, const char *file, int line) {
 }
 
 __global__
-void inplace_vector_add_kernel_0(int *a_array, int *b_array, int n) {
+void inplace_vector_add_kernel_0(int *a_array, int *b_array) {
   int g_tid = blockIdx.x * blockDim.x + threadIdx.x;
   a_array[g_tid] = a_array[g_tid] + b_array[g_tid];
 }
