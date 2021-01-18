@@ -306,6 +306,7 @@ peg::parser!{
             = quiet!{(
                 [' '|'\n'|'\t'|'\r'] _) // 0 or more whitespaces
                 / ("//" (!['\n'][_])* ['\n'] _) // Comment to EOL
+                / ("/*" (!"*/"[_])* "*/" _) // Block comment
                 / ""}
 
         /// At least one whitespace
