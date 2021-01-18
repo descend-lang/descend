@@ -1,6 +1,6 @@
 mod helpers;
 
-use crate::ast::ty::{Nat, Ty, ScalarData, ExecLoc, Memory, Provenance, Kind, GlobalItem, GlobalFunDef, FrameExpr, IdentKinded};
+use crate::ast::ty::{Nat, Ty, ScalarData, ExecLoc, Memory, Provenance, Kind, GlobalItem, GlobalFunDef, FrameExpr, IdentKinded, KindedArg};
 use crate::ty_check::ty_ctx::IdentTyped;
 use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp};
 
@@ -39,7 +39,7 @@ peg::parser!{
             }
 
         rule kind_parameter() -> IdentKinded
-            = name:prov_identifier() _ ":" _ kind:kind() {
+            = name:identifier() _ ":" _ kind:kind() {
                 IdentKinded::new(&Ident::new(&name), kind)
             }
 
@@ -227,13 +227,16 @@ peg::parser!{
             }
 
         rule provenance() -> Provenance
-            = prov:prov_identifier() {
-                Provenance::Ident(Ident::new(&prov)) // TODO: When should this be Provenance::Value?
+            = prov:prov_value() {
+                Provenance::Value(prov)
+            }
+            / ident:identifier() {
+                Provenance::Ident(Ident::new(&ident))
             }
 
         /// Identifier, but also allows leading ' for provenance names
-        rule prov_identifier() -> String
-        = s:$(identifier() / ("'" identifier())) { s.into() }
+        rule prov_value() -> String
+        = s:$("'" identifier()) { s.into() }
 
         /// Parse an identifier
         rule identifier() -> String
@@ -382,7 +385,7 @@ mod tests {
     #[test]
     fn ty_reference() {
         assert_eq!(descent::ty("&'a uniq cpu.heap i32"), Ok(Ty::Ref(
-                Provenance::Ident(Ident::new("'a")),
+                Provenance::Value("'a".into()),
                 Ownership::Uniq,
                 Memory::CpuHeap,
                 Box::new(Ty::Scalar(ScalarData::I32))
