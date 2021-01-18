@@ -247,9 +247,9 @@ peg::parser!{
         }
 
         rule keyword() -> ()
-            = "crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
+            = ("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
             / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
-            / "if" / "else" / "for" / "in" / "sync_threads"
+            / "if" / "else" / "for" / "in" / "sync_threads" / "fn" / "letprov") !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
 
         
         // Literal may be one of Unit, bool, i32, f32
