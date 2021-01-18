@@ -59,11 +59,11 @@ peg::parser!{
                     }
                 }
             }
-            / "let" __ m:mutability() __ ident:ident() _ ":" _ ty:ty() _ "=" _ expr:expression() _ ";" _
+            / "let" __ m:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() _ "=" _ expr:expression() _ ";" _
                 tail:expression_seq()
             {
                 let tail_ty = tail.ty.clone();
-                Expr{expr:ExprKind::Let(m, ident, ty, Box::new(expr), Box::new(tail)), ty: tail_ty}
+                Expr{expr:ExprKind::Let(m.unwrap_or(Mutability::Const), ident, ty, Box::new(expr), Box::new(tail)), ty: tail_ty}
             }
             / expr:expression() { expr }
 
@@ -263,7 +263,8 @@ peg::parser!{
         rule keyword() -> ()
             = ("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
             / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
-            / "if" / "else" / "for" / "in" / "sync_threads" / "fn" / "letprov") !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
+            / "let" / "if" / "else" / "for" / "in" / "sync_threads" / "fn" / "letprov")
+            !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
 
         
         // Literal may be one of Unit, bool, i32, f32
