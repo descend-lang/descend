@@ -235,17 +235,14 @@ impl KindCtx {
         KindCtx { vec: Vec::new() }
     }
 
-    pub fn from(ty_idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> Result<Self, String> {
-        let kind_ctx: Self = Self::new().append_ty_idents(ty_idents);
+    pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> Result<Self, String> {
+        let kind_ctx: Self = Self::new().append_idents(idents);
         kind_ctx.well_kinded_prv_rels(&prv_rels)?;
         Ok(kind_ctx.append_prv_rels(prv_rels))
     }
 
-    pub fn append_ty_idents(mut self, ty_idents: Vec<IdentKinded>) -> Self {
-        let mut entries: Vec<_> = ty_idents
-            .into_iter()
-            .map(|id_kinded| KindingCtxEntry::Ident(id_kinded))
-            .collect();
+    pub fn append_idents(mut self, idents: Vec<IdentKinded>) -> Self {
+        let mut entries: Vec<_> = idents.into_iter().map(KindingCtxEntry::Ident).collect();
         self.vec.append(&mut entries);
         self
     }
@@ -257,7 +254,7 @@ impl KindCtx {
         self
     }
 
-    pub fn get_ty_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
+    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
         self.vec.iter().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
@@ -294,11 +291,11 @@ impl KindCtx {
     }
 
     pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {
-        self.get_ty_idents(kind).any(|id| ident == id)
+        self.get_idents(kind).any(|id| ident == id)
     }
 
-    pub fn well_kinded_prv_rels(&self, prv_rels: &Vec<PrvRel>) -> Result<(), String> {
-        let mut prv_idents = self.get_ty_idents(Kind::Provenance);
+    pub fn well_kinded_prv_rels(&self, prv_rels: &[PrvRel]) -> Result<(), String> {
+        let mut prv_idents = self.get_idents(Kind::Provenance);
         for prv_rel in prv_rels {
             if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
                 return Err(format!("{} is not declared", prv_rel.longer));

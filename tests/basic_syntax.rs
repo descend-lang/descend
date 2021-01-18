@@ -642,7 +642,7 @@ mod copy_to_gpu {
         IdentKinded::new(&Ident::new("elem_ty"), Kind::Ty)
     }
     pub fn kind_ctx() -> KindCtx {
-        KindCtx::new().append_ty_idents(vec![ty_ident()])
+        KindCtx::new().append_idents(vec![ty_ident()])
     }
     pub fn decl_and_ty() -> IdentTyped {
         let empty_frame_expr = FrameExpr::FrTy(FrameTyping::new());
