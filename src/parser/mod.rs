@@ -69,25 +69,25 @@ peg::parser!{
 
         /// Parse an expression
         pub(crate) rule expression() -> Expr = precedence!{
-            x:(@) "&&" y:@ { helpers::make_binary(BinOp::And, x, y) }
-            x:(@) "||" y:@ { helpers::make_binary(BinOp::Or, x, y) }
+            x:(@) _ "&&" _ y:@ { helpers::make_binary(BinOp::And, x, y) }
+            x:(@) _ "||" _ y:@ { helpers::make_binary(BinOp::Or, x, y) }
             --
-            x:(@) "==" y:@ { helpers::make_binary(BinOp::Eq, x, y) }
-            x:(@) "!=" y:@ { helpers::make_binary(BinOp::Neq, x, y) }
-            x:(@) "<" y:@ { helpers::make_binary(BinOp::Lt, x, y) }
-            x:(@) "<=" y:@ { helpers::make_binary(BinOp::Le, x, y) }
-            x:(@) ">" y:@ { helpers::make_binary(BinOp::Gt, x, y) }
-            x:(@) ">=" y:@ { helpers::make_binary(BinOp::Ge, x, y) }
+            x:(@) _ "==" _ y:@ { helpers::make_binary(BinOp::Eq, x, y) }
+            x:(@) _ "!=" _ y:@ { helpers::make_binary(BinOp::Neq, x, y) }
+            x:(@) _ "<" _ y:@ { helpers::make_binary(BinOp::Lt, x, y) }
+            x:(@) _ "<=" _ y:@ { helpers::make_binary(BinOp::Le, x, y) }
+            x:(@) _ ">" _ y:@ { helpers::make_binary(BinOp::Gt, x, y) }
+            x:(@) _ ">=" _ y:@ { helpers::make_binary(BinOp::Ge, x, y) }
             --
-            x:(@) "+" y:@ { helpers::make_binary(BinOp::Add, x, y) }
-            x:(@) "-" y:@ { helpers::make_binary(BinOp::Sub, x, y) }
+            x:(@) _ "+" _ y:@ { helpers::make_binary(BinOp::Add, x, y) }
+            x:(@) _ "-" _ y:@ { helpers::make_binary(BinOp::Sub, x, y) }
             --
-            x:(@) "*" y:@ { helpers::make_binary(BinOp::Mul, x, y) }
-            x:(@) "/" y:@ { helpers::make_binary(BinOp::Div, x, y) }
-            x:(@) "%" y:@ { helpers::make_binary(BinOp::Mod, x, y) }
+            x:(@) _ "*" _ y:@ { helpers::make_binary(BinOp::Mul, x, y) }
+            x:(@) _ "/" _ y:@ { helpers::make_binary(BinOp::Div, x, y) }
+            x:(@) _ "%" _ y:@ { helpers::make_binary(BinOp::Mod, x, y) }
             --
-            "-" x:(@) { helpers::make_unary(UnOp::Neg, x) }
-            "!" x:(@) { helpers::make_unary(UnOp::Not, x) }
+            "-" _ x:(@) { helpers::make_unary(UnOp::Neg, x) }
+            "!" _ x:(@) { helpers::make_unary(UnOp::Not, x) }
             --
             // TODO: Integrate this properly into the precedence parser (irrelevant for now
             // since there are no lambda functions yet)
