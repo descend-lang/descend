@@ -14,16 +14,7 @@ pub fn type_from_lit(lit: &Lit) -> Ty {
 pub fn make_binary(op:BinOp, lhs: Expr, rhs:Expr) -> Expr {
     Expr {
         expr: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
-        ty: None,   /*match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => if let (Some(left_type), Some(right_type)) = (lhs.ty, rhs.ty) {
-                if left_type == right_type {
-                    Some(left_type)
-                } else {None}
-            } else {None},
-            BinOp::Mod => Some(Ty::Scalar(ScalarData::I32)),
-            BinOp::And | BinOp::Or | BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Neq  => Some(Ty::Scalar(ScalarData::Bool)),
-        }*/
-        // tried to insert expression_Ty from the lhs and rhs of the operation
+        ty: None
     }
 }
 

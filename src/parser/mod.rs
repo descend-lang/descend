@@ -122,7 +122,7 @@ peg::parser!{
             "[" _ expressions:expression() ** (_ "," _) _ "]" {
                 Expr {expr: ExprKind::Array(expressions), ty: None}
             }
-            "(" _ expressions:(e:expression() _ "," _ {e})* _ ")" {
+            "(" _ expressions:expression() ** (_ "," _) _ ")" {
                 Expr {expr: ExprKind::Tuple(expressions), ty: None}
             }
             "if" _ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
@@ -132,7 +132,7 @@ peg::parser!{
                 }
             }
             sync_threads:("sync_threads" _ "[" _ gpu_expr:expression() _ ";" _ threads:nat() _ "]" _ {(gpu_expr, threads)})?
-                "for" _ ident:ident() _ "in" _ collection:expression() "{" _ body:expression_seq() _ "}"
+                "for" __ ident:ident() __ "in" _ collection:expression() _ "{" _ body:expression_seq() _ "}"
             {
                 match sync_threads {
                     None => Expr {
@@ -146,7 +146,6 @@ peg::parser!{
                         ty: None
                     },
                 }
-
             }
             // Parentheses to override precedence
             "(" _ expression:expression() _ ")" { expression }
@@ -534,47 +533,158 @@ mod tests {
                     Nat::Lit(0)
             )))), "does not recognize place expression *x.0");
     }
+    
+    #[test]
+    fn expression_literal() {
+        assert_eq!(descent::expression("7"), Ok(Expr{
+            expr: ExprKind::Lit(Lit::Int(7)),
+            ty: Some(Ty::Scalar(ScalarData::I32))
+        }));
+    }
 
     #[test]
-    fn expression() {
-        assert_eq!(descent::expression("if 7+8 {let mut x : f32 = 17.123; true} else {15/3}"), Ok(Expr{
-            expr: ExprKind::IfElse(
-                Box::new(Expr{
-                    expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
-                            expr: ExprKind::Lit(Lit::Int(7)),
-                            ty: Some(Ty::Scalar(ScalarData::I32))
-                        }), Box::new(Expr{
-                            expr: ExprKind::Lit(Lit::Int(8)),
-                            ty: Some(Ty::Scalar(ScalarData::I32))
-                        })),
-                    ty: None
-                }),
-                Box::new(Expr{
-                    expr: ExprKind::Let(Mutability::Mut, Ident::new("x"), Ty::Scalar(ScalarData::F32), Box::new(Expr{
-                            expr: ExprKind::Lit(Lit::Float(17.123)),
-                            ty: Some(Ty::Scalar(ScalarData::F32))
-                        }), Box::new(Expr{
-                            expr: ExprKind::Lit(Lit::Bool(true)),
-                            ty: Some(Ty::Scalar(ScalarData::Bool))
-                        })),
-                    ty: Some(Ty::Scalar(ScalarData::Bool))
-                }),
-                Box::new(Expr{
-                    expr: ExprKind::Binary(BinOp::Div, Box::new(Expr{
-                            expr: ExprKind::Lit(Lit::Int(15)),
-                            ty: Some(Ty::Scalar(ScalarData::I32))
-                        }), Box::new(Expr{
-                            expr: ExprKind::Lit(Lit::Int(3)),
-                            ty: Some(Ty::Scalar(ScalarData::I32))
-                        })),
-                    ty: None
+    fn expression_addition() {
+        assert_eq!(descent::expression("7+8"), Ok(Expr{
+            expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                    expr: ExprKind::Lit(Lit::Int(7)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
+                }), Box::new(Expr{
+                    expr: ExprKind::Lit(Lit::Int(8)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
                 })),
             ty: None
         }));
     }
+
+    #[test]
+    fn expression_parenthesis() {
+        assert_eq!(descent::expression_seq("(5+6) * 7"), Ok(Expr{
+            expr: ExprKind::Binary(BinOp::Mul, Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(5)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        }), Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(6)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                }), Box::new(Expr{
+                    expr: ExprKind::Lit(Lit::Int(8)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
+                })),
+            ty: None
+        }));
+    }
+
+    #[test]
+    fn expression_place_expr() {
+        assert_eq!(descent::expression_seq("someIdentifier"), Ok(Expr{
+                expr: ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new("someIdentifier"))),
+                ty: None
+        }));
+        assert_eq!(descent::expression_seq("*x"), Ok(Expr{
+            expr: ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(PlaceExpr::Var(Ident::new("x"))))),
+            ty: None
+        }));
+        assert_eq!(descent::expression_seq("**x.7"), Ok(Expr{
+            expr: ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(Box::new(PlaceExpr::Var(Ident::new("x"))), Nat::Lit(7))))))),
+            ty: None
+        }));
+        assert_eq!(descent::expression_seq("x.2.3"), Ok(Expr{
+            expr: ExprKind::PlaceExpr(PlaceExpr::Proj(Box::new(PlaceExpr::Proj(Box::new(PlaceExpr::Var(Ident::new("x"))), Nat::Lit(2))), Nat::Lit(3))),
+            ty: None
+        }));
+    }
+
+    #[test]
+    fn expression_indexing() {
+        assert_eq!(descent::expression_seq("place_expression[12]"), Ok(Expr{
+            expr: ExprKind::Index(PlaceExpr::Var(Ident::new("place_expression")), Nat::Lit(12)),
+            ty: None
+        }));
+    }
+
+    #[test]
+    fn expression_assignment() {
+        assert_eq!(descent::expression_seq("var_token = 7.3e2"), Ok(Expr{
+            expr: ExprKind::Assign(PlaceExpr::Var(Ident::new("var_token")), Box::new(Expr{
+                expr: ExprKind::Lit(Lit::Float(730.0)),
+                ty: Some(Ty::Scalar(ScalarData::F32))
+            })),
+            ty:None
+        }));
+        assert_eq!(descent::expression_seq("*var_token = 3 + 4"), Ok(Expr{
+            expr: ExprKind::Assign(PlaceExpr::Deref(Box::new(PlaceExpr::Var(Ident::new("var_token")))), Box::new(Expr{
+                expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                    expr: ExprKind::Lit(Lit::Int(3)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
+                }), Box::new(Expr{
+                    expr: ExprKind::Lit(Lit::Int(4)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
+                })),
+                ty: None
+            })),
+            ty:None
+        }));
+    }
+
+    #[test]
+    fn expression_references() {
+        assert_eq!(descent::expression_seq("&'prov uniq variable"), Ok(Expr{
+            expr: ExprKind::Ref(Provenance::Value(String::from("'prov")), Ownership::Uniq, PlaceExpr::Var(Ident::new("variable"))),
+            ty: None
+        }));
+        assert_eq!(descent::expression_seq("&prov_var shrd variable"), Ok(Expr{
+            expr: ExprKind::Ref(Provenance::Ident(Ident::new("prov_var")), Ownership::Shrd, PlaceExpr::Var(Ident::new("variable"))),
+            ty: None
+        }));
+        assert_eq!(descent::expression_seq("&'prov uniq var[7]"), Ok(Expr{
+            expr: ExprKind::BorrowIndex(Provenance::Value(String::from("'prov")), Ownership::Uniq, PlaceExpr::Var(Ident::new("var")), Nat::Lit(7)),
+            ty: None
+        }));
+        assert_eq!(descent::expression_seq("&'prov uniq var[token]"), Ok(Expr{
+            expr: ExprKind::BorrowIndex(Provenance::Value(String::from("'prov")), Ownership::Uniq, PlaceExpr::Var(Ident::new("var")), Nat::Ident(Ident::new("token"))),
+            ty: None
+        }));
+    }
+
+    #[test]
+    fn expression_array() {
+        assert_eq!(descent::expression_seq("[12, x[3], true]"), Ok(Expr{
+            expr: ExprKind::Array(vec![Expr{
+                expr: ExprKind::Lit(Lit::Int(12)),
+                ty: Some(Ty::Scalar(ScalarData::I32))
+            }, Expr{
+                expr: ExprKind::Index(PlaceExpr::Var(Ident::new("x")), Nat::Lit(3)),
+                ty: None
+            }, Expr{
+                expr: ExprKind::Lit(Lit::Bool(true)),
+                ty: Some(Ty::Scalar(ScalarData::Bool))
+            }]),
+            ty: None
+        }));
+    }
+
+    #[test]
+    fn expression_tupel() {
+        assert_eq!(descent::expression_seq("(12, x[3], true)"), Ok(Expr{
+            expr: ExprKind::Tuple(vec![Expr{
+                expr: ExprKind::Lit(Lit::Int(12)),
+                ty: Some(Ty::Scalar(ScalarData::I32))
+            }, Expr{
+                expr: ExprKind::Index(PlaceExpr::Var(Ident::new("x")), Nat::Lit(3)),
+                ty: None
+            }, Expr{
+                expr: ExprKind::Lit(Lit::Bool(true)),
+                ty: Some(Ty::Scalar(ScalarData::Bool))
+            }]),
+            ty: None
+        }));
+    }
+
     #[test]
     fn expression_if_else() {
-        assert_eq!(descent::expression("if 7<8 {7+8} else {7*8}"), Ok(Expr{
+        assert_eq!(descent::expression_seq("if 7<8 {7+8} else {7*8}"), Ok(Expr{
             expr: ExprKind::IfElse(
                 Box::new(Expr{
                     expr: ExprKind::Binary(BinOp::Lt, Box::new(Expr{
@@ -609,24 +719,78 @@ mod tests {
             ty: None
         }));
     }
+
     #[test]
-    fn expression_addition() {
-        assert_eq!(descent::expression("7+8"), Ok(Expr{
-            expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
-                    expr: ExprKind::Lit(Lit::Int(7)),
+    fn expression_for_loop() {
+        let x = Ident::new("x");
+        assert_eq!(descent::expression_seq("for x in [1,2,3] {x = x+1}"), Ok(Expr{
+            expr: ExprKind::For(x.clone(), Box::new(Expr{
+                expr: ExprKind::Array(vec![Expr{
+                    expr: ExprKind::Lit(Lit::Int(1)),
                     ty: Some(Ty::Scalar(ScalarData::I32))
-                }), Box::new(Expr{
-                    expr: ExprKind::Lit(Lit::Int(8)),
+                }, Expr{
+                    expr: ExprKind::Lit(Lit::Int(2)),
                     ty: Some(Ty::Scalar(ScalarData::I32))
+                }, Expr{
+                    expr: ExprKind::Lit(Lit::Int(3)),
+                    ty: Some(Ty::Scalar(ScalarData::I32))
+                }]),
+                ty: None
+            }), Box::new(Expr{
+                expr: ExprKind::Assign(PlaceExpr::Var(x.clone()), Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                        expr: ExprKind::PlaceExpr(PlaceExpr::Var(x.clone())),
+                        ty: None
+                    }), Box::new(Expr{
+                        expr: ExprKind::Lit(Lit::Int(1)),
+                        ty: Some(Ty::Scalar(ScalarData::I32))
+                    })),
+                    ty: None
                 })),
+                ty: None
+            })),
             ty: None
         }));
     }
+
     #[test]
-    fn expression_literal() {
-        assert_eq!(descent::expression("7"), Ok(Expr{
-            expr: ExprKind::Lit(Lit::Int(7)),
-            ty: Some(Ty::Scalar(ScalarData::I32))
+    fn expression_sync_threads() {
+        let elems = Ident::new("elems");
+        assert_eq!(descent::expression_seq("sync_threads[gpu; 1024] for elems in elems_grouped {*elems.0 = *elems.0 + *elems.1;}"), Ok(Expr{
+            expr: ExprKind::ParForGlobalSync(Box::new(Expr{
+                expr: ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new("gpu"))),
+                ty: None
+            }), Nat::Lit(1024), elems.clone(), Box::new(Expr{
+                expr: ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new("elems_grouped"))),
+                ty: None
+            }), Box::new(Expr{
+                expr: ExprKind::Assign(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(Box::new(PlaceExpr::Var(elems.clone())), Nat::Lit(0)))), Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                        expr: ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(Box::new(PlaceExpr::Var(elems.clone())), Nat::Lit(0))))),
+                        ty: None
+                    }), Box::new(Expr{
+                        expr: ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(Box::new(PlaceExpr::Var(elems.clone())), Nat::Lit(1))))),
+                        ty: None
+                    })),
+                    ty: None
+                })) ,
+                ty: None
+            })),
+            ty: None
+        }));
+    }
+
+    #[test]
+    fn expression_let() {
+        assert_eq!(descent::expression_seq("let mut x : f32 = 17.123f32; true"), Ok(Expr{
+            expr: ExprKind::Let(Mutability::Mut, Ident::new("x"), Ty::Scalar(ScalarData::F32), Box::new(Expr{
+                expr: ExprKind::Lit(Lit::Float(17.123)),
+                ty: Some(Ty::Scalar(ScalarData::F32))
+            }), Box::new(Expr{
+                expr: ExprKind::Lit(Lit::Bool(true)),
+                ty: Some(Ty::Scalar(ScalarData::Bool))
+            })),
+            ty: Some(Ty::Scalar(ScalarData::Bool))
         }));
     }
 
