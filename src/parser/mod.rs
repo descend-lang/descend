@@ -122,7 +122,10 @@ peg::parser!{
             "[" _ expressions:expression() ** (_ "," _) _ "]" {
                 Expr {expr: ExprKind::Array(expressions), ty: None}
             }
-            "(" _ expressions:expression() ** (_ "," _) _ ")" {
+            "(" _ expression:expression() _ "," _ ")" {
+                Expr {expr: ExprKind::Tuple(vec![expression]), ty: None}
+            }
+            "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
                 Expr {expr: ExprKind::Tuple(expressions), ty: None}
             }
             "if" _ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
@@ -569,7 +572,7 @@ mod tests {
                         })),
                     ty: None
                 }), Box::new(Expr{
-                    expr: ExprKind::Lit(Lit::Int(8)),
+                    expr: ExprKind::Lit(Lit::Int(7)),
                     ty: Some(Ty::Scalar(ScalarData::I32))
                 })),
             ty: None
