@@ -809,8 +809,8 @@ mod tests {
     #[test]
     fn vector_add() {
         let src = r#"fn inplace_vector_add<n: nat, a: prv, b: prv>(
-    ha_array: &'a uniq cpu.heap [i32; n],
-    hb_array: &'b shrd cpu.heap [i32; n]
+        ha_array: &'a uniq cpu.heap [i32; n],
+        hb_array: &'b shrd cpu.heap [i32; n]
     ) -[cpu.thread]-> () {
         letprov <a, b, c, d, e, f, g, h> {
             let gpu: GPU = gpu(/* GPU info */);
@@ -834,7 +834,121 @@ mod tests {
         Err(e) => println!("{}", e),
         _ => {}
     };
+
+    let expr_seq = r#"let gpu: GPU = gpu(/* GPU info */);
+        
+    let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
+    let b_array: [i32; n] @ gpu.global = copy_to_gpu<[i32; n]>(&d uniq gpu, hb_array);
+
+    let view_a: [[&a uniq gpu.global i32; n]] = to_view<a, uniq, gpu.global, n, i32>(&a uniq a_array);
+    let view_b: [[&b shrd gpu.global i32; n]] = to_view<b, shrd, gpu.global, n, i32>(&b shrd b_array);
+    let elems_grouped_for_threads: [[(&a uniq gpu.global i32, &b shrd gpu.global i32); n]] =
+    zip<n, &a uniq gpu.global i32, &b shrd gpu.global i32>(view_a, view_b);
+    // hoisted runtime check: n == 64 * 1024
+    sync_threads[gpu; 1024] for elems in elems_grouped_for_threads { // elems: (&a uniq gpu.global i32, &b uniq gpu.global i32)
+        *elems.0 = *elems.0 + *elems.1; // elems.0: &a uniq gpu.global i32
+    };
+    copy_to_host<n, g, 'a, i32>(&g shrd a_array, ha_array);"#;
+
     // TODO: Do proper check against expected AST
+    let name = "inplace_vector_add".into();
+    let ty_idents = vec!{
+        IdentKinded::new(&Ident::new("n"), Kind::Nat),
+        IdentKinded::new(&Ident::new("a"), Kind::Provenance),
+        IdentKinded::new(&Ident::new("b"), Kind::Provenance),
+    };
+    let params = vec!{
+        IdentTyped::new(Ident::new("ha_array"), Ty::Ref(
+            Provenance::Value("\'a".into()), 
+            Ownership::Uniq,
+            Memory::CpuHeap,
+            Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarData::I32)), Nat::Ident(Ident::new("n"))))
+        )),
+        IdentTyped::new(Ident::new("hb_array"), Ty::Ref(
+            Provenance::Value("\'b".into()), 
+            Ownership::Shrd,
+            Memory::CpuHeap,
+            Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarData::I32)), Nat::Ident(Ident::new("n"))))
+        )),
+    };
+    let ret_ty = Ty::Scalar(ScalarData::Unit);
+    let exec = ExecLoc::CpuThread;
+    let prv_rels = vec![];
+
+    let mut f_ty = fun_ty(
+        params
+            .iter()
+            .map(|ident| -> Ty { ident.ty.clone() })
+            .collect(),
+        &FrameExpr::FrTy(vec![]),
+        exec,
+        &ret_ty,
+    );
+
+    let intended = GlobalItem::Def(Box::new(GlobalFunDef{
+        name,
+        ty_idents,
+        params,
+        ret_ty,
+        exec,
+        prv_rels,
+        body_expr: descent::expression_seq(&expr_seq).unwrap(),
+        fun_ty: f_ty
+      }));
     assert!(result.is_ok());
+    assert_eq!(result.unwrap(), intended, "Something was not parsed as intended")
+    }
+
+    // TODO: This test is to be completed when binary operations for Nat Type are implemented
+    #[test]
+    fn par_reduce() {
+        let src = r#"fn par_reduce<n: nat, a: prv>(     // update to current syntax: 'a => a for prv
+        ha_array: &'a uniq cpu.heap [i32; n]
+    ) -[cpu.thread]-> i32 {
+        letprov <e, g, r, s, h> {
+            let gpu: GPU = gpu(/* GPU info */);
+            let mut gpu_arr : [i32; n] = copy_to_gpu<g, 'a, [i32; n]>(&g uniq gpu, ha_array);
+                // // Modified: added ` : [i32; n]`, parse broke here otherwise
+            let view_arr: [[&r shrd gpu.global i32; n]] = 
+                to_view<r, uniq, gpu.global, n, i32>(&r uniq gpu_arr);
+            let chunks: [[ [[&r uniq gpu.global i32; n/1024]]; 1024]] = 
+                group<n/1024, n, &r uniq gpu.global i32>(view_arr);
+            // transpose for coalescing
+            let chunks_for_threads: [[ [[&r uniq gpu.global i32; 1024]]; n/1024]] =
+                transpose<1024, n/1024, &r uniq gpu.global i32>(chunks_for_threads);
+            // hoisted runtime check: n/1024 == 64 * 1024
+            // reduce chunks in parallel
+            sync_threads[gpu, 64 * 1024] for chunck in chunks_for_threads {
+                let mut acc: i32 = 0;
+                for elem in chunck { // elem: &r uniq gpu.global i32
+                    acc = acc + *elem;
+                }
+                // This works because array views themselves are immutable.
+                // Hence, chunk is immutable and we would not be able to write something like
+                // chunk[0] = other_borrow: &r uniq gpu.global i32
+                *(chunck[0]) = acc;
+            }
+            
+            // drop uniq borrows of gpu_arr before out is constructed
+            let out_view: [[&s shrd gpu.global i32; n]] =
+                to_view<s, shrd, gpu.global, n, i32>(&s shrd gpu_arr);
+            let part_res_only_gpu: [[&s shrd gpu.global i32; 64*1024]] =
+                take<64*1024, n, &s shrd gpu.global i32>(out_view);
+            let part_res_only_host: [[&h uniq cpu.heap i32; 64*1024]] =
+                take<64*1024>(to_view(&h uniq cpu.heap ha_array));
+            view_copy_to_host<64*1024, h, s, i32>(part_res_only_host, part_res_only_gpu);
+        
+            // host-side reduction of the partial results
+            let mut acc: i32 = 0;
+            for elem in part_res_only_host { // elem: &h uniq cpu.heap i32
+                acc = acc + *elem;
+            }
+
+            acc // return result from function
+        }
+    }"#;
+    let result = descent::global_item(src);
+    // TODO: Do proper check against expected AST
+    assert!(result.is_err()); // Currently not parsed properly due to Nat binOp Terms (i.e. 64*1024, n/1024 as Nat values)
     }
 }
