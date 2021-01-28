@@ -319,7 +319,7 @@ impl KindCtx {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum GlobalItem {
     PreDecl(Box<PreDeclaredGlobalFun>),
     Def(Box<GlobalFunDef>),
@@ -329,7 +329,7 @@ pub trait IntoProgramItem {
     fn into_item(self) -> GlobalItem;
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct PreDeclaredGlobalFun {
     pub name: String,
     pub fun_ty: Ty,
@@ -341,7 +341,7 @@ impl IntoProgramItem for PreDeclaredGlobalFun {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct GlobalFunDef {
     pub name: String,
     pub ty_idents: Vec<IdentKinded>,
