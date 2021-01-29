@@ -25,10 +25,15 @@ peg::parser!{
                     exec,
                     &ret_ty,
                 );
+<<<<<<< HEAD
                 let ty_idents = match ty_idents {
                     Some(ty_idents) => ty_idents,
                     None => vec![]
                 };
+=======
+
+                
+>>>>>>> Add Tests for GlobalFunDef
                 GlobalItem::Def(Box::new(GlobalFunDef{
                   name,
                   ty_idents,
@@ -875,7 +880,7 @@ mod tests {
     let exec = ExecLoc::CpuThread;
     let prv_rels = vec![];
 
-    let mut f_ty = fun_ty(
+    let f_ty = fun_ty(
         params
             .iter()
             .map(|ident| -> Ty { ident.ty.clone() })
@@ -897,6 +902,121 @@ mod tests {
       }));
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), intended, "Something was not parsed as intended")
+    }
+
+    #[test]
+    fn all_function_kinds() {
+        // all currently available kinds are tested
+        let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
+            ha_array: &'a uniq cpu.heap [i32; n]
+        ) -[cpu.thread]-> () {
+            letprov <some, stuff> {     
+                let answer_to_everything :i32 = 42;
+                answer_to_everything
+            }
+        }"#;
+        let body = r#"let answer_to_everything :i32 = 42;
+            answer_to_everything"#;
+
+        let result = descent::global_item(src);
+
+        // TODO: Do proper check against expected AST
+        let name = "test_kinds".into();
+        let ty_idents = vec!{
+            IdentKinded::new(&Ident::new("n"), Kind::Nat),
+            IdentKinded::new(&Ident::new("a"), Kind::Provenance),
+            IdentKinded::new(&Ident::new("t"), Kind::Ty),
+            IdentKinded::new(&Ident::new("m"), Kind::Memory),
+            IdentKinded::new(&Ident::new("f"), Kind::Frame),
+        };
+        let params = vec!{
+            IdentTyped::new(Ident::new("ha_array"), Ty::Ref(
+                Provenance::Value("\'a".into()), 
+                Ownership::Uniq,
+                Memory::CpuHeap,
+                Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarData::I32)), Nat::Ident(Ident::new("n"))))
+            )),
+        };
+        let ret_ty = Ty::Scalar(ScalarData::Unit);
+        let exec = ExecLoc::CpuThread;
+        let prv_rels = vec![];
+
+        let f_ty = fun_ty(
+            params
+                .iter()
+                .map(|ident| -> Ty { ident.ty.clone() })
+                .collect(),
+            &FrameExpr::FrTy(vec![]),
+            exec,
+            &ret_ty,
+        );
+
+        let intended = GlobalItem::Def(Box::new(GlobalFunDef{
+            name,
+            ty_idents,
+            params,
+            ret_ty,
+            exec,
+            prv_rels,
+            body_expr: descent::expression_seq(body).unwrap(),
+            fun_ty: f_ty
+        }));
+
+        assert_eq!(result.unwrap(), intended);
+    }
+
+    #[test]
+    fn function_must_have_kinds() {
+        // test both versions with and without <> pointy brackets
+        let src_1 = r#"fn no_kinds(
+            ha_array: &'a uniq cpu.heap [i32; n],
+            hb_array: &'b shrd cpu.heap [i32; n]
+        ) -[cpu.thread]-> () {
+            let answer_to_everything :i32 = 42;
+            answer_to_everything
+            }
+        }"#;
+        let src_2 = r#"fn no_kinds<>(
+            ha_array: &'a uniq cpu.heap [i32; n],
+            hb_array: &'b shrd cpu.heap [i32; n]
+        ) -[cpu.thread]-> () {
+            let answer_to_everything :i32 = 42;
+            answer_to_everything
+            }
+        }"#;
+
+        let result_1 = descent::global_item(src_1);
+        let result_2 = descent::global_item(src_2);
+
+        assert!(result_1.is_err());
+        assert!(result_2.is_err());
+    }
+
+    #[test]
+    fn wrong_kinds_cause_error() {
+        // kind type is spelled wrong
+        let src = r#"fn wrong_kind_spelling<n: nat, a: prov, b: prv>(
+            ha_array: &'a uniq cpu.heap [i32; n],
+            hb_array: &'b shrd cpu.heap [i32; n]
+        ) -[cpu.thread]-> () {
+            // no body, not relevant to tested rule
+            }
+        }"#;
+
+        let result = descent::global_item(src);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn function_parameters_required() {
+        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {
+            // no body, not relevant to tested rule
+            }
+        }"#;
+
+        let result = descent::global_item(src);
+        assert!(result.is_err());
     }
 
     // TODO: This test is to be completed when binary operations for Nat Type are implemented
