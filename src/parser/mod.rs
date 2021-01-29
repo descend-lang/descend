@@ -14,8 +14,7 @@ peg::parser!{
             = "fn" __ name:identifier() _ "<" _ ty_idents:(kind_parameter() ** (_ "," _)) _ ">" _
             "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
             "-[" _ exec:execution_location() _ "]->" _ ret_ty:ty() _
-            "{" _ "letprov" _ "<" _ identifier() ** (_ "," _) /* TODO: ast structure for letprov? */ _ ">" _
-            "{" _ body_expr:expression_seq() _"}" _ "}" {
+            "{" _ body_expr:expression_seq() _"}" {
                 // TODO: Kick this out of the AST?
                 let mut f_ty = fun_ty(
                     params
@@ -133,6 +132,12 @@ peg::parser!{
                     expr: ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse)),
                     ty: None
                 }
+            }
+            "letprov" _ "<" _ identifier() ** (_ "," _)  _ ">" _
+                "{" _ body:expression_seq() _ "}"
+            {
+                // TODO: ast structure for letprov? Return body for now
+                body
             }
             sync_threads:("sync_threads" _ "[" _ gpu_expr:expression() _ ";" _ threads:nat() _ "]" _ {(gpu_expr, threads)})?
                 "for" __ ident:ident() __ "in" _ collection:expression() _ "{" _ body:expression_seq() _ "}"
@@ -269,7 +274,7 @@ peg::parser!{
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
                 / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
-                / "let" / "if" / "else" / "for" / "in" / "sync_threads" / "fn" / "letprov")
+                / "let"("prov")? / "if" / "else" / "for" / "in" / "sync_threads" / "fn")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.stack" / "cpu.heap" / "gpu.global" / "gpu.shared"
@@ -821,6 +826,10 @@ mod tests {
         }
     }"#;
     let result = descent::global_item(src);
+    match &result {
+        Err(e) => println!("{}", e),
+        _ => {}
+    };
     // TODO: Do proper check against expected AST
     assert!(result.is_ok());
     }
