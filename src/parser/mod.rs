@@ -11,7 +11,7 @@ peg::parser!{
 
         // TODO: PreDeclaredGlobalFun missing Syntax
         pub(crate) rule global_item() -> GlobalItem
-            = "fn" __ name:identifier() _ "<" _ ty_idents:(kind_parameter() ** (_ "," _)) _ ">" _
+            = "fn" __ name:identifier() _ ty_idents:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
             "-[" _ exec:execution_location() _ "]->" _ ret_ty:ty() _
             "{" _ body_expr:expression_seq() _"}" {
@@ -25,6 +25,10 @@ peg::parser!{
                     exec,
                     &ret_ty,
                 );
+                let ty_idents = match ty_idents {
+                    Some(ty_idents) => ty_idents,
+                    None => vec![]
+                };
                 GlobalItem::Def(Box::new(GlobalFunDef{
                   name,
                   ty_idents,
