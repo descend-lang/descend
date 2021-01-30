@@ -25,15 +25,10 @@ peg::parser!{
                     exec,
                     &ret_ty,
                 );
-<<<<<<< HEAD
                 let ty_idents = match ty_idents {
                     Some(ty_idents) => ty_idents,
                     None => vec![]
                 };
-=======
-
-                
->>>>>>> Add Tests for GlobalFunDef
                 GlobalItem::Def(Box::new(GlobalFunDef{
                   name,
                   ty_idents,
