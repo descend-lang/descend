@@ -29,6 +29,7 @@ peg::parser!{
                     Some(ty_idents) => ty_idents,
                     None => vec![]
                 };
+                print!("Parameters are: {:?}\n",params);
                 GlobalItem::Def(Box::new(GlobalFunDef{
                   name,
                   ty_idents,
@@ -961,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn function_must_have_kinds() {
+    fn kind_parameters_optional() {
         // test both versions with and without <> pointy brackets
         let src_1 = r#"fn no_kinds(
             ha_array: &'a uniq cpu.heap [i32; n],
@@ -969,7 +970,6 @@ mod tests {
         ) -[cpu.thread]-> () {
             let answer_to_everything :i32 = 42;
             answer_to_everything
-            }
         }"#;
         let src_2 = r#"fn no_kinds<>(
             ha_array: &'a uniq cpu.heap [i32; n],
@@ -977,14 +977,13 @@ mod tests {
         ) -[cpu.thread]-> () {
             let answer_to_everything :i32 = 42;
             answer_to_everything
-            }
         }"#;
 
         let result_1 = descent::global_item(src_1);
         let result_2 = descent::global_item(src_2);
 
-        assert!(result_1.is_err());
-        assert!(result_2.is_err());
+        assert!(result_1.is_ok());
+        assert!(result_2.is_ok());
     }
 
     #[test]
@@ -994,8 +993,8 @@ mod tests {
             ha_array: &'a uniq cpu.heap [i32; n],
             hb_array: &'b shrd cpu.heap [i32; n]
         ) -[cpu.thread]-> () {
-            // no body, not relevant to tested rule
-            }
+            let answer_to_everything :i32 = 42;
+            answer_to_everything
         }"#;
 
         let result = descent::global_item(src);
@@ -1004,14 +1003,14 @@ mod tests {
     }
 
     #[test]
-    fn function_parameters_required() {
-        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {
-            // no body, not relevant to tested rule
-            }
+    fn no_function_parameters_required() {
+        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {            
+            let answer_to_everything :i32 = 42;
+            answer_to_everything
         }"#;
 
         let result = descent::global_item(src);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     // TODO: This test is to be completed when binary operations for Nat Type are implemented
