@@ -6,14 +6,17 @@ auto inplace_vector_add_host(
     descend::i32_t * const __restrict__ ha_array,
     const descend::i32_t * const __restrict__ hb_array
 ) -> void {
-  auto gpu = descend::create_gpu(0);
+  const auto gpu = descend::create_gpu(0);
 
-  auto a_array = descend::gpu_alloc<descend::i32_t>(&gpu, ha_array);
+  auto a_array = descend::gpu_alloc<descend::array_t<descend::i32_t, n>>(&gpu, ha_array);
   const auto b_array = descend::gpu_alloc<descend::array_t<descend::i32_t, n>>(&gpu, hb_array);
 
-  descend::par_for_across<1024>(
+  descend::par_for_across<1, 1024>(
         &gpu,
-        [] __global__ (descend::i32_t * const __restrict__ a_array, const descend::i32_t * const __restrict__ b_array) {
+        [] __device__ (
+                descend::i32_t * const __restrict__ a_array,
+                const descend::i32_t * const __restrict__ b_array
+        ) {
             int g_tid = blockIdx.x * blockDim.x + threadIdx.x;
             a_array[g_tid] = a_array[g_tid] + b_array[g_tid];
         },
@@ -24,11 +27,11 @@ auto inplace_vector_add_host(
 }
 
 auto main() -> int {
-  auto ha_array = descend::HeapBuffer<descend::array_t<descend::i32_t, 1024>>(descend::create_array<1024, descend::i32_t>(0));
-  const auto hb_array = descend::HeapBuffer<descend::array_t<descend::i32_t, 1024>>(descend::create_array<1024, descend::i32_t>(1));
-  inplace_vector_add_host<1024>(&ha_array, &hb_array);
+  auto ha_array = descend::HeapBuffer<descend::array_t<descend::i32_t, 1*1024>>(descend::create_array<1024, descend::i32_t>(0));
+  const auto hb_array = descend::HeapBuffer<descend::array_t<descend::i32_t, 1*1024>>(descend::create_array<1024, descend::i32_t>(1));
+  inplace_vector_add_host<1*1024>(&ha_array, &hb_array);
 
-  for (size_t i = 0; i < 1024; i++) {
+  for (size_t i = 0; i < 1*1024; i++) {
       if (ha_array[i] != 1) {
           std::cout << "At i = " << i << "Wrong number. Found " << ha_array[i] << " instead of 1.";
           exit(EXIT_FAILURE);

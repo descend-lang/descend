@@ -66,111 +66,108 @@ class Buffer;
 
 template<typename DescendType>
 class Buffer<Memory::CpuHeap, DescendType> {
-    DescendType * const _ptr;
+    DescendType * const ptr_;
 
 public:
     static constexpr std::size_t size = size_in_bytes<DescendType>;
 
-    Buffer(const DescendType * const __restrict__ init_ptr) : _ptr{new DescendType(*init_ptr)} {}
-    Buffer(const DescendType init_val) : _ptr{new DescendType}
+    Buffer(const DescendType init_val) : ptr_{new DescendType(init_val)} {}
+    Buffer(const DescendType * const __restrict__ init_ptr) : ptr_{new DescendType(*init_ptr)} {}
     ~Buffer() {
-        delete _ptr;
+        delete ptr_;
     }
 
     auto operator&() -> DescendType * {
-        return _ptr;
+        return ptr_;
     }
 
     auto operator&() const -> const DescendType * {
-        return _ptr;
+        return ptr_;
     }
 };
 
 template<typename DescendType, std::size_t n>
 class Buffer<Memory::CpuHeap, descend::array_t<DescendType, n>> {
-    descend::array_t<DescendType, n> * const _ptr;
+    descend::array_t<DescendType, n> * const ptr_;
 
 public:
     static constexpr std::size_t size = size_in_bytes<descend::array_t<DescendType, n>>();
 
-    Buffer(const descend::array_t<DescendType, n> init) : _ptr{new descend::array_t<DescendType, n>} {
-        std::copy(init.begin(), init.end(), _ptr->data());
+    Buffer(const descend::array_t<DescendType, n> init) : ptr_{new descend::array_t<DescendType, n>} {
+        std::copy(init.begin(), init.end(), ptr_->data());
     }
 
-    Buffer(const DescendType * const __restrict__ init_ptr) : _ptr{new descend::array_t<DescendType, n>} {
-        std::copy(init_ptr, init_ptr + size, _ptr);
+    Buffer(const DescendType * const __restrict__ init_ptr) : ptr_{new descend::array_t<DescendType, n>} {
+        std::copy(init_ptr, init_ptr + size, ptr_->data());
     }
     ~Buffer() {
-        delete _ptr;
+        delete ptr_;
     }
 
     auto operator&() -> DescendType * {
-        return _ptr->data();
+        return ptr_->data();
     }
 
     auto operator&() const -> const DescendType * {
-        return _ptr->data();
+        return ptr_->data();
     }
 
-    DescendType& operator[](std::size_t idx) { return (*_ptr)[idx]; }
-    const DescendType& operator[](std::size_t idx) const { return (*_ptr)[idx]; }
+    DescendType& operator[](std::size_t idx) { return (*ptr_)[idx]; }
+    const DescendType& operator[](std::size_t idx) const { return (*ptr_)[idx]; }
 };
 
 template<typename DescendType>
 class Buffer<Memory::GpuGlobal, DescendType> {
-    DescendType * _dev_ptr;
-    const Gpu _gpu;
+    const Gpu gpu_;
+    DescendType * dev_ptr_;
 
 public:
-    static constexpr std::size_t size = size_in_bytes<DescendType>;
+    static constexpr std::size_t size = size_in_bytes<DescendType>();
 
-    Buffer(Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr): _gpu{*gpu} {
-        CHECK_CUDA_ERR( cudaSetDevice(_gpu) );
-        CHECK_CUDA_ERR( cudaMalloc(_dev_ptr, size) );
-        CHECK_CUDA_ERR( cudaMemcpy(_dev_ptr, init_ptr, size_in_bytes<DescendType>(), cudaMemcpyHostToDevice) );
+    Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr): gpu_{*gpu} {
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+        CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
+        CHECK_CUDA_ERR( cudaMemcpy(dev_ptr_, init_ptr, size_in_bytes<DescendType>(), cudaMemcpyHostToDevice) );
     }
 
     ~Buffer() {
-        CHECK_CUDA_ERR( cudaSetDevice(_gpu) );
-        CHECK_CUDA_ERR( cudaFree(_dev_ptr) );
-        ~Buffer();
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+        CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
     }
 
     auto operator&() -> DescendType * {
-        return _dev_ptr;
+        return dev_ptr_;
     }
 
     auto operator&() const -> const DescendType * {
-        return _dev_ptr;
+        return dev_ptr_;
     }
 };
 
 template<typename DescendType, std::size_t n>
 class Buffer<Memory::GpuGlobal, descend::array_t<DescendType, n>> {
-    DescendType * const _dev_ptr;
-    const Gpu _gpu;
+    const Gpu gpu_;
+    DescendType * dev_ptr_;
 
 public:
     static constexpr std::size_t size = size_in_bytes<array_t<DescendType, n>>();
 
-    Buffer(Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) {
-        _gpu = *gpu;
-        CHECK_CUDA_ERR( cudaSetDevice(_gpu) );
-        CHECK_CUDA_ERR( cudaMalloc(_dev_ptr, size) );
-        CHECK_CUDA_ERR( cudaMemcpy(_dev_ptr, init_ptr, size, cudaMemcpyHostToDevice) );
+    Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{*gpu} {
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+        CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
+        CHECK_CUDA_ERR( cudaMemcpy(dev_ptr_, init_ptr, size, cudaMemcpyHostToDevice) );
     }
 
     ~Buffer() {
-        CHECK_CUDA_ERR( cudaSetDevice(_gpu) );
-        CHECK_CUDA_ERR( cudaFree(_dev_ptr) );
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+        CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
     }
 
     auto operator&() -> DescendType * {
-        return _dev_ptr;
+        return dev_ptr_;
     }
-
     auto operator&() const -> const DescendType * {
-        return _dev_ptr;
+        return dev_ptr_;
     }
 };
 
@@ -180,35 +177,34 @@ using HeapBuffer = Buffer<Memory::CpuHeap, DescendType>;
 template<typename DescendType>
 using GpuBuffer = Buffer<Memory::GpuGlobal, DescendType>;
 
-template<typename DescendType>
-auto gpu_alloc(Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) -> GpuBuffer<DescendType>  {
+template<typename DescendType, typename PtrType>
+auto gpu_alloc(const Gpu * const __restrict__ gpu, const PtrType * const __restrict__ init_ptr) -> GpuBuffer<DescendType>  {
     return descend::GpuBuffer<DescendType>(gpu, init_ptr);
 }
 
-template<typename DescendType, std::size_t n>
-auto gpu_alloc<descend::array_t<DescendType, n>>(Gpu * gpu, DescendType * const __restrict__ init_ptr) -> GpuBuffer<DescendType> {
-    return descend::GpuBuffer<descend::array_t<DescendType, n>>(gpu, init_ptr);
-}
-
-template<typename DescendType>
-auto copy_to_host(const DescendType * const __restrict__ device_ptr, DescendType * const __restrict__ host_ptr) -> void {
+template<typename DescendType, typename PtrTypeDev, typename PtrTypeHost>
+auto copy_to_host(const PtrTypeDev * __restrict__ device_ptr, PtrTypeHost * const __restrict__ host_ptr) -> void {
     CHECK_CUDA_ERR( cudaMemcpy(host_ptr, device_ptr, size_in_bytes<DescendType>(), cudaMemcpyDeviceToHost) );
 }
 
-template<std::size_t num_blocks, std::size_t num_threads, typename F>
-auto par_for_across(Gpu *gpu, F &function, void *args ...) -> void {
+template <typename F, typename... Args>
+__global__ void launch(F f, Args... args)
+{
+    f(args...);
+}
+
+template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
+auto par_for_across(const Gpu *gpu, F &&f, Args... args) -> void {
     CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
-    [] __global__ (descend::i32_t * const __restrict__ a_array, const descend::i32_t * const __restrict__ b_array) {
-        int g_tid = blockIdx.x * blockDim.x + threadIdx.x;
-        a_array[g_tid] = a_array[g_tid] + b_array[g_tid];
-    }<<<num_blocks, num_threads>>>(args);
+    launch<<<num_blocks, num_threads>>>(f, args...);
     CHECK_CUDA_ERR( cudaPeekAtLastError() );
+    CHECK_CUDA_ERR( cudaDeviceSynchronize() );
 }
 
 namespace detail
 {
     template <typename T, std::size_t ... Is>
-    constexpr std::array<T, sizeof...(Is)>
+    constexpr descend::array_t<T, sizeof...(Is)>
     create_array(T value, std::index_sequence<Is...>)
     {
         // cast Is to void to remove the warning: unused value
@@ -217,7 +213,7 @@ namespace detail
 };
 
 template <std::size_t N, typename T>
-constexpr std::array<T, N> create_array(const T& value)
+constexpr descend::array_t<T, N> create_array(const T& value)
 {
     return detail::create_array(value, std::make_index_sequence<N>());
 }
