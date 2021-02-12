@@ -160,6 +160,7 @@ peg::parser!{
                     },
                 }
             }
+            --
             // Parentheses to override precedence
             "(" _ expression:expression() _ ")" { expression }
         } 
@@ -808,7 +809,124 @@ mod tests {
     }
 
     #[test]
-    fn vector_add() {
+    fn expression_parenthesis_overriding_precedence() {
+        // "natural" operator precendence without parenthesis
+        assert_eq!(descent::expression("-1 + 2 * 3 + 4 + 5 * 6 * 7"), Ok(Expr{
+            expr: ExprKind::Binary(BinOp::Add,
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Add,
+                        Box::new(Expr{
+                            expr: ExprKind::Binary(BinOp::Add,
+                                Box::new(Expr{
+                                    expr: ExprKind::Unary(UnOp::Neg,
+                                        Box::new(Expr{
+                                            expr: ExprKind::Lit(Lit::Int(1)),
+                                            ty: Some(Ty::Scalar(ScalarData::I32))
+                                        })),
+                                    ty: None
+                                }),
+                                Box::new(Expr{
+                                    expr: ExprKind::Binary(BinOp::Mul,
+                                        Box::new(Expr{
+                                            expr: ExprKind::Lit(Lit::Int(2)),
+                                            ty: Some(Ty::Scalar(ScalarData::I32))
+                                        }),
+                                        Box::new(Expr{
+                                            expr: ExprKind::Lit(Lit::Int(3)),
+                                            ty: Some(Ty::Scalar(ScalarData::I32))
+                                        })),
+                                        ty: None
+                                    })),
+                                ty: None
+                            }),
+                        Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(4)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))                    
+                        })),
+                    ty: None
+                }),
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Mul,
+                        Box::new(Expr{
+                            expr: ExprKind::Binary(BinOp::Mul,
+                                Box::new(Expr{
+                                    expr: ExprKind::Lit(Lit::Int(5)),
+                                    ty: Some(Ty::Scalar(ScalarData::I32))
+                                }),
+                                Box::new(Expr{
+                                    expr: ExprKind::Lit(Lit::Int(6)),
+                                    ty: Some(Ty::Scalar(ScalarData::I32))
+                                })),
+                            ty: None       
+                        }),
+                        Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(7)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                })),
+            ty: None
+        }));
+
+        // precedences overridden via parentheses
+        assert_eq!(descent::expression("-(1 + 2) * ((3 + (4 + 5) * 6) * 7)"), Ok(Expr{
+            expr: ExprKind::Binary(BinOp::Mul, 
+                Box::new(Expr{
+                    expr: ExprKind::Unary(UnOp::Neg, 
+                        Box::new(Expr{
+                            expr: ExprKind::Binary(BinOp::Add, 
+                                Box::new(Expr{
+                                    expr: ExprKind::Lit(Lit::Int(1)),
+                                    ty: Some(Ty::Scalar(ScalarData::I32))
+                                }), 
+                                Box::new(Expr{
+                                    expr: ExprKind::Lit(Lit::Int(2)),
+                                    ty: Some(Ty::Scalar(ScalarData::I32))
+                                })),
+                            ty: None
+                        })),
+                    ty: None
+                }), 
+                Box::new(Expr{
+                    expr: ExprKind::Binary(BinOp::Mul, 
+                        Box::new(Expr{
+                            expr: ExprKind::Binary(BinOp::Add, 
+                                Box::new(Expr{
+                                    expr: ExprKind::Lit(Lit::Int(3)),
+                                    ty: Some(Ty::Scalar(ScalarData::I32))
+                                }),
+                                Box::new(Expr{
+                                    expr: ExprKind::Binary(BinOp::Mul, 
+                                        Box::new(Expr{
+                                            expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
+                                                    expr: ExprKind::Lit(Lit::Int(4)),
+                                                    ty: Some(Ty::Scalar(ScalarData::I32))
+                                                }), Box::new(Expr{
+                                                    expr: ExprKind::Lit(Lit::Int(5)),
+                                                    ty: Some(Ty::Scalar(ScalarData::I32))
+                                                })),
+                                            ty: None
+                                        }),
+                                        Box::new(Expr{
+                                            expr: ExprKind::Lit(Lit::Int(6)),
+                                            ty: Some(Ty::Scalar(ScalarData::I32))
+                                        })),
+                                    ty: None
+                                })), 
+                            ty: None
+                        }), 
+                        Box::new(Expr{
+                            expr: ExprKind::Lit(Lit::Int(7)),
+                            ty: Some(Ty::Scalar(ScalarData::I32))
+                        })),
+                    ty: None
+                })),
+            ty: None
+        }));
+    }
+
+    #[test]
+    fn globalItem_globalFunDef_vector_add() {
         let src = r#"fn inplace_vector_add<n: nat, a: prv, b: prv>(
         ha_array: &'a uniq cpu.heap [i32; n],
         hb_array: &'b shrd cpu.heap [i32; n]
@@ -901,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn all_function_kinds() {
+    fn globalItem_globalFunDef_all_function_kinds() {
         // all currently available kinds are tested
         let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
             ha_array: &'a uniq cpu.heap [i32; n]
@@ -962,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn kind_parameters_optional() {
+    fn globalItem_globalFunDef_kind_parameters_optional() {
         // test both versions with and without <> pointy brackets
         let src_1 = r#"fn no_kinds(
             ha_array: &'a uniq cpu.heap [i32; n],
@@ -987,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn wrong_kinds_cause_error() {
+    fn globalItem_globalFunDef_wrong_kinds_cause_error() {
         // kind type is spelled wrong
         let src = r#"fn wrong_kind_spelling<n: nat, a: prov, b: prv>(
             ha_array: &'a uniq cpu.heap [i32; n],
@@ -1003,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn no_function_parameters_required() {
+    fn globalItem_globalFunDef_no_function_parameters_required() {
         let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {            
             let answer_to_everything :i32 = 42;
             answer_to_everything
@@ -1014,6 +1132,7 @@ mod tests {
     }
 
     // TODO: This test is to be completed when binary operations for Nat Type are implemented
+    /*
     #[test]
     fn par_reduce() {
         let src = r#"fn par_reduce<n: nat, a: prv>(     // update to current syntax: 'a => a for prv
@@ -1065,4 +1184,5 @@ mod tests {
     // TODO: Do proper check against expected AST
     assert!(result.is_err()); // Currently not parsed properly due to Nat binOp Terms (i.e. 64*1024, n/1024 as Nat values)
     }
+    */
 }
