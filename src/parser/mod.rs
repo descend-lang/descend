@@ -822,6 +822,12 @@ mod tests {
         let result = descend::expression("1+2)");
         assert!(result.is_err());
 
+        let result = descend::expression("1+2(");
+        assert!(result.is_err());
+
+        let result = descend::expression(")1+2");
+        assert!(result.is_err());
+
         let result = descend::expression("(1+2)");
         assert!(result.is_ok());
     }
