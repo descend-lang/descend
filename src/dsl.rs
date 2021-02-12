@@ -2,7 +2,6 @@ use crate::ast::ty::*;
 use crate::ast::utils::fresh_name;
 use crate::ast::Lit::Unit;
 use crate::ast::*;
-use crate::ty_check::ty_ctx::IdentTyped;
 
 //
 // Syntax

@@ -1,10 +1,10 @@
-use super::Ty;
-use super::{BinOp, Expr, Item, ParamDecl, Stmt, TemplateArg, TemplateParam, UnOp};
-use crate::codegen::ScalarTy;
+use super::cu_ast::{
+    BinOp, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
+};
 use std::fmt::Formatter;
 use std::fmt::Write;
 
-pub fn print(program: &[Item]) -> String {
+pub(super) fn print(program: &[Item]) -> String {
     let mut code = String::new();
     for i in program {
         let res = writeln!(&mut code, "{}", i);
@@ -25,6 +25,7 @@ impl std::fmt::Display for Item {
                 params,
                 ret_ty,
                 body,
+                is_dev_fun,
             } => {
                 if !templ_params.is_empty() {
                     write!(f, "template<")?;
@@ -63,7 +64,7 @@ impl std::fmt::Display for Stmt {
                 writeln!(f)?;
                 writeln!(f, "}}")
             }
-            ExprStmt(expr) => write!(f, "{};", expr),
+            Expr(expr) => write!(f, "{};", expr),
             If { cond, body } => {
                 writeln!(f, "if ({})", cond)?;
                 write!(f, "{}", body)
@@ -144,11 +145,11 @@ impl std::fmt::Display for TemplateArg {
     }
 }
 
-impl std::fmt::Display for TemplateParam {
+impl std::fmt::Display for TemplParam {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TemplateParam::NonType { param_name, ty } => write!(f, "{} {}", ty, param_name),
-            TemplateParam::Ty(ty_name) => write!(f, "typename {}", ty_name),
+            TemplParam::NonType { param_name, ty } => write!(f, "{} {}", ty, param_name),
+            TemplParam::Ty(ty_name) => write!(f, "typename {}", ty_name),
         }
     }
 }
@@ -189,8 +190,8 @@ impl std::fmt::Display for Ty {
                 write!(f, ">")
             }
             Buffer(ty, buff_kind) => match buff_kind {
-                super::BufferKind::Heap => write!(f, "HeapBuffer<{}>", ty),
-                super::BufferKind::Gpu => write!(f, "GpuBuffer<{}>", ty),
+                super::cu_ast::BufferKind::Heap => write!(f, "HeapBuffer<{}>", ty),
+                super::cu_ast::BufferKind::Gpu => write!(f, "GpuBuffer<{}>", ty),
             },
             Scalar(sty) => write!(f, "{}", sty),
         }
@@ -228,7 +229,7 @@ fn test_print_program() -> std::fmt::Result {
         Item::Include("descend.cuh".to_string()),
         Item::FunDef {
             name: "test_fun".to_string(),
-            templ_params: vec![TemplateParam::NonType {
+            templ_params: vec![TemplParam::NonType {
                 param_name: "n".to_string(),
                 ty: Scalar(ScalarTy::SizeT),
             }],
@@ -248,6 +249,7 @@ fn test_print_program() -> std::fmt::Result {
                 ty: None,
                 expr: Some(Expr::Ident("a".to_string())),
             }],
+            is_dev_fun: true,
         },
     ];
     let code = print(&program);

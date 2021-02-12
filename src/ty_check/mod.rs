@@ -9,7 +9,7 @@ use crate::ty_check::subty_check::multiple_outlives;
 use borrow_check::ownership_safe;
 use std::ops::Deref;
 use subty_check::subty_check;
-use ty_ctx::{IdentTyped, TyCtx};
+use ty_ctx::TyCtx;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------

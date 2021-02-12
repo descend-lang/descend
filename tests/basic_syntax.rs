@@ -10,7 +10,7 @@ use descend::ast::ty::*;
 use descend::ast::Ownership::{Shrd, Uniq};
 use descend::ast::*;
 use descend::dsl::*;
-use descend::ty_check::ty_ctx::{IdentTyped, PrvMapping, TyCtx};
+use descend::ty_check::ty_ctx::{PrvMapping, TyCtx};
 use descend::ty_check::{ty_check, ty_check_expr};
 use descend::{arr, tuple, tuple_ty};
 use std::collections::HashSet;
@@ -633,10 +633,11 @@ fn function_decl_reference_params_example() {
 
 mod copy_to_gpu {
     use descend::ast::ty::Memory::GpuGlobal;
-    use descend::ast::ty::{ExecLoc, FrameExpr, FrameTyping, IdentKinded, Kind, KindCtx, Ty};
+    use descend::ast::ty::{
+        ExecLoc, FrameExpr, FrameTyping, IdentKinded, IdentTyped, Kind, KindCtx, Ty,
+    };
     use descend::ast::*;
     use descend::dsl::*;
-    use descend::ty_check::ty_ctx::IdentTyped;
 
     pub fn ty_ident() -> IdentKinded {
         IdentKinded::new(&Ident::new("elem_ty"), Kind::Ty)

@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::ty_check::ty_ctx::{IdentTyped, TyEntry};
+use crate::ty_check::ty_ctx::TyEntry;
 use std::fmt;
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
@@ -359,6 +359,18 @@ impl IntoProgramItem for GlobalFunDef {
     }
 }
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct IdentTyped {
+    pub ident: Ident,
+    pub ty: Ty,
+}
+
+impl IdentTyped {
+    pub fn new(ident: Ident, ty: Ty) -> Self {
+        IdentTyped { ident, ty }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GlobalCtx {
     items: Vec<GlobalItem>,
@@ -383,6 +395,13 @@ impl GlobalCtx {
         self.items.iter_mut().filter_map(|item| match item {
             GlobalItem::PreDecl(_) => None,
             GlobalItem::Def(gl_fun_def) => Some(gl_fun_def.as_mut()),
+        })
+    }
+
+    pub fn fun_defs(&self) -> impl Iterator<Item = &GlobalFunDef> {
+        self.items.iter().filter_map(|item| match item {
+            GlobalItem::PreDecl(_) => None,
+            GlobalItem::Def(gl_fun_def) => Some(gl_fun_def.as_ref()),
         })
     }
 

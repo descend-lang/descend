@@ -1,24 +1,26 @@
-// TODO proper access modifiers such that this is contained in codegen only
+pub(super) type CuProgram = Vec<Item>;
 
-pub enum Item {
+// TODO big difference in sizes beteween variants
+pub(super) enum Item {
     Include(String),
     FunDef {
         name: String,
-        templ_params: Vec<TemplateParam>,
+        templ_params: Vec<TemplParam>,
         params: Vec<ParamDecl>,
         ret_ty: Ty,
         body: Vec<Stmt>,
+        is_dev_fun: bool,
     },
 }
 
-pub enum Stmt {
+pub(super) enum Stmt {
     VarDecl {
         name: String,
         ty: Option<Ty>,
         expr: Option<Expr>,
     },
     Block(Vec<Stmt>),
-    ExprStmt(Expr),
+    Expr(Expr),
     If {
         cond: Expr,
         body: Box<Stmt>,
@@ -37,12 +39,12 @@ pub enum Stmt {
     Return(Option<Expr>),
 }
 
-pub struct ParamDecl {
-    name: String,
-    ty: Ty,
+pub(super) struct ParamDecl {
+    pub(super) name: String,
+    pub(super) ty: Ty,
 }
 
-pub enum Expr {
+pub(super) enum Expr {
     Ident(String),
     Literal, // TODO
     Assign {
@@ -73,27 +75,27 @@ pub enum Expr {
     },
 }
 
-pub enum UnOp {
+pub(super) enum UnOp {
     Ref,
     DeRef,
 }
 
-pub enum BinOp {
+pub(super) enum BinOp {
     Add,
     Mult,
 }
 
-pub enum TemplateParam {
+pub(super) enum TemplParam {
     NonType { param_name: String, ty: Ty },
     Ty(Ty),
 }
 
-pub enum TemplateArg {
+pub(super) enum TemplateArg {
     Expr(Expr),
     Ty(Ty),
 }
 
-pub enum Ty {
+pub(super) enum Ty {
     // for now assume every pointer to be __restrict__ qualified
     // http://www.open-std.org/JTC1/SC22/WG14/www/docs/n1256.pdf#page=122&zoom=auto,-205,535
     Ptr(Box<Ty>),
@@ -113,12 +115,12 @@ pub enum Ty {
     Scalar(ScalarTy),
 }
 
-pub enum BufferKind {
+pub(super) enum BufferKind {
     Heap,
     Gpu,
 }
 
-pub enum ScalarTy {
+pub(super) enum ScalarTy {
     Auto,
     Void,
     I32,
