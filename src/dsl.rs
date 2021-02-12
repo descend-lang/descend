@@ -1,4 +1,3 @@
-use crate::ast::ty::*;
 use crate::ast::utils::fresh_name;
 use crate::ast::Lit::Unit;
 use crate::ast::*;
@@ -365,7 +364,7 @@ pub fn at_ty(ty: &Ty, mem: &Memory) -> Ty {
 #[macro_export]
 macro_rules! tuple_ty {
     ($($v:expr),*) => {
-        $crate::ast::ty::Ty::Tuple(
+        $crate::ast::Ty::Tuple(
             vec![$($v.clone()),*]
         )
     }

@@ -2,7 +2,6 @@ mod borrow_check;
 mod subty_check;
 pub mod ty_ctx;
 
-use crate::ast::ty::*;
 use crate::ast::Ownership;
 use crate::ast::*;
 use crate::ty_check::subty_check::multiple_outlives;

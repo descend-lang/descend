@@ -1,5 +1,4 @@
 use super::ty_ctx::{PrvMapping, TyCtx};
-use crate::ast::ty::*;
 use crate::ast::*;
 use crate::ty_check::place_expr_ty_under_own;
 use std::collections::HashSet;

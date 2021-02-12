@@ -5,8 +5,7 @@ use super::ty_ctx::TyCtx;
 //
 
 use super::ErrMsg;
-use crate::ast::ty::*;
-use crate::ast::{Ident, PlaceExpr};
+use crate::ast::*;
 use std::collections::HashSet;
 
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′

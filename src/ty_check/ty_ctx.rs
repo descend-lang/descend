@@ -1,5 +1,4 @@
-use crate::ast::ty::{FrameTyping, IdentTyped, Loan, Nat, ScalarData, Ty};
-use crate::ast::{Ident, Path, Place, TypedPlace};
+use crate::ast::*;
 use std::collections::HashSet;
 
 #[derive(PartialEq, Eq, Debug, Clone)]

@@ -4,9 +4,8 @@
 
 extern crate descend;
 
-use descend::ast::ty::ExecLoc::CpuThread;
-use descend::ast::ty::Memory::{GpuGlobal, GpuShared};
-use descend::ast::ty::*;
+use descend::ast::ExecLoc::CpuThread;
+use descend::ast::Memory::{GpuGlobal, GpuShared};
 use descend::ast::Ownership::{Shrd, Uniq};
 use descend::ast::*;
 use descend::dsl::*;
@@ -632,11 +631,11 @@ fn function_decl_reference_params_example() {
 }
 
 mod copy_to_gpu {
-    use descend::ast::ty::Memory::GpuGlobal;
-    use descend::ast::ty::{
+    use descend::ast::Memory::GpuGlobal;
+    use descend::ast::*;
+    use descend::ast::{
         ExecLoc, FrameExpr, FrameTyping, IdentKinded, IdentTyped, Kind, KindCtx, Ty,
     };
-    use descend::ast::*;
     use descend::dsl::*;
 
     pub fn ty_ident() -> IdentKinded {
