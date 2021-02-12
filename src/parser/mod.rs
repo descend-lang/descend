@@ -7,7 +7,7 @@ use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, B
 use crate::dsl::fun_ty;
 
 peg::parser!{
-    pub(crate) grammar descent() for str {
+    pub(crate) grammar descend() for str {
 
         // TODO: PreDeclaredGlobalFun missing Syntax
         pub(crate) rule global_item() -> GlobalItem
@@ -340,19 +340,19 @@ mod tests {
 
     #[test]
     fn nat_literal() {
-        assert_eq!(descent::nat("0"), Ok(Nat::Lit(0)), "cannot parse 0");
-        assert_eq!(descent::nat("42"), Ok(Nat::Lit(42)), "cannot parse 42");
-        assert!(descent::nat("100000000000000000000").is_err(), "overflow not handled");
-        assert!(descent::nat("-1").is_err(), "negative numbers not handled");
-        assert!(descent::nat("3abc").is_err(), "garbage not handled");
-        assert!(descent::nat("").is_err(), "matches empty");
+        assert_eq!(descend::nat("0"), Ok(Nat::Lit(0)), "cannot parse 0");
+        assert_eq!(descend::nat("42"), Ok(Nat::Lit(42)), "cannot parse 42");
+        assert!(descend::nat("100000000000000000000").is_err(), "overflow not handled");
+        assert!(descend::nat("-1").is_err(), "negative numbers not handled");
+        assert!(descend::nat("3abc").is_err(), "garbage not handled");
+        assert!(descend::nat("").is_err(), "matches empty");
     }
 
     #[test]
     #[ignore = "Unimplemented"]
     fn nat_identifier() {
-        assert_eq!(descent::nat("N"), Ok(Nat::Ident(Ident::new("N"))), "cannot parse N");
-        assert_eq!(descent::nat("my_long_ident"), Ok(Nat::Ident(Ident::new("my_long_ident"))),
+        assert_eq!(descend::nat("N"), Ok(Nat::Ident(Ident::new("N"))), "cannot parse N");
+        assert_eq!(descend::nat("my_long_ident"), Ok(Nat::Ident(Ident::new("my_long_ident"))),
             "cannot parse long identifer");
     }
 
@@ -364,19 +364,19 @@ mod tests {
 
     #[test]
     fn ty_scalar() {
-        assert_eq!(descent::ty("f32"), Ok(Ty::Scalar(ScalarData::F32)), 
+        assert_eq!(descend::ty("f32"), Ok(Ty::Scalar(ScalarData::F32)), 
             "does not recognize f32 type");
-        assert_eq!(descent::ty("i32"), Ok(Ty::Scalar(ScalarData::I32)), 
+        assert_eq!(descend::ty("i32"), Ok(Ty::Scalar(ScalarData::I32)), 
             "does not recognize i32 type");
-        assert_eq!(descent::ty("()"), Ok(Ty::Scalar(ScalarData::Unit)), 
+        assert_eq!(descend::ty("()"), Ok(Ty::Scalar(ScalarData::Unit)), 
             "does not recognize unit type");
-        assert_eq!(descent::ty("bool"), Ok(Ty::Scalar(ScalarData::Bool)), 
+        assert_eq!(descend::ty("bool"), Ok(Ty::Scalar(ScalarData::Bool)), 
             "does not recognize Boolean type");
     }
 
     #[test]
     fn ty_gpu() {
-        assert_eq!(descent::ty("GPU"), Ok(Ty::GPU), 
+        assert_eq!(descend::ty("GPU"), Ok(Ty::GPU), 
             "does not recognize GPU type");
     }
 
@@ -385,27 +385,27 @@ mod tests {
         let ty_f32 = Ty::Scalar(ScalarData::F32);
         let ty_i32 = Ty::Scalar(ScalarData::I32);
         let ty_unit = Ty::Scalar(ScalarData::Unit);
-        assert_eq!(descent::ty("(f32)"), Ok(Ty::Tuple(vec![ty_f32])), 
+        assert_eq!(descend::ty("(f32)"), Ok(Ty::Tuple(vec![ty_f32])), 
             "does not recognize (f32) tuple type");
-        assert_eq!(descent::ty("(i32,i32)"), Ok(Ty::Tuple(vec![ty_i32.clone(), ty_i32])), 
+        assert_eq!(descend::ty("(i32,i32)"), Ok(Ty::Tuple(vec![ty_i32.clone(), ty_i32])), 
             "does not recognize (i32) tuple type");
-        assert_eq!(descent::ty("((),(),())"), Ok(Ty::Tuple(vec![
+        assert_eq!(descend::ty("((),(),())"), Ok(Ty::Tuple(vec![
             ty_unit.clone(), ty_unit.clone(), ty_unit.clone()])), 
             "does not recognize (unit,unit,unit) tuple type");
     }
 
     #[test]
     fn ty_array_view() {
-        assert_eq!(descent::ty("[f32;42]"), Ok(Ty::Array(Box::new(
+        assert_eq!(descend::ty("[f32;42]"), Ok(Ty::Array(Box::new(
             Ty::Scalar(ScalarData::F32)),
             Nat::Lit(42)
         )), "does not recognize [f32;42] type");
         // TODO: Implement identifer parsing in nat
-        // assert_eq!(descent::ty("[();N]"), Ok(Ty::Array(Box::new(
+        // assert_eq!(descend::ty("[();N]"), Ok(Ty::Array(Box::new(
         //     Ty::Scalar(ScalarData::Unit)),
         //     Nat::Ident(Nat::new_ident("N")))
         // ), "does not recognize [();N] type");
-        assert_eq!(descent::ty("[[i32;24]]"), Ok(Ty::ArrayView(Box::new(
+        assert_eq!(descend::ty("[[i32;24]]"), Ok(Ty::ArrayView(Box::new(
             Ty::Scalar(ScalarData::I32)),
             Nat::Lit(24)
         )), "does not recognize [[f32;24]] type");
@@ -413,19 +413,19 @@ mod tests {
 
     #[test]
     fn ty_identifier() {
-        assert_eq!(descent::ty("T"), Ok(Ty::Ident(Ident::new("T"))), 
+        assert_eq!(descend::ty("T"), Ok(Ty::Ident(Ident::new("T"))), 
             "does not recognize T type");
     }
 
     #[test]
     fn ty_reference() {
-        assert_eq!(descent::ty("&'a uniq cpu.heap i32"), Ok(Ty::Ref(
+        assert_eq!(descend::ty("&'a uniq cpu.heap i32"), Ok(Ty::Ref(
                 Provenance::Value("'a".into()),
                 Ownership::Uniq,
                 Memory::CpuHeap,
                 Box::new(Ty::Scalar(ScalarData::I32))
             )), "does not recognize type of unique i32 reference in cpu heap with provenance 'a");
-        assert_eq!(descent::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::Ref(
+        assert_eq!(descend::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::Ref(
                 Provenance::Ident(Ident::new("b")),
                 Ownership::Shrd,
                 Memory::GpuGlobal,
@@ -438,11 +438,11 @@ mod tests {
 
     #[test]
     fn ty_memory_kind() {
-        assert_eq!(descent::ty("i32 @ cpu.stack"), Ok(Ty::At(
+        assert_eq!(descend::ty("i32 @ cpu.stack"), Ok(Ty::At(
             Box::new(Ty::Scalar(ScalarData::I32)),
             Memory::CpuStack
         )), "does not recognize f32 @ cpu.stack type");
-        assert_eq!(descent::ty("[f32;42] @ gpu.global"), Ok(Ty::At(
+        assert_eq!(descend::ty("[f32;42] @ gpu.global"), Ok(Ty::At(
             Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarData::F32)), Nat::Lit(42))),
             Memory::GpuGlobal
         )), "does not recognize [f32;42] @ gpu.global type");
@@ -450,9 +450,9 @@ mod tests {
 
     #[test]
     fn ownership() {
-        assert_eq!(descent::ownership("shrd"), Ok(Ownership::Shrd), 
+        assert_eq!(descend::ownership("shrd"), Ok(Ownership::Shrd), 
             "does not recognize shrd ownership qualifier");
-        assert_eq!(descent::ownership("uniq"), Ok(Ownership::Uniq), 
+        assert_eq!(descend::ownership("uniq"), Ok(Ownership::Uniq), 
             "does not recognize uniq ownership qualifier");
     }
 
@@ -460,87 +460,87 @@ mod tests {
     #[ignore = "Mutability does not implement Eq"]
     fn mutability() {
         // TODO: Missing Eq implementation in AST
-        // assert_eq!(descent::mutability("const"), Ok(Mutability::Const), 
+        // assert_eq!(descend::mutability("const"), Ok(Mutability::Const), 
         //     "does not recognize const mutability qualifier");
-        // assert_eq!(descent::mutability("mut"), Ok(Mutability::Mut), 
+        // assert_eq!(descend::mutability("mut"), Ok(Mutability::Mut), 
         //     "does not recognize mut mutability qualifier");
     }
 
     #[test]
     fn memory_kind() {
-        assert_eq!(descent::memory_kind("cpu.stack"), Ok(Memory::CpuStack), 
+        assert_eq!(descend::memory_kind("cpu.stack"), Ok(Memory::CpuStack), 
             "does not recognize cpu.stack memory kind");
-        assert_eq!(descent::memory_kind("cpu.heap"), Ok(Memory::CpuHeap), 
+        assert_eq!(descend::memory_kind("cpu.heap"), Ok(Memory::CpuHeap), 
             "does not recognize cpu.heap memory kind");
-        assert_eq!(descent::memory_kind("gpu.global"), Ok(Memory::GpuGlobal), 
+        assert_eq!(descend::memory_kind("gpu.global"), Ok(Memory::GpuGlobal), 
             "does not recognize gpu.global memory kind");
-        assert_eq!(descent::memory_kind("gpu.shared"), Ok(Memory::GpuShared), 
+        assert_eq!(descend::memory_kind("gpu.shared"), Ok(Memory::GpuShared), 
             "does not recognize gpu.shared memory kind");
-        assert_eq!(descent::memory_kind("M"), Ok(Memory::Ident(Ident::new("M"))), 
+        assert_eq!(descend::memory_kind("M"), Ok(Memory::Ident(Ident::new("M"))), 
             "does not recognize M memory kind");
     }
 
     #[test]
     fn execution_location() {
-        assert_eq!(descent::execution_location("cpu.thread"), Ok(ExecLoc::CpuThread), 
+        assert_eq!(descend::execution_location("cpu.thread"), Ok(ExecLoc::CpuThread), 
             "does not recognize cpu.stack memory kind");
-        assert_eq!(descent::execution_location("gpu.group"), Ok(ExecLoc::GpuGroup), 
+        assert_eq!(descend::execution_location("gpu.group"), Ok(ExecLoc::GpuGroup), 
             "does not recognize cpu.heap memory kind");
-        assert_eq!(descent::execution_location("gpu.thread"), Ok(ExecLoc::GpuThread), 
+        assert_eq!(descend::execution_location("gpu.thread"), Ok(ExecLoc::GpuThread), 
             "does not recognize gpu.global memory kind");
     }
 
     #[test]
     fn literal() {
-        assert_eq!(descent::literal("true"), Ok(Lit::Bool(true)), "does not parse boolean correctly");
-        assert_eq!(descent::literal("False").is_err(), true, "wrongfully parses misspelled boolean");
-        assert_eq!(descent::literal("12345"), Ok(Lit::Int(12345)), "does not parse i32 correctly");
-        assert_eq!(descent::literal("789i32"), Ok(Lit::Int(789)), "does not parse i32 correctly");
-        assert_eq!(descent::literal("-1i32"), Ok(Lit::Int(-1)), "does not correctly parse 1e05i32 to i32");
-        assert_eq!(descent::literal("1f32"), Ok(Lit::Float(1.)), "does not correctly parse 1f32 to f32");
+        assert_eq!(descend::literal("true"), Ok(Lit::Bool(true)), "does not parse boolean correctly");
+        assert_eq!(descend::literal("False").is_err(), true, "wrongfully parses misspelled boolean");
+        assert_eq!(descend::literal("12345"), Ok(Lit::Int(12345)), "does not parse i32 correctly");
+        assert_eq!(descend::literal("789i32"), Ok(Lit::Int(789)), "does not parse i32 correctly");
+        assert_eq!(descend::literal("-1i32"), Ok(Lit::Int(-1)), "does not correctly parse 1e05i32 to i32");
+        assert_eq!(descend::literal("1f32"), Ok(Lit::Float(1.)), "does not correctly parse 1f32 to f32");
         // TODO: Do proper float comparison (test error against threshold)
-        assert_eq!(descent::literal("1.0"), Ok(Lit::Float(1.0)), "does not parse f32 correctly");
-        assert_eq!(descent::literal("2.0f32"), Ok(Lit::Float(2.0)), "does not parse f32 correctly");
-        assert_eq!(descent::literal("777.7e0f32"), Ok(Lit::Float(777.7)), "does not parse f32 correctly");
-        assert_eq!(descent::literal("777.7e01f32"), Ok(Lit::Float(7777.0)), "does not parse f32 correctly");
-        assert_eq!(descent::literal("1.0e2"), Ok(Lit::Float(100.0)), "does not parse f32 in scientific notation correctly");
-        assert_eq!(descent::literal("1.0e-2"), Ok(Lit::Float(0.01)), "does not parse f32 in scientific notation correctly");
-        assert_eq!(descent::literal("3.7f32"), Ok(Lit::Float(3.7)), "does not parse f32 correctly");
-        assert_eq!(descent::literal("3.75e3"), Ok(Lit::Float(3750.0)), "does not parse scientific notation f32 correctly");
-        assert_eq!(descent::literal("-1234.5e-0005"), Ok(Lit::Float(-0.012345)), "does not parse negative scientific notation f32 correctly");
-        assert_eq!(descent::literal("3.14159265358979323846264338327950288"), // std::f64::consts::PI
+        assert_eq!(descend::literal("1.0"), Ok(Lit::Float(1.0)), "does not parse f32 correctly");
+        assert_eq!(descend::literal("2.0f32"), Ok(Lit::Float(2.0)), "does not parse f32 correctly");
+        assert_eq!(descend::literal("777.7e0f32"), Ok(Lit::Float(777.7)), "does not parse f32 correctly");
+        assert_eq!(descend::literal("777.7e01f32"), Ok(Lit::Float(7777.0)), "does not parse f32 correctly");
+        assert_eq!(descend::literal("1.0e2"), Ok(Lit::Float(100.0)), "does not parse f32 in scientific notation correctly");
+        assert_eq!(descend::literal("1.0e-2"), Ok(Lit::Float(0.01)), "does not parse f32 in scientific notation correctly");
+        assert_eq!(descend::literal("3.7f32"), Ok(Lit::Float(3.7)), "does not parse f32 correctly");
+        assert_eq!(descend::literal("3.75e3"), Ok(Lit::Float(3750.0)), "does not parse scientific notation f32 correctly");
+        assert_eq!(descend::literal("-1234.5e-0005"), Ok(Lit::Float(-0.012345)), "does not parse negative scientific notation f32 correctly");
+        assert_eq!(descend::literal("3.14159265358979323846264338327950288"), // std::f64::consts::PI
                                     Ok(Lit::Float(3.1415927)), "not parsing f32 float as expected");
-        assert_eq!(descent::literal("12345ad").is_err(), true, "incorrectly parsing invalid literal");
-        assert_eq!(descent::literal("e54").is_err(), true, "incorrectly parsing e-notation only to literal");
-        assert_eq!(descent::literal("-i32").is_err(), true, "incorrectly parsing 'negative data type' to literal");
+        assert_eq!(descend::literal("12345ad").is_err(), true, "incorrectly parsing invalid literal");
+        assert_eq!(descend::literal("e54").is_err(), true, "incorrectly parsing e-notation only to literal");
+        assert_eq!(descend::literal("-i32").is_err(), true, "incorrectly parsing 'negative data type' to literal");
     }
 
     #[test]
     fn kind() {
-        assert_eq!(descent::kind("nat"), Ok(Kind::Nat), 
+        assert_eq!(descend::kind("nat"), Ok(Kind::Nat), 
             "does not recognize nat kind");
-        assert_eq!(descent::kind("mem"), Ok(Kind::Memory), 
+        assert_eq!(descend::kind("mem"), Ok(Kind::Memory), 
             "does not recognize mem kind");
-        assert_eq!(descent::kind("ty"), Ok(Kind::Ty), 
+        assert_eq!(descend::kind("ty"), Ok(Kind::Ty), 
             "does not recognize ty kind");
-        assert_eq!(descent::kind("prv"), Ok(Kind::Provenance), 
+        assert_eq!(descend::kind("prv"), Ok(Kind::Provenance), 
             "does not recognize prv kind");
-        assert_eq!(descent::kind("frm"), Ok(Kind::Frame), 
+        assert_eq!(descend::kind("frm"), Ok(Kind::Frame), 
             "does not recognize frm kind");
     }
 
     #[test]
     fn place_expression() {
-        assert_eq!(descent::place_expression("*x"), Ok(
+        assert_eq!(descend::place_expression("*x"), Ok(
             PlaceExpr::Deref(Box::new(
                 PlaceExpr::Var(Ident::new("x"))
             ))), "does not recognize place expression *x");
-        assert_eq!(descent::place_expression("x.0"), Ok(
+        assert_eq!(descend::place_expression("x.0"), Ok(
             PlaceExpr::Proj(
                 Box::new(PlaceExpr::Var(Ident::new("x"))),
                 Nat::Lit(0)
             )), "does not recognize place expression *x");
-        assert_eq!(descent::place_expression("*x.0"), Ok(
+        assert_eq!(descend::place_expression("*x.0"), Ok(
             PlaceExpr::Deref(Box::new(
                 PlaceExpr::Proj(
                     Box::new(PlaceExpr::Var(Ident::new("x"))),
@@ -550,7 +550,7 @@ mod tests {
     
     #[test]
     fn expression_literal() {
-        assert_eq!(descent::expression("7"), Ok(Expr{
+        assert_eq!(descend::expression("7"), Ok(Expr{
             expr: ExprKind::Lit(Lit::Int(7)),
             ty: Some(Ty::Scalar(ScalarData::I32))
         }));
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn expression_addition() {
-        assert_eq!(descent::expression("7+8"), Ok(Expr{
+        assert_eq!(descend::expression("7+8"), Ok(Expr{
             expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
                     expr: ExprKind::Lit(Lit::Int(7)),
                     ty: Some(Ty::Scalar(ScalarData::I32))
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn expression_parenthesis() {
-        assert_eq!(descent::expression_seq("(5+6) * 7"), Ok(Expr{
+        assert_eq!(descend::expression_seq("(5+6) * 7"), Ok(Expr{
             expr: ExprKind::Binary(BinOp::Mul, Box::new(Expr{
                     expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
                             expr: ExprKind::Lit(Lit::Int(5)),
@@ -592,19 +592,19 @@ mod tests {
 
     #[test]
     fn expression_place_expr() {
-        assert_eq!(descent::expression_seq("someIdentifier"), Ok(Expr{
+        assert_eq!(descend::expression_seq("someIdentifier"), Ok(Expr{
                 expr: ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new("someIdentifier"))),
                 ty: None
         }));
-        assert_eq!(descent::expression_seq("*x"), Ok(Expr{
+        assert_eq!(descend::expression_seq("*x"), Ok(Expr{
             expr: ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(PlaceExpr::Var(Ident::new("x"))))),
             ty: None
         }));
-        assert_eq!(descent::expression_seq("**x.7"), Ok(Expr{
+        assert_eq!(descend::expression_seq("**x.7"), Ok(Expr{
             expr: ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(Box::new(PlaceExpr::Var(Ident::new("x"))), Nat::Lit(7))))))),
             ty: None
         }));
-        assert_eq!(descent::expression_seq("x.2.3"), Ok(Expr{
+        assert_eq!(descend::expression_seq("x.2.3"), Ok(Expr{
             expr: ExprKind::PlaceExpr(PlaceExpr::Proj(Box::new(PlaceExpr::Proj(Box::new(PlaceExpr::Var(Ident::new("x"))), Nat::Lit(2))), Nat::Lit(3))),
             ty: None
         }));
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn expression_indexing() {
-        assert_eq!(descent::expression_seq("place_expression[12]"), Ok(Expr{
+        assert_eq!(descend::expression_seq("place_expression[12]"), Ok(Expr{
             expr: ExprKind::Index(PlaceExpr::Var(Ident::new("place_expression")), Nat::Lit(12)),
             ty: None
         }));
@@ -620,14 +620,14 @@ mod tests {
 
     #[test]
     fn expression_assignment() {
-        assert_eq!(descent::expression_seq("var_token = 7.3e2"), Ok(Expr{
+        assert_eq!(descend::expression_seq("var_token = 7.3e2"), Ok(Expr{
             expr: ExprKind::Assign(PlaceExpr::Var(Ident::new("var_token")), Box::new(Expr{
                 expr: ExprKind::Lit(Lit::Float(730.0)),
                 ty: Some(Ty::Scalar(ScalarData::F32))
             })),
             ty:None
         }));
-        assert_eq!(descent::expression_seq("*var_token = 3 + 4"), Ok(Expr{
+        assert_eq!(descend::expression_seq("*var_token = 3 + 4"), Ok(Expr{
             expr: ExprKind::Assign(PlaceExpr::Deref(Box::new(PlaceExpr::Var(Ident::new("var_token")))), Box::new(Expr{
                 expr: ExprKind::Binary(BinOp::Add, Box::new(Expr{
                     expr: ExprKind::Lit(Lit::Int(3)),
@@ -644,19 +644,19 @@ mod tests {
 
     #[test]
     fn expression_references() {
-        assert_eq!(descent::expression_seq("&'prov uniq variable"), Ok(Expr{
+        assert_eq!(descend::expression_seq("&'prov uniq variable"), Ok(Expr{
             expr: ExprKind::Ref(Provenance::Value(String::from("'prov")), Ownership::Uniq, PlaceExpr::Var(Ident::new("variable"))),
             ty: None
         }));
-        assert_eq!(descent::expression_seq("&prov_var shrd variable"), Ok(Expr{
+        assert_eq!(descend::expression_seq("&prov_var shrd variable"), Ok(Expr{
             expr: ExprKind::Ref(Provenance::Ident(Ident::new("prov_var")), Ownership::Shrd, PlaceExpr::Var(Ident::new("variable"))),
             ty: None
         }));
-        assert_eq!(descent::expression_seq("&'prov uniq var[7]"), Ok(Expr{
+        assert_eq!(descend::expression_seq("&'prov uniq var[7]"), Ok(Expr{
             expr: ExprKind::BorrowIndex(Provenance::Value(String::from("'prov")), Ownership::Uniq, PlaceExpr::Var(Ident::new("var")), Nat::Lit(7)),
             ty: None
         }));
-        assert_eq!(descent::expression_seq("&'prov uniq var[token]"), Ok(Expr{
+        assert_eq!(descend::expression_seq("&'prov uniq var[token]"), Ok(Expr{
             expr: ExprKind::BorrowIndex(Provenance::Value(String::from("'prov")), Ownership::Uniq, PlaceExpr::Var(Ident::new("var")), Nat::Ident(Ident::new("token"))),
             ty: None
         }));
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn expression_array() {
-        assert_eq!(descent::expression_seq("[12, x[3], true]"), Ok(Expr{
+        assert_eq!(descend::expression_seq("[12, x[3], true]"), Ok(Expr{
             expr: ExprKind::Array(vec![Expr{
                 expr: ExprKind::Lit(Lit::Int(12)),
                 ty: Some(Ty::Scalar(ScalarData::I32))
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn expression_tupel() {
-        assert_eq!(descent::expression_seq("(12, x[3], true)"), Ok(Expr{
+        assert_eq!(descend::expression_seq("(12, x[3], true)"), Ok(Expr{
             expr: ExprKind::Tuple(vec![Expr{
                 expr: ExprKind::Lit(Lit::Int(12)),
                 ty: Some(Ty::Scalar(ScalarData::I32))
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn expression_if_else() {
-        assert_eq!(descent::expression_seq("if 7<8 {7+8} else {7*8}"), Ok(Expr{
+        assert_eq!(descend::expression_seq("if 7<8 {7+8} else {7*8}"), Ok(Expr{
             expr: ExprKind::IfElse(
                 Box::new(Expr{
                     expr: ExprKind::Binary(BinOp::Lt, Box::new(Expr{
@@ -737,7 +737,7 @@ mod tests {
     #[test]
     fn expression_for_loop() {
         let x = Ident::new("x");
-        assert_eq!(descent::expression_seq("for x in [1,2,3] {x = x+1}"), Ok(Expr{
+        assert_eq!(descend::expression_seq("for x in [1,2,3] {x = x+1}"), Ok(Expr{
             expr: ExprKind::For(x.clone(), Box::new(Expr{
                 expr: ExprKind::Array(vec![Expr{
                     expr: ExprKind::Lit(Lit::Int(1)),
@@ -770,7 +770,7 @@ mod tests {
     #[test]
     fn expression_sync_threads() {
         let elems = Ident::new("elems");
-        assert_eq!(descent::expression_seq("sync_threads[gpu; 1024] for elems in elems_grouped {*elems.0 = *elems.0 + *elems.1;}"), Ok(Expr{
+        assert_eq!(descend::expression_seq("sync_threads[gpu; 1024] for elems in elems_grouped {*elems.0 = *elems.0 + *elems.1;}"), Ok(Expr{
             expr: ExprKind::ParForGlobalSync(Box::new(Expr{
                 expr: ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new("gpu"))),
                 ty: None
@@ -796,7 +796,7 @@ mod tests {
 
     #[test]
     fn expression_let() {
-        assert_eq!(descent::expression_seq("let mut x : f32 = 17.123f32; true"), Ok(Expr{
+        assert_eq!(descend::expression_seq("let mut x : f32 = 17.123f32; true"), Ok(Expr{
             expr: ExprKind::Let(Mutability::Mut, Ident::new("x"), Ty::Scalar(ScalarData::F32), Box::new(Expr{
                 expr: ExprKind::Lit(Lit::Float(17.123)),
                 ty: Some(Ty::Scalar(ScalarData::F32))
@@ -809,9 +809,27 @@ mod tests {
     }
 
     #[test]
+    fn expressions_expect_matched_parentheses() {
+        let result = descend::expression("(1+2");
+        assert!(result.is_err());
+
+        let result = descend::expression("(1+2))");
+        assert!(result.is_err());
+
+        let result = descend::expression("((1+2)");
+        assert!(result.is_err());
+
+        let result = descend::expression("1+2)");
+        assert!(result.is_err());
+
+        let result = descend::expression("(1+2)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn expression_parenthesis_overriding_precedence() {
         // "natural" operator precendence without parenthesis
-        assert_eq!(descent::expression("-1 + 2 * 3 + 4 + 5 * 6 * 7"), Ok(Expr{
+        assert_eq!(descend::expression("-1 + 2 * 3 + 4 + 5 * 6 * 7"), Ok(Expr{
             expr: ExprKind::Binary(BinOp::Add,
                 Box::new(Expr{
                     expr: ExprKind::Binary(BinOp::Add,
@@ -869,7 +887,7 @@ mod tests {
         }));
 
         // precedences overridden via parentheses
-        assert_eq!(descent::expression("-(1 + 2) * ((3 + (4 + 5) * 6) * 7)"), Ok(Expr{
+        assert_eq!(descend::expression("-(1 + 2) * ((3 + (4 + 5) * 6) * 7)"), Ok(Expr{
             expr: ExprKind::Binary(BinOp::Mul, 
                 Box::new(Expr{
                     expr: ExprKind::Unary(UnOp::Neg, 
@@ -948,7 +966,7 @@ mod tests {
             copy_to_host<n, g, 'a, i32>(&g shrd a_array, ha_array);
         }
     }"#;
-    let result = descent::global_item(src);
+    let result = descend::global_item(src);
     match &result {
         Err(e) => println!("{}", e),
         _ => {}
@@ -1011,7 +1029,7 @@ mod tests {
         ret_ty,
         exec,
         prv_rels,
-        body_expr: descent::expression_seq(&expr_seq).unwrap(),
+        body_expr: descend::expression_seq(&expr_seq).unwrap(),
         fun_ty: f_ty
       }));
     assert!(result.is_ok());
@@ -1032,7 +1050,7 @@ mod tests {
         let body = r#"let answer_to_everything :i32 = 42;
             answer_to_everything"#;
 
-        let result = descent::global_item(src);
+        let result = descend::global_item(src);
 
         // TODO: Do proper check against expected AST
         let name = "test_kinds".into();
@@ -1072,7 +1090,7 @@ mod tests {
             ret_ty,
             exec,
             prv_rels,
-            body_expr: descent::expression_seq(body).unwrap(),
+            body_expr: descend::expression_seq(body).unwrap(),
             fun_ty: f_ty
         }));
 
@@ -1097,8 +1115,8 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let result_1 = descent::global_item(src_1);
-        let result_2 = descent::global_item(src_2);
+        let result_1 = descend::global_item(src_1);
+        let result_2 = descend::global_item(src_2);
 
         assert!(result_1.is_ok());
         assert!(result_2.is_ok());
@@ -1115,7 +1133,7 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let result = descent::global_item(src);
+        let result = descend::global_item(src);
 
         assert!(result.is_err());
     }
@@ -1127,7 +1145,7 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let result = descent::global_item(src);
+        let result = descend::global_item(src);
         assert!(result.is_ok());
     }
 
@@ -1180,7 +1198,7 @@ mod tests {
             acc // return result from function
         }
     }"#;
-    let result = descent::global_item(src);
+    let result = descend::global_item(src);
     // TODO: Do proper check against expected AST
     assert!(result.is_err()); // Currently not parsed properly due to Nat binOp Terms (i.e. 64*1024, n/1024 as Nat values)
     }
