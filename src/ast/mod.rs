@@ -23,7 +23,7 @@ impl Expr {
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", format!("{}", self.expr))
+        write!(f, "{}", self.expr)
     }
 }
 
@@ -153,12 +153,11 @@ impl PlaceExpr {
 
 impl fmt::Display for PlaceExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Proj(pl_expr, n) => format!("{}.{}", pl_expr, n),
-            Self::Deref(pl_expr) => format!("{}", pl_expr),
-            Self::Var(ident) => format!("{}", ident),
-        };
-        write!(f, "{}", str)
+        match self {
+            Self::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
+            Self::Deref(pl_expr) => write!(f, "*{}", pl_expr),
+            Self::Var(ident) => write!(f, "{}", ident),
+        }
     }
 }
 
@@ -197,6 +196,7 @@ pub enum ExprKind {
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<Expr>),
     DepApp(Box<Expr>, KindedArg),
+    // TODO If
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),
@@ -214,30 +214,29 @@ pub enum ExprKind {
 
 impl fmt::Display for ExprKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Lit(l) => format!("{}", l),
-            Self::PlaceExpr(pl_expr) => format!("{}", pl_expr),
-            Self::Index(pl_expr, n) => format!("{}[{}]", pl_expr, n),
+        match self {
+            Self::Lit(l) => write!(f, "{}", l),
+            Self::PlaceExpr(pl_expr) => write!(f, "{}", pl_expr),
+            Self::Index(pl_expr, n) => write!(f, "{}[{}]", pl_expr, n),
             // TODO display kind
-            Self::Ref(prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
+            Self::Ref(prv, own, pl_expr) => write!(f, "&{} {} {}", prv, own, pl_expr),
             Self::BorrowIndex(prv, own, pl_expr, n) => {
-                format!("&{} {} {}[{}]", prv, own, pl_expr, n)
+                write!(f, "&{} {} {}[{}]", prv, own, pl_expr, n)
             }
-            Self::Assign(pl_expr, e) => format!("{} = {}", pl_expr, e),
+            Self::Assign(pl_expr, e) => write!(f, "{} = {}", pl_expr, e),
             Self::Let(mutab, ident, ty, e1, e2) => {
-                format!("let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
+                write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
             }
-            Self::Seq(e1, e2) => format!("{}; {}", e1, e2),
+            Self::Seq(e1, e2) => write!(f, "{}; {}", e1, e2),
             /*            Self::Lambda(params, exec, ty, e) => {
-                format!("|{}| [{}]-> {} {{ {} }}", params, exec, ty, e)
+                write!(f, "|{}| [{}]-> {} {{ {} }}", params, exec, ty, e)
             }
             Self::DepLambda(ty_ident, exec, e) => {
-                format!("<{}> [{}]-> {{ {} }}", ty_ident, exec, e)
+                write!(f, "<{}> [{}]-> {{ {} }}", ty_ident, exec, e)
             }
-            Self::App(f, arg) => format!("{}({})", f, arg),*/
+            Self::App(f, arg) => write!(f, "{}({})", f, arg),*/
             _ => panic!("not yet implemented"),
-        };
-        write!(f, "{}", str)
+        }
     }
 }
 
@@ -270,13 +269,12 @@ pub enum Lit {
 
 impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Unit => String::from("()"),
-            Self::Bool(b) => format!("{}", b),
-            Self::Int(i) => format!("{}", i),
-            Self::Float(f) => format!("{}", f),
-        };
-        write!(f, "{}", str)
+        match self {
+            Self::Unit => write!(f, "()"),
+            Self::Bool(b) => write!(f, "{}", b),
+            Self::Int(i) => write!(f, "{}", i),
+            Self::Float(fl) => write!(f, "{}", fl),
+        }
     }
 }
 
@@ -449,11 +447,10 @@ pub enum Provenance {
 
 impl fmt::Display for Provenance {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Value(name) => name.clone(),
-            Self::Ident(ty_ident) => format!("{}", ty_ident),
-        };
-        write!(f, "{}", str)
+        match self {
+            Self::Value(name) => write!(f, "{}", name),
+            Self::Ident(ty_ident) => write!(f, "{}", ty_ident),
+        }
     }
 }
 
@@ -819,12 +816,11 @@ impl Nat {
 
 impl fmt::Display for Nat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Ident(ident) => format!("{}", ident),
-            Self::Lit(n) => format!("{}", n),
-            //Self::Binary(ident) => format!("{}", ident),
-        };
-        write!(f, "{}", str)
+        match self {
+            Self::Ident(ident) => write!(f, "{}", ident),
+            Self::Lit(n) => write!(f, "{}", n),
+            //Self::Binary(ident) => write!(f, "{}", ident),
+        }
     }
 }
 
