@@ -92,7 +92,6 @@ impl PlaceCtx {
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, Nat),
     Deref(Box<PlaceExpr>),
-    //ParIndex(PlaceExpr, ParIndex),
     Var(Ident),
 }
 
@@ -169,6 +168,11 @@ pub enum ParIndex {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
+    // TODO remove GlobalFunIdent
+    //  instead? Maybe differentiate between FunctionCall where function is Ident
+    //  and Function call where function is expression (so must be lambda)
+    //  This is currently wrong, because an global fun ident is not an Expr (has no value).
+    //  Or we say it has the value of a function pointer type (like C or Rust) which may be better.
     GlobalFunIdent(String),
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
@@ -194,6 +198,7 @@ pub enum ExprKind {
     DepLambda(IdentKinded, ExecLoc, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
+    // Todo make this the only apply and use template params
     App(Box<Expr>, Vec<Expr>),
     DepApp(Box<Expr>, KindedArg),
     // TODO If
@@ -206,8 +211,9 @@ pub enum ExprKind {
     For(Ident, Box<Expr>, Box<Expr>),
     // TODO for-each is probably not a good term, at least if we stick to the notion that amount of
     //  elements and amount of threads need to be equal.
-    // Parallel for-each (global) thread with input, syncing at the end.
-    ParForGlobalSync(Box<Expr>, Nat, Ident, Box<Expr>, Box<Expr>),
+    // Parallel for (global) thread with input, syncing at the end.
+    // for x in view-expr across parallelism-config-expr { body }
+    ParForSync(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Unary(UnOp, Box<Expr>),
 }
@@ -259,12 +265,12 @@ impl fmt::Display for Ident {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum Lit {
     Unit,
     Bool(bool),
-    Int(i32),
-    Float(f32),
+    I32(i32),
+    F32(f32),
 }
 
 impl fmt::Display for Lit {
@@ -272,8 +278,8 @@ impl fmt::Display for Lit {
         match self {
             Self::Unit => write!(f, "()"),
             Self::Bool(b) => write!(f, "{}", b),
-            Self::Int(i) => write!(f, "{}", i),
-            Self::Float(fl) => write!(f, "{}", fl),
+            Self::I32(i) => write!(f, "{}", i),
+            Self::F32(fl) => write!(f, "{}", fl),
         }
     }
 }

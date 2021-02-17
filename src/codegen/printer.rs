@@ -1,8 +1,14 @@
 use super::cu_ast::{
     BinOp, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
+use crate::codegen::cu_ast::Lit;
 use std::fmt::Formatter;
 use std::fmt::Write;
+
+// function cuda_fmt takes Formatter and recursively formats
+// trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
+// implement Display for CuAst by calling cuda_fmt in fmt passing the formatter and completely handing
+// over the computation
 
 pub(super) fn print(program: &[Item]) -> String {
     let mut code = String::new();
@@ -32,10 +38,15 @@ impl std::fmt::Display for Item {
                     fmt_vec(f, templ_params, ", ")?;
                     writeln!(f, ">")?;
                 }
-                writeln!(f, "auto {}(", name)?;
+                writeln!(
+                    f,
+                    "{} auto {}(",
+                    if *is_dev_fun { "__device__" } else { "" },
+                    name
+                )?;
                 fmt_vec(f, params, ",\n")?;
                 writeln!(f, "\n) -> {} {{", ret_ty)?;
-                fmt_vec(f, body, "\n")?;
+                write!(f, "{}", body)?;
                 writeln!(f, "\n}}")
             }
         }
@@ -64,6 +75,7 @@ impl std::fmt::Display for Stmt {
                 writeln!(f)?;
                 writeln!(f, "}}")
             }
+            Seq(stmts) => fmt_vec(f, stmts, ";\n"),
             Expr(expr) => write!(f, "{};", expr),
             If { cond, body } => {
                 writeln!(f, "if ({})", cond)?;
@@ -99,9 +111,12 @@ impl std::fmt::Display for Expr {
         use Expr::*;
         match self {
             Ident(name) => write!(f, "{}", name),
-            Literal => unimplemented!(),
-            Assign { l_val, r_val } => write!(f, "{} = {}", l_val, r_val),
-            DeviceLambda { params, body } => {
+            Lit(l) => write!(f, "{}", l),
+            Assign {
+                lhs: l_val,
+                rhs: r_val,
+            } => write!(f, "{} = {}", l_val, r_val),
+            Lambda { params, body } => {
                 writeln!(f, "[] __device__ (")?;
                 fmt_vec(f, &params, ",\n")?;
                 writeln!(f, ") {{")?;
@@ -126,6 +141,20 @@ impl std::fmt::Display for Expr {
             UnOp { op, arg } => write!(f, "{}{}", op, arg),
             BinOp { op, lhs, rhs } => write!(f, "{} {} {}", lhs, op, rhs),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
+            Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
+            Ref(expr) => write!(f, "&{}", expr),
+            Deref(expr) => write!(f, "*{}", expr),
+        }
+    }
+}
+
+impl std::fmt::Display for Lit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Lit::Void => write!(f, "void"),
+            Lit::Bool(b) => write!(f, "{}", b),
+            Lit::I32(i) => write!(f, "{}", i),
+            Lit::F32(fl) => write!(f, "{}", fl),
         }
     }
 }
@@ -244,11 +273,11 @@ fn test_print_program() -> std::fmt::Result {
                 },
             ],
             ret_ty: Scalar(ScalarTy::Void),
-            body: vec![Stmt::VarDecl {
+            body: Stmt::Seq(vec![Stmt::VarDecl {
                 name: "a_f".to_string(),
                 ty: None,
                 expr: Some(Expr::Ident("a".to_string())),
-            }],
+            }]),
             is_dev_fun: true,
         },
     ];

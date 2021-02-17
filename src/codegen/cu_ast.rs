@@ -1,3 +1,5 @@
+use crate::ast::Nat;
+
 pub(super) type CuProgram = Vec<Item>;
 
 // TODO big difference in sizes beteween variants
@@ -8,7 +10,7 @@ pub(super) enum Item {
         templ_params: Vec<TemplParam>,
         params: Vec<ParamDecl>,
         ret_ty: Ty,
-        body: Vec<Stmt>,
+        body: Stmt,
         is_dev_fun: bool,
     },
 }
@@ -16,10 +18,11 @@ pub(super) enum Item {
 pub(super) enum Stmt {
     VarDecl {
         name: String,
-        ty: Option<Ty>,
+        ty: Ty,
         expr: Option<Expr>,
     },
-    Block(Vec<Stmt>),
+    Block(Stmt),
+    Seq(Box<Stmt>, Box<Stmt>),
     Expr(Expr),
     If {
         cond: Expr,
@@ -46,14 +49,15 @@ pub(super) struct ParamDecl {
 
 pub(super) enum Expr {
     Ident(String),
-    Literal, // TODO
+    Lit(Lit),
     Assign {
-        l_val: Box<Expr>,
-        r_val: Box<Expr>,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
     },
-    DeviceLambda {
+    Lambda {
         params: Vec<ParamDecl>,
-        body: Vec<Stmt>,
+        body: Stmt,
+        is_dev_fun: bool,
     },
     FunCall {
         fun: Box<Expr>,
@@ -71,8 +75,23 @@ pub(super) enum Expr {
     },
     ArraySubscript {
         array: Box<Expr>,
-        index: Box<Expr>,
+        index: Nat,
     },
+    Proj {
+        tuple: Box<Expr>,
+        n: Nat,
+    },
+    Ref(Box<Expr>),
+    Deref(Box<Expr>),
+    Tuple(Vec<Expr>),
+    Nat(Nat),
+}
+
+pub(super) enum Lit {
+    Void,
+    Bool(bool),
+    I32(i32),
+    F32(f32),
 }
 
 pub(super) enum UnOp {
@@ -83,6 +102,7 @@ pub(super) enum UnOp {
 pub(super) enum BinOp {
     Add,
     Mult,
+    Lt,
 }
 
 pub(super) enum TemplParam {

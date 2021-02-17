@@ -313,13 +313,13 @@ pub trait DescendLiteral {
 
 impl DescendLiteral for i32 {
     fn as_lit(&self) -> ExprKind {
-        ExprKind::Lit(Lit::Int(*self))
+        ExprKind::Lit(Lit::I32(*self))
     }
 }
 
 impl DescendLiteral for f32 {
     fn as_lit(&self) -> ExprKind {
-        ExprKind::Lit(Lit::Float(*self))
+        ExprKind::Lit(Lit::F32(*self))
     }
 }
 

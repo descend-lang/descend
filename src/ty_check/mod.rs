@@ -10,12 +10,11 @@ use std::ops::Deref;
 use subty_check::subty_check;
 use ty_ctx::TyCtx;
 
+type ErrMsg = String;
+
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------
 //      ⊢ Σ
-
-type ErrMsg = String;
-
 pub fn ty_check(gl_ctx: &mut GlobalCtx) -> Result<(), ErrMsg> {
     let gl_ctx_copy_for_fun_defs = gl_ctx.clone();
     let errs = gl_ctx
@@ -368,8 +367,8 @@ fn ty_check_literal(ty_ctx: TyCtx, l: &mut Lit) -> (TyCtx, Ty) {
     let scalar_data = match l {
         Lit::Unit => ScalarData::Unit,
         Lit::Bool(_) => ScalarData::Bool,
-        Lit::Int(_) => ScalarData::I32,
-        Lit::Float(_) => ScalarData::F32,
+        Lit::I32(_) => ScalarData::I32,
+        Lit::F32(_) => ScalarData::F32,
     };
     (ty_ctx, Ty::Scalar(scalar_data))
 }
