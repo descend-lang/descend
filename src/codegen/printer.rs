@@ -177,7 +177,7 @@ impl std::fmt::Display for TemplateArg {
 impl std::fmt::Display for TemplParam {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TemplParam::NonType { param_name, ty } => write!(f, "{} {}", ty, param_name),
+            TemplParam::Value { param_name, ty } => write!(f, "{} {}", ty, param_name),
             TemplParam::Ty(ty_name) => write!(f, "typename {}", ty_name),
         }
     }
@@ -206,10 +206,10 @@ impl std::fmt::Display for Ty {
         use Ty::*;
         match self {
             Ptr(ty) => write!(f, "{} *", ty),
-            ConstPtr(ty) => write!(f, "const {} *", ty),
+            PtrConst(ty) => write!(f, "const {} *", ty),
             Const(ty) => match ty.as_ref() {
                 Ptr(_) => write!(f, "{} const", ty),
-                ConstPtr(_) => write!(f, "{} const", ty),
+                PtrConst(_) => write!(f, "{} const", ty),
                 _ => write!(f, "const {}", ty),
             },
             Array(ty, size) => write!(f, "descend::array<{}, {}>", ty, size),
@@ -258,14 +258,14 @@ fn test_print_program() -> std::fmt::Result {
         Item::Include("descend.cuh".to_string()),
         Item::FunDef {
             name: "test_fun".to_string(),
-            templ_params: vec![TemplParam::NonType {
+            templ_params: vec![TemplParam::Value {
                 param_name: "n".to_string(),
                 ty: Scalar(ScalarTy::SizeT),
             }],
             params: vec![
                 ParamDecl {
                     name: "a".to_string(),
-                    ty: Const(Box::new(ConstPtr(Box::new(Scalar(ScalarTy::I32))))),
+                    ty: Const(Box::new(PtrConst(Box::new(Scalar(ScalarTy::I32))))),
                 },
                 ParamDecl {
                     name: "b".to_string(),

@@ -1,4 +1,4 @@
-use super::ty_ctx::TyCtx;
+use super::ctxs::{KindCtx, TyCtx};
 
 //
 // Subtyping and Provenance Subtyping from Oxide

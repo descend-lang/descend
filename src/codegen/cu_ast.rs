@@ -15,13 +15,18 @@ pub(super) enum Item {
     },
 }
 
+pub(super) struct ParamDecl {
+    pub(super) name: String,
+    pub(super) ty: Ty,
+}
+
 pub(super) enum Stmt {
     VarDecl {
         name: String,
         ty: Ty,
         expr: Option<Expr>,
     },
-    Block(Stmt),
+    Block(Box<Stmt>),
     Seq(Box<Stmt>, Box<Stmt>),
     Expr(Expr),
     If {
@@ -42,11 +47,6 @@ pub(super) enum Stmt {
     Return(Option<Expr>),
 }
 
-pub(super) struct ParamDecl {
-    pub(super) name: String,
-    pub(super) ty: Ty,
-}
-
 pub(super) enum Expr {
     Ident(String),
     Lit(Lit),
@@ -57,6 +57,7 @@ pub(super) enum Expr {
     Lambda {
         params: Vec<ParamDecl>,
         body: Stmt,
+        ret_ty: Ty,
         is_dev_fun: bool,
     },
     FunCall {
@@ -84,6 +85,8 @@ pub(super) enum Expr {
     Ref(Box<Expr>),
     Deref(Box<Expr>),
     Tuple(Vec<Expr>),
+    // The current plan for Nats is to simply print them with C syntax.
+    // Instead generate a C/Cuda expression?
     Nat(Nat),
 }
 
@@ -106,8 +109,8 @@ pub(super) enum BinOp {
 }
 
 pub(super) enum TemplParam {
-    NonType { param_name: String, ty: Ty },
-    Ty(Ty),
+    Value { param_name: String, ty: Ty },
+    TyName { name: String },
 }
 
 pub(super) enum TemplateArg {
@@ -116,11 +119,15 @@ pub(super) enum TemplateArg {
 }
 
 pub(super) enum Ty {
+    Scalar(ScalarTy),
+    Tuple(Vec<Ty>),
+    Array(Box<Ty>, Nat),
+    Buffer(Box<Ty>, BufferKind),
     // for now assume every pointer to be __restrict__ qualified
     // http://www.open-std.org/JTC1/SC22/WG14/www/docs/n1256.pdf#page=122&zoom=auto,-205,535
     Ptr(Box<Ty>),
     // The pointer itself is mutable, but the underlying data is not.
-    ConstPtr(Box<Ty>),
+    PtrConst(Box<Ty>),
     // TODO In C++ const is a type qualifier (as opposed to qualifying an identifier).
     //  However the way we generate code let's us treat const as an identifier qualifier (we would
     //  not return a const value from a function for example, but e.g., a non-const const pointer).
@@ -129,10 +136,8 @@ pub(super) enum Ty {
     // "necessarily" the function signature ... https://abseil.io/tips/109
     // Top-level const
     Const(Box<Ty>),
-    Array(Box<Ty>, usize),
-    Tuple(Vec<Ty>),
-    Buffer(Box<Ty>, BufferKind),
-    Scalar(ScalarTy),
+    // Template parameter identifer
+    Ident(String),
 }
 
 pub(super) enum BufferKind {
@@ -145,5 +150,7 @@ pub(super) enum ScalarTy {
     Void,
     I32,
     F32,
+    Bool,
     SizeT,
+    Memory,
 }

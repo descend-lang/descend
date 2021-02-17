@@ -1,3 +1,5 @@
+use super::{Path, Place};
+use crate::ast::internal::FrameTyping;
 use crate::ast::*;
 use std::collections::HashSet;
 
@@ -12,6 +14,8 @@ pub enum TyEntry {
     Var(IdentTyped),
     PrvMapping(PrvMapping),
 }
+
+pub type TypedPlace = (Place, Ty);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct TyCtx {
@@ -184,11 +188,10 @@ impl TyCtx {
                 | ArrayView(_, _)
                 | At(_, _)
                 | Ref(_, _, _, _)
-                | Fn(_, _, _, _)
-                | DepFn(_, _, _, _)
+                | Fn(_, _, _, _, _)
                 | Ident(_)
                 | Dead(_)
-                | GPU => vec![(pl, ty.clone())],
+                | Gpu => vec![(pl, ty.clone())],
                 Tuple(tys) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
@@ -283,10 +286,205 @@ impl TyCtx {
     }
 }
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct IdentTyped {
+    pub ident: Ident,
+    pub ty: Ty,
+}
+
+impl IdentTyped {
+    pub fn new(ident: Ident, ty: Ty) -> Self {
+        IdentTyped { ident, ty }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum KindingCtxEntry {
+    Ident(IdentKinded),
+    PrvRel(PrvRel),
+}
+
+pub struct KindCtx {
+    vec: Vec<KindingCtxEntry>,
+}
+
+impl KindCtx {
+    pub fn new() -> Self {
+        KindCtx { vec: Vec::new() }
+    }
+
+    pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> Result<Self, String> {
+        let kind_ctx: Self = Self::new().append_idents(idents);
+        kind_ctx.well_kinded_prv_rels(&prv_rels)?;
+        Ok(kind_ctx.append_prv_rels(prv_rels))
+    }
+
+    pub fn append_idents(mut self, idents: Vec<IdentKinded>) -> Self {
+        let mut entries: Vec<_> = idents.into_iter().map(KindingCtxEntry::Ident).collect();
+        self.vec.append(&mut entries);
+        self
+    }
+
+    pub fn append_prv_rels(mut self, prv_rels: Vec<PrvRel>) -> Self {
+        for prv_rel in prv_rels {
+            self.vec.push(KindingCtxEntry::PrvRel(prv_rel));
+        }
+        self
+    }
+
+    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
+        self.vec.iter().filter_map(move |entry| {
+            if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
+                if k == &kind {
+                    Some(ident)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn get_kind(&self, ident: &Ident) -> Result<&Kind, String> {
+        let res = self.vec.iter().find_map(|entry| {
+            if let KindingCtxEntry::Ident(IdentKinded { ident: id, kind }) = entry {
+                if id == ident {
+                    Some(kind)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        if let Some(kind) = res {
+            Ok(kind)
+        } else {
+            Err(format!(
+                "Cannot find identifier {} in kinding context",
+                ident
+            ))
+        }
+    }
+
+    pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {
+        self.get_idents(kind).any(|id| ident == id)
+    }
+
+    pub fn well_kinded_prv_rels(&self, prv_rels: &[PrvRel]) -> Result<(), String> {
+        let mut prv_idents = self.get_idents(Kind::Provenance);
+        for prv_rel in prv_rels {
+            if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
+                return Err(format!("{} is not declared", prv_rel.longer));
+            }
+            if !prv_idents.any(|prv_ident| &prv_rel.shorter == prv_ident) {
+                return Err(format!("{} is not declared", prv_rel.shorter));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn outlives(&self, l: &Ident, s: &Ident) -> Result<(), String> {
+        if self.vec.iter().any(|entry| match entry {
+            KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
+            _ => false,
+        }) {
+            Ok(())
+        } else {
+            Err(format!("{} is not defined as outliving {}.", l, s))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum GlobalItem {
+    PreDecl(Box<PreDeclaredGlobalFun>),
+    Def(Box<GlobalFunDef>),
+}
+
+pub trait IntoGlobalItem {
+    fn into_item(self) -> GlobalItem;
+}
+
+#[derive(Debug, Clone)]
+pub struct PreDeclaredGlobalFun {
+    pub name: String,
+    pub fun_ty: Ty,
+}
+
+impl IntoGlobalItem for PreDeclaredGlobalFun {
+    fn into_item(self) -> GlobalItem {
+        GlobalItem::PreDecl(Box::new(self))
+    }
+}
+
+impl IntoGlobalItem for GlobalFunDef {
+    fn into_item(self) -> GlobalItem {
+        GlobalItem::Def(Box::new(self))
+    }
+}
+
+// todo move out, not part of the syntax
+#[derive(Debug, Clone)]
+pub struct GlobalCtx {
+    items: Vec<GlobalItem>,
+}
+
+impl GlobalCtx {
+    pub fn new() -> Self {
+        GlobalCtx { items: vec![] }
+    }
+
+    pub fn append_items<T, I>(mut self, new_items: I) -> Self
+    where
+        T: IntoGlobalItem,
+        I: IntoIterator<Item = T>,
+    {
+        self.items
+            .extend(new_items.into_iter().map(IntoGlobalItem::into_item));
+        self
+    }
+
+    pub fn fun_defs_mut(&mut self) -> impl Iterator<Item = &mut GlobalFunDef> {
+        self.items.iter_mut().filter_map(|item| match item {
+            GlobalItem::PreDecl(_) => None,
+            GlobalItem::Def(gl_fun_def) => Some(gl_fun_def.as_mut()),
+        })
+    }
+
+    pub fn fun_defs(&self) -> impl Iterator<Item = &GlobalFunDef> {
+        self.items.iter().filter_map(|item| match item {
+            GlobalItem::PreDecl(_) => None,
+            GlobalItem::Def(gl_fun_def) => Some(gl_fun_def.as_ref()),
+        })
+    }
+
+    // pub fn pre_declared_funs(&self) -> impl Iterator<Item = &PreDeclaredGlobalFun> {
+    //     panic!("todo")
+    // }
+
+    pub fn fun_ty_by_name(&self, name: &str) -> Result<&Ty, String> {
+        let fun = self.items.iter().find(|item| match item {
+            GlobalItem::PreDecl(fun_decl) => fun_decl.name == name,
+            // TODO
+            GlobalItem::Def(fun_def) => false,
+        });
+        match fun {
+            Some(GlobalItem::PreDecl(fun_decl)) => Ok(&fun_decl.fun_ty),
+            Some(GlobalItem::Def(fun_def)) => Ok(&fun_def.fun_ty),
+            None => Err(format!(
+                "Function `{}` does not exist in global environment.",
+                name
+            )),
+        }
+    }
+}
+
 #[test]
 fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
-    let x = IdentTyped::new(Ident::new("x"), Ty::Scalar(ScalarData::I32));
+    let x = IdentTyped::new(Ident::new("x"), Ty::Scalar(ScalarTy::I32));
     let place = Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);
     ty_ctx = ty_ctx.kill_place(&place);

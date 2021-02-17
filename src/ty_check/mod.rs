@@ -1,14 +1,15 @@
 mod borrow_check;
+mod ctxs;
 mod subty_check;
-pub mod ty_ctx;
 
+use crate::ast::internal::append_idents_typed;
 use crate::ast::Ownership;
 use crate::ast::*;
 use crate::ty_check::subty_check::multiple_outlives;
 use borrow_check::ownership_safe;
+use ctxs::{GlobalCtx, IdentTyped, KindCtx, TyCtx};
 use std::ops::Deref;
 use subty_check::subty_check;
-use ty_ctx::TyCtx;
 
 type ErrMsg = String;
 
@@ -39,10 +40,19 @@ pub fn ty_check(gl_ctx: &mut GlobalCtx) -> Result<(), ErrMsg> {
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
 fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<(), ErrMsg> {
-    let kind_ctx = KindCtx::from(gf.ty_idents.clone(), gf.prv_rels.clone())?;
+    let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())?;
 
     // Build frame typing for this function
-    let glf_frame = append_idents_typed(&vec![], gf.params.clone());
+    let glf_frame = append_idents_typed(
+        &vec![],
+        gf.params
+            .iter()
+            .map(|ParamDecl { ident, ty, .. }| IdentTyped {
+                ident: ident.clone(),
+                ty: ty.clone(),
+            })
+            .collect(),
+    );
     let ty_ctx = TyCtx::from(glf_frame);
 
     ty_check_expr(gl_ctx, &kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
@@ -134,7 +144,7 @@ fn ty_check_par_for_global(
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let gpu_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, gpu_expr)?;
-    if !matches!(gpu_expr.ty, Some(Ty::GPU)) {
+    if !matches!(gpu_expr.ty, Some(Ty::Gpu)) {
         return Err(format!(
             "Expected an expression of type GPU, instead found an expression of type {:?}",
             gpu_expr.ty
@@ -156,7 +166,7 @@ fn ty_check_par_for_global(
             .append_ident_typed(IdentTyped::new(ident.clone(), elem_ty.deref().clone()));
         // TODO check that type of the identifier is dead? Meaning that it has been used in the loop.
         let body_ctx = ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
-        Ok((array_view_ctx, Ty::Scalar(ScalarData::Unit)))
+        Ok((array_view_ctx, Ty::Scalar(ScalarTy::Unit)))
     } else {
         Err(format!(
             "Expected array type, but found {:?}",
@@ -250,8 +260,8 @@ fn ty_check_binary_op(
     let lhs_ty = lhs.ty.as_ref().unwrap();
     let rhs_ty = rhs.ty.as_ref().unwrap();
     match (lhs_ty, rhs_ty) {
-        (Ty::Scalar(ScalarData::F32), Ty::Scalar(ScalarData::F32))
-        | (Ty::Scalar(ScalarData::I32), Ty::Scalar(ScalarData::I32)) => {
+        (Ty::Scalar(ScalarTy::F32), Ty::Scalar(ScalarTy::F32))
+        | (Ty::Scalar(ScalarTy::I32), Ty::Scalar(ScalarTy::I32)) => {
             Ok((rhs_ty_ctx, lhs_ty.clone()))
         }
         _ => Err(format!(
@@ -365,10 +375,10 @@ fn ty_check_array(
 
 fn ty_check_literal(ty_ctx: TyCtx, l: &mut Lit) -> (TyCtx, Ty) {
     let scalar_data = match l {
-        Lit::Unit => ScalarData::Unit,
-        Lit::Bool(_) => ScalarData::Bool,
-        Lit::I32(_) => ScalarData::I32,
-        Lit::F32(_) => ScalarData::F32,
+        Lit::Unit => ScalarTy::Unit,
+        Lit::Bool(_) => ScalarTy::Bool,
+        Lit::I32(_) => ScalarTy::I32,
+        Lit::F32(_) => ScalarTy::F32,
     };
     (ty_ctx, Ty::Scalar(scalar_data))
 }
@@ -580,5 +590,100 @@ fn borr_pl_expr_ty_and_passed_prvs_under_own<'a>(
         Ok((ty, passed_prvs))
     } else {
         Err("Trying to dereference non reference type.".to_string())
+    }
+}
+
+pub type Path = Vec<Nat>;
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Place {
+    pub ident: Ident,
+    pub path: Path,
+}
+impl Place {
+    pub fn new(ident: Ident, path: Path) -> Self {
+        Place { ident, path }
+    }
+
+    pub fn to_place_expr(&self) -> PlaceExpr {
+        self.path
+            .iter()
+            .fold(PlaceExpr::Var(self.ident.clone()), |pl_expr, path_entry| {
+                PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone())
+            })
+    }
+}
+
+pub enum PlaceCtx {
+    Proj(Box<PlaceCtx>, Nat),
+    Deref(Box<PlaceCtx>),
+    Hole,
+}
+
+impl PlaceCtx {
+    pub fn insert_pl_expr(&self, pl_expr: PlaceExpr) -> PlaceExpr {
+        match self {
+            Self::Hole => pl_expr,
+            Self::Proj(pl_ctx, n) => {
+                PlaceExpr::Proj(Box::new(pl_ctx.insert_pl_expr(pl_expr)), n.clone())
+            }
+            Self::Deref(pl_ctx) => PlaceExpr::Deref(Box::new(pl_ctx.insert_pl_expr(pl_expr))),
+        }
+    }
+
+    // Assumes the PlaceCtx HAS an innermost deref, meaning the Hole is wrapped by a Deref.
+    // This is always true for PlaceCtxs created by PlaceExpr.to_pl_ctx_and_most_specif_pl
+    pub fn without_innermost_deref(&self) -> Self {
+        match self {
+            Self::Hole => Self::Hole,
+            Self::Proj(pl_ctx, _) => {
+                if let Self::Hole = **pl_ctx {
+                    panic!("There must an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
+                } else {
+                    pl_ctx.without_innermost_deref()
+                }
+            }
+            Self::Deref(pl_ctx) => {
+                if let Self::Hole = **pl_ctx {
+                    Self::Hole
+                } else {
+                    pl_ctx.without_innermost_deref()
+                }
+            }
+        }
+    }
+}
+
+impl crate::ast::PlaceExpr {
+    fn to_pl_ctx_and_most_specif_pl(&self) -> (PlaceCtx, Place) {
+        match self {
+            PlaceExpr::Deref(inner_ple) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (PlaceCtx::Deref(Box::new(pl_ctx)), pl)
+            }
+            PlaceExpr::Proj(inner_ple, n) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                match pl_ctx {
+                    PlaceCtx::Hole => (pl_ctx, Place::new(pl.ident, vec![n.clone()])),
+                    _ => (PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
+                }
+            }
+            PlaceExpr::Var(ident) => (PlaceCtx::Hole, Place::new(ident.clone(), vec![])),
+        }
+    }
+
+    fn to_place(&self) -> Option<Place> {
+        if self.is_place() {
+            Some(self.to_pl_ctx_and_most_specif_pl().1)
+        } else {
+            None
+        }
+    }
+
+    fn equiv(&'_ self, place: &'_ Place) -> bool {
+        if let (PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
+            &pl == place
+        } else {
+            false
+        }
     }
 }

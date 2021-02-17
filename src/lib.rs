@@ -3,3 +3,4 @@ pub mod ast;
 pub mod dsl;
 pub mod codegen;
 pub mod ty_check;
+pub mod utils;

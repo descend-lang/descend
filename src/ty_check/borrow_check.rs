@@ -1,6 +1,7 @@
-use super::ty_ctx::{PrvMapping, TyCtx};
+use super::ctxs::{KindCtx, PrvMapping, TyCtx};
+use super::Place;
 use crate::ast::*;
-use crate::ty_check::place_expr_ty_under_own;
+use crate::ty_check::PlaceCtx;
 use std::collections::HashSet;
 
 //
@@ -143,7 +144,7 @@ fn ownership_safe_deref_abs(
 ) -> Result<HashSet<Loan>, String> {
     let currently_checked_pl_expr =
         pl_ctx_no_deref.insert_pl_expr(PlaceExpr::Deref(Box::new(most_spec_pl.to_place_expr())));
-    let ty = place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
+    let ty = super::place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
     check_own_lte_ref(own, ref_own)?;
     if ownership_safe_under_existing_loans(ty_ctx, reborrows, own, &currently_checked_pl_expr) {
         let mut passed_through_prvs = HashSet::new();
