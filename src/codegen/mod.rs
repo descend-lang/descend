@@ -91,12 +91,12 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<desc::Ident, View>) -
         )),
         Lambda(params, exec, ty, expr) => Expr(cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
-            body: gen_stmt_expr(expr, view_ctx).stmt(),
+            body: Box::new(gen_stmt_expr(expr, view_ctx).stmt()),
             ret_ty: gen_ty(ty, Mutability::Mut),
             is_dev_fun: is_dev_fun(*exec),
         }),
         App(fun, kinded_args, args) => Expr(cu::Expr::FunCall {
-            fun: Box::new(gen_stmt_expr(fun, view_ctx).expr),
+            fun: Box::new(gen_stmt_expr(fun, view_ctx).expr()),
             template_args: gen_kinded_args(kinded_args),
             args: args
                 .iter()
@@ -115,7 +115,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<desc::Ident, View>) -
         Tuple(elems) => Expr(cu::Expr::Tuple(
             elems
                 .iter()
-                .map(|el| gen_stmt_expr(el, view_ctx))
+                .map(|el| gen_stmt_expr(el, view_ctx).expr())
                 .collect::<Vec<_>>(),
         )),
         For(ident, coll_expr, body) => {
@@ -243,10 +243,9 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr) -> cu::Expr {
 fn gen_templ_params(ty_idents: &[desc::IdentKinded]) -> Vec<cu::TemplParam> {
     ty_idents
         .iter()
+        // TODO filter_map
         .filter(|desc::IdentKinded { ident, kind }| {
-            !(matches!(kind, desc::Kind::Frame)
-                || matches!(kind, desc::Kind::Provenance)
-                || matches!(kind, desc::Kind::Own))
+            !(matches!(kind, desc::Kind::Frame) || matches!(kind, desc::Kind::Provenance))
         })
         .map(gen_templ_param)
         .collect()
@@ -287,9 +286,7 @@ fn gen_kinded_args(templ_args: &[desc::KindedArg]) -> Vec<cu::TemplateArg> {
 fn gen_kinded_arg(templ_arg: &desc::KindedArg) -> cu::TemplateArg {
     match templ_arg {
         // TODO think about this:
-        //  this mistreats typename identifiers as Expr. The generated code should still be correct
-        //  though.
-        desc::KindedArg::Ident(ident) => cu::TemplateArg::Expr(cu::Expr::Ident(ident.name.clone())),
+        desc::KindedArg::Ident(ident) => cu::TemplateArg::Ty(cu::Ty::Ident(ident.name.clone())),
         desc::KindedArg::Nat(n) => cu::TemplateArg::Expr(cu::Expr::Nat(n.clone())),
         desc::KindedArg::Memory(mem) => cu::TemplateArg::Expr(cu::Expr::Ident(match mem {
             desc::Memory::Ident(ident) => ident.name.clone(),
@@ -301,9 +298,16 @@ fn gen_kinded_arg(templ_arg: &desc::KindedArg) -> cu::TemplateArg {
             }
         })),
         desc::KindedArg::Ty(ty) => cu::TemplateArg::Ty(gen_ty(ty, desc::Mutability::Mut)),
-        desc::KindedArg::Provenance(_) => {
-            panic!("Provenances are only used for type checking and cannot be generated.")
-        }
+        // TODO the panic message is not entirely true. Exec IS important when it appears in a type
+        //  in order to determine __device__ annotations. However, there is no way to generate
+        //  an Exec::Ident which means these must not be used by users and are only for
+        desc::KindedArg::Exec(_) => panic!(
+            "This should not be allowed and is currently a problem \
+        with the design of execution locations. See Issue #3."
+        ),
+        desc::KindedArg::Provenance(_) | desc::KindedArg::Frame(_) => panic!(
+            "Provenances and Frames are only used for type checking and cannot be generated."
+        ),
     }
 }
 
@@ -329,7 +333,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
             let buff_kind = match mem {
                 desc::Memory::CpuHeap => cu::BufferKind::Heap,
                 desc::Memory::GpuGlobal => cu::BufferKind::Gpu,
-                desc::Memory::Ident(ident) => cu::Ty::Ident(ident.name.clone()),
+                desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
                 desc::Memory::GpuShared => unimplemented!("big TODO!"),
                 desc::Memory::CpuStack => {
                     panic!("CpuStack is not valid for At types. Should never appear here.")
@@ -361,11 +365,11 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
     }
 }
 
+// TODO correct?
 fn is_dev_fun(exec: desc::ExecLoc) -> bool {
     match exec {
-        // TODO correct?
         desc::ExecLoc::GpuGroup | desc::ExecLoc::GpuThread => true,
-        desc::ExecLoc::CpuThread => false,
+        desc::ExecLoc::CpuThread | desc::ExecLoc::View => false,
     }
 }
 

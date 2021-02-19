@@ -1,5 +1,5 @@
 use super::cu_ast::{
-    BinOp, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
+    BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
 use crate::codegen::cu_ast::Lit;
 use std::fmt::Formatter;
@@ -58,24 +58,21 @@ impl std::fmt::Display for Stmt {
         use Stmt::*;
         match self {
             VarDecl { name, ty, expr } => {
-                if let Some(ty) = ty {
-                    write!(f, "{} ", ty)?;
-                } else {
-                    write!(f, "auto ")?;
-                }
-                write!(f, "{}", name)?;
+                write!(f, "{} {}", ty, name)?;
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
                 }
                 write!(f, ";")
             }
-            Block(stmts) => {
+            Block(stmt) => {
                 writeln!(f, "{{")?;
-                fmt_vec(f, stmts, "\n")?;
-                writeln!(f)?;
+                writeln!(f, "{}", stmt)?;
                 writeln!(f, "}}")
             }
-            Seq(stmts) => fmt_vec(f, stmts, ";\n"),
+            Seq(stmt1, stmt2) => {
+                writeln!(f, "{}", stmt1)?;
+                write!(f, "{}", stmt2)
+            }
             Expr(expr) => write!(f, "{};", expr),
             If { cond, body } => {
                 writeln!(f, "if ({})", cond)?;
@@ -116,12 +113,18 @@ impl std::fmt::Display for Expr {
                 lhs: l_val,
                 rhs: r_val,
             } => write!(f, "{} = {}", l_val, r_val),
-            Lambda { params, body } => {
-                writeln!(f, "[] __device__ (")?;
+            Lambda {
+                params,
+                body,
+                ret_ty,
+                is_dev_fun,
+            } => {
+                let dev_qual = if *is_dev_fun { "__device__" } else { "" };
+                writeln!(f, "[] {} (", dev_qual)?;
                 fmt_vec(f, &params, ",\n")?;
-                writeln!(f, ") {{")?;
-                fmt_vec(f, &body, ",\n")?;
-                writeln!(f, "\n}}")
+                writeln!(f, ") -> {} {{", ret_ty)?;
+                writeln!(f, "{}", &body)?;
+                writeln!(f, "}}")
             }
             FunCall {
                 fun,
@@ -144,6 +147,12 @@ impl std::fmt::Display for Expr {
             Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
             Ref(expr) => write!(f, "&{}", expr),
             Deref(expr) => write!(f, "*{}", expr),
+            Tuple(elems) => {
+                write!(f, "descend::tuple{{")?;
+                fmt_vec(f, elems, ", ")?;
+                write!(f, "}}")
+            }
+            Nat(n) => write!(f, "{}", n),
         }
     }
 }
@@ -178,7 +187,7 @@ impl std::fmt::Display for TemplParam {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TemplParam::Value { param_name, ty } => write!(f, "{} {}", ty, param_name),
-            TemplParam::Ty(ty_name) => write!(f, "typename {}", ty_name),
+            TemplParam::TyName { name } => write!(f, "typename {}", name),
         }
     }
 }
@@ -197,6 +206,7 @@ impl std::fmt::Display for BinOp {
         match self {
             BinOp::Add => write!(f, "+"),
             BinOp::Mult => write!(f, "*"),
+            BinOp::Lt => write!(f, "<"),
         }
     }
 }
@@ -219,10 +229,12 @@ impl std::fmt::Display for Ty {
                 write!(f, ">")
             }
             Buffer(ty, buff_kind) => match buff_kind {
-                super::cu_ast::BufferKind::Heap => write!(f, "HeapBuffer<{}>", ty),
-                super::cu_ast::BufferKind::Gpu => write!(f, "GpuBuffer<{}>", ty),
+                BufferKind::Heap => write!(f, "HeapBuffer<{}>", ty),
+                BufferKind::Gpu => write!(f, "GpuBuffer<{}>", ty),
+                BufferKind::Ident(name) => write!(f, "{}", name),
             },
             Scalar(sty) => write!(f, "{}", sty),
+            Ident(name) => write!(f, "{}", name),
         }
     }
 }
@@ -236,6 +248,8 @@ impl std::fmt::Display for ScalarTy {
             I32 => write!(f, "descend::i32"),
             F32 => write!(f, "descend::f32"),
             SizeT => write!(f, "std::size_t"),
+            Bool => write!(f, "bool"),
+            Memory => write!(f, "descend::Memory"),
         }
     }
 }
@@ -273,11 +287,11 @@ fn test_print_program() -> std::fmt::Result {
                 },
             ],
             ret_ty: Scalar(ScalarTy::Void),
-            body: Stmt::Seq(vec![Stmt::VarDecl {
+            body: Stmt::VarDecl {
                 name: "a_f".to_string(),
-                ty: None,
+                ty: Ty::Scalar(ScalarTy::Auto),
                 expr: Some(Expr::Ident("a".to_string())),
-            }]),
+            },
             is_dev_fun: true,
         },
     ];

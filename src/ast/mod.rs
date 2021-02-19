@@ -1,5 +1,6 @@
 pub mod internal;
 
+use internal::FrameExpr;
 use std::fmt;
 
 pub type CompilUnit = Vec<GlobalFunDef>;
@@ -13,7 +14,19 @@ pub struct GlobalFunDef {
     pub exec: ExecLoc,
     pub prv_rels: Vec<PrvRel>,
     pub body_expr: Expr,
-    pub fun_ty: Ty,
+}
+
+impl GlobalFunDef {
+    pub fn ty(&self) -> Ty {
+        let param_tys: Vec<_> = self.params.iter().map(|p_decl| p_decl.ty.clone()).collect();
+        Ty::Fn(
+            self.generic_params.clone(),
+            param_tys,
+            Box::new(FrameExpr::Empty),
+            self.exec,
+            Box::new(self.ret_ty.clone()),
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -262,7 +275,7 @@ pub enum Kind {
     Ty,
     Provenance,
     Frame,
-    Own,
+    Exec,
 }
 
 impl fmt::Display for Kind {
@@ -273,7 +286,7 @@ impl fmt::Display for Kind {
             Kind::Ty => "type",
             Kind::Provenance => "prv",
             Kind::Frame => "frm",
-            Kind::Own => "own",
+            Kind::Exec => "exec",
         };
         write!(f, "{}", str)
     }
@@ -288,8 +301,8 @@ pub enum KindedArg {
     Memory(Memory),
     Ty(Ty),
     Provenance(Provenance),
-    // TODO is Frame needed? probably.
-    //    Frame(FrameExpr),
+    Frame(FrameExpr),
+    Exec(ExecLoc),
     // TODO remove ownership?
     //    Own(Ownership),
 }
@@ -471,12 +484,7 @@ pub enum ExecLoc {
     CpuThread,
     GpuGroup,
     GpuThread,
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Loan {
-    pub place_expr: PlaceExpr,
-    pub own: Ownership,
+    View,
 }
 
 // Provenance Relation: varrho_1:varrho_2

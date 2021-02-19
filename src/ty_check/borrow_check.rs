@@ -1,5 +1,6 @@
-use super::ctxs::{KindCtx, PrvMapping, TyCtx};
+use super::ctxs::{KindCtx, TyCtx};
 use super::Place;
+use crate::ast::internal::{Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::PlaceCtx;
 use std::collections::HashSet;
@@ -8,7 +9,7 @@ use std::collections::HashSet;
 // Ownership Safety
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
-pub fn ownership_safe(
+pub(super) fn ownership_safe(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     reborrows: &[Place],

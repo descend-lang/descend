@@ -15,11 +15,13 @@ pub(super) enum Item {
     },
 }
 
+#[derive(Clone, Debug)]
 pub(super) struct ParamDecl {
     pub(super) name: String,
     pub(super) ty: Ty,
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum Stmt {
     VarDecl {
         name: String,
@@ -47,6 +49,7 @@ pub(super) enum Stmt {
     Return(Option<Expr>),
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum Expr {
     Ident(String),
     Lit(Lit),
@@ -56,7 +59,7 @@ pub(super) enum Expr {
     },
     Lambda {
         params: Vec<ParamDecl>,
-        body: Stmt,
+        body: Box<Stmt>,
         ret_ty: Ty,
         is_dev_fun: bool,
     },
@@ -90,6 +93,7 @@ pub(super) enum Expr {
     Nat(Nat),
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum Lit {
     Void,
     Bool(bool),
@@ -97,11 +101,13 @@ pub(super) enum Lit {
     F32(f32),
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum UnOp {
     Ref,
     DeRef,
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum BinOp {
     Add,
     Mult,
@@ -113,11 +119,13 @@ pub(super) enum TemplParam {
     TyName { name: String },
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum TemplateArg {
     Expr(Expr),
     Ty(Ty),
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum Ty {
     Scalar(ScalarTy),
     Tuple(Vec<Ty>),
@@ -140,11 +148,15 @@ pub(super) enum Ty {
     Ident(String),
 }
 
+// TODO this is not really a Cuda type and should maybe be represented by a generic type construct
+#[derive(Clone, Debug)]
 pub(super) enum BufferKind {
     Heap,
     Gpu,
+    Ident(String),
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum ScalarTy {
     Auto,
     Void,

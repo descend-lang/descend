@@ -5,8 +5,8 @@ fn inplace_vector_add<n: nat, 'a: prv, 'b: prv>(
   letprov <a, b, c, d, e, f, g, h> {
     let gpu: GPU = gpu(/* GPU info */);
 
-    let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
-    let b_array: [i32; n] @ gpu.global = copy_to_gpu<[i32; n]>(&d uniq gpu, hb_array);
+    let mut a_array: [i32; n] @ gpu.global = gpu_alloc<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
+    let b_array: [i32; n] @ gpu.global = gpu_alloc<[i32; n]>(&d uniq gpu, hb_array);
 
     let view_a: [[&a uniq gpu.global i32; n]] = to_view<a, uniq, gpu.global, n, i32>(&a uniq a_array);
     let view_b: [[&b shrd gpu.global i32; n]] = to_view<b, shrd, gpu.global, n, i32>(&b shrd b_array);

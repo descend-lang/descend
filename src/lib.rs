@@ -1,6 +1,7 @@
+// TODO remove pub where possible. only public because of basic_syntax tests
 pub mod ast;
 #[macro_use]
 pub mod dsl;
-pub mod codegen;
+mod codegen;
 pub mod ty_check;
-pub mod utils;
+mod utils;

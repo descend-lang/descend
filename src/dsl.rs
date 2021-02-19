@@ -1,6 +1,5 @@
 use crate::ast::Lit::Unit;
 use crate::ast::*;
-use crate::utils::fresh_name;
 
 //
 // Syntax
@@ -59,17 +58,6 @@ pub fn fdef(
         .map(|(name, kind)| IdentKinded::new(&Ident::new(name), *kind))
         .collect();
 
-    let mut f_ty = fun_ty(
-        generic_idents.clone(),
-        params
-            .iter()
-            .map(|p: &(Mutability, &str, &Ty)| -> Ty { p.2.clone() })
-            .collect(),
-        &internal::FrameExpr::FrTy(vec![]),
-        exec,
-        ret_ty,
-    );
-
     GlobalFunDef {
         name: String::from(name),
         generic_params: generic_idents,
@@ -78,7 +66,6 @@ pub fn fdef(
         exec,
         prv_rels,
         body_expr: body,
-        fun_ty: f_ty,
     }
 }
 
