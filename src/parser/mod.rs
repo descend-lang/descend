@@ -660,6 +660,8 @@ mod tests {
             expr: ExprKind::BorrowIndex(Provenance::Value(String::from("'prov")), Ownership::Uniq, PlaceExpr::Var(Ident::new("var")), Nat::Ident(Ident::new("token"))),
             ty: None
         }));
+        let result = descend::expression_seq("&'a uniq var[7][3]");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -677,6 +679,18 @@ mod tests {
             }]),
             ty: None
         }));
+    }
+
+    #[test]
+    fn expression_array_missing_parentheses() {
+        let result = descend::expression_seq("[12, x[3], true)");
+        assert!(result.is_err());
+        let result = descend::expression_seq("[12, x[3], true]]");
+        assert!(result.is_err());
+        let result = descend::expression_seq("[12, x[3], true");
+        assert!(result.is_err());
+        let result = descend::expression_seq("([12, x[3], true)]");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -768,6 +782,12 @@ mod tests {
     }
 
     #[test]
+    fn expression_for_loop_negative() {
+        let result_expect_ident = descend::expression_seq("for (1+2) in [1,2,3] {x = x+1}");
+        assert!(result_expect_ident.is_err());
+    }
+
+    #[test]
     fn expression_sync_threads() {
         let elems = Ident::new("elems");
         assert_eq!(descend::expression_seq("sync_threads[gpu; 1024] for elems in elems_grouped {*elems.0 = *elems.0 + *elems.1;}"), Ok(Expr{
@@ -792,6 +812,9 @@ mod tests {
             })),
             ty: None
         }));
+        //Negative test
+        let result = descend::expression_seq("sync_threads[gpu; 10.24] for elems in elems_grouped {*elems.0 = *elems.0 + *elems.1;}");
+        assert!(result.is_err()); //expected Integer - read Float
     }
 
     #[test]
@@ -806,6 +829,21 @@ mod tests {
             })),
             ty: Some(Ty::Scalar(ScalarData::Bool))
         }));
+    }
+
+    #[test]
+    fn expression_let_negative() {
+        //Does there always have to be another instruction after let ?
+        let result = descend::expression_seq("let mut x : f32 = 17.123f32;");
+        assert!(result.is_err());
+        let result = descend::expression_seq("let mut x : 32 = 17.123f32; true");
+        assert!(result.is_err());
+        let result = descend::expression_seq("let mut x:bool@gpu.shared@ = false; true");
+        assert!(result.is_err());
+        let result = descend::expression_seq("let x = 17.123; true");
+        assert!(result.is_err());
+        let result = descend::expression_seq("let x:bool@Memory.Location = false; true");
+        assert!(result.is_err());
     }
 
     #[test]
