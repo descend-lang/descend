@@ -1,12 +1,16 @@
 use crate::ast::{
-    internal, ExecLoc, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, Ty,
+    internal, BinOpNat, ExecLoc, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, Ty,
 };
 
 pub static GPU_ALLOC: &str = "gpu_alloc";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static GPU: &str = "gpu";
+pub static SPAWN_THREADS: &str = "spawn_threads";
 
 pub static TO_VIEW: &str = "to_view";
+pub static GROUP: &str = "group";
+pub static JOIN: &str = "join";
+pub static TRANSPOSE: &str = "transpose";
 
 pub struct FunDecl {
     pub name: String,
@@ -15,12 +19,12 @@ pub struct FunDecl {
 
 // TODO add correct predeclared functions with their types
 pub(super) fn fun_decls() -> Vec<FunDecl> {
-    let decls: [(&str, Ty); 1] = [(TO_VIEW, to_view_ty())];
+    let decls = [(TO_VIEW, to_view_ty()), (GPU_ALLOC, gpu_alloc_ty())];
 
     decls
         .iter()
         .map(|(name, ty)| FunDecl {
-            name: name.to_string(),
+            name: (*name).to_string(),
             ty: ty.clone(),
         })
         .collect()
@@ -95,7 +99,7 @@ fn to_view_ty() -> Ty {
         kind: Kind::Memory,
     };
     let ex_exec = IdentKinded {
-        ident: ex.clone(),
+        ident: ex,
         kind: Kind::Exec,
     };
     let n_nat = IdentKinded {
@@ -126,6 +130,122 @@ fn to_view_ty() -> Ty {
                 Memory::Ident(m),
                 Box::new(Ty::Ident(t)),
             )),
+            Nat::Ident(n),
+        )),
+    )
+}
+
+// group:
+//  <s: nat, n: nat, t: ty>([[t; n]]) -> [[ [[t; size]]; n/size ]]
+fn group_ty() -> Ty {
+    let s = Ident::new("s");
+    let n = Ident::new("n");
+    let t = Ident::new("t");
+    let s_nat = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Nat,
+    };
+    let n_nat = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Nat,
+    };
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+    Ty::Fn(
+        vec![s_nat, n_nat, t_ty],
+        vec![Ty::ArrayView(
+            Box::new(Ty::Ident(t.clone())),
+            Nat::Ident(n.clone()),
+        )],
+        Box::new(internal::FrameExpr::Empty),
+        ExecLoc::View,
+        Box::new(Ty::ArrayView(
+            Box::new(Ty::ArrayView(
+                Box::new(Ty::Ident(t.clone())),
+                Nat::Ident(s.clone()),
+            )),
+            Nat::BinOp(
+                BinOpNat::Div,
+                Box::new(Nat::Ident(n)),
+                Box::new(Nat::Ident(s)),
+            ),
+        )),
+    )
+}
+
+// join:
+//  <m: nat, n: nat, t: ty>([[ [[t; n]]; m]]) -> [[t; m*n]]
+fn join_ty() -> Ty {
+    let m = Ident::new("m");
+    let n = Ident::new("n");
+    let t = Ident::new("t");
+    let m_nat = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Nat,
+    };
+    let n_nat = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Nat,
+    };
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+    Ty::Fn(
+        vec![m_nat, n_nat, t_ty],
+        vec![Ty::ArrayView(
+            Box::new(Ty::ArrayView(
+                Box::new(Ty::Ident(t.clone())),
+                Nat::Ident(n.clone()),
+            )),
+            Nat::Ident(m.clone()),
+        )],
+        Box::new(internal::FrameExpr::Empty),
+        ExecLoc::View,
+        Box::new(Ty::ArrayView(
+            Box::new(Ty::Ident(t.clone())),
+            Nat::BinOp(
+                BinOpNat::Mul,
+                Box::new(Nat::Ident(m)),
+                Box::new(Nat::Ident(n)),
+            ),
+        )),
+    )
+}
+
+// transpose:
+//  <m: nat, n: nat, t: ty>([[ [[t; n]]; m]]) -> [[ [[t; m]]; n]]
+fn transpose_ty() -> Ty {
+    let m = Ident::new("m");
+    let n = Ident::new("n");
+    let t = Ident::new("t");
+    let m_nat = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Nat,
+    };
+    let n_nat = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Nat,
+    };
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+    Ty::Fn(
+        vec![m_nat, n_nat, t_ty],
+        vec![Ty::ArrayView(
+            Box::new(Ty::ArrayView(
+                Box::new(Ty::Ident(t.clone())),
+                Nat::Ident(n.clone()),
+            )),
+            Nat::Ident(m.clone()),
+        )],
+        Box::new(internal::FrameExpr::Empty),
+        ExecLoc::View,
+        Box::new(Ty::ArrayView(
+            Box::new(Ty::ArrayView(Box::new(Ty::Ident(t)), Nat::Ident(m))),
             Nat::Ident(n),
         )),
     )

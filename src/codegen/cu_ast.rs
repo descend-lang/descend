@@ -104,14 +104,26 @@ pub(super) enum Lit {
 #[derive(Clone, Debug)]
 pub(super) enum UnOp {
     Ref,
-    DeRef,
+    Deref,
+    Not,
+    Neg,
 }
 
 #[derive(Clone, Debug)]
 pub(super) enum BinOp {
     Add,
-    Mult,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    And,
+    Or,
+    Eq,
     Lt,
+    Le,
+    Gt,
+    Ge,
+    Neq,
 }
 
 pub(super) enum TemplParam {

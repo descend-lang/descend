@@ -121,7 +121,7 @@ fn ty_check_expr(
         ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
             ty_check_ref(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
         }
-        ExprKind::Binary(bin_op, lhs, rhs) => {
+        ExprKind::BinOp(bin_op, lhs, rhs) => {
             ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
         }
         ExprKind::Index(pl_expr, index) => {
@@ -536,7 +536,7 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
 ) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
     match pl_expr {
         // TC-Var
-        PlaceExpr::Var(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
+        PlaceExpr::Ident(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
         // TC-Proj
         PlaceExpr::Proj(tuple_expr, n) => {
             proj_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, tuple_expr, n)
@@ -613,11 +613,10 @@ impl Place {
     }
 
     fn to_place_expr(&self) -> PlaceExpr {
-        self.path
-            .iter()
-            .fold(PlaceExpr::Var(self.ident.clone()), |pl_expr, path_entry| {
-                PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone())
-            })
+        self.path.iter().fold(
+            PlaceExpr::Ident(self.ident.clone()),
+            |pl_expr, path_entry| PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone()),
+        )
     }
 }
 
@@ -675,7 +674,7 @@ impl crate::ast::PlaceExpr {
                     _ => (PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
                 }
             }
-            PlaceExpr::Var(ident) => (PlaceCtx::Hole, Place::new(ident.clone(), vec![])),
+            PlaceExpr::Ident(ident) => (PlaceCtx::Hole, Place::new(ident.clone(), vec![])),
         }
     }
 

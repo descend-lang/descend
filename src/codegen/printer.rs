@@ -195,19 +195,32 @@ impl std::fmt::Display for TemplParam {
 impl std::fmt::Display for UnOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnOp::Ref => write!(f, "&"),
-            UnOp::DeRef => write!(f, "*"),
+            Self::Ref => write!(f, "&"),
+            Self::Deref => write!(f, "*"),
+            Self::Not => write!(f, "!"),
+            Self::Neg => write!(f, "-"),
         }
     }
 }
 
 impl std::fmt::Display for BinOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BinOp::Add => write!(f, "+"),
-            BinOp::Mult => write!(f, "*"),
-            BinOp::Lt => write!(f, "<"),
-        }
+        let str = match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Mod => "%",
+            Self::And => "&&",
+            Self::Or => "||",
+            Self::Eq => "=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+            Self::Neq => "!=",
+        };
+        write!(f, "{}", str)
     }
 }
 

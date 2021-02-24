@@ -35,6 +35,11 @@ Gpu create_gpu(size_t device_id) {
     return device_id;
 };
 
+struct GlobalThreads {
+    constexpr size_t NUMBER_OF_THREADS;
+
+};
+
 template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
     return sizeof(T);

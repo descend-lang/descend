@@ -110,8 +110,8 @@ pub enum ExprKind {
     // Parallel for (global) thread with input, syncing at the end.
     // for x in view-expr across parallelism-config-expr { body }
     ParForSync(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
-    Binary(BinOp, Box<Expr>, Box<Expr>),
-    Unary(UnOp, Box<Expr>),
+    BinOp(BinOp, Box<Expr>, Box<Expr>),
+    UnOp(UnOp, Box<Expr>),
 }
 
 impl fmt::Display for ExprKind {
@@ -311,14 +311,14 @@ pub enum KindedArg {
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, Nat),
     Deref(Box<PlaceExpr>),
-    Var(Ident),
+    Ident(Ident),
 }
 
 impl PlaceExpr {
     pub fn is_place(&self) -> bool {
         match self {
             PlaceExpr::Proj(ple, _) => ple.is_place(),
-            PlaceExpr::Var(_) => true,
+            PlaceExpr::Ident(_) => true,
             PlaceExpr::Deref(_) => false,
         }
     }
@@ -328,7 +328,7 @@ impl PlaceExpr {
             match other {
                 Self::Proj(pl_expr, _) => self.prefix_of(pl_expr),
                 Self::Deref(pl_expr) => self.prefix_of(pl_expr),
-                Self::Var(_) => false,
+                Self::Ident(_) => false,
             }
         } else {
             true
@@ -341,7 +341,7 @@ impl fmt::Display for PlaceExpr {
         match self {
             Self::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
             Self::Deref(pl_expr) => write!(f, "*{}", pl_expr),
-            Self::Var(ident) => write!(f, "{}", ident),
+            Self::Ident(ident) => write!(f, "{}", ident),
         }
     }
 }
@@ -514,7 +514,7 @@ impl IdentKinded {
 pub enum Nat {
     Ident(Ident),
     Lit(usize),
-    //    Binary(BinOpNat, Box<Nat>, Box<Nat>),
+    BinOp(BinOpNat, Box<Nat>, Box<Nat>),
 }
 
 impl Nat {
@@ -528,18 +528,30 @@ impl fmt::Display for Nat {
         match self {
             Self::Ident(ident) => write!(f, "{}", ident),
             Self::Lit(n) => write!(f, "{}", n),
-            //Self::Binary(ident) => write!(f, "{}", ident),
+            Self::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
         }
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum BinOpNat {
     Add,
     Sub,
     Mul,
     Div,
     Mod,
+}
+
+impl fmt::Display for BinOpNat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Add => write!(f, "+"),
+            Self::Sub => write!(f, "-"),
+            Self::Mul => write!(f, "*"),
+            Self::Div => write!(f, "/"),
+            Self::Mod => write!(f, "%"),
+        }
+    }
 }
 
 #[test]

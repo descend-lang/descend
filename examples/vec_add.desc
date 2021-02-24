@@ -12,7 +12,7 @@ fn inplace_vector_add<n: nat, 'a: prv, 'b: prv>(
     let view_b: [[&b shrd gpu.global i32; n]] = to_view<b, shrd, gpu.global, n, i32>(&b shrd b_array);
     let elems: [[(&a uniq gpu.global i32, &b shrd gpu.global i32); n]] =
         zip<n, &a uniq gpu.global i32, &b shrd gpu.global i32>(view_a, view_b);
-    let threads: ThreadRange<64*1024> = gpu.spawn_threads<64*1024>()
+    let threads: GlobalThreads<64*1024> = spawn_threads<64*1024, h>(&h uniq gpu)
     // hoisted runtime check: n == 64 * 1024
     for (a, b) in elems across threads {
       *a = *a + *b;

@@ -30,7 +30,7 @@ pub fn nat_id(name: &str) -> Nat {
 
 // Variable
 pub fn ident(name: &str) -> Expr {
-    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new(name))))
+    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new(name))))
 }
 
 pub fn fun_name(name: &str) -> Expr {
@@ -108,7 +108,7 @@ pub fn div(lhs: Expr, rhs: Expr) -> Expr {
     bin_op(BinOp::Div, lhs, rhs)
 }
 pub fn bin_op(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
-    Expr::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)))
+    Expr::new(ExprKind::BinOp(op, Box::new(lhs), Box::new(rhs)))
 }
 
 // Array constructor

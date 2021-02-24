@@ -56,7 +56,8 @@ impl StmtOrExpr {
     }
 }
 
-fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<desc::Ident, View>) -> StmtOrExpr {
+// TODO how to deal with return values from descend to cuda. Last expr of sequence not a statement.
+fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> StmtOrExpr {
     use desc::ExprKind::*;
     use StmtOrExpr::*;
     match &expr.expr {
@@ -76,6 +77,21 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<desc::Ident, View>) -
             lhs: Box::new(gen_pl_expr(pl_expr)),
             rhs: Box::new(gen_stmt_expr(expr, view_ctx).expr()),
         }),
+        // Let ArrayView
+        Let(mutbl, ident, ty, v, e) if matches!(ty, desc::Ty::ArrayView(_, _)) => {
+            if let Some(old) =
+                view_ctx.insert(ident.name.clone(), ViewExpr::create_from(v, view_ctx))
+            {
+                panic!(
+                    "Reassigning view expression variable from `{i} = {old:?}` to `{i} = {new:?}`",
+                    i = ident.name,
+                    old = old,
+                    new = ViewExpr::create_from(v, view_ctx)
+                );
+            }
+            gen_stmt_expr(e, view_ctx)
+        }
+        // Let Expression
         Let(mutbl, ident, ty, e1, e2) => Stmt(cu::Stmt::Seq(
             Box::new(cu::Stmt::VarDecl {
                 name: ident.name.clone(),
@@ -92,7 +108,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<desc::Ident, View>) -
         Lambda(params, exec, ty, expr) => Expr(cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt_expr(expr, view_ctx).stmt()),
-            ret_ty: gen_ty(ty, Mutability::Mut),
+            ret_ty: gen_ty(ty, desc::Mutability::Mut),
             is_dev_fun: is_dev_fun(*exec),
         }),
         App(fun, kinded_args, args) => Expr(cu::Expr::FunCall {
@@ -147,74 +163,85 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<desc::Ident, View>) -
                 stmt: Box::new(gen_stmt_expr(body, view_ctx).stmt()),
             })
         }
-        ParForSync(ident, view_expr, parall_config_expr, body) => unimplemented!(),
-        //     cu::Expr::FunCall {
-        //     fun: Box::new(cu::Expr::Ident("descend::par_for".to_string())),
-        //     template_args: vec![],
-        //     args: elems
-        //         .iter()
-        //         .map(|e| gen_stmt_expr(e, view_ctx).expr())
-        //         .collect::<Vec<_>>(),
-        // },
-        Binary(op, lhs, rhs) => unimplemented!(),
-        Unary(op, arg) => unimplemented!(),
+        ParForSync(ident, view_expr, parall_config_expr, body) => {
+            let v = ViewExpr::create_from(view_expr, view_ctx);
+            let source_pl_exprs = v.collect_pl_exprs();
+            let param_decls: Vec<_> = source_pl_exprs
+                .iter()
+                .enumerate()
+                .map(|(i, pl_expr)| cu::ParamDecl {
+                    name: format!("p{}", i),
+                    ty: gen_ty(pl_expr.ty.as_ref().unwrap(), Mutability::Const),
+                })
+                .collect();
+            let idx = cu::Expr::BinOp {
+                op: cu::BinOp::Add,
+                lhs: Box::new(cu::Expr::BinOp {
+                    op: cu::BinOp::Mul,
+                    lhs: Box::new(cu::Expr::Ident("blockIdx.x".to_string())),
+                    rhs: Box::new(cu::Expr::Ident("blockDim.x".to_string())),
+                }),
+                rhs: Box::new(cu::Expr::Ident("threadIdx.x".to_string())),
+            };
+            let res = view_ctx.insert(
+                ident.name.clone(),
+                ViewExpr::Idx {
+                    idx,
+                    view: Box::new(v),
+                },
+            );
+            if res.is_some() {
+                panic!(
+                    "Conflicting names. View variable `{}` used twice.",
+                    ident.name
+                )
+            }
+            let loop_body = cu::Expr::Lambda {
+                params: param_decls,
+                body: Box::new(gen_stmt_expr(body, view_ctx).stmt()),
+                ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
+                is_dev_fun: true,
+            };
+            let mut input: Vec<_> = source_pl_exprs
+                .iter()
+                .map(|e| gen_stmt_expr(e, view_ctx).expr())
+                .collect();
+            let mut args = vec![loop_body];
+            args.append(&mut input);
+            Stmt(cu::Stmt::Expr(cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("descend::par_for".to_string())),
+                template_args: vec![/* TODO GPU params */],
+                args,
+            }))
+        }
+        BinOp(op, lhs, rhs) => Expr(cu::Expr::BinOp {
+            op: match op {
+                desc::BinOp::Add => cu::BinOp::Add,
+                desc::BinOp::Sub => cu::BinOp::Sub,
+                desc::BinOp::Mul => cu::BinOp::Mul,
+                desc::BinOp::Div => cu::BinOp::Div,
+                desc::BinOp::Mod => cu::BinOp::Mod,
+                desc::BinOp::And => cu::BinOp::And,
+                desc::BinOp::Or => cu::BinOp::Or,
+                desc::BinOp::Eq => cu::BinOp::Eq,
+                desc::BinOp::Lt => cu::BinOp::Lt,
+                desc::BinOp::Le => cu::BinOp::Le,
+                desc::BinOp::Gt => cu::BinOp::Gt,
+                desc::BinOp::Ge => cu::BinOp::Ge,
+                desc::BinOp::Neq => cu::BinOp::Neq,
+            },
+            lhs: Box::new(gen_stmt_expr(lhs, view_ctx).expr()),
+            rhs: Box::new(gen_stmt_expr(rhs, view_ctx).expr()),
+        }),
+        UnOp(op, arg) => Expr(cu::Expr::UnOp {
+            op: match op {
+                desc::UnOp::Deref => cu::UnOp::Deref,
+                desc::UnOp::Not => cu::UnOp::Not,
+                desc::UnOp::Neg => cu::UnOp::Neg,
+            },
+            arg: Box::new(gen_stmt_expr(arg, view_ctx).expr()),
+        }),
     }
-}
-
-// TODO move to a higher module and make sure that this is the only place at which
-//  View has to be extended
-//  or Lower Module, which ever fits better. Also then remove the paths in front of Types
-pub enum View {
-    ToView {
-        r: desc::Provenance,
-        mem: desc::Memory,
-        n: desc::Nat,
-        ty: desc::Ty,
-        expr: desc::Expr,
-    },
-    Group {
-        size: desc::Nat,
-        n: desc::Nat,
-        ty: desc::Ty,
-        view: Box<View>,
-    },
-    Split {
-        pos: desc::Nat,
-        rest: desc::Nat,
-        ty: desc::Ty,
-        view: Box<View>,
-    },
-    Join {
-        m: desc::Nat,
-        n: desc::Nat,
-        ty: desc::Ty,
-        view: Box<View>,
-    },
-    Transpose {
-        m: desc::Nat,
-        n: desc::Nat,
-        ty: desc::Ty,
-        view: Box<View>,
-    },
-    Zip {
-        n: desc::Nat,
-        fst_ty: desc::Ty,
-        snd_ty: desc::Ty,
-        fst: Box<View>,
-        snd: Box<View>,
-    },
-    Take {
-        num: desc::Nat,
-        n: desc::Nat,
-        ty: desc::Ty,
-        view: Box<View>,
-    },
-    Drop {
-        num: desc::Nat,
-        n: desc::Nat,
-        ty: desc::Ty,
-        view: Box<View>,
-    },
 }
 
 fn gen_lit(l: desc::Lit) -> cu::Expr {
@@ -236,18 +263,22 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr) -> cu::Expr {
             n: n.clone(),
         },
         desc::PlaceExpr::Deref(pl) => cu::Expr::Deref(Box::new(gen_pl_expr(pl.as_ref()))),
-        desc::PlaceExpr::Var(ident) => cu::Expr::Ident(ident.name.clone()),
+        desc::PlaceExpr::Ident(ident) => cu::Expr::Ident(ident.name.clone()),
     }
 }
 
 fn gen_templ_params(ty_idents: &[desc::IdentKinded]) -> Vec<cu::TemplParam> {
     ty_idents
         .iter()
-        // TODO filter_map
-        .filter(|desc::IdentKinded { ident, kind }| {
-            !(matches!(kind, desc::Kind::Frame) || matches!(kind, desc::Kind::Provenance))
+        .filter_map(|ty_ident| {
+            if !(matches!(ty_ident.kind, desc::Kind::Frame)
+                || matches!(ty_ident.kind, desc::Kind::Provenance))
+            {
+                Some(gen_templ_param(ty_ident))
+            } else {
+                None
+            }
         })
-        .map(gen_templ_param)
         .collect()
 }
 
@@ -377,5 +408,207 @@ fn coll_size(ty: &desc::Ty) -> Option<desc::Nat> {
     match ty {
         desc::Ty::Array(_, n) => Some(n.clone()),
         _ => None,
+    }
+}
+
+// Views are parsed as normal predeclared functions so that it is possible to infer types.
+// ----- After typechecking the AST is updated to contain views instead of function applications of
+// ----- predeclard view functions. (first idea)
+// +++++ During code generation view function applications are converted to View Variants and used
+// +++++ to generate Indices.
+#[derive(Debug, Clone)]
+enum ViewExpr {
+    ToView {
+        // only needed for type checking
+        // r: desc::Provenance,
+        // mem: desc::Memory,
+        // TODO are the nat and type needed?
+        n: desc::Nat,
+        ty: desc::Ty,
+        // box to reduce variant's size
+        pl_expr: Box<desc::Expr>,
+    },
+    Idx {
+        // TODO Nat or something else?
+        idx: cu::Expr,
+        view: Box<ViewExpr>,
+    },
+    Group {
+        size: desc::Nat,
+        n: desc::Nat,
+        ty: desc::Ty,
+        view: Box<ViewExpr>,
+    },
+    Join {
+        m: desc::Nat,
+        n: desc::Nat,
+        ty: desc::Ty,
+        view: Box<ViewExpr>,
+    },
+    Transpose {
+        m: desc::Nat,
+        n: desc::Nat,
+        ty: desc::Ty,
+        view: Box<ViewExpr>,
+    },
+    // Split {
+    //     pos: desc::Nat,
+    //     rest: desc::Nat,
+    //     ty: desc::Ty,
+    //     view: Box<ViewExpr>,
+    // },
+    // Zip {
+    //     n: desc::Nat,
+    //     fst_ty: desc::Ty,
+    //     snd_ty: desc::Ty,
+    //     fst: Box<ViewExpr>,
+    //     snd: Box<ViewExpr>,
+    // },
+    // Take {
+    //     num: desc::Nat,
+    //     n: desc::Nat,
+    //     ty: desc::Ty,
+    //     view: Box<ViewExpr>,
+    // },
+    // Drop {
+    //     num: desc::Nat,
+    //     n: desc::Nat,
+    //     ty: desc::Ty,
+    //     view: Box<ViewExpr>,
+    // },
+}
+
+impl ViewExpr {
+    // Precondition: Expression is a fully typed function application and has type ArrayView.
+    fn create_from(expr: &desc::Expr, view_ctx: &HashMap<String, ViewExpr>) -> ViewExpr {
+        if !matches!(expr.ty, Some(desc::Ty::ArrayView(_, _))) {
+            panic!(
+                "Expected expression of type ArrayView, but found {:?}",
+                expr.ty
+            );
+        }
+
+        match &expr.expr {
+            // TODO this is assuming that f is an identifier
+            //  We have to redesign Views to not be data types...
+            desc::ExprKind::App(f, gen_args, args) => {
+                if let desc::ExprKind::GlobalFunIdent(name) = &f.expr {
+                    if name == crate::ty_check::pre_decl::TO_VIEW {
+                        ViewExpr::create_to_view_view(gen_args, args)
+                    } else if name == crate::ty_check::pre_decl::GROUP {
+                        ViewExpr::create_group_view(gen_args, args, view_ctx)
+                    } else if name == crate::ty_check::pre_decl::JOIN {
+                        ViewExpr::create_join_view(gen_args, args, view_ctx)
+                    } else if name == crate::ty_check::pre_decl::TRANSPOSE {
+                        ViewExpr::create_transpose_view(gen_args, args, view_ctx)
+                    } else {
+                        unimplemented!()
+                    }
+                } else {
+                    panic!("Non-globally defined view functions do not exist.")
+                }
+            }
+            desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) => {
+                view_ctx.get(&ident.name).unwrap().clone()
+            }
+            _ => panic!("Expected a function application, but found {:?}", expr.expr),
+        }
+    }
+
+    fn create_to_view_view(gen_args: &[desc::KindedArg], args: &[desc::Expr]) -> ViewExpr {
+        if let (desc::KindedArg::Nat(n), desc::KindedArg::Ty(ty), Some(pl_expr)) =
+            (&gen_args[2], &gen_args[3], args.first())
+        {
+            // e cannot contain views, so the view_ctx can be empty
+            return ViewExpr::ToView {
+                n: n.clone(),
+                ty: ty.clone(),
+                pl_expr: Box::new(pl_expr.clone()),
+            };
+        }
+        panic!("Cannot create `to_view` from the provided arguments.");
+    }
+
+    fn create_group_view(
+        gen_args: &[desc::KindedArg],
+        args: &[desc::Expr],
+        view_ctx: &HashMap<String, ViewExpr>,
+    ) -> ViewExpr {
+        if let (
+            desc::KindedArg::Nat(s),
+            desc::KindedArg::Nat(n),
+            desc::KindedArg::Ty(ty),
+            Some(v),
+        ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
+        {
+            return ViewExpr::Group {
+                size: s.clone(),
+                n: n.clone(),
+                ty: ty.clone(),
+                view: Box::new(ViewExpr::create_from(v, view_ctx)),
+            };
+        }
+        panic!("Cannot create `to_view` from the provided arguments.");
+    }
+
+    fn create_join_view(
+        gen_args: &[desc::KindedArg],
+        args: &[desc::Expr],
+        view_ctx: &HashMap<String, ViewExpr>,
+    ) -> ViewExpr {
+        if let (
+            desc::KindedArg::Nat(m),
+            desc::KindedArg::Nat(n),
+            desc::KindedArg::Ty(ty),
+            Some(v),
+        ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
+        {
+            return ViewExpr::Join {
+                m: m.clone(),
+                n: n.clone(),
+                ty: ty.clone(),
+                view: Box::new(ViewExpr::create_from(v, view_ctx)),
+            };
+        }
+        panic!("Cannot create `to_view` from the provided arguments.");
+    }
+
+    fn create_transpose_view(
+        gen_args: &[desc::KindedArg],
+        args: &[desc::Expr],
+        view_ctx: &HashMap<String, ViewExpr>,
+    ) -> ViewExpr {
+        if let (
+            desc::KindedArg::Nat(m),
+            desc::KindedArg::Nat(n),
+            desc::KindedArg::Ty(ty),
+            Some(v),
+        ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
+        {
+            return ViewExpr::Transpose {
+                m: m.clone(),
+                n: n.clone(),
+                ty: ty.clone(),
+                view: Box::new(ViewExpr::create_from(v, view_ctx)),
+            };
+        }
+        panic!("Cannot create `to_view` from the provided arguments.");
+    }
+
+    fn collect_pl_exprs(&self) -> Vec<desc::Expr> {
+        fn collect_pl_exprs_rec(v: &ViewExpr, mut vec: Vec<desc::Expr>) -> Vec<desc::Expr> {
+            match v {
+                ViewExpr::ToView { pl_expr, .. } => {
+                    vec.push(pl_expr.as_ref().clone());
+                    vec
+                }
+                ViewExpr::Group { view, .. } => collect_pl_exprs_rec(view.as_ref(), vec),
+                ViewExpr::Join { view, .. } => collect_pl_exprs_rec(view.as_ref(), vec),
+                ViewExpr::Transpose { view, .. } => collect_pl_exprs_rec(view.as_ref(), vec),
+                _ => unimplemented!(),
+            }
+        }
+        let vec = vec![];
+        collect_pl_exprs_rec(&self, vec)
     }
 }
