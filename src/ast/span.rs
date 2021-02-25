@@ -22,7 +22,7 @@ impl Span {
             } else {
                 column_count = column_count + 1;
             }
-            if i <= self.start {
+            if i >= self.start {
                 return (line_count, column_count);
             }
         }
