@@ -1,8 +1,13 @@
 pub mod ty;
 pub mod utils;
 
+mod span;
+
 use std::fmt;
 use ty::*;
+pub use span::*;
+
+use descend_derive::span_derive;
 
 #[derive(Eq ,Debug, Clone)]
 pub struct Expr {
@@ -248,15 +253,25 @@ impl fmt::Display for ExprKind {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Ident {
     pub name: String,
+    #[span_derive_ignore]
+    pub span: Option<Span>
 }
 
 impl Ident {
-    pub fn new(name: &str) -> Ident {
-        Ident {
+    pub fn new(name: &str) -> Self {
+        Self {
             name: String::from(name),
+            span: None
+        }
+    }
+
+    pub fn with_span(name: String, span: Span) -> Self {
+        Self {
+            name, span: Some(span)
         }
     }
 }

@@ -1,14 +1,15 @@
 [package]
-name = "descend"
+name = "descend_derive"
 version = "0.1.0"
 authors = ["Köpcke <bastian.koepcke@wwu.de>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
-peg = "0.6.3"
-descend_derive = {path = "./descend_derive"}
+[lib]
+proc-macro = true
 
-[workspace]
-members = ["descend_derive"]
+[dependencies]
+syn = { version = "1.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"

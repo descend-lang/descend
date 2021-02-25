@@ -1,8 +1,10 @@
+//! Module for components related to parsing
+
 mod helpers;
 
 use crate::ast::ty::{Nat, Ty, ScalarData, ExecLoc, Memory, Provenance, Kind, GlobalItem, GlobalFunDef, FrameExpr, IdentKinded, KindedArg};
 use crate::ty_check::ty_ctx::IdentTyped;
-use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp};
+use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp, Span};
 
 use crate::dsl::fun_ty;
 
@@ -43,8 +45,8 @@ peg::parser!{
             }
 
         rule kind_parameter() -> IdentKinded
-            = name:identifier() _ ":" _ kind:kind() {
-                IdentKinded::new(&Ident::new(&name), kind)
+            = name:ident() _ ":" _ kind:kind() {
+                IdentKinded::new(&name, kind)
             }
 
         rule fun_parameter() -> IdentTyped
@@ -174,12 +176,12 @@ peg::parser!{
                 / ty:ty() { KindedArg::Ty(ty) }
                 / prov:provenance() { KindedArg::Provenance(prov) }
             ) { result }
-            / ident:identifier() { KindedArg::Ident(Ident::new(&ident))}
+            / ident:ident() { KindedArg::Ident(ident)}
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
-            = derefs:("*" _)* name:identifier() _ ns:("." _ n:nat() _ {n})* {
-                let root = PlaceExpr::Var(Ident::new(&name));
+            = derefs:("*" _)* name:ident() _ ns:("." _ n:nat() _ {n})* {
+                let root = PlaceExpr::Var(name);
                 // . operator binds stronger
                 let proj = ns.into_iter().fold(root, |prev,n| PlaceExpr::Proj(Box::new(prev), n));
                 // * operator binds weaker
@@ -197,8 +199,8 @@ peg::parser!{
                     Err(_) => { Err("Cannot parse natural number") }
                 }
             }
-            / name:identifier() {
-                Nat::Ident(Ident::new(&name))
+            / name:ident() {
+                Nat::Ident(name)
             }
             // TODO: binary operations are currently disabled
             // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
@@ -216,7 +218,7 @@ peg::parser!{
             / "bool" { Ty::Scalar(ScalarData::Bool) }
             / "()" { Ty::Scalar(ScalarData::Unit) }
             / "GPU" { Ty::GPU }
-            / name:identifier() { Ty::Ident(Ident::new(&name)) }
+            / name:ident() { Ty::Ident(name) }
             / "(" _ types:ty() ** ( _ "," _ ) _ ")" { Ty::Tuple(types) }
             / "[" _ t:ty() _ ";" _ n:nat() _ "]" { Ty::Array(Box::new(t), n) }
             / "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { Ty::ArrayView(Box::new(t), n) }
@@ -237,7 +239,7 @@ peg::parser!{
             / "cpu.heap" { Memory::CpuHeap }
             / "gpu.global" { Memory::GpuGlobal }
             / "gpu.shared" { Memory::GpuShared }
-            / name:identifier() { Memory::Ident(Ident::new(&name)) }
+            / name:ident() { Memory::Ident(name) }
 
         pub(crate) rule execution_location() -> ExecLoc
             = "cpu.thread" { ExecLoc::CpuThread }
@@ -253,16 +255,16 @@ peg::parser!{
             /// "own" { } // TODO: Unimplemented in AST
 
         rule ident() -> Ident
-            = i:$(identifier()) {
-                Ident{name: i.to_string()}
+            = start:position!() ident:$(identifier()) end:position!() {
+                Ident::with_span(ident.into(), Span::new(start, end))
             }
 
         rule provenance() -> Provenance
             = prov:prov_value() {
                 Provenance::Value(prov)
             }
-            / ident:identifier() {
-                Provenance::Ident(Ident::new(&ident))
+            / ident:ident() {
+                Provenance::Ident(ident)
             }
 
         /// Identifier, but also allows leading ' for provenance names
