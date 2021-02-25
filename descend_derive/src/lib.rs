@@ -96,7 +96,7 @@ pub fn span_derive(attr: TokenStream, input: TokenStream) -> TokenStream {
         impl<'a> Into<#helper_name<'a>> for &'a #original_name {
             fn into(self) -> #helper_name<'a> {
                 #helper_name {
-                    #(#into_fields: &self.#into_fields)*
+                    #(#into_fields: &self.#into_fields),*
                 }
             }
         }
