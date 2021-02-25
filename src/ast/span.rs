@@ -2,8 +2,8 @@
 
 #[derive(Clone, Copy, Debug)]
 pub struct Span {
-    start: usize,
-    end: usize
+    pub start: usize,
+    pub end: usize
 }
 
 impl Span {

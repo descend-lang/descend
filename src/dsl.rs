@@ -144,14 +144,13 @@ pub fn bin_op(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
 macro_rules! arr {
     ($($v:literal),*) => {
         {
-             // Hack to test for same types.
-             // vec![$($v),*];
-             $crate::ast::Expr {
-                expr: $crate::ast::ExprKind::Array(
+            // Hack to test for same types.
+            // vec![$($v),*];
+            $crate::ast::Expr::new(
+                $crate::ast::ExprKind::Array(
                     vec![$(lit(& $v)),*]
-                ),
-                ty: None,
-            }
+                )
+            )
         }
     };
     ($($v:expr),*) => {
@@ -179,12 +178,11 @@ macro_rules! tuple {
     };
     ($($v:literal),*) => {
         {
-             $crate::ast::Expr {
-                expr: $crate::ast::ExprKind::Tuple(
+            $crate::ast::Expr::new(
+                $crate::ast::ExprKind::Tuple(
                     vec![$(lit(& $v)),*]
-                ),
-                ty: None,
-            }
+                )
+            )
         }
     };
     ($($v:expr),*) => {

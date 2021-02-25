@@ -9,27 +9,26 @@ pub use span::*;
 
 use descend_derive::span_derive;
 
-#[derive(Eq ,Debug, Clone)]
+#[span_derive(PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: ExprKind,
     pub ty: Option<Ty>,
+    #[span_derive_ignore]
+    pub span: Option<Span>
 }
 
 impl Expr {
-    pub fn typed_expr(expr: ExprKind, ty: &Ty) -> Expr {
-        Expr {
-            expr,
-            ty: Some(ty.clone()),
-        }
-    }
     pub fn new(expr: ExprKind) -> Expr {
-        Expr { expr, ty: None }
+        Expr { expr, ty: None, span: None }
     }
-}
 
-impl PartialEq for Expr {
-    fn eq(&self, other:&Self) -> bool {
-        self.expr == other.expr
+    pub fn with_span(expr: ExprKind, span: Span) -> Expr {
+        Expr { expr, ty: None, span: Some(span) }
+    }
+
+    pub fn with_type(expr: ExprKind, ty: Ty) -> Expr {
+        Expr { expr, ty: Some(ty), span: None }
     }
 }
 

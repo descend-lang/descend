@@ -1,6 +1,6 @@
 //! Helper functions for parsing
 
-use crate::ast::{BinOp, Expr, ExprKind, Lit, UnOp, ty::{ScalarData, Ty, KindedArg}};
+use crate::ast::{BinOp, Expr, ExprKind, Lit, Span, UnOp, ty::{ScalarData, Ty, KindedArg}};
 
 pub fn type_from_lit(lit: &Lit) -> Ty {
     Ty::Scalar(match lit {
@@ -14,32 +14,36 @@ pub fn type_from_lit(lit: &Lit) -> Ty {
 pub fn make_binary(op:BinOp, lhs: Expr, rhs:Expr) -> Expr {
     Expr {
         expr: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
-        ty: None
+        ty: None,
+        span: None
     }
 }
 
 pub fn make_unary(op:UnOp, rhs:Expr) -> Expr {
     Expr {
         expr: ExprKind::Unary(op, Box::new(rhs)),
-        ty: None
+        ty: None,
+        span: None
     }
 }
 
-pub fn make_function_application(func: Expr, kind_args: Option<Vec<KindedArg>>, args: Vec<Expr>) -> Expr {
+pub fn make_function_application(func: Expr, kind_args: Option<Vec<KindedArg>>, args: Vec<Expr>, span: Span) -> Expr {
     match kind_args {
         Some(mut kind_args) if !kind_args.is_empty() => {
             let first_arg = kind_args.remove(0);
             Expr {
                 expr: ExprKind::DepApp(Box::new(
-                    make_function_application(func, Some(kind_args), args)),
+                    make_function_application(func, Some(kind_args), args, span)),
                     first_arg),
-                ty: None
+                ty: None,
+                span: Some(span)
             }
         }
         _ => {
             Expr {
                 expr: ExprKind::App(Box::new(func), args),
-                ty: None
+                ty: None,
+                span: Some(span)
             }
         }
     }
