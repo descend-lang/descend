@@ -1,5 +1,6 @@
 use crate::ast::{
-    internal, BinOpNat, ExecLoc, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, Ty,
+    internal, BinOpNat, ExecLoc, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance,
+    ScalarTy, Ty,
 };
 
 pub static GPU_ALLOC: &str = "gpu_alloc";
@@ -67,7 +68,7 @@ fn gpu_alloc_ty() -> Ty {
                 Provenance::Ident(r1),
                 Ownership::Uniq,
                 Memory::Ident(m1),
-                Box::new(Ty::Gpu),
+                Box::new(Ty::Scalar(ScalarTy::Gpu)),
             ),
             Ty::Ref(
                 Provenance::Ident(r2),

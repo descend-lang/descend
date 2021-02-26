@@ -151,7 +151,7 @@ fn ty_check_par_for_global(
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let gpu_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, gpu_expr)?;
-    if !matches!(gpu_expr.ty, Some(Ty::Gpu)) {
+    if !matches!(gpu_expr.ty, Some(Ty::Scalar(ScalarTy::Gpu))) {
         return Err(format!(
             "Expected an expression of type GPU, instead found an expression of type {:?}",
             gpu_expr.ty
@@ -284,22 +284,22 @@ fn ty_check_app(
     ty_ctx: TyCtx,
     exec: ExecLoc,
     ef: &mut Expr,
-    k_args: &mut [KindedArg],
+    k_args: &mut [ArgKinded],
     args: &mut [Expr],
 ) -> Result<(TyCtx, Ty), String> {
     fn check_arg_has_correct_kind(
         kind_ctx: &KindCtx,
         expected: &Kind,
-        kv: &KindedArg,
+        kv: &ArgKinded,
     ) -> Result<(), String> {
         match kv {
-            KindedArg::Provenance(_) if expected == &Kind::Provenance => Ok(()),
-            KindedArg::Ty(_) if expected == &Kind::Ty => Ok(()),
-            KindedArg::Nat(_) if expected == &Kind::Nat => Ok(()),
-            KindedArg::Memory(_) if expected == &Kind::Memory => Ok(()),
+            ArgKinded::Provenance(_) if expected == &Kind::Provenance => Ok(()),
+            ArgKinded::Ty(_) if expected == &Kind::Ty => Ok(()),
+            ArgKinded::Nat(_) if expected == &Kind::Nat => Ok(()),
+            ArgKinded::Memory(_) if expected == &Kind::Memory => Ok(()),
             // TODO?
             //  KindedArg::Frame(_) if expected == &Kind::Frame => Ok(()),
-            KindedArg::Ident(k_ident) if expected == kind_ctx.get_kind(k_ident)? => Ok(()),
+            ArgKinded::Ident(k_ident) if expected == kind_ctx.get_kind(k_ident)? => Ok(()),
             _ => Err(format!(
                 "expected argument of kind {:?}, but the provided argument has another kind",
                 expected

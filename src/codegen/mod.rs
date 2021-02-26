@@ -20,7 +20,6 @@ fn gen_fun_def(gl_fun: &desc::GlobalFunDef) -> cu::Item {
         params,
         ret_ty,
         exec,
-        prv_rels: _,
         body_expr,
         ..
     } = gl_fun;
@@ -35,6 +34,7 @@ fn gen_fun_def(gl_fun: &desc::GlobalFunDef) -> cu::Item {
     }
 }
 
+#[derive(Debug)]
 enum StmtOrExpr {
     Stmt(cu::Stmt),
     Expr(cu::Expr),
@@ -44,14 +44,14 @@ impl StmtOrExpr {
     fn stmt(self) -> cu::Stmt {
         match self {
             StmtOrExpr::Stmt(stmt) => stmt,
-            _ => panic!("Expected Stmt but found Expr."),
+            StmtOrExpr::Expr(e) => panic!("Expected Stmt but found Expr\n {:?}", e),
         }
     }
 
     fn expr(self) -> cu::Expr {
         match self {
             StmtOrExpr::Expr(expr) => expr,
-            _ => panic!("Expected Expr but found Stmt"),
+            StmtOrExpr::Stmt(s) => panic!("Expected Expr but found Stmt\n {:?}", s),
         }
     }
 }
@@ -69,6 +69,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
             index: n.clone(),
         }),
         Ref(_, _, pl_expr) => Expr(cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr)))),
+        LetProv(_, expr) => gen_stmt_expr(expr, view_ctx),
         BorrowIndex(_, _, pl_expr, n) => Expr(cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
             array: Box::new(gen_pl_expr(pl_expr)),
             index: n.clone(),
@@ -113,7 +114,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
         }),
         App(fun, kinded_args, args) => Expr(cu::Expr::FunCall {
             fun: Box::new(gen_stmt_expr(fun, view_ctx).expr()),
-            template_args: gen_kinded_args(kinded_args),
+            template_args: gen_args_kinded(kinded_args),
             args: args
                 .iter()
                 .map(|e| gen_stmt_expr(e, view_ctx).expr())
@@ -163,7 +164,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
                 stmt: Box::new(gen_stmt_expr(body, view_ctx).stmt()),
             })
         }
-        ParForSync(ident, view_expr, parall_config_expr, body) => {
+        ParForSync(ident, view_expr, glb_cfg_expr, body) => {
             let v = ViewExpr::create_from(view_expr, view_ctx);
             let source_pl_exprs = v.collect_pl_exprs();
             let param_decls: Vec<_> = source_pl_exprs
@@ -196,6 +197,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
                     ident.name
                 )
             }
+            let glb_cfg = gen_stmt_expr(glb_cfg_expr, &mut HashMap::new()).expr();
             let loop_body = cu::Expr::Lambda {
                 params: param_decls,
                 body: Box::new(gen_stmt_expr(body, view_ctx).stmt()),
@@ -206,11 +208,11 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
                 .iter()
                 .map(|e| gen_stmt_expr(e, view_ctx).expr())
                 .collect();
-            let mut args = vec![loop_body];
+            let mut args: Vec<cu::Expr> = vec![loop_body, glb_cfg];
             args.append(&mut input);
             Stmt(cu::Stmt::Expr(cu::Expr::FunCall {
                 fun: Box::new(cu::Expr::Ident("descend::par_for".to_string())),
-                template_args: vec![/* TODO GPU params */],
+                template_args: vec![],
                 args,
             }))
         }
@@ -249,10 +251,7 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
         desc::Lit::Bool(b) => cu::Expr::Lit(cu::Lit::Bool(b)),
         desc::Lit::I32(i) => cu::Expr::Lit(cu::Lit::I32(i)),
         desc::Lit::F32(f) => cu::Expr::Lit(cu::Lit::F32(f)),
-        desc::Lit::Unit => unimplemented!(
-            "How to deal with this? \
-            (provide custom unit type in C or do not allow () literals)"
-        ),
+        desc::Lit::Unit => cu::Expr::Lit(cu::Lit::Void),
     }
 }
 
@@ -310,16 +309,22 @@ fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
     }
 }
 
-fn gen_kinded_args(templ_args: &[desc::KindedArg]) -> Vec<cu::TemplateArg> {
-    templ_args.iter().map(gen_kinded_arg).collect()
+fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
+    templ_args
+        .iter()
+        .filter_map(|ka| match ka {
+            desc::ArgKinded::Provenance(_) | desc::ArgKinded::Frame(_) => None,
+            _ => Some(gen_arg_kinded(ka)),
+        })
+        .collect()
 }
 
-fn gen_kinded_arg(templ_arg: &desc::KindedArg) -> cu::TemplateArg {
+fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> cu::TemplateArg {
     match templ_arg {
         // TODO think about this:
-        desc::KindedArg::Ident(ident) => cu::TemplateArg::Ty(cu::Ty::Ident(ident.name.clone())),
-        desc::KindedArg::Nat(n) => cu::TemplateArg::Expr(cu::Expr::Nat(n.clone())),
-        desc::KindedArg::Memory(mem) => cu::TemplateArg::Expr(cu::Expr::Ident(match mem {
+        desc::ArgKinded::Ident(ident) => cu::TemplateArg::Ty(cu::Ty::Ident(ident.name.clone())),
+        desc::ArgKinded::Nat(n) => cu::TemplateArg::Expr(cu::Expr::Nat(n.clone())),
+        desc::ArgKinded::Memory(mem) => cu::TemplateArg::Expr(cu::Expr::Ident(match mem {
             desc::Memory::Ident(ident) => ident.name.clone(),
             desc::Memory::GpuGlobal => "Memory::GpuGlobal".to_string(),
             desc::Memory::GpuShared => unimplemented!("TODO!"),
@@ -328,15 +333,15 @@ fn gen_kinded_arg(templ_arg: &desc::KindedArg) -> cu::TemplateArg {
                 panic!("CpuStack is not valid for At types. Should never appear here.")
             }
         })),
-        desc::KindedArg::Ty(ty) => cu::TemplateArg::Ty(gen_ty(ty, desc::Mutability::Mut)),
+        desc::ArgKinded::Ty(ty) => cu::TemplateArg::Ty(gen_ty(ty, desc::Mutability::Mut)),
         // TODO the panic message is not entirely true. Exec IS important when it appears in a type
         //  in order to determine __device__ annotations. However, there is no way to generate
         //  an Exec::Ident which means these must not be used by users and are only for
-        desc::KindedArg::Exec(_) => panic!(
+        desc::ArgKinded::Exec(_) => panic!(
             "This should not be allowed and is currently a problem \
         with the design of execution locations. See Issue #3."
         ),
-        desc::KindedArg::Provenance(_) | desc::KindedArg::Frame(_) => panic!(
+        desc::ArgKinded::Provenance(_) | desc::ArgKinded::Frame(_) => panic!(
             "Provenances and Frames are only used for type checking and cannot be generated."
         ),
     }
@@ -354,6 +359,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
+            desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
         },
         desc::Ty::Tuple(tys) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(ty, m)).collect()),
         desc::Ty::Array(ty, n) => cu::Ty::Array(Box::new(gen_ty(ty, m)), n.clone()),
@@ -384,7 +390,6 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
                 cu::Ty::PtrConst(cty)
             }
         }
-        desc::Ty::Gpu => unimplemented!("needs changes"),
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
         desc::Ty::Ident(ident) => cu::Ty::Ident(ident.name.clone()),
     };
@@ -515,8 +520,8 @@ impl ViewExpr {
         }
     }
 
-    fn create_to_view_view(gen_args: &[desc::KindedArg], args: &[desc::Expr]) -> ViewExpr {
-        if let (desc::KindedArg::Nat(n), desc::KindedArg::Ty(ty), Some(pl_expr)) =
+    fn create_to_view_view(gen_args: &[desc::ArgKinded], args: &[desc::Expr]) -> ViewExpr {
+        if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(ty), Some(pl_expr)) =
             (&gen_args[2], &gen_args[3], args.first())
         {
             // e cannot contain views, so the view_ctx can be empty
@@ -530,14 +535,14 @@ impl ViewExpr {
     }
 
     fn create_group_view(
-        gen_args: &[desc::KindedArg],
+        gen_args: &[desc::ArgKinded],
         args: &[desc::Expr],
         view_ctx: &HashMap<String, ViewExpr>,
     ) -> ViewExpr {
         if let (
-            desc::KindedArg::Nat(s),
-            desc::KindedArg::Nat(n),
-            desc::KindedArg::Ty(ty),
+            desc::ArgKinded::Nat(s),
+            desc::ArgKinded::Nat(n),
+            desc::ArgKinded::Ty(ty),
             Some(v),
         ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
         {
@@ -552,14 +557,14 @@ impl ViewExpr {
     }
 
     fn create_join_view(
-        gen_args: &[desc::KindedArg],
+        gen_args: &[desc::ArgKinded],
         args: &[desc::Expr],
         view_ctx: &HashMap<String, ViewExpr>,
     ) -> ViewExpr {
         if let (
-            desc::KindedArg::Nat(m),
-            desc::KindedArg::Nat(n),
-            desc::KindedArg::Ty(ty),
+            desc::ArgKinded::Nat(m),
+            desc::ArgKinded::Nat(n),
+            desc::ArgKinded::Ty(ty),
             Some(v),
         ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
         {
@@ -574,14 +579,14 @@ impl ViewExpr {
     }
 
     fn create_transpose_view(
-        gen_args: &[desc::KindedArg],
+        gen_args: &[desc::ArgKinded],
         args: &[desc::Expr],
         view_ctx: &HashMap<String, ViewExpr>,
     ) -> ViewExpr {
         if let (
-            desc::KindedArg::Nat(m),
-            desc::KindedArg::Nat(n),
-            desc::KindedArg::Ty(ty),
+            desc::ArgKinded::Nat(m),
+            desc::ArgKinded::Nat(n),
+            desc::ArgKinded::Ty(ty),
             Some(v),
         ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
         {
@@ -610,5 +615,70 @@ impl ViewExpr {
         }
         let vec = vec![];
         collect_pl_exprs_rec(&self, vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::ExprKind::GlobalFunIdent;
+    use crate::codegen::gen_fun_def;
+
+    #[test]
+    fn scalar_mult_on_vec() {
+        use crate::ast::*;
+        let scalar_mult_fun = GlobalFunDef {
+            name: "scalar_mult".to_string(),
+            generic_params: vec![
+                IdentKinded {
+                    ident: Ident::new("a"),
+                    kind: Kind::Provenance,
+                },
+                IdentKinded {
+                    ident: Ident::new("n"),
+                    kind: Kind::Nat,
+                },
+            ],
+            params: vec![ParamDecl {
+                ident: Ident::new("h_array"),
+                ty: Ty::Ref(
+                    Provenance::Ident(Ident::new("a")),
+                    Ownership::Uniq,
+                    Memory::CpuHeap,
+                    Box::new(Ty::Array(
+                        Box::new(Ty::Scalar(ScalarTy::I32)),
+                        Nat::Ident(Ident::new("n")),
+                    )),
+                ),
+                mutbl: Mutability::Const,
+            }],
+            ret_ty: Ty::Scalar(ScalarTy::Unit),
+            exec: ExecLoc::CpuThread,
+            prv_rels: vec![],
+            body_expr: Expr {
+                expr: ExprKind::LetProv(
+                    vec!["a".to_string()],
+                    Box::new(Expr {
+                        expr: ExprKind::Let(
+                            Mutability::Const,
+                            Ident::new("gpu"),
+                            Ty::Scalar(ScalarTy::Gpu),
+                            Box::new(Expr {
+                                expr: ExprKind::GlobalFunIdent("gpu".to_string()),
+                                ty: Some(Ty::Scalar(ScalarTy::Gpu)),
+                            }),
+                            Box::new(Expr {
+                                expr: ExprKind::Lit(Lit::Unit),
+                                ty: Some(Ty::Scalar(ScalarTy::Unit)),
+                            }),
+                        ),
+                        ty: Some(Ty::Scalar(ScalarTy::Unit)),
+                    }),
+                ),
+                ty: Some(Ty::Scalar(ScalarTy::Unit)),
+            },
+        };
+
+        let compil_unit: CompilUnit = vec![scalar_mult_fun];
+        print!("{}", super::gen(&compil_unit));
     }
 }

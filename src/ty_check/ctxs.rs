@@ -179,8 +179,7 @@ impl TyCtx {
                 | Ref(_, _, _, _)
                 | Fn(_, _, _, _, _)
                 | Ident(_)
-                | Dead(_)
-                | Gpu => vec![(pl, ty.clone())],
+                | Dead(_) => vec![(pl, ty.clone())],
                 Tuple(tys) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {

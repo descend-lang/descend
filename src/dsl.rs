@@ -91,7 +91,7 @@ pub fn app(f: Expr, args: Vec<Expr>) -> Expr {
     dep_app(f, vec![], args)
 }
 
-pub fn dep_app(f: Expr, kinded_args: Vec<KindedArg>, args: Vec<Expr>) -> Expr {
+pub fn dep_app(f: Expr, kinded_args: Vec<ArgKinded>, args: Vec<Expr>) -> Expr {
     Expr::new(ExprKind::App(Box::new(f), kinded_args, args))
 }
 

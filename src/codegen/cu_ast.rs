@@ -177,4 +177,5 @@ pub(super) enum ScalarTy {
     Bool,
     SizeT,
     Memory,
+    Gpu,
 }

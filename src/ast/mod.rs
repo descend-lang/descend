@@ -81,6 +81,7 @@ pub enum ExprKind {
     Index(PlaceExpr, Nat),
     // Borrow Expressions
     Ref(Provenance, Ownership, PlaceExpr),
+    LetProv(Vec<String>, Box<Expr>),
     BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
@@ -96,7 +97,7 @@ pub enum ExprKind {
     // Function application
     // e_f(e_1, ..., e_n)
     // Todo make this the only apply and use template params
-    App(Box<Expr>, Vec<KindedArg>, Vec<Expr>),
+    App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
     // TODO If
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // e.g., [1, 2 + 3, 4]
@@ -293,7 +294,7 @@ impl fmt::Display for Kind {
 }
 
 #[derive(Debug, Clone)]
-pub enum KindedArg {
+pub enum ArgKinded {
     // TODO this exists only for the parser?
     //  talk to parser group to figure out how to do this properly
     Ident(Ident),
@@ -365,7 +366,6 @@ pub enum Ty {
     //  without too much boilerplate.
     Dead(Box<Ty>),
     Ref(Provenance, Ownership, Memory, Box<Ty>),
-    Gpu,
     Ident(Ident),
 }
 
@@ -382,7 +382,6 @@ impl Ty {
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
             ArrayView(ty, _) => ty.non_copyable(),
-            Gpu => true,
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }
@@ -400,8 +399,7 @@ impl Ty {
             | Fn(_, _, _, _, _)
             | At(_, _)
             | Array(_, _)
-            | ArrayView(_, _)
-            | Gpu => true,
+            | ArrayView(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -412,7 +410,7 @@ impl Ty {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use Ty::*;
         match self {
-            Scalar(_) | Ident(_) | Gpu | Dead(_) => false,
+            Scalar(_) | Ident(_) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -451,6 +449,7 @@ pub enum ScalarTy {
     I32,
     F32,
     Bool,
+    Gpu,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

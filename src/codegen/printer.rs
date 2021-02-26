@@ -160,7 +160,7 @@ impl std::fmt::Display for Expr {
 impl std::fmt::Display for Lit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Lit::Void => write!(f, "void"),
+            Lit::Void => Ok(()),
             Lit::Bool(b) => write!(f, "{}", b),
             Lit::I32(i) => write!(f, "{}", i),
             Lit::F32(fl) => write!(f, "{}", fl),
@@ -263,6 +263,7 @@ impl std::fmt::Display for ScalarTy {
             SizeT => write!(f, "std::size_t"),
             Bool => write!(f, "bool"),
             Memory => write!(f, "descend::Memory"),
+            Gpu => write!(f, "descend::Gpu"),
         }
     }
 }
