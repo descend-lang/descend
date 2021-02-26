@@ -1,18 +1,25 @@
 //! Module for components related to parsing
 
 mod helpers;
+mod source;
+use peg::{error::ParseError, str::LineCol};
+pub use source::*;
 
-use crate::ast::ty::{Nat, Ty, ScalarData, ExecLoc, Memory, Provenance, Kind, GlobalItem, GlobalFunDef, FrameExpr, IdentKinded, KindedArg};
+use crate::ast::ty::{Nat, Ty, ScalarData, ExecLoc, Memory, Provenance, Kind, GlobalFunDef, FrameExpr, IdentKinded, KindedArg};
 use crate::ty_check::ty_ctx::IdentTyped;
 use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp, Span};
 
 use crate::dsl::fun_ty;
 
+pub fn parse_global_fun_def(src: &str) -> Result<GlobalFunDef, ParseError<LineCol>> {
+    descend::global_fun_def(src)
+}
+
 peg::parser!{
     pub(crate) grammar descend() for str {
 
         // TODO: PreDeclaredGlobalFun missing Syntax
-        pub(crate) rule global_item() -> GlobalItem
+        pub(crate) rule global_fun_def() -> GlobalFunDef
             = "fn" __ name:identifier() _ ty_idents:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
             "-[" _ exec:execution_location() _ "]->" _ ret_ty:ty() _
@@ -31,8 +38,7 @@ peg::parser!{
                     Some(ty_idents) => ty_idents,
                     None => vec![]
                 };
-                print!("Parameters are: {:?}\n",params);
-                GlobalItem::Def(Box::new(GlobalFunDef{
+                GlobalFunDef {
                   name,
                   ty_idents,
                   params,
@@ -41,7 +47,7 @@ peg::parser!{
                   prv_rels: vec![], // TODO: What even is this?
                   body_expr,
                   fun_ty: f_ty
-                }))
+                }
             }
 
         rule kind_parameter() -> IdentKinded
@@ -1042,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn global_item_global_fun_def_vector_add() {
+    fn global_fun_def_vector_add() {
         let src = r#"fn inplace_vector_add<n: nat, a: prv, b: prv>(
         ha_array: &'a uniq cpu.heap [i32; n],
         hb_array: &'b shrd cpu.heap [i32; n]
@@ -1064,7 +1070,7 @@ mod tests {
             copy_to_host<n, g, 'a, i32>(&g shrd a_array, ha_array);
         }
     }"#;
-    let result = descend::global_item(src);
+    let result = descend::global_fun_def(src);
     match &result {
         Err(e) => println!("{}", e),
         _ => {}
@@ -1120,7 +1126,7 @@ mod tests {
         &ret_ty,
     );
 
-    let intended = GlobalItem::Def(Box::new(GlobalFunDef{
+    let intended = GlobalFunDef{
         name,
         ty_idents,
         params,
@@ -1129,13 +1135,13 @@ mod tests {
         prv_rels,
         body_expr: descend::expression_seq(&expr_seq).unwrap(),
         fun_ty: f_ty
-      }));
+      };
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), intended, "Something was not parsed as intended")
     }
 
     #[test]
-    fn global_item_global_fun_def_all_function_kinds() {
+    fn global_fun_def_all_function_kinds() {
         // all currently available kinds are tested
         let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
             ha_array: &'a uniq cpu.heap [i32; n]
@@ -1148,7 +1154,7 @@ mod tests {
         let body = r#"let answer_to_everything :i32 = 42;
             answer_to_everything"#;
 
-        let result = descend::global_item(src);
+        let result = descend::global_fun_def(src);
 
         // TODO: Do proper check against expected AST
         let name = "test_kinds".into();
@@ -1181,7 +1187,7 @@ mod tests {
             &ret_ty,
         );
 
-        let intended = GlobalItem::Def(Box::new(GlobalFunDef{
+        let intended = GlobalFunDef{
             name,
             ty_idents,
             params,
@@ -1190,13 +1196,13 @@ mod tests {
             prv_rels,
             body_expr: descend::expression_seq(body).unwrap(),
             fun_ty: f_ty
-        }));
+        };
 
         assert_eq!(result.unwrap(), intended);
     }
 
     #[test]
-    fn global_item_global_fun_def_kind_parameters_optional() {
+    fn global_fun_def_kind_parameters_optional() {
         // test both versions with and without <> pointy brackets
         let src_1 = r#"fn no_kinds(
             ha_array: &'a uniq cpu.heap [i32; n],
@@ -1213,15 +1219,15 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let result_1 = descend::global_item(src_1);
-        let result_2 = descend::global_item(src_2);
+        let result_1 = descend::global_fun_def(src_1);
+        let result_2 = descend::global_fun_def(src_2);
 
         assert!(result_1.is_ok());
         assert!(result_2.is_ok());
     }
 
     #[test]
-    fn global_item_global_fun_def_wrong_kinds_cause_error() {
+    fn global_fun_def_wrong_kinds_cause_error() {
         // kind type is spelled wrong
         let src = r#"fn wrong_kind_spelling<n: nat, a: prov, b: prv>(
             ha_array: &'a uniq cpu.heap [i32; n],
@@ -1231,19 +1237,19 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let result = descend::global_item(src);
+        let result = descend::global_fun_def(src);
 
         assert!(result.is_err());
     }
 
     #[test]
-    fn global_item_global_fun_def_no_function_parameters_required() {
+    fn global_fun_def_no_function_parameters_required() {
         let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {            
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
 
-        let result = descend::global_item(src);
+        let result = descend::global_fun_def(src);
         assert!(result.is_ok());
     }
 

@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 peg = "0.6.3"
 descend_derive = {path = "./descend_derive"}
+clap = "^3.0.0-beta.2" # Only beta version available for now
 
 [workspace]
 members = ["descend_derive"]
