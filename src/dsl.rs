@@ -1,8 +1,5 @@
-use crate::ast::ty::*;
-use crate::ast::utils::fresh_name;
 use crate::ast::Lit::Unit;
 use crate::ast::*;
-use crate::ty_check::ty_ctx::IdentTyped;
 
 //
 // Syntax
@@ -33,7 +30,7 @@ pub fn nat_id(name: &str) -> Nat {
 
 // Variable
 pub fn ident(name: &str) -> Expr {
-    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Var(Ident::new(name))))
+    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new(name))))
 }
 
 pub fn fun_name(name: &str) -> Expr {
@@ -49,49 +46,39 @@ pub fn deref(pl_expr: Expr) -> Expr {
 // Function Declaration
 pub fn fdef(
     name: &str,
-    ty_params: Vec<(&str, Kind)>,
-    params: Vec<(&str, &Ty)>,
+    generic_params: Vec<(&str, Kind)>,
+    params: Vec<(Mutability, &str, &Ty)>,
     ret_ty: &Ty,
     exec: ExecLoc,
     prv_rels: Vec<PrvRel>,
     body: Expr,
 ) -> GlobalFunDef {
-    let mut f_ty = fun_ty(
-        params
-            .iter()
-            .map(|p: &(&str, &Ty)| -> Ty { p.1.clone() })
-            .collect(),
-        &FrameExpr::FrTy(vec![]),
-        exec,
-        ret_ty,
-    );
-
-    let ty_idents: Vec<_> = ty_params
+    let generic_idents: Vec<_> = generic_params
         .iter()
         .map(|(name, kind)| IdentKinded::new(&Ident::new(name), *kind))
         .collect();
 
-    if !ty_idents.is_empty() {
-        f_ty = multi_arg_genfn_ty(ty_idents.as_slice(), exec, &f_ty);
-    }
-
     GlobalFunDef {
         name: String::from(name),
-        ty_idents,
+        generic_params: generic_idents,
         params: param_list(params),
         ret_ty: ret_ty.clone(),
         exec,
         prv_rels,
         body_expr: body,
-        fun_ty: f_ty,
     }
 }
 
-// creates a list of identifier expressions; every expression has a set type
-fn param_list(params: Vec<(&str, &Ty)>) -> Vec<IdentTyped> {
+// creates a list of identifier expressions; every expression has a set type and
+// mutability qualifier
+fn param_list(params: Vec<(Mutability, &str, &Ty)>) -> Vec<ParamDecl> {
     params
         .into_iter()
-        .map(|(ident_name, ty)| IdentTyped::new(Ident::new(ident_name), ty.clone()))
+        .map(|(mutbl, ident_name, ty)| ParamDecl {
+            ident: Ident::new(ident_name),
+            ty: ty.clone(),
+            mutbl,
+        })
         .collect()
 }
 
@@ -100,27 +87,12 @@ pub fn seq(e1: Expr, e2: Expr) -> Expr {
     Expr::new(ExprKind::Seq(Box::new(e1), Box::new(e2)))
 }
 
-pub fn app(f: Expr, arg: Vec<Expr>) -> Expr {
-    Expr::new(ExprKind::App(Box::new(f), arg))
+pub fn app(f: Expr, args: Vec<Expr>) -> Expr {
+    dep_app(f, vec![], args)
 }
 
-pub fn ddep_app(f: Expr, dt: &Ty) -> Expr {
-    Expr::new(ExprKind::DepApp(Box::new(f), KindedArg::Ty(dt.clone())))
-}
-pub fn ndep_app(f: Expr, nat: &Nat) -> Expr {
-    Expr::new(ExprKind::DepApp(Box::new(f), KindedArg::Nat(nat.clone())))
-}
-pub fn mdep_app(f: Expr, mem: &Memory) -> Expr {
-    Expr::new(ExprKind::DepApp(
-        Box::new(f),
-        KindedArg::Memory(mem.clone()),
-    ))
-}
-pub fn pdep_app(f: Expr, prv: &Provenance) -> Expr {
-    Expr::new(ExprKind::DepApp(
-        Box::new(f),
-        KindedArg::Provenance(prv.clone()),
-    ))
+pub fn dep_app(f: Expr, kinded_args: Vec<ArgKinded>, args: Vec<Expr>) -> Expr {
+    Expr::new(ExprKind::App(Box::new(f), kinded_args, args))
 }
 
 pub fn add(lhs: Expr, rhs: Expr) -> Expr {
@@ -136,7 +108,7 @@ pub fn div(lhs: Expr, rhs: Expr) -> Expr {
     bin_op(BinOp::Div, lhs, rhs)
 }
 pub fn bin_op(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
-    Expr::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)))
+    Expr::new(ExprKind::BinOp(op, Box::new(lhs), Box::new(rhs)))
 }
 
 // Array constructor
@@ -232,16 +204,6 @@ pub fn borr(prv: &Provenance, own: Ownership, expr: Expr) -> Expr {
     })
 }
 
-pub fn fun<F: DescendLambda>(f: F, exec: ExecLoc, ret_ty: &Ty) -> Expr {
-    let (param_idents, body) = f.as_params_and_body();
-    Expr::new(ExprKind::Lambda(
-        param_idents,
-        exec,
-        ret_ty.clone(),
-        Box::new(body),
-    ))
-}
-
 fn expr_to_plexpr(e: Expr) -> PlaceExpr {
     match e {
         Expr {
@@ -249,51 +211,6 @@ fn expr_to_plexpr(e: Expr) -> PlaceExpr {
             ..
         } => pl,
         _ => panic!("Not a place expression."),
-    }
-}
-
-pub fn dep_fun<F>(df: F, exec: ExecLoc) -> Expr
-where
-    F: Fn(Ty) -> Expr,
-{
-    let ty_id = IdentKinded::new(&Ident::new(&fresh_name("dt")), Kind::Ty);
-    let expr = df(Ty::Ident(ty_id.ident.clone()));
-    Expr::new(ExprKind::DepLambda(ty_id, exec, Box::new(expr)))
-}
-
-// TODO: Specify types for parameters.
-pub trait DescendLambda {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr);
-}
-
-impl DescendLambda for dyn Fn(Expr) -> Expr {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
-        let name = &fresh_name("p");
-        //TODO: Add mutable paramters.
-        let param_ident = ident(name);
-        let param_idents = vec![Ident::new(name)];
-        let body = self(param_ident);
-        (param_idents, body)
-    }
-}
-
-impl DescendLambda for dyn Fn(Expr, Expr) -> Expr {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
-        let (name1, name2) = (&fresh_name("p"), &fresh_name("p"));
-        let (param_ident1, param_ident2) = (ident(name1), ident(name2));
-        let param_idents = vec![Ident::new(name1), Ident::new(name2)];
-        let body = self(param_ident1, param_ident2);
-        (param_idents, body)
-    }
-}
-
-impl DescendLambda for dyn Fn(Expr, Expr, Expr) -> Expr {
-    fn as_params_and_body(&self) -> (Vec<Ident>, Expr) {
-        let (name1, name2, name3) = (&fresh_name("p"), &fresh_name("p"), &fresh_name("p"));
-        let (param_ident1, param_ident2, param_ident3) = (ident(name1), ident(name2), ident(name3));
-        let param_idents = vec![Ident::new(name1), Ident::new(name2), Ident::new(name3)];
-        let body = self(param_ident1, param_ident2, param_ident3);
-        (param_idents, body)
     }
 }
 
@@ -313,13 +230,13 @@ pub trait DescendLiteral {
 
 impl DescendLiteral for i32 {
     fn as_lit(&self) -> ExprKind {
-        ExprKind::Lit(Lit::Int(*self))
+        ExprKind::Lit(Lit::I32(*self))
     }
 }
 
 impl DescendLiteral for f32 {
     fn as_lit(&self) -> ExprKind {
-        ExprKind::Lit(Lit::Float(*self))
+        ExprKind::Lit(Lit::F32(*self))
     }
 }
 
@@ -364,14 +281,21 @@ pub fn at_ty(ty: &Ty, mem: &Memory) -> Ty {
 #[macro_export]
 macro_rules! tuple_ty {
     ($($v:expr),*) => {
-        $crate::ast::ty::Ty::Tuple(
+        $crate::ast::Ty::Tuple(
             vec![$($v.clone()),*]
         )
     }
 }
 
-pub fn fun_ty(param_tys: Vec<Ty>, frame_expr: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
+pub fn fun_ty(
+    generic_param: Vec<IdentKinded>,
+    param_tys: Vec<Ty>,
+    frame_expr: &internal::FrameExpr,
+    exec: ExecLoc,
+    ret_ty: &Ty,
+) -> Ty {
     Ty::Fn(
+        generic_param,
         param_tys,
         Box::new(frame_expr.clone()),
         exec,
@@ -379,37 +303,12 @@ pub fn fun_ty(param_tys: Vec<Ty>, frame_expr: &FrameExpr, exec: ExecLoc, ret_ty:
     )
 }
 
-pub fn genfun_ty(param: &IdentKinded, frame: &FrameExpr, exec: ExecLoc, ret_ty: &Ty) -> Ty {
-    Ty::DepFn(
-        param.clone(),
-        Box::new(frame.clone()),
-        exec,
-        Box::new(ret_ty.clone()),
-    )
-}
-
-pub fn multi_arg_genfn_ty(params: &[IdentKinded], exec: ExecLoc, ret_ty: &Ty) -> Ty {
-    let empty_frame = FrameExpr::FrTy(vec![]);
-    match params.split_first() {
-        None => {
-            panic!("To create a generic function type, at least one parameter must be provided")
-        }
-        Some((head, &[])) => genfun_ty(head, &empty_frame, exec, ret_ty),
-        Some((head, tail)) => genfun_ty(
-            head,
-            &empty_frame,
-            exec,
-            &multi_arg_genfn_ty(tail, exec, ret_ty),
-        ),
-    }
-}
-
 // Scalar Types
 #[allow(non_upper_case_globals)]
-pub static i32: Ty = Ty::Scalar(ScalarData::I32);
+pub static i32: Ty = Ty::Scalar(ScalarTy::I32);
 #[allow(non_upper_case_globals)]
-pub static f32: Ty = Ty::Scalar(ScalarData::F32);
+pub static f32: Ty = Ty::Scalar(ScalarTy::F32);
 #[allow(non_upper_case_globals)]
-pub static bool: Ty = Ty::Scalar(ScalarData::Bool);
+pub static bool: Ty = Ty::Scalar(ScalarTy::Bool);
 #[allow(non_upper_case_globals)]
-pub static unit_ty: Ty = Ty::Scalar(ScalarData::Unit);
+pub static unit_ty: Ty = Ty::Scalar(ScalarTy::Unit);

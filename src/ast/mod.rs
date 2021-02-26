@@ -1,13 +1,45 @@
-pub mod ty;
-pub mod utils;
+pub mod internal;
 
 mod span;
 
 use std::fmt;
-use ty::*;
 pub use span::*;
 
 use descend_derive::span_derive;
+use internal::FrameExpr;
+
+pub type CompilUnit = Vec<GlobalFunDef>;
+
+#[derive(Debug, Clone)]
+pub struct GlobalFunDef {
+    pub name: String,
+    pub generic_params: Vec<IdentKinded>,
+    pub params: Vec<ParamDecl>,
+    pub ret_ty: Ty,
+    pub exec: ExecLoc,
+    pub prv_rels: Vec<PrvRel>,
+    pub body_expr: Expr,
+}
+
+impl GlobalFunDef {
+    pub fn ty(&self) -> Ty {
+        let param_tys: Vec<_> = self.params.iter().map(|p_decl| p_decl.ty.clone()).collect();
+        Ty::Fn(
+            self.generic_params.clone(),
+            param_tys,
+            Box::new(FrameExpr::Empty),
+            self.exec,
+            Box::new(self.ret_ty.clone()),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamDecl {
+    pub ident: Ident,
+    pub ty: Ty,
+    pub mutbl: Mutability,
+}
 
 #[span_derive(PartialEq, Eq)]
 #[derive(Debug, Clone)]
@@ -34,142 +66,7 @@ impl Expr {
 
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", format!("{}", self.expr))
-    }
-}
-
-pub type Path = Vec<Nat>;
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Place {
-    pub ident: Ident,
-    pub path: Path,
-}
-impl Place {
-    pub fn new(ident: Ident, path: Path) -> Self {
-        Place { ident, path }
-    }
-
-    pub fn to_place_expr(&self) -> PlaceExpr {
-        self.path
-            .iter()
-            .fold(PlaceExpr::Var(self.ident.clone()), |pl_expr, path_entry| {
-                PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone())
-            })
-    }
-}
-pub type TypedPlace = (Place, Ty);
-
-pub enum PlaceCtx {
-    Proj(Box<PlaceCtx>, Nat),
-    Deref(Box<PlaceCtx>),
-    Hole,
-}
-
-impl PlaceCtx {
-    pub fn insert_pl_expr(&self, pl_expr: PlaceExpr) -> PlaceExpr {
-        match self {
-            Self::Hole => pl_expr,
-            Self::Proj(pl_ctx, n) => {
-                PlaceExpr::Proj(Box::new(pl_ctx.insert_pl_expr(pl_expr)), n.clone())
-            }
-            Self::Deref(pl_ctx) => PlaceExpr::Deref(Box::new(pl_ctx.insert_pl_expr(pl_expr))),
-        }
-    }
-
-    // Assumes the PlaceCtx HAS an innermost deref, meaning the Hole is wrapped by a Deref.
-    // This is always true for PlaceCtxs created by PlaceExpr.to_pl_ctx_and_most_specif_pl
-    pub fn without_innermost_deref(&self) -> Self {
-        match self {
-            Self::Hole => Self::Hole,
-            Self::Proj(pl_ctx, _) => {
-                if let Self::Hole = **pl_ctx {
-                    panic!("There must an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
-                } else {
-                    pl_ctx.without_innermost_deref()
-                }
-            }
-            Self::Deref(pl_ctx) => {
-                if let Self::Hole = **pl_ctx {
-                    Self::Hole
-                } else {
-                    pl_ctx.without_innermost_deref()
-                }
-            }
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum PlaceExpr {
-    Proj(Box<PlaceExpr>, Nat),
-    Deref(Box<PlaceExpr>),
-    //ParIndex(PlaceExpr, ParIndex),
-    Var(Ident),
-}
-
-impl PlaceExpr {
-    pub fn is_place(&self) -> bool {
-        match self {
-            PlaceExpr::Proj(ple, _) => ple.is_place(),
-            PlaceExpr::Var(_) => true,
-            PlaceExpr::Deref(_) => false,
-        }
-    }
-
-    pub fn to_pl_ctx_and_most_specif_pl(&self) -> (PlaceCtx, Place) {
-        match self {
-            PlaceExpr::Deref(inner_ple) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                (PlaceCtx::Deref(Box::new(pl_ctx)), pl)
-            }
-            PlaceExpr::Proj(inner_ple, n) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                match pl_ctx {
-                    PlaceCtx::Hole => (pl_ctx, Place::new(pl.ident, vec![n.clone()])),
-                    _ => (PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
-                }
-            }
-            PlaceExpr::Var(ident) => (PlaceCtx::Hole, Place::new(ident.clone(), vec![])),
-        }
-    }
-
-    pub fn to_place(&self) -> Option<Place> {
-        if self.is_place() {
-            Some(self.to_pl_ctx_and_most_specif_pl().1)
-        } else {
-            None
-        }
-    }
-
-    pub fn prefix_of(&self, other: &Self) -> bool {
-        if self != other {
-            match other {
-                Self::Proj(pl_expr, _) => self.prefix_of(pl_expr),
-                Self::Deref(pl_expr) => self.prefix_of(pl_expr),
-                Self::Var(_) => false,
-            }
-        } else {
-            true
-        }
-    }
-
-    pub fn equiv(&'_ self, place: &'_ Place) -> bool {
-        if let (PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
-            &pl == place
-        } else {
-            false
-        }
-    }
-}
-
-impl fmt::Display for PlaceExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Proj(pl_expr, n) => format!("{}.{}", pl_expr, n),
-            Self::Deref(pl_expr) => format!("{}", pl_expr),
-            Self::Var(ident) => format!("{}", ident),
-        };
-        write!(f, "{}", str)
+        write!(f, "{}", self.expr)
     }
 }
 
@@ -181,6 +78,11 @@ pub enum ParIndex {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ExprKind {
+    // TODO remove GlobalFunIdent
+    //  instead? Maybe differentiate between FunctionCall where function is Ident
+    //  and Function call where function is expression (so must be lambda)
+    //  This is currently wrong, because an global fun ident is not an Expr (has no value).
+    //  Or we say it has the value of a function pointer type (like C or Rust) which may be better.
     GlobalFunIdent(String),
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
@@ -189,6 +91,7 @@ pub enum ExprKind {
     Index(PlaceExpr, Nat),
     // Borrow Expressions
     Ref(Provenance, Ownership, PlaceExpr),
+    LetProv(Vec<String>, Box<Expr>),
     BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
@@ -200,14 +103,12 @@ pub enum ExprKind {
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     // TODO: Add types for parameters.
-    Lambda(Vec<Ident>, ExecLoc, Ty, Box<Expr>),
-    // A function that accepts something of the specified kind as an argument.
-    // (x : kind) [exec]-> { e }
-    DepLambda(IdentKinded, ExecLoc, Box<Expr>),
+    Lambda(Vec<ParamDecl>, ExecLoc, Ty, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
-    App(Box<Expr>, Vec<Expr>),
-    DepApp(Box<Expr>, KindedArg),
+    // Todo make this the only apply and use template params
+    App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
+    // TODO If
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),
@@ -217,38 +118,38 @@ pub enum ExprKind {
     For(Ident, Box<Expr>, Box<Expr>),
     // TODO for-each is probably not a good term, at least if we stick to the notion that amount of
     //  elements and amount of threads need to be equal.
-    // Parallel for-each (global) thread with input, syncing at the end.
-    ParForGlobalSync(Box<Expr>, Nat, Ident, Box<Expr>, Box<Expr>),
-    Binary(BinOp, Box<Expr>, Box<Expr>),
-    Unary(UnOp, Box<Expr>),
+    // Parallel for (global) thread with input, syncing at the end.
+    // for x in view-expr across parallelism-config-expr { body }
+    ParForSync(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
+    BinOp(BinOp, Box<Expr>, Box<Expr>),
+    UnOp(UnOp, Box<Expr>),
 }
 
 impl fmt::Display for ExprKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Lit(l) => format!("{}", l),
-            Self::PlaceExpr(pl_expr) => format!("{}", pl_expr),
-            Self::Index(pl_expr, n) => format!("{}[{}]", pl_expr, n),
+        match self {
+            Self::Lit(l) => write!(f, "{}", l),
+            Self::PlaceExpr(pl_expr) => write!(f, "{}", pl_expr),
+            Self::Index(pl_expr, n) => write!(f, "{}[{}]", pl_expr, n),
             // TODO display kind
-            Self::Ref(prv, own, pl_expr) => format!("&{} {} {}", prv, own, pl_expr),
+            Self::Ref(prv, own, pl_expr) => write!(f, "&{} {} {}", prv, own, pl_expr),
             Self::BorrowIndex(prv, own, pl_expr, n) => {
-                format!("&{} {} {}[{}]", prv, own, pl_expr, n)
+                write!(f, "&{} {} {}[{}]", prv, own, pl_expr, n)
             }
-            Self::Assign(pl_expr, e) => format!("{} = {}", pl_expr, e),
+            Self::Assign(pl_expr, e) => write!(f, "{} = {}", pl_expr, e),
             Self::Let(mutab, ident, ty, e1, e2) => {
-                format!("let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
+                write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
             }
-            Self::Seq(e1, e2) => format!("{}; {}", e1, e2),
+            Self::Seq(e1, e2) => write!(f, "{}; {}", e1, e2),
             /*            Self::Lambda(params, exec, ty, e) => {
-                format!("|{}| [{}]-> {} {{ {} }}", params, exec, ty, e)
+                write!(f, "|{}| [{}]-> {} {{ {} }}", params, exec, ty, e)
             }
             Self::DepLambda(ty_ident, exec, e) => {
-                format!("<{}> [{}]-> {{ {} }}", ty_ident, exec, e)
+                write!(f, "<{}> [{}]-> {{ {} }}", ty_ident, exec, e)
             }
-            Self::App(f, arg) => format!("{}({})", f, arg),*/
+            Self::App(f, arg) => write!(f, "{}({})", f, arg),*/
             _ => panic!("not yet implemented"),
-        };
-        write!(f, "{}", str)
+        }
     }
 }
 
@@ -281,38 +182,37 @@ impl fmt::Display for Ident {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Lit {
     Unit,
     Bool(bool),
-    Int(i32),
-    Float(f32),
+    I32(i32),
+    F32(f32),
 }
 
-impl PartialEq for Lit{
-    fn eq(&self, other:&Self) -> bool {
-        let b = match (self, other) {
-            (Self::Unit, Self::Unit) => true,
-            (Self::Bool(x), Self::Bool(y)) => if x == y {true} else {false},
-            (Self::Int(x), Self::Int(y)) => if x == y {true} else {false},
-            (Self::Float(x), Self::Float(y)) => if x == y {true} else {false},
-            _ => false
-        };
-        b
-    }
-}
+// impl PartialEq for Lit{
+//     fn eq(&self, other:&Self) -> bool {
+//         let b = match (self, other) {
+//             (Self::Unit, Self::Unit) => true,
+//             (Self::Bool(x), Self::Bool(y)) => if x == y {true} else {false},
+//             (Self::Int(x), Self::Int(y)) => if x == y {true} else {false},
+//             (Self::Float(x), Self::Float(y)) => if x == y {true} else {false},
+//             _ => false
+//         };
+//         b
+//     }
+// }
 
 impl Eq for Lit{}
 
 impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Unit => String::from("()"),
-            Self::Bool(b) => format!("{}", b),
-            Self::Int(i) => format!("{}", i),
-            Self::Float(f) => format!("{}", f),
-        };
-        write!(f, "{}", str)
+        match self {
+            Self::Unit => write!(f, "()"),
+            Self::Bool(b) => write!(f, "{}", b),
+            Self::I32(i) => write!(f, "{}", i),
+            Self::F32(fl) => write!(f, "{}", fl),
+        }
     }
 }
 
@@ -336,15 +236,6 @@ impl fmt::Display for Mutability {
 pub enum Ownership {
     Shrd,
     Uniq,
-}
-
-#[test]
-fn test_ownership_ordering() {
-    use Ownership::*;
-    assert!(Shrd <= Shrd);
-    assert!(Shrd <= Uniq);
-    assert!(Uniq <= Uniq);
-    assert!(!(Uniq <= Shrd))
 }
 
 impl fmt::Display for Ownership {
@@ -411,4 +302,297 @@ impl fmt::Display for BinOp {
         };
         write!(f, "{}", str)
     }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+pub enum Kind {
+    Nat,
+    Memory,
+    Ty,
+    Provenance,
+    Frame,
+    Exec,
+}
+
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
+            Kind::Nat => "nat",
+            Kind::Memory => "mem",
+            Kind::Ty => "type",
+            Kind::Provenance => "prv",
+            Kind::Frame => "frm",
+            Kind::Exec => "exec",
+        };
+        write!(f, "{}", str)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArgKinded {
+    // TODO this exists only for the parser?
+    //  talk to parser group to figure out how to do this properly
+    Ident(Ident),
+    Nat(Nat),
+    Memory(Memory),
+    Ty(Ty),
+    Provenance(Provenance),
+    Frame(FrameExpr),
+    Exec(ExecLoc),
+    // TODO remove ownership?
+    //    Own(Ownership),
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum PlaceExpr {
+    Proj(Box<PlaceExpr>, Nat),
+    Deref(Box<PlaceExpr>),
+    Ident(Ident),
+}
+
+impl PlaceExpr {
+    pub fn is_place(&self) -> bool {
+        match self {
+            PlaceExpr::Proj(ple, _) => ple.is_place(),
+            PlaceExpr::Ident(_) => true,
+            PlaceExpr::Deref(_) => false,
+        }
+    }
+
+    pub fn prefix_of(&self, other: &Self) -> bool {
+        if self != other {
+            match other {
+                Self::Proj(pl_expr, _) => self.prefix_of(pl_expr),
+                Self::Deref(pl_expr) => self.prefix_of(pl_expr),
+                Self::Ident(_) => false,
+            }
+        } else {
+            true
+        }
+    }
+}
+
+impl fmt::Display for PlaceExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
+            Self::Deref(pl_expr) => write!(f, "*{}", pl_expr),
+            Self::Ident(ident) => write!(f, "{}", ident),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum Ty {
+    Scalar(ScalarTy),
+    Tuple(Vec<Ty>),
+    Array(Box<Ty>, Nat),
+    ArrayView(Box<Ty>, Nat),
+    At(Box<Ty>, Memory),
+    Fn(
+        Vec<IdentKinded>,
+        Vec<Ty>,
+        Box<internal::FrameExpr>,
+        ExecLoc,
+        Box<Ty>,
+    ),
+    // TODO better syntactical support for dead and maybe dead types would maybe be safer for prgramming,
+    //  but this requires a better understanding of where a type can be dead in order to be done
+    //  without too much boilerplate.
+    Dead(Box<Ty>),
+    Ref(Provenance, Ownership, Memory, Box<Ty>),
+    Ident(Ident),
+}
+
+impl Ty {
+    pub fn non_copyable(&self) -> bool {
+        use Ty::*;
+        match self {
+            Scalar(_) => false,
+            Ident(_) => true,
+            Ref(_, Ownership::Uniq, _, _) => true,
+            Ref(_, Ownership::Shrd, _, _) => false,
+            Fn(_, _, _, _, _) => false,
+            At(_, _) => true,
+            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
+            Array(ty, _) => ty.non_copyable(),
+            ArrayView(ty, _) => ty.non_copyable(),
+            Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
+        }
+    }
+
+    pub fn copyable(&self) -> bool {
+        !self.non_copyable()
+    }
+
+    pub fn is_fully_alive(&self) -> bool {
+        use Ty::*;
+        match self {
+            Scalar(_)
+            | Ident(_)
+            | Ref(_, _, _, _)
+            | Fn(_, _, _, _, _)
+            | At(_, _)
+            | Array(_, _)
+            | ArrayView(_, _) => true,
+            Tuple(elem_tys) => elem_tys
+                .iter()
+                .fold(true, |acc, ty| acc & ty.is_fully_alive()),
+            Dead(_) => false,
+        }
+    }
+
+    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
+        use Ty::*;
+        match self {
+            Scalar(_) | Ident(_) | Dead(_) => false,
+            Ref(prv, _, _, ty) => {
+                let found_reference = if let Provenance::Value(prv_val_n) = prv {
+                    prv_val_name == prv_val_n
+                } else {
+                    false
+                };
+                found_reference || ty.contains_ref_to_prv(prv_val_name)
+            }
+            // TODO Probably need to scan frame_expr as well
+            Fn(_, param_tys, frame_expr, _, ret_ty) => {
+                param_tys
+                    .iter()
+                    .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
+                    || ret_ty.contains_ref_to_prv(prv_val_name)
+            }
+            At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            ArrayView(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            Tuple(elem_tys) => elem_tys
+                .iter()
+                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
+        }
+    }
+}
+
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        panic!("not yet implemented")
+        //        write!(f, "{}:{}", self.name, self.kind)
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+pub enum ScalarTy {
+    Unit,
+    I32,
+    F32,
+    Bool,
+    Gpu,
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum Provenance {
+    Value(String),
+    Ident(Ident),
+}
+
+impl fmt::Display for Provenance {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Value(name) => write!(f, "{}", name),
+            Self::Ident(ty_ident) => write!(f, "{}", ty_ident),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum Memory {
+    CpuHeap,
+    GpuGlobal,
+    GpuShared,
+    Ident(Ident),
+    // TODO refactor?
+    // only exists for pointers to the stack. Must not be used for At types.
+    CpuStack,
+}
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+pub enum ExecLoc {
+    CpuThread,
+    GpuGroup,
+    GpuThread,
+    View,
+}
+
+// Provenance Relation: varrho_1:varrho_2
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct PrvRel {
+    pub longer: Ident,
+    pub shorter: Ident,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct IdentKinded {
+    pub ident: Ident,
+    pub kind: Kind,
+}
+
+impl IdentKinded {
+    pub fn new(ident: &Ident, kind: Kind) -> Self {
+        IdentKinded {
+            ident: ident.clone(),
+            kind: kind.clone(),
+        }
+    }
+}
+
+// TODO should this really be part of the AST? Nats are also part of the Cuda-AST. Separate module.
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum Nat {
+    Ident(Ident),
+    Lit(usize),
+    BinOp(BinOpNat, Box<Nat>, Box<Nat>),
+}
+
+impl Nat {
+    pub fn eval(&self) -> usize {
+        panic!("not implemented yet")
+    }
+}
+
+impl fmt::Display for Nat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Ident(ident) => write!(f, "{}", ident),
+            Self::Lit(n) => write!(f, "{}", n),
+            Self::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum BinOpNat {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
+impl fmt::Display for BinOpNat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Add => write!(f, "+"),
+            Self::Sub => write!(f, "-"),
+            Self::Mul => write!(f, "*"),
+            Self::Div => write!(f, "/"),
+            Self::Mod => write!(f, "%"),
+        }
+    }
+}
+
+#[test]
+fn test_ownership_ordering() {
+    use Ownership::*;
+    assert!(Shrd <= Shrd);
+    assert!(Shrd <= Uniq);
+    assert!(Uniq <= Uniq);
+    assert!(!(Uniq <= Shrd))
 }

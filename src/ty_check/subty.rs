@@ -1,17 +1,16 @@
-use super::ty_ctx::TyCtx;
+use super::ctxs::{KindCtx, TyCtx};
+use crate::ast::internal::Loan;
 
 //
 // Subtyping and Provenance Subtyping from Oxide
 //
 
-use super::ErrMsg;
-use crate::ast::ty::*;
-use crate::ast::{Ident, PlaceExpr};
+use crate::ast::*;
 use std::collections::HashSet;
 
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
-pub fn subty_check(
+pub(super) fn check(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     sub_ty: &Ty,
@@ -25,18 +24,18 @@ pub fn subty_check(
         (sub, sup) if sub == sup => Ok(ty_ctx),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
         (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size)) if sub_size == sup_size => {
-            subty_check(kind_ctx, ty_ctx, &sub_elem_ty, &sup_elem_ty)
+            check(kind_ctx, ty_ctx, &sub_elem_ty, &sup_elem_ty)
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′
         (Ref(sub_prv, Shrd, sub_mem, sub_ty), Ref(sup_prv, Shrd, sup_mem, sup_ty)) => {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            subty_check(kind_ctx, res_outl_ty_ctx, &sub_ty, &sup_ty)
+            check(kind_ctx, res_outl_ty_ctx, &sub_ty, &sup_ty)
         }
         // Δ; Γ ⊢ &B ρ1 uniq τ1 ≲ &B ρ2 uniq τ2 ⇒ Γ''
         (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty)) => {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            let res_forw = subty_check(kind_ctx, res_outl_ty_ctx.clone(), &sub_ty, &sup_ty)?;
-            let res_back = subty_check(kind_ctx, res_outl_ty_ctx, &sup_ty, &sub_ty)?;
+            let res_forw = check(kind_ctx, res_outl_ty_ctx.clone(), &sub_ty, &sup_ty)?;
+            let res_back = check(kind_ctx, res_outl_ty_ctx, &sup_ty, &sub_ty)?;
             // TODO find out why this is important (techniqually),
             //  and return a proper error if suitable
             assert_eq!(res_forw, res_back);
@@ -46,12 +45,12 @@ pub fn subty_check(
         (Ty::Tuple(sub_elems), Ty::Tuple(sup_elems)) => {
             let mut res_ctx = ty_ctx;
             for (sub, sup) in sub_elems.iter().zip(sup_elems) {
-                res_ctx = subty_check(kind_ctx, res_ctx, sub, sup)?;
+                res_ctx = check(kind_ctx, res_ctx, sub, sup)?;
             }
             Ok(res_ctx)
         }
         // Δ; Γ ⊢ \delta1 ≲ †\delta2 ⇒ Γ
-        (sub, Dead(sup)) => subty_check(kind_ctx, ty_ctx, sub, sup),
+        (sub, Dead(sup)) => check(kind_ctx, ty_ctx, sub, sup),
         //TODO add case for Transitiviy?
         // Δ; Γ ⊢ τ1 ≲ τ3 ⇒ Γ''
         (sub, sup) => panic!(format!(
@@ -68,7 +67,7 @@ fn outlives(
     ty_ctx: TyCtx,
     longer_prv: &Provenance,
     shorter_prv: &Provenance,
-) -> Result<TyCtx, ErrMsg> {
+) -> Result<TyCtx, String> {
     use Provenance::*;
 
     match (longer_prv, shorter_prv) {
@@ -217,7 +216,7 @@ fn outl_check_ident_val_prv(
 }
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
-pub fn multiple_outlives<'a, I>(
+pub(super) fn multiple_outlives<'a, I>(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     prv_rels: I,

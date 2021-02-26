@@ -1,34 +1,13 @@
-use crate::ast::ty::{FrameTyping, Loan, Nat, ScalarData, Ty};
-use crate::ast::{Ident, Path, Place, TypedPlace};
-use std::collections::HashSet;
+use super::pre_decl::FunDecl;
+use super::{Path, Place};
+use crate::ast::internal::{Frame, FrameTyping, IdentTyped, Loan, PrvMapping};
+use crate::ast::*;
+use std::collections::{HashMap, HashSet};
+
+pub(super) type TypedPlace = (Place, Ty);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-// TODO only store references?
-pub struct IdentTyped {
-    pub ident: Ident,
-    pub ty: Ty,
-}
-
-impl IdentTyped {
-    pub fn new(ident: Ident, ty: Ty) -> Self {
-        IdentTyped { ident, ty }
-    }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct PrvMapping {
-    pub prv: String,
-    pub loans: HashSet<Loan>,
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum TyEntry {
-    Var(IdentTyped),
-    PrvMapping(PrvMapping),
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct TyCtx {
+pub(super) struct TyCtx {
     frame_tys: Vec<FrameTyping>,
 }
 
@@ -47,14 +26,14 @@ impl TyCtx {
 
     pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
         let frame_typing = self.frame_tys.iter_mut().last().unwrap();
-        frame_typing.push(TyEntry::Var(id_typed));
+        frame_typing.push(Frame::Var(id_typed));
         self
     }
 
     pub fn drop_ident(mut self, ident: &Ident) -> Option<Self> {
         for frame in self.frame_tys.iter_mut().rev() {
             let rev_pos_if_exists = frame.iter().rev().position(|ty_entry| match ty_entry {
-                TyEntry::Var(ident_typed) => &ident_typed.ident == ident,
+                Frame::Var(ident_typed) => &ident_typed.ident == ident,
                 _ => false,
             });
             if let Some(rev_pos) = rev_pos_if_exists {
@@ -68,13 +47,13 @@ impl TyCtx {
 
     pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
         let frame_typing = self.frame_tys.iter_mut().last().unwrap();
-        frame_typing.push(TyEntry::PrvMapping(prv_mapping));
+        frame_typing.push(Frame::PrvMapping(prv_mapping));
         self
     }
 
     pub fn idents_typed(&self) -> impl Iterator<Item = &'_ IdentTyped> {
         self.frame_tys.iter().flatten().filter_map(|fe| {
-            if let TyEntry::Var(ident_typed) = fe {
+            if let Frame::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
                 None
@@ -84,7 +63,7 @@ impl TyCtx {
 
     pub fn idents_typed_mut(&mut self) -> impl Iterator<Item = &'_ mut IdentTyped> {
         self.frame_tys.iter_mut().flatten().filter_map(|fe| {
-            if let TyEntry::Var(ident_typed) = fe {
+            if let Frame::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
                 None
@@ -94,7 +73,7 @@ impl TyCtx {
 
     pub fn prv_mappings(&self) -> impl Iterator<Item = &'_ PrvMapping> {
         self.frame_tys.iter().flatten().filter_map(|fe| {
-            if let TyEntry::PrvMapping(prv_mapping) = fe {
+            if let Frame::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
                 None
@@ -104,7 +83,7 @@ impl TyCtx {
 
     pub fn prv_mappings_mut(&mut self) -> impl Iterator<Item = &'_ mut PrvMapping> {
         self.frame_tys.iter_mut().flatten().filter_map(|fe| {
-            if let TyEntry::PrvMapping(prv_mapping) = fe {
+            if let Frame::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
                 None
@@ -118,7 +97,7 @@ impl TyCtx {
         loan_set: HashSet<Loan>,
     ) -> Result<Self, String> {
         for fe in self.frame_tys.iter_mut().flatten() {
-            if let TyEntry::PrvMapping(prv_mapping) = fe {
+            if let Frame::PrvMapping(prv_mapping) = fe {
                 if prv_mapping.prv == prv_val_name {
                     prv_mapping.loans = loan_set;
                     return Ok(self);
@@ -198,11 +177,9 @@ impl TyCtx {
                 | ArrayView(_, _)
                 | At(_, _)
                 | Ref(_, _, _, _)
-                | Fn(_, _, _, _)
-                | DepFn(_, _, _, _)
+                | Fn(_, _, _, _, _)
                 | Ident(_)
-                | Dead(_)
-                | GPU => vec![(pl, ty.clone())],
+                | Dead(_) => vec![(pl, ty.clone())],
                 Tuple(tys) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
@@ -266,7 +243,7 @@ impl TyCtx {
         self
     }
 
-    pub fn kill_place(mut self, pl: &Place) -> Self {
+    pub fn kill_place(self, pl: &Place) -> Self {
         if let Ok(pl_ty) = self.place_ty(pl) {
             self.set_place_ty(pl, Ty::Dead(Box::new(pl_ty)))
         } else {
@@ -297,10 +274,152 @@ impl TyCtx {
     }
 }
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+enum KindingCtxEntry {
+    Ident(IdentKinded),
+    PrvRel(PrvRel),
+}
+
+pub(super) struct KindCtx {
+    vec: Vec<KindingCtxEntry>,
+}
+
+impl KindCtx {
+    pub fn new() -> Self {
+        KindCtx { vec: Vec::new() }
+    }
+
+    pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> Result<Self, String> {
+        let kind_ctx: Self = Self::new().append_idents(idents);
+        kind_ctx.well_kinded_prv_rels(&prv_rels)?;
+        Ok(kind_ctx.append_prv_rels(prv_rels))
+    }
+
+    pub fn append_idents(mut self, idents: Vec<IdentKinded>) -> Self {
+        let mut entries: Vec<_> = idents.into_iter().map(KindingCtxEntry::Ident).collect();
+        self.vec.append(&mut entries);
+        self
+    }
+
+    pub fn append_prv_rels(mut self, prv_rels: Vec<PrvRel>) -> Self {
+        for prv_rel in prv_rels {
+            self.vec.push(KindingCtxEntry::PrvRel(prv_rel));
+        }
+        self
+    }
+
+    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
+        self.vec.iter().filter_map(move |entry| {
+            if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
+                if k == &kind {
+                    Some(ident)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn get_kind(&self, ident: &Ident) -> Result<&Kind, String> {
+        let res = self.vec.iter().find_map(|entry| {
+            if let KindingCtxEntry::Ident(IdentKinded { ident: id, kind }) = entry {
+                if id == ident {
+                    Some(kind)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        if let Some(kind) = res {
+            Ok(kind)
+        } else {
+            Err(format!(
+                "Cannot find identifier {} in kinding context",
+                ident
+            ))
+        }
+    }
+
+    pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {
+        self.get_idents(kind).any(|id| ident == id)
+    }
+
+    pub fn well_kinded_prv_rels(&self, prv_rels: &[PrvRel]) -> Result<(), String> {
+        let mut prv_idents = self.get_idents(Kind::Provenance);
+        for prv_rel in prv_rels {
+            if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
+                return Err(format!("{} is not declared", prv_rel.longer));
+            }
+            if !prv_idents.any(|prv_ident| &prv_rel.shorter == prv_ident) {
+                return Err(format!("{} is not declared", prv_rel.shorter));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn outlives(&self, l: &Ident, s: &Ident) -> Result<(), String> {
+        if self.vec.iter().any(|entry| match entry {
+            KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
+            _ => false,
+        }) {
+            Ok(())
+        } else {
+            Err(format!("{} is not defined as outliving {}.", l, s))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct GlobalCtx {
+    // HashMap is correct. We have a direct mapping between name and type only, and also want to
+    // be able to ask for types by name.
+    items: HashMap<String, Ty>,
+}
+
+impl GlobalCtx {
+    pub fn new() -> Self {
+        GlobalCtx {
+            items: HashMap::new(),
+        }
+    }
+
+    pub fn append_from_gl_fun_defs(mut self, gl_fun_defs: &[GlobalFunDef]) -> Self {
+        self.items.extend(
+            gl_fun_defs
+                .iter()
+                .map(|gl_fun_def| (gl_fun_def.name.clone(), gl_fun_def.ty())),
+        );
+        self
+    }
+
+    pub fn append_fun_decls(mut self, fun_decls: &[FunDecl]) -> Self {
+        self.items.extend(
+            fun_decls
+                .iter()
+                .map(|FunDecl { name, ty }| (name.clone(), ty.clone())),
+        );
+        self
+    }
+
+    pub fn fun_ty_by_name(&self, name: &str) -> Result<&Ty, String> {
+        match self.items.get(name) {
+            Some(ty) => Ok(ty),
+            None => Err(format!(
+                "Function `{}` does not exist in global environment.",
+                name
+            )),
+        }
+    }
+}
+
 #[test]
 fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
-    let x = IdentTyped::new(Ident::new("x"), Ty::Scalar(ScalarData::I32));
+    let x = IdentTyped::new(Ident::new("x"), Ty::Scalar(ScalarTy::I32));
     let place = Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);
     ty_ctx = ty_ctx.kill_place(&place);

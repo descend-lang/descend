@@ -1,14 +1,15 @@
-use super::ty_ctx::{PrvMapping, TyCtx};
-use crate::ast::ty::*;
+use super::ctxs::{KindCtx, TyCtx};
+use super::Place;
+use crate::ast::internal::{Loan, PrvMapping};
 use crate::ast::*;
-use crate::ty_check::place_expr_ty_under_own;
+use crate::ty_check::PlaceCtx;
 use std::collections::HashSet;
 
 //
 // Ownership Safety
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
-pub fn ownership_safe(
+pub(super) fn ownership_safe(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     reborrows: &[Place],
@@ -144,7 +145,7 @@ fn ownership_safe_deref_abs(
 ) -> Result<HashSet<Loan>, String> {
     let currently_checked_pl_expr =
         pl_ctx_no_deref.insert_pl_expr(PlaceExpr::Deref(Box::new(most_spec_pl.to_place_expr())));
-    let ty = place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
+    let ty = super::place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
     check_own_lte_ref(own, ref_own)?;
     if ownership_safe_under_existing_loans(ty_ctx, reborrows, own, &currently_checked_pl_expr) {
         let mut passed_through_prvs = HashSet::new();

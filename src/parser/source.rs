@@ -2,7 +2,7 @@
 
 use peg::{error::ParseError, str::LineCol};
 
-use crate::ast::ty::GlobalFunDef;
+use crate::ast::GlobalFunDef;
 
 use super::parse_global_fun_def;
 
