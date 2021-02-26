@@ -1,7 +1,3 @@
-//
-// Created by basti on 1/28/21.
-//
-
 #ifndef DESCEND_DESCEND_CUH
 #define DESCEND_DESCEND_CUH
 #include <cstdint>
@@ -35,10 +31,17 @@ Gpu create_gpu(size_t device_id) {
     return device_id;
 };
 
-struct GlobalThreads {
-    constexpr size_t NUMBER_OF_THREADS;
+template<std::size_t num_blocks, std::size_t num_threads>
+struct GridConfig {
+    const Gpu gpu;
 
+    GridConfig(const Gpu * const gpu) : gpu(*gpu) {}
 };
+
+template<std::size_t num_blocks, std::size_t num_threads>
+GridConfig<num_blocks, num_threads> spawn_threads(const Gpu * const gpu) {
+    return GridConfig<num_blocks, num_threads>(gpu);
+}
 
 template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
@@ -199,8 +202,8 @@ __global__ void launch(F f, Args... args)
 }
 
 template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
-auto par_for_across(const Gpu *gpu, F &&f, Args... args) -> void {
-    CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
+auto par_for_across(const GridConfig<num_blocks, num_threads> * const thread_config, F &&f, Args... args) -> void {
+    CHECK_CUDA_ERR( cudaSetDevice(thread_config->gpu) );
     launch<<<num_blocks, num_threads>>>(f, args...);
     CHECK_CUDA_ERR( cudaPeekAtLastError() );
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );

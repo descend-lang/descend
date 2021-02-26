@@ -11,8 +11,9 @@ auto inplace_vector_add_host(
     auto a_array = descend::gpu_alloc<descend::array_t<descend::i32_t, n>>(&gpu, ha_array);
     const auto b_array = descend::gpu_alloc<descend::array_t<descend::i32_t, n>>(&gpu, hb_array);
 
-    descend::par_for_across<1, 1024>(
-        &gpu,
+    const auto grid = descend::spawn_threads<1, 1024>(&gpu);
+    descend::par_for_across(
+        &grid,
         [] __device__ (
             descend::i32_t * const __restrict__ a_array,
             const descend::i32_t * const __restrict__ b_array
