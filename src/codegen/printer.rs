@@ -107,6 +107,7 @@ impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Expr::*;
         match self {
+            Empty => Ok(()),
             Ident(name) => write!(f, "{}", name),
             Lit(l) => write!(f, "{}", l),
             Assign {

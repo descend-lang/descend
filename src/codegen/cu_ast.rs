@@ -51,6 +51,8 @@ pub(super) enum Stmt {
 
 #[derive(Clone, Debug)]
 pub(super) enum Expr {
+    // TODO Is there a better way to represent Unit values in C++?
+    Empty,
     Ident(String),
     Lit(Lit),
     Assign {
