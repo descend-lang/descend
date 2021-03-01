@@ -78,34 +78,44 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
             lhs: Box::new(gen_pl_expr(pl_expr)),
             rhs: Box::new(gen_stmt_expr(expr, view_ctx).expr()),
         }),
-        // Let ArrayView
-        Let(mutbl, ident, ty, v, e) if matches!(ty, desc::Ty::ArrayView(_, _)) => {
-            if let Some(old) =
-                view_ctx.insert(ident.name.clone(), ViewExpr::create_from(v, view_ctx))
-            {
-                panic!(
-                    "Reassigning view expression variable from `{i} = {old:?}` to `{i} = {new:?}`",
-                    i = ident.name,
-                    old = old,
-                    new = ViewExpr::create_from(v, view_ctx)
-                );
+        Let(mutbl, ident, ty, e1, e2) => {
+            let e2_stmt = gen_ret_if_not_sequenced(e2, view_ctx);
+            // Let ArrayView
+            if matches!(ty, desc::Ty::ArrayView(_, _)) {
+                if let Some(old) =
+                    view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e1, view_ctx))
+                {
+                    panic!(
+                        "Reassigning view expression variable from `{i} = {old:?}` to `{i} = {new:?}`",
+                        i = ident.name,
+                        old = old,
+                        new = ViewExpr::create_from(e1, view_ctx)
+                    )
+                }
+                Stmt(e2_stmt)
+            // Let Expression
+            } else {
+                Stmt(cu::Stmt::Seq(
+                    Box::new(cu::Stmt::VarDecl {
+                        name: ident.name.clone(),
+                        ty: gen_ty(ty, *mutbl),
+                        expr: Some(gen_stmt_expr(e1, view_ctx).expr()),
+                    }),
+                    Box::new(e2_stmt),
+                ))
             }
-            gen_stmt_expr(e, view_ctx)
         }
-        // Let Expression
-        Let(mutbl, ident, ty, e1, e2) => Stmt(cu::Stmt::Seq(
-            Box::new(cu::Stmt::VarDecl {
-                name: ident.name.clone(),
-                ty: gen_ty(ty, *mutbl),
-                expr: Some(gen_stmt_expr(e1, view_ctx).expr()),
-            }),
-            Box::new(gen_stmt_expr(e2, view_ctx).stmt()),
-        )),
         // e1 ; e2
-        Seq(e1, e2) => Stmt(cu::Stmt::Seq(
-            Box::new(gen_stmt_expr(e1, view_ctx).stmt()),
-            Box::new(gen_stmt_expr(e2, view_ctx).stmt()),
-        )),
+        Seq(e1, e2) => Stmt(
+            // TODO this is weird. Assumptions are, that left side has no seq nor let (so no sequencing) or every sequence ends in
+            //  a stmt. Currently, with unit type it is possible to create a sequence by function
+            //  composition. However, we never generate code that really returns a unit value. Can still
+            //  be generated. Think about this.
+            cu::Stmt::Seq(
+                Box::new(gen_stmt_expr(e1, view_ctx).stmt()),
+                Box::new(gen_ret_if_not_sequenced(e2, view_ctx)),
+            ),
+        ),
         Lambda(params, exec, ty, expr) => Expr(cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt_expr(expr, view_ctx).stmt()),
@@ -246,12 +256,29 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
     }
 }
 
+// TODO related to cu::Expr::Empty.
+//  This is an ad-hoc solution for dealing with unit type and its value.
+fn gen_ret_if_not_sequenced(e: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::Stmt {
+    let e_stmt_or_expr = gen_stmt_expr(e, view_ctx);
+    match (&e.expr, &e.ty) {
+        (desc::ExprKind::Seq(_, _), _) | (desc::ExprKind::Let(_, _, _, _, _), _) => {
+            e_stmt_or_expr.stmt()
+        }
+        (desc::ExprKind::Lit(_), Some(desc::Ty::Scalar(desc::ScalarTy::Unit)))
+        | (desc::ExprKind::App(_, _, _), Some(desc::Ty::Scalar(desc::ScalarTy::Unit))) => {
+            cu::Stmt::Return(Some(e_stmt_or_expr.expr()))
+        }
+        (_, Some(desc::Ty::Scalar(desc::ScalarTy::Unit))) => e_stmt_or_expr.stmt(),
+        _ => cu::Stmt::Return(Some(e_stmt_or_expr.expr())),
+    }
+}
+
 fn gen_lit(l: desc::Lit) -> cu::Expr {
     match l {
         desc::Lit::Bool(b) => cu::Expr::Lit(cu::Lit::Bool(b)),
         desc::Lit::I32(i) => cu::Expr::Lit(cu::Lit::I32(i)),
         desc::Lit::F32(f) => cu::Expr::Lit(cu::Lit::F32(f)),
-        desc::Lit::Unit => cu::Expr::Lit(cu::Lit::Void),
+        desc::Lit::Unit => cu::Expr::Empty,
     }
 }
 
