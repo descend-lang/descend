@@ -2,8 +2,8 @@ pub mod internal;
 
 mod span;
 
-use std::fmt;
 pub use span::*;
+use std::fmt;
 
 use descend_derive::span_derive;
 use internal::FrameExpr;
@@ -47,20 +47,32 @@ pub struct Expr {
     pub expr: ExprKind,
     pub ty: Option<Ty>,
     #[span_derive_ignore]
-    pub span: Option<Span>
+    pub span: Option<Span>,
 }
 
 impl Expr {
     pub fn new(expr: ExprKind) -> Expr {
-        Expr { expr, ty: None, span: None }
+        Expr {
+            expr,
+            ty: None,
+            span: None,
+        }
     }
 
     pub fn with_span(expr: ExprKind, span: Span) -> Expr {
-        Expr { expr, ty: None, span: Some(span) }
+        Expr {
+            expr,
+            ty: None,
+            span: Some(span),
+        }
     }
 
     pub fn with_type(expr: ExprKind, ty: Ty) -> Expr {
-        Expr { expr, ty: Some(ty), span: None }
+        Expr {
+            expr,
+            ty: Some(ty),
+            span: None,
+        }
     }
 }
 
@@ -83,7 +95,7 @@ pub enum ExprKind {
     //  and Function call where function is expression (so must be lambda)
     //  This is currently wrong, because an global fun ident is not an Expr (has no value).
     //  Or we say it has the value of a function pointer type (like C or Rust) which may be better.
-    GlobalFunIdent(String),
+    GlobalFunIdent(Ident),
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
     PlaceExpr(PlaceExpr),
@@ -97,7 +109,7 @@ pub enum ExprKind {
     Assign(PlaceExpr, Box<Expr>),
     // Variable declaration, assignment and sequencing
     // let x: ty = e1; e2
-    Let(Mutability, Ident, Ty, Box<Expr>, Box<Expr>),
+    Let(Mutability, Ident, Option<Ty>, Box<Expr>, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),
     // Anonymous function which can capture its surrounding context
@@ -138,7 +150,11 @@ impl fmt::Display for ExprKind {
             }
             Self::Assign(pl_expr, e) => write!(f, "{} = {}", pl_expr, e),
             Self::Let(mutab, ident, ty, e1, e2) => {
-                write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
+                if let Some(ty) = ty {
+                    write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
+                } else {
+                    write!(f, "let {} {} = {}; {}", mutab, ident, e1, e2)
+                }
             }
             Self::Seq(e1, e2) => write!(f, "{}; {}", e1, e2),
             /*            Self::Lambda(params, exec, ty, e) => {
@@ -158,20 +174,21 @@ impl fmt::Display for ExprKind {
 pub struct Ident {
     pub name: String,
     #[span_derive_ignore]
-    pub span: Option<Span>
+    pub span: Option<Span>,
 }
 
 impl Ident {
     pub fn new(name: &str) -> Self {
         Self {
             name: String::from(name),
-            span: None
+            span: None,
         }
     }
 
     pub fn with_span(name: String, span: Span) -> Self {
         Self {
-            name, span: Some(span)
+            name,
+            span: Some(span),
         }
     }
 }
@@ -203,7 +220,7 @@ pub enum Lit {
 //     }
 // }
 
-impl Eq for Lit{}
+impl Eq for Lit {}
 
 impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -343,6 +360,21 @@ pub enum ArgKinded {
     //    Own(Ownership),
 }
 
+impl ArgKinded {
+    fn kind(&self) -> Kind {
+        use ArgKinded::*;
+        match self {
+            Ident(_) => panic!("Identifier's kind depends on the kinding context."),
+            Nat(_) => Kind::Nat,
+            Memory(_) => Kind::Memory,
+            Ty(_) => Kind::Ty,
+            Provenance(_) => Kind::Provenance,
+            Frame(_) => Kind::Frame,
+            Exec(_) => Kind::Exec,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, Nat),
@@ -402,6 +434,7 @@ pub enum Ty {
     Dead(Box<Ty>),
     Ref(Provenance, Ownership, Memory, Box<Ty>),
     Ident(Ident),
+    GridConfig(Nat, Nat),
 }
 
 impl Ty {
@@ -414,6 +447,7 @@ impl Ty {
             Ref(_, Ownership::Shrd, _, _) => false,
             Fn(_, _, _, _, _) => false,
             At(_, _) => true,
+            GridConfig(_, _) => false,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
             ArrayView(ty, _) => ty.non_copyable(),
@@ -434,7 +468,8 @@ impl Ty {
             | Fn(_, _, _, _, _)
             | At(_, _)
             | Array(_, _)
-            | ArrayView(_, _) => true,
+            | ArrayView(_, _)
+            | GridConfig(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -445,7 +480,7 @@ impl Ty {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use Ty::*;
         match self {
-            Scalar(_) | Ident(_) | Dead(_) => false,
+            Scalar(_) | Ident(_) | GridConfig(_, _) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -467,6 +502,63 @@ impl Ty {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
+        }
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use Ty::*;
+
+        if ident_kinded.kind != with.kind() {
+            panic!(
+                "Trying to substitute identifier of kind {} by expression of kind {}",
+                ident_kinded.kind,
+                with.kind()
+            )
+        }
+        match self {
+            Scalar(_) => self.clone(),
+            Ident(id) => {
+                if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
+                    match with {
+                        ArgKinded::Ident(idk) => Ident(idk.clone()),
+                        ArgKinded::Ty(ty) => ty.clone(),
+                        _ => panic!("Trying to substitute type identifier with non-type value."),
+                    }
+                } else {
+                    self.clone()
+                }
+            }
+            Ref(prv, own, mem, ty) => Ref(
+                prv.subst_ident_kinded(ident_kinded, with),
+                own.clone(),
+                mem.subst_ident_kinded(ident_kinded, with),
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+            ),
+            Fn(_, _, _, _, _) => {
+                unimplemented!("No function definitions allowed in another function definition.")
+            }
+            At(ty, mem) => At(
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                mem.subst_ident_kinded(ident_kinded, with),
+            ),
+            GridConfig(n1, n2) => GridConfig(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+            ),
+            Tuple(elem_tys) => Tuple(
+                elem_tys
+                    .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
+            ),
+            Array(ty, n) => Array(
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            ArrayView(ty, n) => Array(
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            Dead(ty) => ty.subst_ident_kinded(ident_kinded, with),
         }
     }
 }
@@ -493,6 +585,20 @@ pub enum Provenance {
     Ident(Ident),
 }
 
+impl Provenance {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        assert_eq!(ident_kinded.kind, with.kind());
+        if ident_kinded.kind == Kind::Provenance {
+            match self {
+                Provenance::Ident(id) if id == ident_kinded.ident => with.prv(),
+                _ => self.clone(),
+            }
+        } else {
+            self.clone()
+        }
+    }
+}
+
 impl fmt::Display for Provenance {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -511,6 +617,20 @@ pub enum Memory {
     // TODO refactor?
     // only exists for pointers to the stack. Must not be used for At types.
     CpuStack,
+}
+
+impl Memory {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Memory {
+        assert_eq!(ident_kinded.kind, with.kind());
+        if ident_kinded.kind == Kind::Memory {
+            match self {
+                Memory::Ident(id) if id == ident_kinded.ident => with.mem(),
+                _ => self.clone(),
+            }
+        } else {
+            self.clone()
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -554,6 +674,18 @@ pub enum Nat {
 impl Nat {
     pub fn eval(&self) -> usize {
         panic!("not implemented yet")
+    }
+
+    pub fn stubst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Nat {
+        assert_eq!(ident_kinded.kind, with.kind());
+        if ident_kinded.kind == Kind::Nat {
+            match self {
+                Nat::Ident(id) if id == ident_kinded.ident => with.nat(),
+                _ => self.clone(),
+            }
+        } else {
+            self.clone()
+        }
     }
 }
 

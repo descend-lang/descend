@@ -160,6 +160,8 @@ pub(super) enum Ty {
     Const(Box<Ty>),
     // Template parameter identifer
     Ident(String),
+    // TODO generalise to TemplateInstance
+    GridConfig(Nat, Nat),
 }
 
 // TODO this is not really a Cuda type and should maybe be represented by a generic type construct

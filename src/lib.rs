@@ -2,7 +2,7 @@
 pub mod ast;
 #[macro_use]
 pub mod dsl;
-mod codegen;
-pub mod ty_check;
+pub mod codegen;
 pub mod parser;
+pub mod ty_check;
 mod utils;

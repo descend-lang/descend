@@ -3,9 +3,9 @@ use crate::ast::{
     ScalarTy, Ty,
 };
 
+pub static GPU: &str = "gpu";
 pub static GPU_ALLOC: &str = "gpu_alloc";
 pub static COPY_TO_HOST: &str = "copy_to_host";
-pub static GPU: &str = "gpu";
 pub static SPAWN_THREADS: &str = "spawn_threads";
 
 pub static TO_VIEW: &str = "to_view";
@@ -20,7 +20,12 @@ pub struct FunDecl {
 
 // TODO add correct predeclared functions with their types
 pub(super) fn fun_decls() -> Vec<FunDecl> {
-    let decls = [(TO_VIEW, to_view_ty()), (GPU_ALLOC, gpu_alloc_ty())];
+    let decls = [
+        (TO_VIEW, to_view_ty()),
+        (GPU_ALLOC, gpu_alloc_ty()),
+        (GPU, gpu_ty()),
+        (COPY_TO_HOST, copy_to_host_ty()),
+    ];
 
     decls
         .iter()
@@ -29,6 +34,18 @@ pub(super) fn fun_decls() -> Vec<FunDecl> {
             ty: ty.clone(),
         })
         .collect()
+}
+
+// gpu:
+//   <>(i32) -[cpu.thread]-> Gpu
+fn gpu_ty() -> Ty {
+    Ty::Fn(
+        vec![],
+        vec![Ty::Scalar(ScalarTy::I32)],
+        Box::new(internal::FrameExpr::Empty),
+        ExecLoc::CpuThread,
+        Box::new(Ty::Scalar(ScalarTy::Gpu)),
+    )
 }
 
 // gpu_alloc:
@@ -80,6 +97,52 @@ fn gpu_alloc_ty() -> Ty {
         Box::new(internal::FrameExpr::Empty),
         ExecLoc::CpuThread,
         Box::new(Ty::At(Box::new(Ty::Ident(t)), Memory::GpuGlobal)),
+    )
+}
+
+// copy_to_host:
+//   <a: prv, b: prv, m: mem, t: ty>(&a shrd m ty@gpu.global, &b uniq cpu.heap ty)
+//      -[cpu.thread]-> ()
+fn copy_to_host_ty() -> Ty {
+    let a = Ident::new("a");
+    let b = Ident::new("b");
+    let m = Ident::new("m");
+    let t = Ident::new("t");
+    let a_prv = IdentKinded {
+        ident: a.clone(),
+        kind: Kind::Provenance,
+    };
+    let b_prv = IdentKinded {
+        ident: b.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Memory,
+    };
+    Ty::Fn(
+        vec![a_prv, b_prv, m_mem, t_ty],
+        vec![
+            Ty::Ref(
+                Provenance::Ident(a),
+                Ownership::Shrd,
+                Memory::Ident(m),
+                Box::new(Ty::At(Box::new(Ty::Ident(t.clone())), Memory::GpuGlobal)),
+            ),
+            Ty::Ref(
+                Provenance::Ident(b),
+                Ownership::Shrd,
+                Memory::CpuHeap,
+                Box::new(Ty::Ident(t)),
+            ),
+        ],
+        Box::new(internal::FrameExpr::Empty),
+        ExecLoc::CpuThread,
+        Box::new(Ty::Scalar(ScalarTy::Unit)),
     )
 }
 
@@ -206,7 +269,7 @@ fn join_ty() -> Ty {
         Box::new(internal::FrameExpr::Empty),
         ExecLoc::View,
         Box::new(Ty::ArrayView(
-            Box::new(Ty::Ident(t.clone())),
+            Box::new(Ty::Ident(t)),
             Nat::BinOp(
                 BinOpNat::Mul,
                 Box::new(Nat::Ident(m)),

@@ -4,7 +4,7 @@ pub mod ctxs;
 pub mod pre_decl;
 mod subty;
 
-use crate::ast::internal::{IdentTyped, Loan};
+use crate::ast::internal::{IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use pre_decl::FunDecl;
@@ -100,12 +100,24 @@ fn ty_check_expr(
     // TODO input contexts are well-formed
     //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
     let (res_ty_ctx, ty) = match &mut expr.expr {
-        ExprKind::GlobalFunIdent(name) => (ty_ctx, gl_ctx.fun_ty_by_name(name)?.clone()),
+        ExprKind::GlobalFunIdent(ident) => (ty_ctx, gl_ctx.fun_ty_by_name(&ident.name)?.clone()),
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
             ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, exec, pl_expr)?
         }
         ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
             ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+        }
+        ExprKind::LetProv(prvs, body) => {
+            let mut ty_ctx_with_prvs = ty_ctx;
+            for prv in prvs {
+                ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping {
+                    prv: prv.clone(),
+                    loans: std::collections::HashSet::new(),
+                })
+            }
+            // TODO do we have to check that the prvs in res_ty_ctx have loans now?
+            let res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx_with_prvs, exec, body)?;
+            (res_ty_ctx, body.ty.as_ref().unwrap().clone())
         }
         // TODO respect mutability
         ExprKind::Let(mutable, ident, ty, ref mut e1, ref mut e2) => {
@@ -310,7 +322,7 @@ fn ty_check_app(
     // TODO check well-kinded: FrameTyping, Prv, Ty
     let mut res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, ef)?;
     if let Ty::Fn(gen_params, param_tys, _, _, out_ty) = ef.ty.as_ref().unwrap() {
-        if !(gen_params.len() == k_args.len()) {
+        if gen_params.len() != k_args.len() {
             return Err(format!(
                 "Wrong amount of generic arguments. Expected {}, found {}",
                 gen_params.len(),
@@ -320,7 +332,6 @@ fn ty_check_app(
         for (gp, kv) in gen_params.iter().zip(k_args) {
             check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
         }
-
         if args.len() != param_tys.len() {
             return Err(format!(
                 "Wrong amount of arguments. Expected {}, found {}",
@@ -328,10 +339,16 @@ fn ty_check_app(
                 args.len()
             ));
         }
-        for (arg, f_arg_ty) in args.iter_mut().zip(param_tys) {
+        let substd_param_tys = param_tys.iter().map(|ty| gen_params.iter().zip(k_args.as_ref()).map(|(gen_param, k_arg)|  ty.subst_ident_kinded(gen_param, k_arg)));
+
+        for (arg, param_ty) in args.iter_mut().zip(substd_param_tys.iter().map(|)) {
             res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, res_ty_ctx, exec, arg)?;
             if arg.ty.as_ref().unwrap() != f_arg_ty {
-                return Err("Argument types do not match.".to_string());
+                return Err(format!(
+                    "Argument types do not match.\n Expected {:?}, but found {:?}.",
+                    f_arg_ty,
+                    arg.ty.as_ref().unwrap()
+                ));
             }
         }
         Ok((res_ty_ctx, *out_ty.clone()))
@@ -397,11 +414,16 @@ fn ty_check_let(
     ty_ctx: TyCtx,
     exec: ExecLoc,
     ident: &mut Ident,
-    ty: &Ty,
+    ty: &Option<Ty>,
     e1: &mut Expr,
     e2: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let ty_ctx_e1 = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e1)?;
+    let ty = if let Some(tty) = ty {
+        tty
+    } else {
+        e1.ty.as_ref().unwrap()
+    };
     let ty_ctx_sub = subty::check(kind_ctx, ty_ctx_e1, &e1.ty.as_ref().unwrap(), ty)?;
     let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone());
     let garbage_coll_ty_ctx_with_ident = ty_ctx_sub
@@ -692,5 +714,26 @@ impl crate::ast::PlaceExpr {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ty_check::ty_check_global_fun_def;
+
+    #[test]
+    fn test_dummy_fun() -> Result<(), String> {
+        let dummy_fun_src = r#"fn dummy_fun<a: prv>(
+            h_array: &a uniq cpu.heap [i32; 4096]
+        ) -[cpu.thread]-> [i32; 3] {
+            let answer_to_everything = [1,2,42];
+            answer_to_everything
+        }"#;
+
+        let dummy_fun = crate::parser::parse_global_fun_def(dummy_fun_src).unwrap();
+        let mut compil_unit = vec![dummy_fun];
+        super::ty_check(&mut compil_unit)?;
+        print!("{:?}", compil_unit[0]);
+        Ok(())
     }
 }

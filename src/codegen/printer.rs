@@ -249,6 +249,7 @@ impl std::fmt::Display for Ty {
             },
             Scalar(sty) => write!(f, "{}", sty),
             Ident(name) => write!(f, "{}", name),
+            GridConfig(nb, nt) => write!(f, "GridConfig<{}, {}>", nb, nt),
         }
     }
 }

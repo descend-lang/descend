@@ -1,9 +1,8 @@
 #![cfg(test)]
 
-// TODO copy_to_gpu should take a shared reference
-/*
 extern crate descend;
 
+/*
 use descend::ast::internal::*;
 use descend::ast::ExecLoc::CpuThread;
 use descend::ast::Memory::{GpuGlobal, GpuShared};
@@ -14,7 +13,42 @@ use descend::ty_check;
 use descend::ty_check::ctxs::{PrvMapping, TyCtx};
 use descend::{arr, tuple, tuple_ty};
 use std::collections::HashSet;
+ */
 
+use descend::ty_check;
+
+#[test]
+fn test_scalar_mult_seq() -> Result<(), String> {
+    let sclar_mult_fun = r#"fn scalar_mult<a: prv>(
+        h_array: &a uniq cpu.heap [i32; 4096]
+    ) -[cpu.thread]-> i32 {
+        let gpu: Gpu =  gpu(0);
+        
+        letprov <'g, 'h, 'z> {
+            let mut array: [i32; 4096] @ gpu.global =
+                gpu_alloc<'g, a, cpu.stack, cpu.heap, [i32; 4096]>(&'g uniq gpu, h_array); 
+            let view: [[&a uniq gpu.global i32; 4096]] =
+                to_view<'z, gpu.global, 4096, i32>(&'z uniq array);
+            let grid: GridConfig<64, 64> = spawn_threads<64, 64, 'h>(&'h shrd gpu);
+            for elem in view across grid {
+                *a = 5 * *b;
+            };
+            copy_to_host<4096, h, a, i32>(&h shrd array, h_array);
+        }
+    }"#;
+
+    let res = descend::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
+    let mut compil_unit = vec![res];
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+
+/*
 #[test]
 #[rustfmt::skip]
 fn scalar_copy_example() {

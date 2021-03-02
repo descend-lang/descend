@@ -34,7 +34,7 @@ pub fn ident(name: &str) -> Expr {
 }
 
 pub fn fun_name(name: &str) -> Expr {
-    Expr::new(ExprKind::GlobalFunIdent(name.to_string()))
+    Expr::new(ExprKind::GlobalFunIdent(Ident::new(name)))
 }
 
 pub fn deref(pl_expr: Expr) -> Expr {
@@ -177,7 +177,7 @@ pub fn r#let(m: Mutability, id_name: &str, ident_ty: &Ty, value: Expr, body: Exp
     Expr::new(ExprKind::Let(
         m,
         Ident::new(id_name),
-        ident_ty.clone(),
+        Some(ident_ty.clone()),
         Box::new(value),
         Box::new(body),
     ))

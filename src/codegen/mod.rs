@@ -61,7 +61,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
     use desc::ExprKind::*;
     use StmtOrExpr::*;
     match &expr.expr {
-        GlobalFunIdent(name) => Expr(cu::Expr::Ident(name.clone())),
+        GlobalFunIdent(ident) => Expr(cu::Expr::Ident(ident.name.clone())),
         Lit(l) => Expr(gen_lit(*l)),
         PlaceExpr(pl_expr) => Expr(gen_pl_expr(pl_expr)),
         Index(pl_expr, n) => Expr(cu::Expr::ArraySubscript {
@@ -81,7 +81,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
         Let(mutbl, ident, ty, e1, e2) => {
             let e2_stmt = gen_ret_if_not_sequenced(e2, view_ctx);
             // Let ArrayView
-            if matches!(ty, desc::Ty::ArrayView(_, _)) {
+            if matches!(ty.as_ref().unwrap(), desc::Ty::ArrayView(_, _)) {
                 if let Some(old) =
                     view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e1, view_ctx))
                 {
@@ -98,7 +98,7 @@ fn gen_stmt_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) ->
                 Stmt(cu::Stmt::Seq(
                     Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
-                        ty: gen_ty(ty, *mutbl),
+                        ty: gen_ty(ty.as_ref().unwrap(), *mutbl),
                         expr: Some(gen_stmt_expr(e1, view_ctx).expr()),
                     }),
                     Box::new(e2_stmt),
@@ -419,6 +419,9 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
         desc::Ty::Ident(ident) => cu::Ty::Ident(ident.name.clone()),
+        desc::Ty::GridConfig(num_blocks, num_threads) => {
+            cu::Ty::GridConfig(num_blocks.clone(), num_threads.clone())
+        }
     };
 
     if matches!(mutbl, desc::Mutability::Mut) {
@@ -524,14 +527,14 @@ impl ViewExpr {
             // TODO this is assuming that f is an identifier
             //  We have to redesign Views to not be data types...
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::GlobalFunIdent(name) = &f.expr {
-                    if name == crate::ty_check::pre_decl::TO_VIEW {
+                if let desc::ExprKind::GlobalFunIdent(ident) = &f.expr {
+                    if ident.name == crate::ty_check::pre_decl::TO_VIEW {
                         ViewExpr::create_to_view_view(gen_args, args)
-                    } else if name == crate::ty_check::pre_decl::GROUP {
+                    } else if ident.name == crate::ty_check::pre_decl::GROUP {
                         ViewExpr::create_group_view(gen_args, args, view_ctx)
-                    } else if name == crate::ty_check::pre_decl::JOIN {
+                    } else if ident.name == crate::ty_check::pre_decl::JOIN {
                         ViewExpr::create_join_view(gen_args, args, view_ctx)
-                    } else if name == crate::ty_check::pre_decl::TRANSPOSE {
+                    } else if ident.name == crate::ty_check::pre_decl::TRANSPOSE {
                         ViewExpr::create_transpose_view(gen_args, args, view_ctx)
                     } else {
                         unimplemented!()
@@ -647,65 +650,18 @@ impl ViewExpr {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::ExprKind::GlobalFunIdent;
     use crate::codegen::gen_fun_def;
 
     #[test]
-    fn scalar_mult_on_vec() {
-        use crate::ast::*;
-        let scalar_mult_fun = GlobalFunDef {
-            name: "scalar_mult".to_string(),
-            generic_params: vec![
-                IdentKinded {
-                    ident: Ident::new("a"),
-                    kind: Kind::Provenance,
-                },
-                IdentKinded {
-                    ident: Ident::new("n"),
-                    kind: Kind::Nat,
-                },
-            ],
-            params: vec![ParamDecl {
-                ident: Ident::new("h_array"),
-                ty: Ty::Ref(
-                    Provenance::Ident(Ident::new("a")),
-                    Ownership::Uniq,
-                    Memory::CpuHeap,
-                    Box::new(Ty::Array(
-                        Box::new(Ty::Scalar(ScalarTy::I32)),
-                        Nat::Ident(Ident::new("n")),
-                    )),
-                ),
-                mutbl: Mutability::Const,
-            }],
-            ret_ty: Ty::Scalar(ScalarTy::Unit),
-            exec: ExecLoc::CpuThread,
-            prv_rels: vec![],
-            body_expr: Expr::with_type(
-                ExprKind::LetProv(
-                    vec!["a".to_string()],
-                    Box::new(Expr::with_type(
-                        ExprKind::Let(
-                            Mutability::Const,
-                            Ident::new("gpu"),
-                            Ty::Scalar(ScalarTy::Gpu),
-                            Box::new(Expr::with_type(
-                                ExprKind::GlobalFunIdent("gpu".to_string()),
-                                Ty::Scalar(ScalarTy::Gpu),
-                            )),
-                            Box::new(Expr::with_type(
-                                ExprKind::Lit(Lit::Unit),
-                                Ty::Scalar(ScalarTy::Unit),
-                            )),
-                        ),
-                        Ty::Scalar(ScalarTy::Unit),
-                    )),
-                ),
-                Ty::Scalar(ScalarTy::Unit),
-            ),
-        };
+    fn test_scalar_mult() {
+        let sclar_mult_fun = r#"fn scalar_mult<a: prv>(
+            h_array: &a uniq cpu.heap [i32; 4096]
+        ) -[cpu.thread]-> i32 {
+            let answer_to_everything: i32 = 42;
+            answer_to_everything
+        }"#;
 
-        let compil_unit: CompilUnit = vec![scalar_mult_fun];
-        print!("{}", super::gen(&compil_unit));
+        let res = crate::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
+        print!("{}", gen_fun_def(&res));
     }
 }
