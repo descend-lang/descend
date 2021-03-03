@@ -347,8 +347,6 @@ impl fmt::Display for Kind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgKinded {
-    // TODO this exists only for the parser?
-    //  talk to parser group to figure out how to do this properly
     Ident(Ident),
     Nat(Nat),
     Memory(Memory),
@@ -356,8 +354,6 @@ pub enum ArgKinded {
     Provenance(Provenance),
     Frame(FrameExpr),
     Exec(ExecLoc),
-    // TODO remove ownership?
-    //    Own(Ownership),
 }
 
 impl ArgKinded {
@@ -391,6 +387,7 @@ impl PlaceExpr {
         }
     }
 
+    // The inner constructs are prefixes of the outer constructs.
     pub fn prefix_of(&self, other: &Self) -> bool {
         if self != other {
             match other {
@@ -507,14 +504,6 @@ impl Ty {
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use Ty::*;
-
-        if ident_kinded.kind != with.kind() {
-            panic!(
-                "Trying to substitute identifier of kind {} by expression of kind {}",
-                ident_kinded.kind,
-                with.kind()
-            )
-        }
         match self {
             Scalar(_) => self.clone(),
             Ident(id) => {
@@ -547,6 +536,7 @@ impl Ty {
             ),
             Tuple(elem_tys) => Tuple(
                 elem_tys
+                    .iter()
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
             ),
@@ -554,7 +544,7 @@ impl Ty {
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
             ),
-            ArrayView(ty, n) => Array(
+            ArrayView(ty, n) => ArrayView(
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
             ),
@@ -587,10 +577,16 @@ pub enum Provenance {
 
 impl Provenance {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
-        assert_eq!(ident_kinded.kind, with.kind());
         if ident_kinded.kind == Kind::Provenance {
             match self {
-                Provenance::Ident(id) if id == ident_kinded.ident => with.prv(),
+                Provenance::Ident(id) if id == &ident_kinded.ident => match with {
+                    ArgKinded::Ident(idk) => Provenance::Ident(idk.clone()),
+                    ArgKinded::Provenance(prv) => prv.clone(),
+                    err => panic!(
+                        "Trying to create provenance value from non-provenance `{:?}`",
+                        err
+                    ),
+                },
                 _ => self.clone(),
             }
         } else {
@@ -621,10 +617,13 @@ pub enum Memory {
 
 impl Memory {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Memory {
-        assert_eq!(ident_kinded.kind, with.kind());
         if ident_kinded.kind == Kind::Memory {
             match self {
-                Memory::Ident(id) if id == ident_kinded.ident => with.mem(),
+                Memory::Ident(id) if id == &ident_kinded.ident => match with {
+                    ArgKinded::Ident(kid) => Memory::Ident(kid.clone()),
+                    ArgKinded::Memory(m) => m.clone(),
+                    err => panic!("Trying to create Memory value from non-memory `{:?}`", err),
+                },
                 _ => self.clone(),
             }
         } else {
@@ -676,11 +675,19 @@ impl Nat {
         panic!("not implemented yet")
     }
 
-    pub fn stubst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Nat {
-        assert_eq!(ident_kinded.kind, with.kind());
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Nat {
         if ident_kinded.kind == Kind::Nat {
             match self {
-                Nat::Ident(id) if id == ident_kinded.ident => with.nat(),
+                Nat::Ident(id) if id == &ident_kinded.ident => match with {
+                    ArgKinded::Ident(idk) => Nat::Ident(idk.clone()),
+                    ArgKinded::Nat(n) => n.clone(),
+                    err => panic!("Trying to create nat value from non-nat `{:?}`", err),
+                },
+                Nat::BinOp(op, n1, n2) => Nat::BinOp(
+                    op.clone(),
+                    Box::new(n1.subst_ident_kinded(ident_kinded, with)),
+                    Box::new(n2.subst_ident_kinded(ident_kinded, with)),
+                ),
                 _ => self.clone(),
             }
         } else {

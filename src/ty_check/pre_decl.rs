@@ -9,6 +9,7 @@ pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static SPAWN_THREADS: &str = "spawn_threads";
 
 pub static TO_VIEW: &str = "to_view";
+pub static TO_VIEW_MUT: &str = "to_view_mut";
 pub static GROUP: &str = "group";
 pub static JOIN: &str = "join";
 pub static TRANSPOSE: &str = "transpose";
@@ -21,10 +22,14 @@ pub struct FunDecl {
 // TODO add correct predeclared functions with their types
 pub(super) fn fun_decls() -> Vec<FunDecl> {
     let decls = [
-        (TO_VIEW, to_view_ty()),
-        (GPU_ALLOC, gpu_alloc_ty()),
+        // Built-in functions
         (GPU, gpu_ty()),
+        (GPU_ALLOC, gpu_alloc_ty()),
         (COPY_TO_HOST, copy_to_host_ty()),
+        (SPAWN_THREADS, spawn_threads_ty()),
+        // View constructors
+        (TO_VIEW, to_view_ty(Ownership::Shrd)),
+        (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
     ];
 
     decls
@@ -101,12 +106,11 @@ fn gpu_alloc_ty() -> Ty {
 }
 
 // copy_to_host:
-//   <a: prv, b: prv, m: mem, t: ty>(&a shrd m ty@gpu.global, &b uniq cpu.heap ty)
+//   <a: prv, b: prv, t: ty>(&a shrd gpu.global ty, &b uniq cpu.heap ty)
 //      -[cpu.thread]-> ()
 fn copy_to_host_ty() -> Ty {
     let a = Ident::new("a");
     let b = Ident::new("b");
-    let m = Ident::new("m");
     let t = Ident::new("t");
     let a_prv = IdentKinded {
         ident: a.clone(),
@@ -116,26 +120,22 @@ fn copy_to_host_ty() -> Ty {
         ident: b.clone(),
         kind: Kind::Provenance,
     };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
     let t_ty = IdentKinded {
         ident: t.clone(),
-        kind: Kind::Memory,
+        kind: Kind::Ty,
     };
     Ty::Fn(
-        vec![a_prv, b_prv, m_mem, t_ty],
+        vec![a_prv, b_prv, t_ty],
         vec![
             Ty::Ref(
                 Provenance::Ident(a),
                 Ownership::Shrd,
-                Memory::Ident(m),
-                Box::new(Ty::At(Box::new(Ty::Ident(t.clone())), Memory::GpuGlobal)),
+                Memory::GpuGlobal,
+                Box::new(Ty::Ident(t.clone())),
             ),
             Ty::Ref(
                 Provenance::Ident(b),
-                Ownership::Shrd,
+                Ownership::Uniq,
                 Memory::CpuHeap,
                 Box::new(Ty::Ident(t)),
             ),
@@ -146,9 +146,48 @@ fn copy_to_host_ty() -> Ty {
     )
 }
 
+// spawn_threads:
+//  <nb: nat, nt: nat, a: prv>(&a shrd gpu) -> GridConfig<nb, nt>
+fn spawn_threads_ty() -> Ty {
+    let nb = Ident::new("nb");
+    let nt = Ident::new("nt");
+    let a = Ident::new("a");
+    let m = Ident::new("m");
+    let nb_nat = IdentKinded {
+        ident: nb.clone(),
+        kind: Kind::Nat,
+    };
+    let nt_nat = IdentKinded {
+        ident: nt.clone(),
+        kind: Kind::Nat,
+    };
+    let a_prv = IdentKinded {
+        ident: a.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    Ty::Fn(
+        vec![nb_nat, nt_nat, a_prv, m_mem],
+        vec![Ty::Ref(
+            Provenance::Ident(a),
+            Ownership::Shrd,
+            Memory::Ident(m),
+            Box::new(Ty::Scalar(ScalarTy::Gpu)),
+        )],
+        Box::new(internal::FrameExpr::Empty),
+        ExecLoc::CpuThread,
+        Box::new(Ty::GridConfig(Nat::Ident(nb), Nat::Ident(nt))),
+    )
+}
+
 // to_view:
 //  <r: prv, m: mem, n: nat, t: ty>(&r shrd m [t; n]) -[view]-> [[&r shrd m t; n]]
-fn to_view_ty() -> Ty {
+// to_view_mut:
+//  <r: prv, m: mem, n: nat, t: ty>(&r uniq m [t; n]) -[view]-> [[&r uniq m t; n]]
+fn to_view_ty(own: Ownership) -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let n = Ident::new("n");
@@ -162,10 +201,6 @@ fn to_view_ty() -> Ty {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    let ex_exec = IdentKinded {
-        ident: ex,
-        kind: Kind::Exec,
-    };
     let n_nat = IdentKinded {
         ident: n.clone(),
         kind: Kind::Nat,
@@ -175,10 +210,10 @@ fn to_view_ty() -> Ty {
         kind: Kind::Ty,
     };
     Ty::Fn(
-        vec![r_prv, m_mem, ex_exec, n_nat, t_ty],
+        vec![r_prv, m_mem, n_nat, t_ty],
         vec![Ty::Ref(
             Provenance::Ident(r.clone()),
-            Ownership::Shrd,
+            own,
             Memory::Ident(m.clone()),
             Box::new(Ty::Array(
                 Box::new(Ty::Ident(t.clone())),
@@ -190,7 +225,7 @@ fn to_view_ty() -> Ty {
         Box::new(Ty::ArrayView(
             Box::new(Ty::Ref(
                 Provenance::Ident(r),
-                Ownership::Shrd,
+                own,
                 Memory::Ident(m),
                 Box::new(Ty::Ident(t)),
             )),

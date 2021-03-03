@@ -61,7 +61,7 @@ fn ownership_safe_place(
         });
         Ok(loan_set)
     } else {
-        Err("A borrow is being violated.".to_string())
+        Err(format!("Trying to violate existing borrow of {:?}.", p))
     }
 }
 
@@ -101,12 +101,15 @@ fn ownership_safe_deref(
                 },
             )
     }
+
+    // Γ(r) = { ω′pi }
+    let loans_for_ref_prv = ty_ctx.loans_for_prv(ref_prv_val_name)?;
     // ω ≲ ωπ
     check_own_lte_ref(own, ref_own)?;
-    let loans_for_ref_prv = ty_ctx.loans_for_prv(ref_prv_val_name)?;
+    // List<pi = pi□ [πi]>
     let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_from_loans(loans_for_ref_prv);
     // List<πe>, List<πi>, π
-    // Refactor into own function
+    // TODO Refactor into own function
     let mut extended_reborrows = Vec::from(reborrows);
     extended_reborrows.extend(pl_ctxs_and_places_in_loans.map(|(_, pl)| pl));
     extended_reborrows.extend(std::iter::once(most_spec_pl.clone()));
@@ -115,7 +118,7 @@ fn ownership_safe_deref(
     let mut potential_prvs_after_subst = subst_pl_with_potential_prvs_ownership_safe(
         kind_ctx,
         ty_ctx,
-        reborrows,
+        &extended_reborrows,
         own,
         &pl_ctx_no_deref,
         loans_for_ref_prv,

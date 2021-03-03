@@ -21,19 +21,19 @@ use descend::ty_check;
 fn test_scalar_mult_seq() -> Result<(), String> {
     let sclar_mult_fun = r#"fn scalar_mult<a: prv>(
         h_array: &a uniq cpu.heap [i32; 4096]
-    ) -[cpu.thread]-> i32 {
+    ) -[cpu.thread]-> () {
         let gpu: Gpu =  gpu(0);
         
-        letprov <'g, 'h, 'z> {
+        letprov <'g, 'h, 'r, 'z> {
             let mut array: [i32; 4096] @ gpu.global =
-                gpu_alloc<'g, a, cpu.stack, cpu.heap, [i32; 4096]>(&'g uniq gpu, h_array); 
-            let view: [[&a uniq gpu.global i32; 4096]] =
-                to_view<'z, gpu.global, 4096, i32>(&'z uniq array);
-            let grid: GridConfig<64, 64> = spawn_threads<64, 64, 'h>(&'h shrd gpu);
+                gpu_alloc<'g, 'r, cpu.stack, cpu.stack, [i32; 4096]>(&'g uniq gpu, &'r shrd *h_array); 
+            let view: [[&'z uniq gpu.global i32; 4096]] =
+                to_view_mut<'z, gpu.global, 4096, i32>(&'z uniq array);
+            let grid: GridConfig<64, 64> = spawn_threads<64, 64, 'h, cpu.stack>(&'h shrd gpu);
             for elem in view across grid {
-                *a = 5 * *b;
+                *elem = 5 * *elem;
             };
-            copy_to_host<4096, h, a, i32>(&h shrd array, h_array);
+            copy_to_host<'h, a, [i32; 4096]>(&'h shrd array, h_array);
         }
     }"#;
 

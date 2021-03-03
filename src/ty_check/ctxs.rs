@@ -273,6 +273,43 @@ impl TyCtx {
                 .unwrap()
         })
     }
+
+    // Γ ▷- p = Γ′
+    pub(super) fn without_reborrow_loans(&self, pl_expr: &PlaceExpr) -> TyCtx {
+        let res_frame_tys = self
+            .frame_tys
+            .iter()
+            .map(|frm_ty| {
+                frm_ty
+                    .iter()
+                    .map(|frame| match frame {
+                        Frame::Var(ident_typed) => Frame::Var(ident_typed.clone()),
+                        Frame::PrvMapping(PrvMapping { prv, loans }) => {
+                            let without_reborrow: HashSet<Loan> = loans
+                                .iter()
+                                .filter_map(|loan| {
+                                    if !PlaceExpr::Deref(Box::new(pl_expr.clone()))
+                                        .prefix_of(&loan.place_expr)
+                                    {
+                                        Some(loan.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            Frame::PrvMapping(PrvMapping {
+                                prv: prv.clone(),
+                                loans: without_reborrow,
+                            })
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        TyCtx {
+            frame_tys: res_frame_tys,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

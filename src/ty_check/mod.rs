@@ -131,7 +131,7 @@ fn ty_check_expr(
             ty_check_app(gl_ctx, kind_ctx, ty_ctx, exec, ef, k_args, args)?
         }
         ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
-            ty_check_ref(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
+            ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
         }
         ExprKind::BinOp(bin_op, lhs, rhs) => {
             ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
@@ -142,7 +142,12 @@ fn ty_check_expr(
         ExprKind::Assign(pl_expr, e) if pl_expr.is_place() => {
             ty_check_assign_place(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
         }
-        ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => unimplemented!(),
+        ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => {
+            ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
+        }
+        ExprKind::ParForSync(id, view_expr, parall_cfg, body) => ty_check_par_for_sync(
+            gl_ctx, kind_ctx, ty_ctx, exec, id, view_expr, parall_cfg, body,
+        )?,
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
@@ -151,46 +156,62 @@ fn ty_check_expr(
     Ok(res_ty_ctx)
 }
 
-fn ty_check_par_for_global(
+fn ty_check_par_for_sync(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: ExecLoc,
-    gpu_expr: &mut Expr,
-    n: &Nat,
     ident: &Ident,
-    array_view: &mut Expr,
+    view: &mut Expr,
+    parall_cfg: &mut Expr,
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    let gpu_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, gpu_expr)?;
-    if !matches!(gpu_expr.ty, Some(Ty::Scalar(ScalarTy::Gpu))) {
+    let view_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, view)?;
+    if !matches!(view.ty, Some(Ty::ArrayView(_, _))) {
         return Err(format!(
-            "Expected an expression of type GPU, instead found an expression of type {:?}",
-            gpu_expr.ty
+            "Expected an expression of type ArrayView, found an expression of type {:?} instead.",
+            view.ty
         ));
     }
-    let array_view_ctx = ty_check_expr(gl_ctx, kind_ctx, gpu_ty_ctx, exec, array_view)?;
-    if let Some(Ty::ArrayView(elem_ty, m)) = &array_view.ty {
-        if m != n {
-            return Err(
-                "The amount of started threads is not equal to the amount of elements passed to the function."
-                    .to_string());
-        }
 
-        // TODO fresh ident
+    let parall_cfg_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, view_ty_ctx, exec, parall_cfg)?;
+    if !matches!(parall_cfg.ty, Some(Ty::GridConfig(_, _))) {
+        return Err(format!(
+            "Expected an expression of type GridConfig, found an expression of type {:?} instead.",
+            parall_cfg.ty
+        ));
+    }
+
+    if let (Ty::ArrayView(elem_ty, m), Ty::GridConfig(nb, nt)) =
+        (view.ty.as_ref().unwrap(), parall_cfg.ty.as_ref().unwrap())
+    {
+        // TODO
+        // if m != Nat::BinOp(BinOpNat::Mul, nb, nt) {
+        //     return Err(
+        //         "The amount of started threads is not equal to the amount of elements passed to the function."
+        //             .to_string());
+        // }
+        println!(
+            "Warning: Did not check equality of {} and {}",
+            m,
+            Nat::BinOp(BinOpNat::Mul, Box::new(nb.clone()), Box::new(nt.clone()))
+        );
+
         // Use a new context to disable capturing variables.
         // In the long run, capturing places of copy data types and allowing shared borrowing
         // should probably be the goal.
-        let ctx_with_ident = TyCtx::new()
+        // TODO Danger this allows capturing of any values
+        //  really needed: Keep prvonance mappings, identifiers with copyable types
+        //  (maybe even non-copyable and therefore everything again in order to allow
+        //  shared borrowing inside).
+        let ctx_with_ident = parall_cfg_ty_ctx
+            .clone()
             .append_ident_typed(IdentTyped::new(ident.clone(), elem_ty.deref().clone()));
         // TODO check that type of the identifier is dead? Meaning that it has been used in the loop.
-        let body_ctx = ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
-        Ok((array_view_ctx, Ty::Scalar(ScalarTy::Unit)))
+        ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
+        Ok((parall_cfg_ty_ctx, Ty::Scalar(ScalarTy::Unit)))
     } else {
-        Err(format!(
-            "Expected array type, but found {:?}",
-            array_view.ty.clone().unwrap()
-        ))
+        panic!("unreachable")
     }
 }
 
@@ -206,6 +227,7 @@ fn ty_check_assign_place(
     let place = pl_expr.to_place().unwrap();
     let place_ty = assigned_val_ty_ctx.place_ty(&place)?;
 
+    // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
     if !matches!(place_ty, Ty::Dead(_)) {
         let pl_uniq_loans = borrow_check::ownership_safe(
             kind_ctx,
@@ -230,8 +252,51 @@ fn ty_check_assign_place(
         &e.ty.as_ref().unwrap(),
         &place_ty,
     )?;
-    let res_ty_ctx = after_subty_ctx.set_place_ty(&place, e.ty.as_ref().unwrap().clone());
-    Err("missing last operation".to_string())
+    let adjust_place_ty_ctx = after_subty_ctx.set_place_ty(&place, e.ty.as_ref().unwrap().clone());
+    Ok((
+        adjust_place_ty_ctx.without_reborrow_loans(pl_expr),
+        Ty::Scalar(ScalarTy::Unit),
+    ))
+}
+
+fn ty_check_assign_deref(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    deref_expr: &mut PlaceExpr,
+    e: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    let assigned_val_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
+    let deref_ty =
+        place_expr_ty_under_own(kind_ctx, &assigned_val_ty_ctx, Ownership::Uniq, deref_expr)?
+            .clone();
+
+    // TODO why is this important?
+    if !deref_ty.is_fully_alive() {
+        return Err(
+            "Trying to assign through reference, to a type which is not fully alive.".to_string(),
+        );
+    }
+
+    borrow_check::ownership_safe(
+        kind_ctx,
+        &assigned_val_ty_ctx,
+        &[],
+        Ownership::Uniq,
+        deref_expr,
+    )?;
+
+    let after_subty_ctx = subty::check(
+        kind_ctx,
+        assigned_val_ty_ctx,
+        &e.ty.as_ref().unwrap(),
+        &deref_ty,
+    )?;
+    Ok((
+        after_subty_ctx.without_reborrow_loans(deref_expr),
+        Ty::Scalar(ScalarTy::Unit),
+    ))
 }
 
 fn ty_check_index_copy(
@@ -313,8 +378,8 @@ fn ty_check_app(
             //  KindedArg::Frame(_) if expected == &Kind::Frame => Ok(()),
             ArgKinded::Ident(k_ident) if expected == kind_ctx.get_kind(k_ident)? => Ok(()),
             _ => Err(format!(
-                "expected argument of kind {:?}, but the provided argument has another kind",
-                expected
+                "expected argument of kind {:?}, but the provided argument is {:?}",
+                expected, kv
             )),
         }
     }
@@ -329,7 +394,7 @@ fn ty_check_app(
                 k_args.len()
             ));
         }
-        for (gp, kv) in gen_params.iter().zip(k_args) {
+        for (gp, kv) in gen_params.iter().zip(&*k_args) {
             check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
         }
         if args.len() != param_tys.len() {
@@ -339,19 +404,36 @@ fn ty_check_app(
                 args.len()
             ));
         }
-        let substd_param_tys = param_tys.iter().map(|ty| gen_params.iter().zip(k_args.as_ref()).map(|(gen_param, k_arg)|  ty.subst_ident_kinded(gen_param, k_arg)));
+        let subst_param_tys: Vec<_> = param_tys
+            .iter()
+            .map(|ty| {
+                let mut subst_ty = ty.clone();
+                for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
+                    subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
+                }
+                subst_ty
+            })
+            .collect();
 
-        for (arg, param_ty) in args.iter_mut().zip(substd_param_tys.iter().map(|)) {
+        for (arg, param_ty) in args.iter_mut().zip(subst_param_tys) {
             res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, res_ty_ctx, exec, arg)?;
-            if arg.ty.as_ref().unwrap() != f_arg_ty {
+            if arg.ty.as_ref().unwrap() != &param_ty {
                 return Err(format!(
                     "Argument types do not match.\n Expected {:?}, but found {:?}.",
-                    f_arg_ty,
+                    param_ty,
                     arg.ty.as_ref().unwrap()
                 ));
             }
         }
-        Ok((res_ty_ctx, *out_ty.clone()))
+        // TODO check provenance relations
+        let subst_out_ty = {
+            let mut subst_ty = out_ty.as_ref().clone();
+            for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
+                subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
+            }
+            subst_ty
+        };
+        Ok((res_ty_ctx, subst_out_ty))
     } else {
         Err(format!(
             "The provided function expression\n {:?}\n does not have a function type.",
@@ -493,7 +575,6 @@ fn ty_check_pl_expr_without_deref(
     }
     let res_ty_ctx = if pl_ty.copyable() {
         borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
-        // TODO check whether the shared type checking of a place expr will be needed
         ty_ctx
     } else {
         borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)?;
@@ -502,7 +583,7 @@ fn ty_check_pl_expr_without_deref(
     Ok((res_ty_ctx, pl_ty))
 }
 
-fn ty_check_ref(
+fn ty_check_borrow(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
@@ -566,7 +647,7 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
         // TC-Deref
         // TODO respect memory
         PlaceExpr::Deref(borr_expr) => {
-            borr_pl_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)
+            deref_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)
         }
     }
 }
@@ -602,7 +683,7 @@ fn proj_expr_ty_and_passed_prvs_under_own<'a>(
     }
 }
 
-fn borr_pl_expr_ty_and_passed_prvs_under_own<'a>(
+fn deref_expr_ty_and_passed_prvs_under_own<'a>(
     kind_ctx: &KindCtx,
     ty_ctx: &'a TyCtx,
     own: Ownership,
