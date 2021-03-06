@@ -40,8 +40,8 @@ impl std::fmt::Display for Item {
                 }
                 writeln!(
                     f,
-                    "{} auto {}(",
-                    if *is_dev_fun { "__device__" } else { "" },
+                    "{}auto {}(",
+                    if *is_dev_fun { "__device__ " } else { "" },
                     name
                 )?;
                 fmt_vec(f, params, ",\n")?;
@@ -58,7 +58,8 @@ impl std::fmt::Display for Stmt {
         use Stmt::*;
         match self {
             VarDecl { name, ty, expr } => {
-                write!(f, "{} {}", ty, name)?;
+                //                write!(f, "{} {}", ty, name)?;
+                write!(f, "auto {}", name)?;
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
                 }
@@ -125,7 +126,7 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, &params, ",\n")?;
                 writeln!(f, ") -> {} {{", ret_ty)?;
                 writeln!(f, "{}", &body)?;
-                writeln!(f, "}}")
+                write!(f, "}}")
             }
             FunCall {
                 fun,
@@ -138,7 +139,7 @@ impl std::fmt::Display for Expr {
                     fmt_vec(f, template_args, ", ")?;
                     write!(f, ">")?;
                 }
-                write!(f, ".(")?;
+                write!(f, "(")?;
                 fmt_vec(f, args, ", ")?;
                 write!(f, ")")
             }
@@ -171,7 +172,7 @@ impl std::fmt::Display for Lit {
 
 impl std::fmt::Display for ParamDecl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.name, self.ty)
+        write!(f, "{} {}", self.ty, self.name)
     }
 }
 

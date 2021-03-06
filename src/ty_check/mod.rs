@@ -80,8 +80,6 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<
     );
 
     Ok(())
-    // TODO IMPORTANT write function that computes the function type for a global fun
-    //  compare existing type with computed type here.
 }
 
 // TODO find out if Gamma is always correct by construction (similarly to Delta), also all 3 combined

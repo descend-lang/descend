@@ -18,11 +18,11 @@ use std::collections::HashSet;
 use descend::ty_check;
 
 #[test]
-fn test_scalar_mult_seq() -> Result<(), String> {
+fn test_scalar_mult() -> Result<(), String> {
     let sclar_mult_fun = r#"fn scalar_mult<a: prv>(
         h_array: &a uniq cpu.heap [i32; 4096]
     ) -[cpu.thread]-> () {
-        let gpu: Gpu =  gpu(0);
+        let gpu: Gpu = gpu(0);
         
         letprov <'g, 'h, 'r, 'z> {
             let mut array: [i32; 4096] @ gpu.global =
@@ -30,6 +30,37 @@ fn test_scalar_mult_seq() -> Result<(), String> {
             let view: [[&'z uniq gpu.global i32; 4096]] =
                 to_view_mut<'z, gpu.global, 4096, i32>(&'z uniq array);
             let grid: GridConfig<64, 64> = spawn_threads<64, 64, 'h, cpu.stack>(&'h shrd gpu);
+            for elem in view across grid {
+                *elem = 5 * *elem;
+            };
+            copy_to_host<'h, a, [i32; 4096]>(&'h shrd array, h_array);
+        }
+    }"#;
+
+    let res = descend::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
+    println!("{:?}", res);
+    let mut compil_unit = vec![res];
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+#[test]
+fn test_scalar_mult_no_type_annotation() -> Result<(), String> {
+    let sclar_mult_fun = r#"fn scalar_mult<a: prv>(
+        h_array: &a uniq cpu.heap [i32; 4096]
+    ) -[cpu.thread]-> () {
+        let gpu = gpu(0);
+        
+        letprov <'g, 'h, 'r, 'z> {
+            let mut array =
+                gpu_alloc<'g, 'r, cpu.stack, cpu.stack, [i32; 4096]>(&'g uniq gpu, &'r shrd *h_array); 
+            let view =
+                to_view_mut<'z, gpu.global, 4096, i32>(&'z uniq array);
+            let grid = spawn_threads<64, 64, 'h, cpu.stack>(&'h shrd gpu);
             for elem in view across grid {
                 *elem = 5 * *elem;
             };
@@ -47,7 +78,6 @@ fn test_scalar_mult_seq() -> Result<(), String> {
         Ok(())
     }
 }
-
 /*
 #[test]
 #[rustfmt::skip]
