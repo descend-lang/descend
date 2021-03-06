@@ -437,11 +437,18 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
         desc::Ty::Ref(_, own, _, ty) => {
-            let cty = Box::new(gen_ty(ty, m));
+            let tty = Box::new(gen_ty(
+                match ty.as_ref() {
+                    // Pointers to arrays point to the element type.
+                    desc::Ty::Array(elem_ty, _) => elem_ty,
+                    _ => ty,
+                },
+                m,
+            ));
             if matches!(own, desc::Ownership::Uniq) {
-                cu::Ty::Ptr(cty)
+                cu::Ty::Ptr(tty)
             } else {
-                cu::Ty::PtrConst(cty)
+                cu::Ty::PtrConst(tty)
             }
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.

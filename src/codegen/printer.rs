@@ -230,6 +230,7 @@ impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
+            // TODO print __restrict__
             Ptr(ty) => write!(f, "{} *", ty),
             PtrConst(ty) => write!(f, "const {} *", ty),
             Const(ty) => match ty.as_ref() {
