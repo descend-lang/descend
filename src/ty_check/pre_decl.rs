@@ -14,13 +14,7 @@ pub static GROUP: &str = "group";
 pub static JOIN: &str = "join";
 pub static TRANSPOSE: &str = "transpose";
 
-pub struct FunDecl {
-    pub name: String,
-    pub ty: Ty,
-}
-
-// TODO add correct predeclared functions with their types
-pub(super) fn fun_decls() -> Vec<FunDecl> {
+pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
         // Built-in functions
         (GPU, gpu_ty()),
@@ -32,13 +26,7 @@ pub(super) fn fun_decls() -> Vec<FunDecl> {
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
     ];
 
-    decls
-        .iter()
-        .map(|(name, ty)| FunDecl {
-            name: (*name).to_string(),
-            ty: ty.clone(),
-        })
-        .collect()
+    decls.iter().cloned().collect()
 }
 
 // gpu:

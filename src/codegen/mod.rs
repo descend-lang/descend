@@ -187,7 +187,17 @@ fn gen_par_for_sync(
 fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::Expr {
     use desc::ExprKind::*;
     match &expr.expr {
-        GlobalFunIdent(ident) => cu::Expr::Ident(ident.name.clone()),
+        GlobalFunIdent(ident) => {
+            let is_pre_decl_fun = crate::ty_check::pre_decl::fun_decls()
+                .iter()
+                .any(|(name, _)| &ident.name == name);
+            let name = if is_pre_decl_fun {
+                format!("descend::{}", ident.name)
+            } else {
+                ident.name.clone()
+            };
+            cu::Expr::Ident(name)
+        }
         Lit(l) => gen_lit(*l),
         PlaceExpr(pl_expr) => gen_pl_expr(pl_expr, view_ctx),
         BinOp(op, lhs, rhs) => cu::Expr::BinOp {

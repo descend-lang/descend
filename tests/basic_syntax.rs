@@ -38,7 +38,6 @@ fn test_scalar_mult() -> Result<(), String> {
     }"#;
 
     let res = descend::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
-    println!("{:?}", res);
     let mut compil_unit = vec![res];
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)

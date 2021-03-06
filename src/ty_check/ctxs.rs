@@ -1,4 +1,3 @@
-use super::pre_decl::FunDecl;
 use super::{Path, Place};
 use crate::ast::internal::{Frame, FrameTyping, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
@@ -413,8 +412,6 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    // HashMap is correct. We have a direct mapping between name and type only, and also want to
-    // be able to ask for types by name.
     items: HashMap<String, Ty>,
 }
 
@@ -434,11 +431,11 @@ impl GlobalCtx {
         self
     }
 
-    pub fn append_fun_decls(mut self, fun_decls: &[FunDecl]) -> Self {
+    pub fn append_fun_decls(mut self, fun_decls: &[(&str, Ty)]) -> Self {
         self.items.extend(
             fun_decls
                 .iter()
-                .map(|FunDecl { name, ty }| (name.clone(), ty.clone())),
+                .map(|(name, ty)| (String::from(*name), ty.clone())),
         );
         self
     }

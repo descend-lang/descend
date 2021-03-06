@@ -7,7 +7,6 @@ mod subty;
 use crate::ast::internal::{IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
-use pre_decl::FunDecl;
 use std::ops::Deref;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -19,7 +18,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), String> {
 
 pub fn ty_check_with_pre_decl_funs(
     compil_unit: &mut CompilUnit,
-    pre_decl_funs: &[FunDecl],
+    pre_decl_funs: &[(&str, Ty)],
 ) -> Result<(), String> {
     let gl_ctx = GlobalCtx::new()
         .append_from_gl_fun_defs(compil_unit)
