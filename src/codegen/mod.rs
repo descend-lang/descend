@@ -2,6 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
+use crate::ast::PlaceExpr;
 use cu_ast as cu;
 use std::collections::HashMap;
 
@@ -23,6 +24,11 @@ fn gen_fun_def(gl_fun: &desc::GlobalFunDef) -> cu::Item {
         ..
     } = gl_fun;
 
+    let mut kind_ctx: HashMap<String, desc::Kind> = ty_idents
+        .iter()
+        .map(|desc::IdentKinded { ident, kind }| (ident.name.clone(), kind.clone()))
+        .collect();
+
     cu::Item::FunDef {
         name: name.clone(),
         templ_params: gen_templ_params(ty_idents),
@@ -32,6 +38,7 @@ fn gen_fun_def(gl_fun: &desc::GlobalFunDef) -> cu::Item {
             body_expr,
             !matches!(ret_ty, desc::Ty::Scalar(desc::ScalarTy::Unit)),
             &mut HashMap::new(),
+            &mut kind_ctx,
         ),
         is_dev_fun: is_dev_fun(*exec),
     }
@@ -41,6 +48,7 @@ fn gen_stmt(
     expr: &desc::Expr,
     return_value: bool,
     view_ctx: &mut HashMap<String, ViewExpr>,
+    kind_ctx: &mut HashMap<String, desc::Kind>,
 ) -> cu::Stmt {
     use desc::ExprKind::*;
     match &expr.expr {
@@ -57,24 +65,32 @@ fn gen_stmt(
                         new = ViewExpr::create_from(e1, view_ctx)
                     )
                 }
-                gen_stmt(e2, return_value, view_ctx)
+                gen_stmt(e2, return_value, view_ctx, kind_ctx)
             // Let Expression
             } else {
                 cu::Stmt::Seq(
                     Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
                         ty: gen_ty(e1.ty.as_ref().unwrap(), *mutbl),
-                        expr: Some(gen_expr(e1, view_ctx)),
+                        expr: Some(gen_expr(e1, view_ctx, kind_ctx)),
                     }),
-                    Box::new(gen_stmt(e2, return_value, view_ctx)),
+                    Box::new(gen_stmt(e2, return_value, view_ctx, kind_ctx)),
                 )
             }
         }
-        LetProv(_, expr) => gen_stmt(expr, return_value, view_ctx),
+        LetProv(prv_idents, expr) => {
+            let mut inner_kind_ctx = kind_ctx.clone();
+            inner_kind_ctx.extend(
+                prv_idents
+                    .iter()
+                    .map(|id| (id.clone(), desc::Kind::Provenance)),
+            );
+            gen_stmt(expr, return_value, view_ctx, &mut inner_kind_ctx)
+        }
         // e1 ; e2
         Seq(e1, e2) => cu::Stmt::Seq(
-            Box::new(gen_stmt(e1, false, view_ctx)),
-            Box::new(gen_stmt(e2, return_value, view_ctx)),
+            Box::new(gen_stmt(e1, false, view_ctx, kind_ctx)),
+            Box::new(gen_stmt(e2, return_value, view_ctx, kind_ctx)),
         ),
         For(ident, coll_expr, body) => {
             if return_value {
@@ -105,14 +121,14 @@ fn gen_stmt(
                     }),
                 },
                 // TODO in body: substitute x for fitting expr including _i_?
-                stmt: Box::new(gen_stmt(body, false, view_ctx)),
+                stmt: Box::new(gen_stmt(body, false, view_ctx, kind_ctx)),
             }
         }
         ParForSync(ident, view_expr, glb_cfg_expr, body) => {
-            gen_par_for_sync(ident, view_expr, glb_cfg_expr, body, view_ctx)
+            gen_par_for_sync(ident, view_expr, glb_cfg_expr, body, view_ctx, kind_ctx)
         }
-        _ if return_value => cu::Stmt::Return(Some(gen_expr(&expr, view_ctx))),
-        _ => cu::Stmt::Expr(gen_expr(&expr, view_ctx)),
+        _ if return_value => cu::Stmt::Return(Some(gen_expr(&expr, view_ctx, kind_ctx))),
+        _ => cu::Stmt::Expr(gen_expr(&expr, view_ctx, kind_ctx)),
     }
 }
 
@@ -122,26 +138,17 @@ fn gen_par_for_sync(
     glb_cfg_expr: &desc::Expr,
     body: &desc::Expr,
     view_ctx: &mut HashMap<String, ViewExpr>,
+    kind_ctx: &mut HashMap<String, desc::Kind>,
 ) -> cu::Stmt {
-    let v = ViewExpr::create_from(view_expr, view_ctx);
-    let source_pl_exprs = v.collect_pl_exprs();
-    let param_decls: Vec<_> = source_pl_exprs
+    let mut v = ViewExpr::create_from(view_expr, view_ctx);
+    let name_to_pl_exprs = v.collect_and_rename_pl_exprs();
+    let param_decls: Vec<_> = name_to_pl_exprs
         .iter()
-        .enumerate()
-        .map(|(i, pl_expr)| cu::ParamDecl {
-            name: format!("p{}", i),
+        .map(|(name, pl_expr)| cu::ParamDecl {
+            name: name.clone(),
             ty: gen_ty(pl_expr.ty.as_ref().unwrap(), desc::Mutability::Const),
         })
         .collect();
-    // let global_id = cu::Expr::BinOp {
-    //     op: cu::BinOp::Add,
-    //     lhs: Box::new(cu::Expr::BinOp {
-    //         op: cu::BinOp::Mul,
-    //         lhs: Box::new(cu::Expr::Ident("blockIdx.x".to_string())),
-    //         rhs: Box::new(cu::Expr::Ident("blockDim.x".to_string())),
-    //     }),
-    //     rhs: Box::new(cu::Expr::Ident("threadIdx.x".to_string())),
-    // };
     let global_id = desc::Nat::BinOp(
         desc::BinOpNat::Add,
         Box::new(desc::Nat::BinOp(
@@ -151,7 +158,8 @@ fn gen_par_for_sync(
         )),
         Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
     );
-    let res = view_ctx.insert(
+    let mut scope_view_ctx: HashMap<String, ViewExpr> = HashMap::new();
+    let res = scope_view_ctx.insert(
         ident.name.clone(),
         ViewExpr::Idx {
             idx: global_id,
@@ -164,16 +172,20 @@ fn gen_par_for_sync(
             ident.name
         )
     }
-    let glb_cfg = cu::Expr::Ref(Box::new(gen_expr(glb_cfg_expr, &mut HashMap::new())));
+    let glb_cfg = cu::Expr::Ref(Box::new(gen_expr(
+        glb_cfg_expr,
+        &mut HashMap::new(),
+        kind_ctx,
+    )));
     let loop_body = cu::Expr::Lambda {
         params: param_decls,
-        body: Box::new(gen_stmt(body, false, view_ctx)),
+        body: Box::new(gen_stmt(body, false, &mut scope_view_ctx, kind_ctx)),
         ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
         is_dev_fun: true,
     };
-    let mut input: Vec<_> = source_pl_exprs
+    let mut input: Vec<_> = name_to_pl_exprs
         .iter()
-        .map(|e| gen_expr(e, view_ctx))
+        .map(|(_, pl_expr)| gen_expr(pl_expr, &mut HashMap::new(), kind_ctx))
         .collect();
     let mut args: Vec<cu::Expr> = vec![glb_cfg, loop_body];
     args.append(&mut input);
@@ -184,7 +196,11 @@ fn gen_par_for_sync(
     })
 }
 
-fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::Expr {
+fn gen_expr(
+    expr: &desc::Expr,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+    kind_ctx: &mut HashMap<String, desc::Kind>,
+) -> cu::Expr {
     use desc::ExprKind::*;
     match &expr.expr {
         GlobalFunIdent(ident) => {
@@ -216,8 +232,8 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
                 desc::BinOp::Ge => cu::BinOp::Ge,
                 desc::BinOp::Neq => cu::BinOp::Neq,
             },
-            lhs: Box::new(gen_expr(lhs, view_ctx)),
-            rhs: Box::new(gen_expr(rhs, view_ctx)),
+            lhs: Box::new(gen_expr(lhs, view_ctx, kind_ctx)),
+            rhs: Box::new(gen_expr(rhs, view_ctx, kind_ctx)),
         },
         UnOp(op, arg) => cu::Expr::UnOp {
             op: match op {
@@ -225,7 +241,7 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
                 desc::UnOp::Not => cu::UnOp::Not,
                 desc::UnOp::Neg => cu::UnOp::Neg,
             },
-            arg: Box::new(gen_expr(arg, view_ctx)),
+            arg: Box::new(gen_expr(arg, view_ctx, kind_ctx)),
         },
         Index(pl_expr, n) => cu::Expr::ArraySubscript {
             array: Box::new(gen_pl_expr(pl_expr, view_ctx)),
@@ -238,7 +254,7 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
         })),
         Assign(pl_expr, expr) => cu::Expr::Assign {
             lhs: Box::new(gen_pl_expr(pl_expr, view_ctx)),
-            rhs: Box::new(gen_expr(expr, view_ctx)),
+            rhs: Box::new(gen_expr(expr, view_ctx, kind_ctx)),
         },
         Lambda(params, exec, ty, expr) => cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
@@ -246,16 +262,17 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
                 expr,
                 !matches!(ty, desc::Ty::Scalar(desc::ScalarTy::Unit)),
                 view_ctx,
+                kind_ctx,
             )),
             ret_ty: gen_ty(ty, desc::Mutability::Mut),
             is_dev_fun: is_dev_fun(*exec),
         },
         App(fun, kinded_args, args) => cu::Expr::FunCall {
-            fun: Box::new(gen_expr(fun, view_ctx)),
-            template_args: gen_args_kinded(kinded_args),
+            fun: Box::new(gen_expr(fun, view_ctx, kind_ctx)),
+            template_args: gen_args_kinded(kinded_args, &kind_ctx),
             args: args
                 .iter()
-                .map(|e| gen_expr(e, view_ctx))
+                .map(|e| gen_expr(e, view_ctx, kind_ctx))
                 .collect::<Vec<_>>(),
         },
         IfElse(cond, e_tt, e_ff) => unimplemented!(),
@@ -264,13 +281,13 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
             template_args: vec![],
             args: elems
                 .iter()
-                .map(|e| gen_expr(e, view_ctx))
+                .map(|e| gen_expr(e, view_ctx, kind_ctx))
                 .collect::<Vec<_>>(),
         },
         Tuple(elems) => cu::Expr::Tuple(
             elems
                 .iter()
-                .map(|el| gen_expr(el, view_ctx))
+                .map(|el| gen_expr(el, view_ctx, kind_ctx))
                 .collect::<Vec<_>>(),
         ),
         _ => panic!(
@@ -295,20 +312,26 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
             tuple: Box::new(gen_pl_expr(pl.as_ref(), view_ctx)),
             n: n.clone(),
         },
-        desc::PlaceExpr::Deref(pl) => cu::Expr::Deref(Box::new(gen_pl_expr(pl.as_ref(), view_ctx))),
-        desc::PlaceExpr::Ident(ident) => {
-            if view_ctx.contains_key(&ident.name) {
-                gen_from_view(view_ctx.get(&ident.name).unwrap())
-            } else {
-                cu::Expr::Ident(ident.name.clone())
+        desc::PlaceExpr::Deref(pl) => {
+            // If an identifier that refers to an unwrapped view expression is being dereferenced,
+            // just generate from the view expression and omit generating the dereferencing.
+            // The dereferencing will happen through indexing.
+            if let desc::PlaceExpr::Ident(ident) = pl.as_ref() {
+                if view_ctx.contains_key(&ident.name) {
+                    return gen_from_view(view_ctx.get(&ident.name).unwrap());
+                }
             }
+            cu::Expr::Deref(Box::new(gen_pl_expr(pl.as_ref(), view_ctx)))
         }
+        desc::PlaceExpr::Ident(ident) => cu::Expr::Ident(ident.name.clone()),
     }
 }
 
 fn gen_from_view(view_expr: &ViewExpr) -> cu::Expr {
     match view_expr {
-        ViewExpr::ToView { n, ty, pl_expr } => gen_expr(pl_expr, &mut HashMap::new()),
+        ViewExpr::ToView { ref_expr, .. } => {
+            gen_expr(ref_expr, &mut HashMap::new(), &mut HashMap::new())
+        }
         ViewExpr::Idx { idx, view } => cu::Expr::ArraySubscript {
             array: Box::new(gen_from_view(view)),
             index: idx.clone(),
@@ -362,42 +385,43 @@ fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
     }
 }
 
-fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
+fn gen_args_kinded(
+    templ_args: &[desc::ArgKinded],
+    ctx: &HashMap<String, desc::Kind>,
+) -> Vec<cu::TemplateArg> {
     templ_args
         .iter()
-        .filter_map(|ka| match ka {
-            desc::ArgKinded::Provenance(_)
-            | desc::ArgKinded::Frame(_)
-            | desc::ArgKinded::Memory(_) => None,
-            _ => Some(gen_arg_kinded(ka)),
-        })
+        .filter_map(|ka| gen_arg_kinded(ka, ctx))
         .collect()
 }
 
-fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> cu::TemplateArg {
+fn gen_arg_kinded(
+    templ_arg: &desc::ArgKinded,
+    ctx: &HashMap<String, desc::Kind>,
+) -> Option<cu::TemplateArg> {
     match templ_arg {
-        // TODO think about this:
-        desc::ArgKinded::Ident(ident) => cu::TemplateArg::Ty(cu::Ty::Ident(ident.name.clone())),
-        desc::ArgKinded::Nat(n) => cu::TemplateArg::Expr(cu::Expr::Nat(n.clone())),
-        desc::ArgKinded::Memory(mem) => cu::TemplateArg::Expr(cu::Expr::Ident(match mem {
-            desc::Memory::Ident(ident) => ident.name.clone(),
-            desc::Memory::GpuGlobal => "Memory::GpuGlobal".to_string(),
-            desc::Memory::GpuShared => unimplemented!("TODO!"),
-            desc::Memory::CpuHeap => "Memory::CpuHeap".to_string(),
-            // TODO How can we make this make more sense?
-            desc::Memory::CpuStack => "Memory::CpuStack".to_string(),
-        })),
-        desc::ArgKinded::Ty(ty) => cu::TemplateArg::Ty(gen_ty(ty, desc::Mutability::Mut)),
-        // TODO the panic message is not entirely true. Exec IS important when it appears in a type
-        //  in order to determine __device__ annotations. However, there is no way to generate
-        //  an Exec::Ident which means these must not be used by users and are only for
-        desc::ArgKinded::Exec(_) => panic!(
-            "This should not be allowed and is currently a problem \
-        with the design of execution locations. See Issue #3."
-        ),
-        desc::ArgKinded::Provenance(_) | desc::ArgKinded::Frame(_) => panic!(
-            "Provenances and Frames are only used for type checking and cannot be generated."
-        ),
+        desc::ArgKinded::Ident(ident) => match ctx.get(&ident.name).unwrap() {
+            desc::Kind::Ty => Some(cu::TemplateArg::Ty(cu::Ty::Ident(ident.name.clone()))),
+            desc::Kind::Nat => Some(cu::TemplateArg::Expr(cu::Expr::Nat(desc::Nat::Ident(
+                ident.clone(),
+            )))),
+            desc::Kind::Memory | desc::Kind::Provenance | desc::Kind::Frame | desc::Kind::Exec => {
+                None
+            }
+        },
+        desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
+        desc::ArgKinded::Ty(ty) => Some(cu::TemplateArg::Ty(gen_ty(ty, desc::Mutability::Mut))),
+        // cu::TemplateArg::Expr(cu::Expr::Ident(match mem {
+        //     desc::Memory::Ident(ident) => panic!("TODO This variant should probably not exist."),
+        //     desc::Memory::GpuGlobal => "Memory::GpuGlobal".to_string(),
+        //     desc::Memory::GpuShared => unimplemented!("TODO!"),
+        //     desc::Memory::CpuHeap => "Memory::CpuHeap".to_string(),
+        //     desc::Memory::CpuStack => "Memory::CpuStack".to_string(),
+        // })),
+        desc::ArgKinded::Memory(_)
+        | desc::ArgKinded::Exec(_)
+        | desc::ArgKinded::Provenance(_)
+        | desc::ArgKinded::Frame(_) => None,
     }
 }
 
@@ -481,21 +505,15 @@ fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
 }
 
 // Views are parsed as normal predeclared functions so that it is possible to infer types.
-// ----- After typechecking the AST is updated to contain views instead of function applications of
-// ----- predeclard view functions. (first idea)
-// +++++ During code generation view function applications are converted to View Variants and used
-// +++++ to generate Indices.
+// During code generation view function applications are converted to View Variants and used
+// to generate Indices.
 #[derive(Debug, Clone)]
 enum ViewExpr {
     ToView {
-        // only needed for type checking
-        // r: desc::Provenance,
-        // mem: desc::Memory,
         // TODO are the nat and type needed?
         n: desc::Nat,
         ty: desc::Ty,
-        // box to reduce variant's size
-        pl_expr: Box<desc::Expr>,
+        ref_expr: Box<desc::Expr>,
     },
     Idx {
         idx: desc::Nat,
@@ -586,14 +604,14 @@ impl ViewExpr {
     }
 
     fn create_to_view_view(gen_args: &[desc::ArgKinded], args: &[desc::Expr]) -> ViewExpr {
-        if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(ty), Some(pl_expr)) =
+        if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(ty), Some(e)) =
             (&gen_args[2], &gen_args[3], args.first())
         {
             // e cannot contain views, so the view_ctx can be empty
             return ViewExpr::ToView {
                 n: n.clone(),
                 ty: ty.clone(),
-                pl_expr: Box::new(pl_expr.clone()),
+                ref_expr: Box::new(e.clone()),
             };
         }
         panic!("Cannot create `to_view` from the provided arguments.");
@@ -665,22 +683,41 @@ impl ViewExpr {
         panic!("Cannot create `to_view` from the provided arguments.");
     }
 
-    fn collect_pl_exprs(&self) -> Vec<desc::Expr> {
-        fn collect_pl_exprs_rec(v: &ViewExpr, mut vec: Vec<desc::Expr>) -> Vec<desc::Expr> {
+    fn collect_and_rename_pl_exprs(&mut self) -> Vec<(String, desc::Expr)> {
+        fn collect_and_rename_pl_exprs_rec(
+            v: &mut ViewExpr,
+            count: &mut u32,
+            mut vec: Vec<(String, desc::Expr)>,
+        ) -> Vec<(String, desc::Expr)> {
             match v {
-                ViewExpr::ToView { pl_expr, .. } => {
-                    vec.push(pl_expr.as_ref().clone());
+                ViewExpr::ToView {
+                    ref_expr: pl_expr, ..
+                } => {
+                    let new_name = format!("p{}", *count);
+                    vec.push((new_name.clone(), pl_expr.as_ref().clone()));
+                    pl_expr.expr =
+                        desc::ExprKind::PlaceExpr(PlaceExpr::Ident(desc::Ident::new(&new_name)));
+                    *count = *count + 1;
                     vec
                 }
-                ViewExpr::Group { view, .. } => collect_pl_exprs_rec(view.as_ref(), vec),
-                ViewExpr::Join { view, .. } => collect_pl_exprs_rec(view.as_ref(), vec),
-                ViewExpr::Transpose { view, .. } => collect_pl_exprs_rec(view.as_ref(), vec),
+                ViewExpr::Group { view, .. } => collect_and_rename_pl_exprs_rec(view, count, vec),
+                ViewExpr::Join { view, .. } => collect_and_rename_pl_exprs_rec(view, count, vec),
+                ViewExpr::Transpose { view, .. } => {
+                    collect_and_rename_pl_exprs_rec(view, count, vec)
+                }
                 _ => unimplemented!(),
             }
         }
         let vec = vec![];
-        collect_pl_exprs_rec(&self, vec)
+        let mut count = 0;
+        collect_and_rename_pl_exprs_rec(self, &mut count, vec)
     }
+
+    // fn substitute_pl_exprs(&mut self, expr_name_map: &[(PlaceExpr, String)]) -> {
+    //     match self {
+    //         ViewExpr::Idx { pl_expr, .. } =>
+    //     }
+    // }
 }
 
 #[cfg(test)]
