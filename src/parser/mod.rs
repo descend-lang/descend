@@ -1301,4 +1301,42 @@ mod tests {
     assert!(result.is_err()); // Currently not parsed properly due to Nat binOp Terms (i.e. 64*1024, n/1024 as Nat values)
     }
     */
+
+    //span testing
+    #[test]
+    fn span_test_let_expression() {
+        let line_col_source = SourceFile::new("let mut result : i32 = true;\nresult".to_string());
+        ////span from expression after semicolon. Assumed we know the expression in which the error occurs
+        let no_syntax_error_but_semantics_error = descend::expression_seq("let mut result : i32 = true;\nresult");
+        let result = match no_syntax_error_but_semantics_error{
+            Ok(Expr{expr: ExprKind::Let(_, _, _, _, expr2), ..}) => match (*expr2).span{
+                Some(span) => line_col_source.get_line_col(span.start),
+                None => None
+            } ,
+            _ => None
+        };
+        assert_eq!(result, Some((2,1)), "cannot extract correct line and column from span");
+        
+        //span from expression after assertion
+        let no_syntax_error_but_semantics_error = descend::expression_seq("let mut result : i32 = true;\nresult");
+        let result = match no_syntax_error_but_semantics_error{
+            Ok(Expr{expr: ExprKind::Let(_, _, _, expr1, _), ..}) => match (*expr1).span{
+                Some(span) => line_col_source.get_line_col(span.start),
+                None => None
+            } ,
+            _ => None
+        };
+        assert_eq!(result, Some((1,24)), "cannot extract correct line and column from span");
+
+        //span from variable identifier
+        let no_syntax_error_but_semantics_error = descend::expression_seq("let mut result : i32 = true;\nresult");
+        let result = match no_syntax_error_but_semantics_error{
+            Ok(Expr{expr: ExprKind::Let(_, ident, _, _, _), ..}) => match ident.span{
+                Some(span) => line_col_source.get_line_col(span.start),
+                None => None
+            } ,
+            _ => None
+        };
+        assert_eq!(result, Some((1,9)), "cannot extract correct line and column from span");
+    }
 }
