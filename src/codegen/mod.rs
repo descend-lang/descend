@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::PlaceExpr;
+use crate::ast::{Nat, PlaceExpr};
 use cu_ast as cu;
 use std::collections::HashMap;
 
@@ -18,7 +18,7 @@ fn gen_fun_def(gl_fun: &desc::GlobalFunDef) -> cu::Item {
         name,
         generic_params: ty_idents,
         params,
-        ret_ty,
+        ret_dty: ret_ty,
         exec,
         body_expr,
         ..
@@ -33,10 +33,10 @@ fn gen_fun_def(gl_fun: &desc::GlobalFunDef) -> cu::Item {
         name: name.clone(),
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
-        ret_ty: gen_ty(ret_ty, desc::Mutability::Mut),
+        ret_ty: gen_ty(&desc::Ty::Data(ret_ty.clone()), desc::Mutability::Mut),
         body: gen_stmt(
             body_expr,
-            !matches!(ret_ty, desc::Ty::Scalar(desc::ScalarTy::Unit)),
+            !matches!(ret_ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
             &mut HashMap::new(),
             &mut kind_ctx,
         ),
@@ -53,8 +53,8 @@ fn gen_stmt(
     use desc::ExprKind::*;
     match &expr.expr {
         Let(mutbl, ident, _, e1, e2) => {
-            // Let ArrayView
-            if matches!(e1.ty.as_ref().unwrap(), desc::Ty::ArrayView(_, _)) {
+            // Let View
+            if matches!(e1.ty.as_ref().unwrap(), desc::Ty::View(_)) {
                 if let Some(old) =
                     view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e1, view_ctx))
                 {
@@ -260,11 +260,11 @@ fn gen_expr(
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
                 expr,
-                !matches!(ty, desc::Ty::Scalar(desc::ScalarTy::Unit)),
+                !matches!(ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
                 view_ctx,
                 kind_ctx,
             )),
-            ret_ty: gen_ty(ty, desc::Mutability::Mut),
+            ret_ty: gen_ty(&desc::Ty::Data(ty.clone()), desc::Mutability::Mut),
             is_dev_fun: is_dev_fun(*exec),
         },
         App(fun, kinded_args, args) => cu::Expr::FunCall {
@@ -318,7 +318,7 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
             // The dereferencing will happen through indexing.
             if let desc::PlaceExpr::Ident(ident) = pl.as_ref() {
                 if view_ctx.contains_key(&ident.name) {
-                    return gen_from_view(view_ctx.get(&ident.name).unwrap());
+                    return gen_from_view(view_ctx.get(&ident.name).unwrap(), vec![]);
                 }
             }
             cu::Expr::Deref(Box::new(gen_pl_expr(pl.as_ref(), view_ctx)))
@@ -327,18 +327,37 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
     }
 }
 
-fn gen_from_view(view_expr: &ViewExpr) -> cu::Expr {
-    match view_expr {
-        ViewExpr::ToView { ref_expr, .. } => {
-            gen_expr(ref_expr, &mut HashMap::new(), &mut HashMap::new())
+fn gen_from_view(view_expr: &ViewExpr, mut path: Vec<Nat>) -> cu::Expr {
+    fn gen_indexing(expr: cu::Expr, path: &[Nat]) -> cu::Expr {
+        unimplemented!()
+    }
+
+    match (view_expr, path.as_slice()) {
+        (ViewExpr::ToView { ref_expr, .. }, _) if !path.is_empty() => gen_indexing(
+            gen_expr(ref_expr, &mut HashMap::new(), &mut HashMap::new()),
+            &path,
+        ),
+        (ViewExpr::Idx { idx, view }, _) => {
+            path.push(idx.clone());
+            gen_from_view(view, path)
+            // cu::Expr::ArraySubscript {
+            // array: Box::new(gen_from_view(view, path)),
+            // index: idx.clone(),
         }
-        ViewExpr::Idx { idx, view } => cu::Expr::ArraySubscript {
-            array: Box::new(gen_from_view(view)),
-            index: idx.clone(),
-        },
-        ViewExpr::Join { m, n, ty, view } => unimplemented!(),
-        ViewExpr::Group { size, n, ty, view } => unimplemented!(),
-        ViewExpr::Transpose { m, n, ty, view } => unimplemented!(),
+        (ViewExpr::Join { m, n, ty, view }, _) => unimplemented!(),
+        (ViewExpr::Group { size, n, ty, view }, _) => unimplemented!(),
+        (
+            ViewExpr::Zip {
+                n,
+                t1,
+                t2,
+                view1,
+                view2,
+            },
+            [i, ..],
+        ) => unimplemented!(),
+        (ViewExpr::Transpose { m, n, ty, view }, _) => unimplemented!(),
+        _ => panic!("unexpected"),
     }
 }
 
@@ -378,10 +397,14 @@ fn gen_param_decls(param_decls: &[desc::ParamDecl]) -> Vec<cu::ParamDecl> {
 }
 
 fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
-    let desc::ParamDecl { ident, ty, mutbl } = param_decl;
+    let desc::ParamDecl {
+        ident,
+        dty: ty,
+        mutbl,
+    } = param_decl;
     cu::ParamDecl {
         name: ident.name.clone(),
-        ty: gen_ty(ty, *mutbl),
+        ty: gen_ty(&desc::Ty::Data(ty.clone()), *mutbl),
     }
 }
 
@@ -430,21 +453,26 @@ fn gen_arg_kinded(
 // as opposed to a Cuda-AST and there, the order of the const is odd
 // when it comes to pointers (C things).
 fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
+    use desc::DataTy as d;
+    use desc::Ty::*;
+    use desc::ViewTy as v;
+
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
-        desc::Ty::Scalar(s) => match s {
+        Data(d::Scalar(s)) => match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
         },
-        desc::Ty::Tuple(tys) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(ty, m)).collect()),
-        desc::Ty::Array(ty, n) => cu::Ty::Array(Box::new(gen_ty(ty, m)), n.clone()),
-        desc::Ty::ArrayView(_, _) => {
-            panic!("This type has no C representation and should be compiled away.")
+        Data(d::Tuple(tys)) => {
+            cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect())
         }
-        desc::Ty::At(ty, mem) => {
+        Data(d::Array(ty, n)) => {
+            cu::Ty::Array(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), n.clone())
+        }
+        Data(d::At(ty, mem)) => {
             let buff_kind = match mem {
                 desc::Memory::CpuHeap => cu::BufferKind::Heap,
                 desc::Memory::GpuGlobal => cu::BufferKind::Gpu,
@@ -454,19 +482,19 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
                     panic!("CpuStack is not valid for At types. Should never appear here.")
                 }
             };
-            cu::Ty::Buffer(Box::new(gen_ty(ty, m)), buff_kind)
+            cu::Ty::Buffer(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), buff_kind)
         }
-        desc::Ty::Fn(_, _, _, _, _) => unimplemented!("needed?"),
-        desc::Ty::Dead(_) => {
+        Data(d::Fn(_, _, _, _, _)) => unimplemented!("needed?"),
+        Data(d::Dead(_)) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
-        desc::Ty::Ref(_, own, _, ty) => {
+        Data(d::Ref(_, own, _, ty)) => {
             let tty = Box::new(gen_ty(
-                match ty.as_ref() {
+                &Data(match ty.as_ref() {
                     // Pointers to arrays point to the element type.
-                    desc::Ty::Array(elem_ty, _) => elem_ty,
-                    _ => ty,
-                },
+                    desc::DataTy::Array(elem_ty, _) => elem_ty.as_ref().clone(),
+                    _ => ty.as_ref().clone(),
+                }),
                 m,
             ));
             if matches!(own, desc::Ownership::Uniq) {
@@ -476,10 +504,13 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
             }
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
-        desc::Ty::Ident(ident) => cu::Ty::Ident(ident.name.clone()),
-        desc::Ty::GridConfig(num_blocks, num_threads) => {
+        Data(d::Ident(ident)) => cu::Ty::Ident(ident.name.clone()),
+        Data(d::GridConfig(num_blocks, num_threads)) => {
             cu::Ty::GridConfig(num_blocks.clone(), num_threads.clone())
         }
+        View(_) => panic!(
+            "Cannot generate view types. Anything with this type should have been compiled away."
+        ),
     };
 
     if matches!(mutbl, desc::Mutability::Mut) {
@@ -499,7 +530,7 @@ fn is_dev_fun(exec: desc::ExecLoc) -> bool {
 
 fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
     match ty {
-        desc::Ty::Array(_, n) => Some(n.clone()),
+        desc::Ty::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
         _ => None,
     }
 }
@@ -512,7 +543,7 @@ enum ViewExpr {
     ToView {
         // TODO are the nat and type needed?
         n: desc::Nat,
-        ty: desc::Ty,
+        ty: desc::DataTy,
         ref_expr: Box<desc::Expr>,
     },
     Idx {
@@ -530,6 +561,14 @@ enum ViewExpr {
         n: desc::Nat,
         ty: desc::Ty,
         view: Box<ViewExpr>,
+    },
+
+    Zip {
+        n: desc::Nat,
+        t1: desc::Ty,
+        t2: desc::Ty,
+        view1: Box<ViewExpr>,
+        view2: Box<ViewExpr>,
     },
     Transpose {
         m: desc::Nat,
@@ -567,7 +606,7 @@ enum ViewExpr {
 impl ViewExpr {
     // Precondition: Expression is a fully typed function application and has type ArrayView.
     fn create_from(expr: &desc::Expr, view_ctx: &HashMap<String, ViewExpr>) -> ViewExpr {
-        if !matches!(expr.ty, Some(desc::Ty::ArrayView(_, _))) {
+        if !matches!(expr.ty, Some(desc::Ty::View(_))) {
             panic!(
                 "Expected expression of type ArrayView, but found {:?}",
                 expr.ty
@@ -587,6 +626,8 @@ impl ViewExpr {
                         ViewExpr::create_group_view(gen_args, args, view_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::JOIN {
                         ViewExpr::create_join_view(gen_args, args, view_ctx)
+                    } else if ident.name == crate::ty_check::pre_decl::ZIP {
+                        ViewExpr::create_zip_view(gen_args, args, view_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::TRANSPOSE {
                         ViewExpr::create_transpose_view(gen_args, args, view_ctx)
                     } else {
@@ -599,22 +640,33 @@ impl ViewExpr {
             desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) => {
                 view_ctx.get(&ident.name).unwrap().clone()
             }
-            _ => panic!("Expected a function application, but found {:?}", expr.expr),
+            _ => panic!(
+                "Expected a function application or identifer, but found {:?}",
+                expr.expr
+            ),
         }
     }
 
     fn create_to_view_view(gen_args: &[desc::ArgKinded], args: &[desc::Expr]) -> ViewExpr {
-        if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(ty), Some(e)) =
-            (&gen_args[2], &gen_args[3], args.first())
-        {
+        match (&gen_args[2], &gen_args[3], args.first()) {
+            (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(desc::Ty::Data(dty)), Some(e)) =>
             // e cannot contain views, so the view_ctx can be empty
-            return ViewExpr::ToView {
-                n: n.clone(),
-                ty: ty.clone(),
-                ref_expr: Box::new(e.clone()),
-            };
+            {
+                ViewExpr::ToView {
+                    n: n.clone(),
+                    ty: dty.clone(),
+                    ref_expr: Box::new(e.clone()),
+                }
+            }
+            (desc::ArgKinded::Ident(n), desc::ArgKinded::Ty(desc::Ty::Data(dty)), Some(e)) => {
+                ViewExpr::ToView {
+                    n: desc::Nat::Ident(desc::Ident::new(&n.name)),
+                    ty: dty.clone(),
+                    ref_expr: Box::new(e.clone()),
+                }
+            }
+            _ => panic!("Cannot create `to_view` from the provided arguments."),
         }
-        panic!("Cannot create `to_view` from the provided arguments.");
     }
 
     fn create_group_view(
@@ -659,6 +711,25 @@ impl ViewExpr {
             };
         }
         panic!("Cannot create `to_view` from the provided arguments.");
+    }
+
+    fn create_zip_view(
+        gen_args: &[desc::ArgKinded],
+        args: &[desc::Expr],
+        view_ctx: &HashMap<String, ViewExpr>,
+    ) -> ViewExpr {
+        if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(t1), desc::ArgKinded::Ty(t2), v1, v2) =
+            (&gen_args[0], &gen_args[1], &gen_args[2], &args[0], &args[1])
+        {
+            return ViewExpr::Zip {
+                n: n.clone(),
+                t1: t1.clone(),
+                t2: t2.clone(),
+                view1: Box::new(ViewExpr::create_from(v1, view_ctx)),
+                view2: Box::new(ViewExpr::create_from(v2, view_ctx)),
+            };
+        }
+        panic!("Cannot create `zip` from the provided arguments.");
     }
 
     fn create_transpose_view(

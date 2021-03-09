@@ -5,6 +5,7 @@ mod span;
 pub use span::*;
 use std::fmt;
 
+use crate::dsl::ident;
 use descend_derive::span_derive;
 use internal::FrameExpr;
 
@@ -15,21 +16,25 @@ pub struct GlobalFunDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
     pub params: Vec<ParamDecl>,
-    pub ret_ty: Ty,
+    pub ret_dty: DataTy,
     pub exec: ExecLoc,
     pub prv_rels: Vec<PrvRel>,
     pub body_expr: Expr,
 }
 
 impl GlobalFunDef {
-    pub fn ty(&self) -> Ty {
-        let param_tys: Vec<_> = self.params.iter().map(|p_decl| p_decl.ty.clone()).collect();
-        Ty::Fn(
+    pub fn ty(&self) -> DataTy {
+        let param_tys: Vec<_> = self
+            .params
+            .iter()
+            .map(|p_decl| Ty::Data(p_decl.dty.clone()))
+            .collect();
+        DataTy::Fn(
             self.generic_params.clone(),
             param_tys,
             Box::new(FrameExpr::Empty),
             self.exec,
-            Box::new(self.ret_ty.clone()),
+            Box::new(Ty::Data(self.ret_dty.clone())),
         )
     }
 }
@@ -37,7 +42,7 @@ impl GlobalFunDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamDecl {
     pub ident: Ident,
-    pub ty: Ty,
+    pub dty: DataTy,
     pub mutbl: Mutability,
 }
 
@@ -115,7 +120,7 @@ pub enum ExprKind {
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     // TODO: Add types for parameters.
-    Lambda(Vec<ParamDecl>, ExecLoc, Ty, Box<Expr>),
+    Lambda(Vec<ParamDecl>, ExecLoc, DataTy, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     // Todo make this the only apply and use template params
@@ -143,7 +148,6 @@ impl fmt::Display for ExprKind {
             Self::Lit(l) => write!(f, "{}", l),
             Self::PlaceExpr(pl_expr) => write!(f, "{}", pl_expr),
             Self::Index(pl_expr, n) => write!(f, "{}[{}]", pl_expr, n),
-            // TODO display kind
             Self::Ref(prv, own, pl_expr) => write!(f, "&{} {} {}", prv, own, pl_expr),
             Self::BorrowIndex(prv, own, pl_expr, n) => {
                 write!(f, "&{} {} {}[{}]", prv, own, pl_expr, n)
@@ -413,11 +417,146 @@ impl fmt::Display for PlaceExpr {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Ty {
-    Scalar(ScalarTy),
-    Tuple(Vec<Ty>),
+    Data(DataTy),
+    View(ViewTy),
+}
+
+impl Ty {
+    pub fn dty(&self) -> &DataTy {
+        match self {
+            Ty::Data(dty) => dty,
+            _ => panic!("Expected data type but found {:?}", self),
+        }
+    }
+
+    pub fn non_copyable(&self) -> bool {
+        match self {
+            Ty::Data(dty) => dty.non_copyable(),
+            Ty::View(vty) => vty.non_copyable(),
+        }
+    }
+
+    pub fn copyable(&self) -> bool {
+        !self.non_copyable()
+    }
+
+    pub fn is_fully_alive(&self) -> bool {
+        match self {
+            Ty::Data(dty) => dty.is_fully_alive(),
+            Ty::View(vty) => vty.is_fully_alive(),
+        }
+    }
+
+    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
+        match self {
+            Ty::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
+            Ty::View(vty) => vty.contains_ref_to_prv(prv_val_name),
+        }
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        match self {
+            Ty::Data(dty) => Ty::Data(dty.subst_ident_kinded(ident_kinded, with)),
+            Ty::View(vty) => Ty::View(vty.subst_ident_kinded(ident_kinded, with)),
+        }
+    }
+}
+
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Ty::Data(dty) => write!(f, "{}", dty),
+            Ty::View(vty) => write!(f, "{}", vty),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum ViewTy {
+    Ident(Ident),
     Array(Box<Ty>, Nat),
-    ArrayView(Box<Ty>, Nat),
-    At(Box<Ty>, Memory),
+    Tuple(Vec<Ty>),
+    // Only for type checking purposes.
+    Dead(Box<ViewTy>),
+}
+
+impl ViewTy {
+    pub fn non_copyable(&self) -> bool {
+        use ViewTy::*;
+        match self {
+            Ident(_) => true,
+            Array(ty, _) => ty.non_copyable(),
+            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
+            Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
+        }
+    }
+
+    pub fn copyable(&self) -> bool {
+        !self.non_copyable()
+    }
+
+    pub fn is_fully_alive(&self) -> bool {
+        use ViewTy::*;
+        match self {
+            Ident(_) | Array(_, _) => true,
+            Tuple(elem_tys) => elem_tys
+                .iter()
+                .fold(true, |acc, ty| acc & ty.is_fully_alive()),
+            Dead(_) => false,
+        }
+    }
+
+    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
+        match self {
+            ViewTy::Ident(_) | ViewTy::Dead(_) => false,
+            ViewTy::Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            ViewTy::Tuple(elem_tys) => elem_tys
+                .iter()
+                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
+        }
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use ViewTy::*;
+        match self {
+            ViewTy::Ident(id) => {
+                if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
+                    match with {
+                        ArgKinded::Ident(idk) => Ident(idk.clone()),
+                        ArgKinded::Ty(Ty::View(vty)) => vty.clone(),
+                        _ => panic!("Trying to substitute type identifier with non-type value."),
+                    }
+                } else {
+                    self.clone()
+                }
+            }
+            Tuple(elem_tys) => Tuple(
+                elem_tys
+                    .iter()
+                    .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
+            ),
+            Array(ty, n) => Array(
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),
+        }
+    }
+}
+
+impl fmt::Display for ViewTy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum DataTy {
+    Scalar(ScalarTy),
+    Tuple(Vec<DataTy>),
+    Array(Box<DataTy>, Nat),
+    At(Box<DataTy>, Memory),
     Fn(
         Vec<IdentKinded>,
         Vec<Ty>,
@@ -425,18 +564,18 @@ pub enum Ty {
         ExecLoc,
         Box<Ty>,
     ),
-    // TODO better syntactical support for dead and maybe dead types would maybe be safer for prgramming,
-    //  but this requires a better understanding of where a type can be dead in order to be done
-    //  without too much boilerplate.
-    Dead(Box<Ty>),
-    Ref(Provenance, Ownership, Memory, Box<Ty>),
+
+    Ref(Provenance, Ownership, Memory, Box<DataTy>),
     Ident(Ident),
     GridConfig(Nat, Nat),
+    // Only for type checking purposes.
+    Dead(Box<DataTy>),
 }
 
-impl Ty {
+impl DataTy {
     pub fn non_copyable(&self) -> bool {
-        use Ty::*;
+        use DataTy::*;
+
         match self {
             Scalar(_) => false,
             Ident(_) => true,
@@ -447,7 +586,6 @@ impl Ty {
             GridConfig(_, _) => false,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
-            ArrayView(ty, _) => ty.non_copyable(),
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }
@@ -457,7 +595,7 @@ impl Ty {
     }
 
     pub fn is_fully_alive(&self) -> bool {
-        use Ty::*;
+        use DataTy::*;
         match self {
             Scalar(_)
             | Ident(_)
@@ -465,7 +603,6 @@ impl Ty {
             | Fn(_, _, _, _, _)
             | At(_, _)
             | Array(_, _)
-            | ArrayView(_, _)
             | GridConfig(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
@@ -475,7 +612,7 @@ impl Ty {
     }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
-        use Ty::*;
+        use DataTy::*;
         match self {
             Scalar(_) | Ident(_) | GridConfig(_, _) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
@@ -495,7 +632,6 @@ impl Ty {
             }
             At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
-            ArrayView(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
@@ -503,14 +639,14 @@ impl Ty {
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
-        use Ty::*;
+        use DataTy::*;
         match self {
             Scalar(_) => self.clone(),
             Ident(id) => {
                 if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
                     match with {
                         ArgKinded::Ident(idk) => Ident(idk.clone()),
-                        ArgKinded::Ty(ty) => ty.clone(),
+                        ArgKinded::Ty(Ty::Data(dty)) => dty.clone(),
                         _ => panic!("Trying to substitute type identifier with non-type value."),
                     }
                 } else {
@@ -544,16 +680,12 @@ impl Ty {
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
             ),
-            ArrayView(ty, n) => ArrayView(
-                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
-                n.subst_ident_kinded(ident_kinded, with),
-            ),
-            Dead(ty) => ty.subst_ident_kinded(ident_kinded, with),
+            Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),
         }
     }
 }
 
-impl fmt::Display for Ty {
+impl fmt::Display for DataTy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         panic!("not yet implemented")
         //        write!(f, "{}:{}", self.name, self.kind)
@@ -672,7 +804,17 @@ pub enum Nat {
 
 impl Nat {
     pub fn eval(&self) -> usize {
-        panic!("not implemented yet")
+        match self {
+            Nat::Ident(_) => panic!("Cannot evaluate identifier."),
+            Nat::Lit(n) => *n,
+            Nat::BinOp(op, l, r) => match op {
+                BinOpNat::Add => l.eval() + r.eval(),
+                BinOpNat::Sub => l.eval() - r.eval(),
+                BinOpNat::Mul => l.eval() * r.eval(),
+                BinOpNat::Div => l.eval() / r.eval(),
+                BinOpNat::Mod => l.eval() % r.eval(),
+            },
+        }
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Nat {

@@ -13,11 +13,11 @@ use std::collections::HashSet;
 pub(super) fn check(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    sub_ty: &Ty,
-    super_ty: &Ty,
+    sub_ty: &DataTy,
+    super_ty: &DataTy,
 ) -> Result<TyCtx, String> {
     use super::Ownership::*;
-    use Ty::*;
+    use DataTy::*;
 
     match (sub_ty, super_ty) {
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
@@ -42,7 +42,7 @@ pub(super) fn check(
             Ok(res_back)
         }
         // Δ; Γ ⊢ (τ1, ..., τn) ≲ (τ1′, ..., τn′) ⇒ Γn
-        (Ty::Tuple(sub_elems), Ty::Tuple(sup_elems)) => {
+        (DataTy::Tuple(sub_elems), DataTy::Tuple(sup_elems)) => {
             let mut res_ctx = ty_ctx;
             for (sub, sup) in sub_elems.iter().zip(sup_elems) {
                 res_ctx = check(kind_ctx, res_ctx, sub, sup)?;
@@ -149,7 +149,7 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         .all_places()
         .into_iter()
         .filter(|(_, ty)| match ty {
-            Ty::Ref(Provenance::Value(prv_name), _, _, _) if prv_name == prv => true,
+            Ty::Data(DataTy::Ref(Provenance::Value(prv_name), _, _, _)) if prv_name == prv => true,
             _ => false,
         })
         .any(|(place, _)| {

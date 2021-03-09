@@ -13,15 +13,20 @@ pub enum FrameExpr {
     Empty,
 }
 
-pub type FrameTyping = Vec<Frame>;
+pub type FrameTyping = Vec<FrameEntry>;
 pub fn append_idents_typed(frm: &FrameTyping, idents_typed: Vec<IdentTyped>) -> FrameTyping {
     let mut new_frm = frm.clone();
-    new_frm.append(&mut idents_typed.into_iter().map(Frame::Var).collect::<Vec<_>>());
+    new_frm.append(
+        &mut idents_typed
+            .into_iter()
+            .map(FrameEntry::Var)
+            .collect::<Vec<_>>(),
+    );
     new_frm
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Frame {
+pub enum FrameEntry {
     Var(IdentTyped),
     PrvMapping(PrvMapping),
 }
