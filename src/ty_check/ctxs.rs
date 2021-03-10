@@ -1,4 +1,3 @@
-use super::{Path, Place};
 use crate::ast::internal::{FrameEntry, FrameTyping, IdentTyped, Loan, PrvMapping};
 use crate::ast::Ty::Data;
 use crate::ast::*;

@@ -243,9 +243,9 @@ fn gen_expr(
             },
             arg: Box::new(gen_expr(arg, view_ctx, kind_ctx)),
         },
-        Index(pl_expr, n) => cu::Expr::ArraySubscript {
+        Index(pl_expr, i) => cu::Expr::ArraySubscript {
             array: Box::new(gen_pl_expr(pl_expr, view_ctx)),
-            index: n.clone(),
+            index: i.clone(),
         },
         Ref(_, _, pl_expr) => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, view_ctx))),
         BorrowIndex(_, _, pl_expr, n) => cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
@@ -307,42 +307,45 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
 }
 
 fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) -> cu::Expr {
-    match pl_expr {
+    match &pl_expr {
         desc::PlaceExpr::Proj(pl, n) => cu::Expr::Proj {
             tuple: Box::new(gen_pl_expr(pl.as_ref(), view_ctx)),
             n: n.clone(),
         },
-        desc::PlaceExpr::Deref(pl) => {
+        desc::PlaceExpr::Ident(ident) => cu::Expr::Ident(ident.name.clone()),
+        desc::PlaceExpr::Deref(ple) => {
             // If an identifier that refers to an unwrapped view expression is being dereferenced,
             // just generate from the view expression and omit generating the dereferencing.
             // The dereferencing will happen through indexing.
-            if let desc::PlaceExpr::Ident(ident) = pl.as_ref() {
-                if view_ctx.contains_key(&ident.name) {
-                    return gen_from_view(view_ctx.get(&ident.name).unwrap(), vec![]);
+            match ple.to_place() {
+                Some(pl) if view_ctx.contains_key(&pl.ident.name) => {
+                    gen_view(view_ctx.get(&pl.ident.name).unwrap(), pl.path)
                 }
+                _ => cu::Expr::Deref(Box::new(gen_pl_expr(ple.as_ref(), view_ctx))),
             }
-            cu::Expr::Deref(Box::new(gen_pl_expr(pl.as_ref(), view_ctx)))
         }
-        desc::PlaceExpr::Ident(ident) => cu::Expr::Ident(ident.name.clone()),
     }
 }
 
-fn gen_from_view(view_expr: &ViewExpr, mut path: Vec<Nat>) -> cu::Expr {
+fn gen_view(view_expr: &ViewExpr, mut path: Vec<Nat>) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[Nat]) -> cu::Expr {
-        unimplemented!()
+        path.iter().fold(expr, |e, idx| cu::Expr::ArraySubscript {
+            array: Box::new(e),
+            index: idx.clone(),
+        })
     }
 
     match (view_expr, path.as_slice()) {
-        (ViewExpr::ToView { ref_expr, .. }, _) if !path.is_empty() => gen_indexing(
-            gen_expr(ref_expr, &mut HashMap::new(), &mut HashMap::new()),
-            &path,
-        ),
+        (ViewExpr::ToView { ref_expr, .. }, _) => {
+            path.reverse();
+            gen_indexing(
+                gen_expr(ref_expr, &mut HashMap::new(), &mut HashMap::new()),
+                &path,
+            )
+        }
         (ViewExpr::Idx { idx, view }, _) => {
             path.push(idx.clone());
-            gen_from_view(view, path)
-            // cu::Expr::ArraySubscript {
-            // array: Box::new(gen_from_view(view, path)),
-            // index: idx.clone(),
+            gen_view(view, path)
         }
         (ViewExpr::Join { m, n, ty, view }, _) => unimplemented!(),
         (ViewExpr::Group { size, n, ty, view }, _) => unimplemented!(),
@@ -354,8 +357,23 @@ fn gen_from_view(view_expr: &ViewExpr, mut path: Vec<Nat>) -> cu::Expr {
                 view1,
                 view2,
             },
-            [i, ..],
-        ) => unimplemented!(),
+            _,
+        ) => {
+            let idx = path.pop();
+            let proj = path.pop();
+            match (idx, proj) {
+                (Some(i), Some(pr)) => {
+                    let inner_view = match pr.eval() {
+                        0 => view1,
+                        1 => view2,
+                        _ => panic!("Trying to project an element for a tuple larger than 2."),
+                    };
+                    path.push(i);
+                    gen_view(inner_view, path)
+                }
+                _ => panic!("Cannot generate Zip View. Index or projection missing."),
+            }
+        }
         (ViewExpr::Transpose { m, n, ty, view }, _) => unimplemented!(),
         _ => panic!("unexpected"),
     }
@@ -455,7 +473,6 @@ fn gen_arg_kinded(
 fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
     use desc::DataTy as d;
     use desc::Ty::*;
-    use desc::ViewTy as v;
 
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
@@ -729,7 +746,10 @@ impl ViewExpr {
                 view2: Box::new(ViewExpr::create_from(v2, view_ctx)),
             };
         }
-        panic!("Cannot create `zip` from the provided arguments.");
+        panic!(
+            "Cannot create `zip` from the provided arguments:\n{:?},\n{:?},\n{:?}",
+            &gen_args[0], &gen_args[1], &gen_args[2]
+        );
     }
 
     fn create_transpose_view(
@@ -776,6 +796,10 @@ impl ViewExpr {
                 ViewExpr::Transpose { view, .. } => {
                     collect_and_rename_pl_exprs_rec(view, count, vec)
                 }
+                ViewExpr::Zip { view1, view2, .. } => {
+                    let renamed_view1 = collect_and_rename_pl_exprs_rec(view1, count, vec);
+                    collect_and_rename_pl_exprs_rec(view2, count, renamed_view1)
+                }
                 _ => unimplemented!(),
             }
         }
@@ -790,6 +814,34 @@ impl ViewExpr {
     //     }
     // }
 }
+//
+// pub fn create_idents_kinded(expr: &mut desc::Expr, mut gen_ident_ctx: HashMap<String, desc::Kind>) -> () {
+//     match &mut expr.expr {
+//         desc::ExprKind::App(f, gen_args, args) => {
+//             for ga in gen_args {
+//                 if let desc::ArgKinded::Ident(id) = ga {
+//                     match gen_ident_ctx.get(&id.name).unwrap() {
+//                         desc::Kind::Ty => unimplemented!(),
+//                         desc::Kind::Nat => {
+//                             *ga = desc::ArgKinded::Nat(Nat::Ident(id.clone()))
+//                         }
+//                         _ => unimplemented!()
+//                     }
+//                 }
+//             }
+//         }
+//         desc::ExprKind::LetProv(prvs, body) => {
+//             for prv in prvs {
+//                 if let Some(_) = &gen_ident_ctx.insert(prv.clone(), desc::Kind::Provenance) {
+//                     panic!("Redefining existing provenance value identifier.")
+//                 } else {
+//                     create_idents_kinded(body, gen_ident_ctx)
+//                 }
+//             }
+//         }
+//         _ =>
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

@@ -1,8 +1,6 @@
 use super::ctxs::{KindCtx, TyCtx};
-use super::Place;
-use crate::ast::internal::{Loan, PrvMapping};
+use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
-use crate::ty_check::PlaceCtx;
 use std::collections::HashSet;
 
 //

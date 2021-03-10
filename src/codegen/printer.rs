@@ -58,7 +58,9 @@ impl std::fmt::Display for Stmt {
         use Stmt::*;
         match self {
             VarDecl { name, ty, expr } => {
-                //                write!(f, "{} {}", ty, name)?;
+                if let Ty::Const(_) = ty {
+                    write!(f, "const ")?
+                }
                 write!(f, "auto {}", name)?;
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;

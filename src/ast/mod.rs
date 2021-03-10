@@ -403,6 +403,46 @@ impl PlaceExpr {
             true
         }
     }
+
+    // TODO refactor. Places are only needed during typechecking and codegen
+    pub fn to_place(&self) -> Option<Place> {
+        if self.is_place() {
+            Some(self.to_pl_ctx_and_most_specif_pl().1)
+        } else {
+            None
+        }
+    }
+
+    // TODO refactor see to_place
+    pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, Place) {
+        match self {
+            PlaceExpr::Deref(inner_ple) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (internal::PlaceCtx::Deref(Box::new(pl_ctx)), pl)
+            }
+            PlaceExpr::Proj(inner_ple, n) => {
+                let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                match pl_ctx {
+                    internal::PlaceCtx::Hole => {
+                        pl.path.push(n.clone());
+                        (pl_ctx, Place::new(pl.ident, pl.path))
+                    }
+                    _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
+                }
+            }
+            PlaceExpr::Ident(ident) => {
+                (internal::PlaceCtx::Hole, Place::new(ident.clone(), vec![]))
+            }
+        }
+    }
+
+    pub fn equiv(&'_ self, place: &'_ Place) -> bool {
+        if let (internal::PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
+            &pl == place
+        } else {
+            false
+        }
+    }
 }
 
 impl fmt::Display for PlaceExpr {
@@ -412,6 +452,26 @@ impl fmt::Display for PlaceExpr {
             Self::Deref(pl_expr) => write!(f, "*{}", pl_expr),
             Self::Ident(ident) => write!(f, "{}", ident),
         }
+    }
+}
+
+// TODO refactor find proper location for this
+pub type Path = Vec<Nat>;
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Place {
+    pub ident: Ident,
+    pub path: Path,
+}
+impl Place {
+    pub fn new(ident: Ident, path: Path) -> Self {
+        Place { ident, path }
+    }
+
+    pub fn to_place_expr(&self) -> PlaceExpr {
+        self.path.iter().fold(
+            PlaceExpr::Ident(self.ident.clone()),
+            |pl_expr, path_entry| PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone()),
+        )
     }
 }
 
