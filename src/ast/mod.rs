@@ -1,11 +1,11 @@
 pub mod internal;
 
 mod span;
+pub mod visit;
 
 pub use span::*;
 use std::fmt;
 
-use crate::dsl::ident;
 use descend_derive::span_derive;
 use internal::FrameExpr;
 
@@ -85,12 +85,6 @@ impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.expr)
     }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum ParIndex {
-    GroupId,
-    ThreadId,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -613,6 +607,7 @@ impl fmt::Display for ViewTy {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum DataTy {
+    Ident(Ident),
     Scalar(ScalarTy),
     Tuple(Vec<DataTy>),
     Array(Box<DataTy>, Nat),
@@ -624,9 +619,7 @@ pub enum DataTy {
         ExecLoc,
         Box<Ty>,
     ),
-
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
-    Ident(Ident),
     GridConfig(Nat, Nat),
     // Only for type checking purposes.
     Dead(Box<DataTy>),

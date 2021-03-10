@@ -214,7 +214,7 @@ impl TyCtx {
     }
 
     pub fn place_ty(&self, place: &Place) -> Result<Ty, String> {
-        fn proj_ty(ty: Ty, path: &Path) -> Ty {
+        fn proj_ty(ty: Ty, path: &[Nat]) -> Ty {
             let mut res_ty = ty;
             for n in path {
                 // TODO should maybe use usize here and not Nat, because Nat is not always

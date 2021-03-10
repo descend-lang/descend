@@ -2,13 +2,13 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{Nat, PlaceExpr};
+use crate::ast::{FunDef, Nat, PlaceExpr};
 use cu_ast as cu;
 use std::collections::HashMap;
 
 // Precondition. all function defitions are successfully typechecked and
 // therefore every subexpression stores a type
-pub fn gen(comp_unit: &desc::CompilUnit) -> String {
+pub fn gen(comp_unit: &[FunDef]) -> String {
     let cu_program = comp_unit.iter().map(gen_fun_def).collect::<cu::CuProgram>();
     printer::print(&cu_program)
 }
