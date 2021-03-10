@@ -8,12 +8,12 @@ use peg::{error::ParseError, str::LineCol};
 pub use source::*;
 
 use crate::ast::{
-    ArgKinded, DataTy, ExecLoc, GlobalFunDef, IdentKinded, Kind, Memory, Nat, ParamDecl,
-    Provenance, ScalarTy, Ty, ViewTy,
+    ArgKinded, DataTy, ExecLoc, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl, Provenance,
+    ScalarTy, Ty, ViewTy,
 };
 use crate::ast::{BinOp, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp};
 
-pub fn parse_global_fun_def(src: &str) -> Result<GlobalFunDef, ParseError<LineCol>> {
+pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
     descend::global_fun_def(src)
 }
 
@@ -21,7 +21,7 @@ peg::parser! {
     pub(crate) grammar descend() for str {
 
         // TODO: PreDeclaredGlobalFun missing Syntax
-        pub(crate) rule global_fun_def() -> GlobalFunDef
+        pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
             "-[" _ exec:execution_location() _ "]->" _ ret_dty:dty() _
@@ -30,7 +30,7 @@ peg::parser! {
                     Some(generic_params) => generic_params,
                     None => vec![]
                 };
-                GlobalFunDef {
+                FunDef {
                   name,
                   generic_params,
                   params,
@@ -117,7 +117,7 @@ peg::parser! {
                 Expr::new(
                     ExprKind::App(
                         Box::new(Expr::with_span(
-                            ExprKind::GlobalFunIdent(func),
+                            ExprKind::FunIdent(func),
                             Span::new(start, place_end)
                         )),
                         kind_args.unwrap_or(vec![]),
@@ -178,7 +178,7 @@ peg::parser! {
                 match across {
                     None => Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body))),
                     Some(parallel_cfg) => Expr::new(
-                        ExprKind::ParForSync(
+                        ExprKind::ParForAcross(
                             ident, Box::new(collection), Box::new(parallel_cfg), Box::new(body)),
                     )
                 }
@@ -1071,7 +1071,7 @@ mod tests {
             descend::expression_seq(
                 "for elems in elems_grouped across grid {*elems.0 = *elems.0 + *elems.1;}"
             ),
-            Ok(Expr::new(ExprKind::ParForSync(
+            Ok(Expr::new(ExprKind::ParForAcross(
                 elems.clone(),
                 Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
                     Ident::new("elems_grouped")
@@ -1350,7 +1350,7 @@ mod tests {
     //     &ret_ty,
     // );
 
-    // let intended = GlobalFunDef{
+    // let intended = FunDef{
     //     name,
     //     ty_idents,
     //     params,
@@ -1411,7 +1411,7 @@ mod tests {
     //         &ret_ty,
     //     );
 
-    //     let intended = GlobalFunDef{
+    //     let intended = FunDef{
     //         name,
     //         ty_idents,
     //         params,

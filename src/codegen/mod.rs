@@ -13,8 +13,8 @@ pub fn gen(comp_unit: &desc::CompilUnit) -> String {
     printer::print(&cu_program)
 }
 
-fn gen_fun_def(gl_fun: &desc::GlobalFunDef) -> cu::Item {
-    let desc::GlobalFunDef {
+fn gen_fun_def(gl_fun: &desc::FunDef) -> cu::Item {
+    let desc::FunDef {
         name,
         generic_params: ty_idents,
         params,
@@ -124,7 +124,7 @@ fn gen_stmt(
                 stmt: Box::new(gen_stmt(body, false, view_ctx, kind_ctx)),
             }
         }
-        ParForSync(ident, view_expr, glb_cfg_expr, body) => {
+        ParForAcross(ident, view_expr, glb_cfg_expr, body) => {
             gen_par_for_sync(ident, view_expr, glb_cfg_expr, body, view_ctx, kind_ctx)
         }
         _ if return_value => cu::Stmt::Return(Some(gen_expr(&expr, view_ctx, kind_ctx))),
@@ -203,7 +203,7 @@ fn gen_expr(
 ) -> cu::Expr {
     use desc::ExprKind::*;
     match &expr.expr {
-        GlobalFunIdent(ident) => {
+        FunIdent(ident) => {
             let is_pre_decl_fun = crate::ty_check::pre_decl::fun_decls()
                 .iter()
                 .any(|(name, _)| &ident.name == name);
@@ -634,7 +634,7 @@ impl ViewExpr {
             // TODO this is assuming that f is an identifier
             //  We have to redesign Views to not be data types...
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::GlobalFunIdent(ident) = &f.expr {
+                if let desc::ExprKind::FunIdent(ident) = &f.expr {
                     if ident.name == crate::ty_check::pre_decl::TO_VIEW
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {

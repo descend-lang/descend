@@ -9,10 +9,10 @@ use crate::dsl::ident;
 use descend_derive::span_derive;
 use internal::FrameExpr;
 
-pub type CompilUnit = Vec<GlobalFunDef>;
+pub type CompilUnit = Vec<FunDef>;
 
 #[derive(Debug, Clone)]
-pub struct GlobalFunDef {
+pub struct FunDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
     pub params: Vec<ParamDecl>,
@@ -22,7 +22,7 @@ pub struct GlobalFunDef {
     pub body_expr: Expr,
 }
 
-impl GlobalFunDef {
+impl FunDef {
     pub fn ty(&self) -> DataTy {
         let param_tys: Vec<_> = self
             .params
@@ -100,7 +100,7 @@ pub enum ExprKind {
     //  and Function call where function is expression (so must be lambda)
     //  This is currently wrong, because an global fun ident is not an Expr (has no value).
     //  Or we say it has the value of a function pointer type (like C or Rust) which may be better.
-    GlobalFunIdent(Ident),
+    FunIdent(Ident),
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
     PlaceExpr(PlaceExpr),
@@ -137,7 +137,7 @@ pub enum ExprKind {
     //  elements and amount of threads need to be equal.
     // Parallel for (global) thread with input, syncing at the end.
     // for x in view-expr across parallelism-config-expr { body }
-    ParForSync(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
+    ParForAcross(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
 }

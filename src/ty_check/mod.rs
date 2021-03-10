@@ -44,7 +44,7 @@ pub fn ty_check_with_pre_decl_funs(
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
-fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<(), String> {
+fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> Result<(), String> {
     let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())?;
 
     // Build frame typing for this function
@@ -97,7 +97,7 @@ fn ty_check_expr(
     // TODO input contexts are well-formed
     //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
     let (res_ty_ctx, ty) = match &mut expr.expr {
-        ExprKind::GlobalFunIdent(ident) => (
+        ExprKind::FunIdent(ident) => (
             ty_ctx,
             Ty::Data(gl_ctx.fun_ty_by_name(&ident.name)?.clone()),
         ),
@@ -136,7 +136,7 @@ fn ty_check_expr(
         ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => {
             ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
         }
-        ExprKind::ParForSync(id, view_expr, parall_cfg, body) => ty_check_par_for_sync(
+        ExprKind::ParForAcross(id, view_expr, parall_cfg, body) => ty_check_par_for_sync(
             gl_ctx, kind_ctx, ty_ctx, exec, id, view_expr, parall_cfg, body,
         )?,
         e => panic!(format!("Impl missing for: {:?}", e)),

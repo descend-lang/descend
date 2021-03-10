@@ -57,6 +57,42 @@ fn test_inplace_vector_add_fixed_sizes() -> Result<(), String> {
 }
 
 #[test]
+fn test_inplace_vector_add_fixed_sizes_inlined() -> Result<(), String> {
+    let inplace_vector_add_fun = r#"fn inplace_vector_add<a: prv, b: prv>(
+        ha_array: &a uniq cpu.heap [i32; 65536],
+        hb_array: &b shrd cpu.heap [i32; 65536]
+    ) -[cpu.thread]-> () {
+        letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
+            let gpu: Gpu = gpu(0);
+
+            let mut a_array: [i32; 65536] @ gpu.global =
+            // TODO cpu.stack for the reborrow seems very wrong...
+                gpu_alloc<'c, 'd, cpu.stack, cpu.stack, [i32; 65536]>(&'c uniq gpu, &'d shrd *ha_array);
+            let b_array: [i32; 65536] @ gpu.global =
+                gpu_alloc<'f, 'i, cpu.stack, cpu.stack, [i32; 65536]>(&'f uniq gpu, &'i shrd *hb_array);
+            let grid: GridConfig<64, 1024> = spawn_threads<64, 1024, 'h, cpu.stack>(&'h shrd gpu);
+            for t
+            in
+                zip(to_view_uniq(&'r uniq a_array), to_view(&'s shrd b_array))
+            across grid {
+                *t.0 = *t.0 + *t.1;
+            }; //sync()
+            copy_to_host<'g, a, [i32; 65536]>(&'g shrd a_array, ha_array);
+        }
+    }"#;
+
+    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
+    let mut compil_unit = vec![res];
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+
+#[test]
 fn test_inplace_vector_add() -> Result<(), String> {
     let inplace_vector_add_fun = r#"fn inplace_vector_add<n: nat, a: prv, b: prv>(
         ha_array: &a uniq cpu.heap [i32; n],
@@ -107,10 +143,13 @@ fn test_scalar_mult() -> Result<(), String> {
             let mut array: [i32; 4096] @ gpu.global =
             // TODO cpu.stack for the reborrow has to be wrong...
                 gpu_alloc<'g, 'r, cpu.stack, cpu.stack, [i32; 4096]>(&'g uniq gpu, &'r shrd *h_array); 
-            let view: [[&'z uniq gpu.global i32; 4096]] =
-                to_view_mut<'z, gpu.global, 4096, i32>(&'z uniq array);
-            let grid: GridConfig<64, 64> = spawn_threads<64, 64, 'h, cpu.stack>(&'h shrd gpu);
-            for elem in view across grid {
+            for
+                elem
+            in
+                to_view_mut<'z, gpu.global, 4096, i32>(&'z uniq array)
+            across
+                spawn_threads<64, 64, 'h, cpu.stack>(&'h shrd gpu)
+            {
                 *elem = 5 * *elem;
             };
             copy_to_host<'h, a, [i32; 4096]>(&'h shrd array, h_array);

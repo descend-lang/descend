@@ -457,7 +457,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn append_from_gl_fun_defs(mut self, gl_fun_defs: &[GlobalFunDef]) -> Self {
+    pub fn append_from_gl_fun_defs(mut self, gl_fun_defs: &[FunDef]) -> Self {
         self.items.extend(
             gl_fun_defs
                 .iter()

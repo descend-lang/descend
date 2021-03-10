@@ -34,7 +34,7 @@ pub fn ident(name: &str) -> Expr {
 }
 
 pub fn fun_name(name: &str) -> Expr {
-    Expr::new(ExprKind::GlobalFunIdent(Ident::new(name)))
+    Expr::new(ExprKind::FunIdent(Ident::new(name)))
 }
 
 pub fn deref(pl_expr: Expr) -> Expr {
@@ -52,13 +52,13 @@ pub fn fdef(
     exec: ExecLoc,
     prv_rels: Vec<PrvRel>,
     body: Expr,
-) -> GlobalFunDef {
+) -> FunDef {
     let generic_idents: Vec<_> = generic_params
         .iter()
         .map(|(name, kind)| IdentKinded::new(&Ident::new(name), *kind))
         .collect();
 
-    GlobalFunDef {
+    FunDef {
         name: String::from(name),
         generic_params: generic_idents,
         params: param_list(params),
