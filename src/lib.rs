@@ -1,4 +1,5 @@
 // TODO remove pub where possible. only public because of basic_syntax tests
+#[macro_use]
 pub mod ast;
 #[macro_use]
 pub mod dsl;

@@ -1130,8 +1130,6 @@ mod tests {
         assert!(result.is_err());
         let result = descend::expression_seq("let mut x:bool@gpu.shared@ = false; true");
         assert!(result.is_err());
-        let result = descend::expression_seq("let x = 17.123; true");
-        assert!(result.is_err());
         let result = descend::expression_seq("let x:bool@Memory.Location = false; true");
         assert!(result.is_err());
     }

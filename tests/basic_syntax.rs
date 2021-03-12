@@ -57,6 +57,7 @@ fn test_inplace_vector_add_fixed_sizes() -> Result<(), String> {
 }
 
 #[test]
+#[ignore]
 fn test_inplace_vector_add_fixed_sizes_inlined() -> Result<(), String> {
     let inplace_vector_add_fun = r#"fn inplace_vector_add<a: prv, b: prv>(
         ha_array: &a uniq cpu.heap [i32; 65536],

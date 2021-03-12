@@ -1,6 +1,7 @@
 pub mod internal;
 
 mod span;
+#[macro_use]
 pub mod visit;
 
 pub use span::*;

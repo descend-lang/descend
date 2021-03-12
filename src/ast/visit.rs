@@ -46,7 +46,7 @@ macro_rules! walk_list {
     };
 }
 
-fn walk_nat<V: Visitor>(visitor: &mut V, n: &mut Nat) {
+pub fn walk_nat<V: Visitor>(visitor: &mut V, n: &mut Nat) {
     match n {
         Nat::Ident(ident) => visitor.visit_ident(ident),
         Nat::BinOp(op, l, r) => {
@@ -58,32 +58,32 @@ fn walk_nat<V: Visitor>(visitor: &mut V, n: &mut Nat) {
     }
 }
 
-fn walk_ident_kinded<V: Visitor>(visitor: &mut V, id_kind: &mut IdentKinded) {
+pub fn walk_ident_kinded<V: Visitor>(visitor: &mut V, id_kind: &mut IdentKinded) {
     let IdentKinded { ident, kind } = id_kind;
     visitor.visit_ident(ident);
     visitor.visit_kind(kind)
 }
 
-fn walk_prv_rel<V: Visitor>(visitor: &mut V, prv_rel: &mut PrvRel) {
+pub fn walk_prv_rel<V: Visitor>(visitor: &mut V, prv_rel: &mut PrvRel) {
     let PrvRel { longer, shorter } = prv_rel;
     visitor.visit_ident(longer);
     visitor.visit_ident(shorter)
 }
 
-fn walk_mem<V: Visitor>(visitor: &mut V, mem: &mut Memory) {
+pub fn walk_mem<V: Visitor>(visitor: &mut V, mem: &mut Memory) {
     if let Memory::Ident(ident) = mem {
         visitor.visit_ident(ident)
     }
 }
 
-fn walk_prv<V: Visitor>(visitor: &mut V, prv: &mut Provenance) {
+pub fn walk_prv<V: Visitor>(visitor: &mut V, prv: &mut Provenance) {
     match prv {
         Provenance::Ident(ident) => visitor.visit_ident(ident),
         Provenance::Value(_) => {}
     }
 }
 
-fn walk_vty<V: Visitor>(visitor: &mut V, vty: &mut ViewTy) {
+pub fn walk_vty<V: Visitor>(visitor: &mut V, vty: &mut ViewTy) {
     match vty {
         ViewTy::Ident(ident) => visitor.visit_ident(ident),
         ViewTy::Tuple(elem_tys) => walk_list!(visitor, visit_ty, elem_tys),
@@ -95,7 +95,7 @@ fn walk_vty<V: Visitor>(visitor: &mut V, vty: &mut ViewTy) {
     }
 }
 
-fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
+pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
     match dty {
         DataTy::Ident(ident) => visitor.visit_ident(ident),
         DataTy::Scalar(sty) => visitor.visit_scalar_ty(sty),
@@ -129,14 +129,14 @@ fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
     }
 }
 
-fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
+pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
     match ty {
         Ty::Data(dty) => visitor.visit_dty(dty),
         Ty::View(vty) => visitor.visit_vty(vty),
     }
 }
 
-fn walk_pl_expr<V: Visitor>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
+pub fn walk_pl_expr<V: Visitor>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
     match pl_expr {
         PlaceExpr::Ident(ident) => visitor.visit_ident(ident),
         PlaceExpr::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
@@ -147,7 +147,7 @@ fn walk_pl_expr<V: Visitor>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
     }
 }
 
-fn walk_arg_kinded<V: Visitor>(visitor: &mut V, arg_kinded: &mut ArgKinded) {
+pub fn walk_arg_kinded<V: Visitor>(visitor: &mut V, arg_kinded: &mut ArgKinded) {
     match arg_kinded {
         ArgKinded::Ident(ident) => visitor.visit_ident(ident),
         ArgKinded::Nat(n) => visitor.visit_nat(n),
@@ -159,7 +159,7 @@ fn walk_arg_kinded<V: Visitor>(visitor: &mut V, arg_kinded: &mut ArgKinded) {
     }
 }
 
-fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
+pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
     // For now, only visit ExprKind
     match &mut expr.expr {
         ExprKind::FunIdent(ident) => visitor.visit_ident(ident),
@@ -244,14 +244,14 @@ fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
     }
 }
 
-fn walk_param_decl<V: Visitor>(visitor: &mut V, param_decl: &mut ParamDecl) {
+pub fn walk_param_decl<V: Visitor>(visitor: &mut V, param_decl: &mut ParamDecl) {
     let ParamDecl { ident, dty, mutbl } = param_decl;
     visitor.visit_ident(ident);
     visitor.visit_dty(dty);
     visitor.visit_mutability(mutbl)
 }
 
-fn walk_fun_def<V: Visitor>(visitor: &mut V, fun_def: &mut FunDef) {
+pub fn walk_fun_def<V: Visitor>(visitor: &mut V, fun_def: &mut FunDef) {
     let FunDef {
         name: _,
         generic_params,
