@@ -2,59 +2,7 @@
 
 extern crate descend;
 
-/*
-use descend::ast::internal::*;
-use descend::ast::ExecLoc::CpuThread;
-use descend::ast::Memory::{GpuGlobal, GpuShared};
-use descend::ast::Ownership::{Shrd, Uniq};
-use descend::ast::*;
-use descend::dsl::*;
 use descend::ty_check;
-use descend::ty_check::ctxs::{PrvMapping, TyCtx};
-use descend::{arr, tuple, tuple_ty};
-use std::collections::HashSet;
- */
-
-use descend::ty_check;
-
-#[test]
-fn test_inplace_vector_add_fixed_sizes() -> Result<(), String> {
-    let inplace_vector_add_fun = r#"fn inplace_vector_add<a: prv, b: prv>(
-        ha_array: &a uniq cpu.heap [i32; 65536],
-        hb_array: &b shrd cpu.heap [i32; 65536]
-    ) -[cpu.thread]-> () {
-        letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
-            let gpu: Gpu = gpu(0);
-
-            let mut a_array: [i32; 65536] @ gpu.global =
-            // TODO cpu.stack for the reborrow seems very wrong...
-                gpu_alloc<'c, 'd, cpu.stack, cpu.stack, [i32; 65536]>(&'c uniq gpu, &'d shrd *ha_array);
-            let b_array: [i32; 65536] @ gpu.global =
-                gpu_alloc<'f, 'i, cpu.stack, cpu.stack, [i32; 65536]>(&'f uniq gpu, &'i shrd *hb_array);
-            let view_a: [[&'r uniq gpu.global i32; 65536]] =
-                to_view_mut<'r, gpu.global, 65536, i32>(&'r uniq a_array);
-            let view_b: [[&'s shrd gpu.global i32; 65536]] =
-                to_view<'s, gpu.global, 65536, i32>(&'s shrd b_array);
-            let elems: [[(&'r uniq gpu.global i32, &'s shrd gpu.global i32); 65536]] =
-                zip<65536, &'r uniq gpu.global i32, &'s shrd gpu.global i32>(view_a, view_b);
-            let grid: GridConfig<64, 1024> = spawn_threads<64, 1024, 'h, cpu.stack>(&'h shrd gpu);
-            for t in elems across grid {
-                *t.0 = *t.0 + *t.1;
-            }; //sync()
-            copy_to_host<'g, a, [i32; 65536]>(&'g shrd a_array, ha_array);
-        }
-    }"#;
-
-    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
-    let mut compil_unit = vec![res];
-    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
-        panic!("{}", err)
-    } else {
-        let res_str = descend::codegen::gen(&compil_unit);
-        print!("{}", res_str);
-        Ok(())
-    }
-}
 
 #[test]
 #[ignore]
@@ -119,6 +67,45 @@ fn test_inplace_vector_add() -> Result<(), String> {
                 *t.0 = *t.0 + *t.1;
             }; //sync()
             copy_to_host<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
+        }
+    }"#;
+
+    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
+    let mut compil_unit = vec![res];
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+
+#[test]
+fn test_inplace_vector_add_fixed_sizes() -> Result<(), String> {
+    let inplace_vector_add_fun = r#"fn inplace_vector_add<a: prv, b: prv>(
+        ha_array: &a uniq cpu.heap [i32; 65536],
+        hb_array: &b shrd cpu.heap [i32; 65536]
+    ) -[cpu.thread]-> () {
+        letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
+            let gpu: Gpu = gpu(0);
+
+            let mut a_array: [i32; 65536] @ gpu.global =
+            // TODO cpu.stack for the reborrow seems very wrong...
+                gpu_alloc<'c, 'd, cpu.stack, cpu.stack, [i32; 65536]>(&'c uniq gpu, &'d shrd *ha_array);
+            let b_array: [i32; 65536] @ gpu.global =
+                gpu_alloc<'f, 'i, cpu.stack, cpu.stack, [i32; 65536]>(&'f uniq gpu, &'i shrd *hb_array);
+            let view_a: [[&'r uniq gpu.global i32; 65536]] =
+                to_view_mut<'r, gpu.global, 65536, i32>(&'r uniq a_array);
+            let view_b: [[&'s shrd gpu.global i32; 65536]] =
+                to_view<'s, gpu.global, 65536, i32>(&'s shrd b_array);
+            let elems: [[(&'r uniq gpu.global i32, &'s shrd gpu.global i32); 65536]] =
+                zip<65536, &'r uniq gpu.global i32, &'s shrd gpu.global i32>(view_a, view_b);
+            let grid: GridConfig<64, 1024> = spawn_threads<64, 1024, 'h, cpu.stack>(&'h shrd gpu);
+            for t in elems across grid {
+                *t.0 = *t.0 + *t.1;
+            }; //sync()
+            copy_to_host<'g, a, [i32; 65536]>(&'g shrd a_array, ha_array);
         }
     }"#;
 
