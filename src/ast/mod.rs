@@ -1,35 +1,41 @@
 pub mod internal;
 
 mod span;
+#[macro_use]
+pub mod visit;
 
-use std::fmt;
 pub use span::*;
+use std::fmt;
 
 use descend_derive::span_derive;
 use internal::FrameExpr;
 
-pub type CompilUnit = Vec<GlobalFunDef>;
+pub type CompilUnit = Vec<FunDef>;
 
 #[derive(Debug, Clone)]
-pub struct GlobalFunDef {
+pub struct FunDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
     pub params: Vec<ParamDecl>,
-    pub ret_ty: Ty,
+    pub ret_dty: DataTy,
     pub exec: ExecLoc,
     pub prv_rels: Vec<PrvRel>,
     pub body_expr: Expr,
 }
 
-impl GlobalFunDef {
-    pub fn ty(&self) -> Ty {
-        let param_tys: Vec<_> = self.params.iter().map(|p_decl| p_decl.ty.clone()).collect();
-        Ty::Fn(
+impl FunDef {
+    pub fn ty(&self) -> DataTy {
+        let param_tys: Vec<_> = self
+            .params
+            .iter()
+            .map(|p_decl| Ty::Data(p_decl.dty.clone()))
+            .collect();
+        DataTy::Fn(
             self.generic_params.clone(),
             param_tys,
             Box::new(FrameExpr::Empty),
             self.exec,
-            Box::new(self.ret_ty.clone()),
+            Box::new(Ty::Data(self.ret_dty.clone())),
         )
     }
 }
@@ -37,7 +43,7 @@ impl GlobalFunDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamDecl {
     pub ident: Ident,
-    pub ty: Ty,
+    pub dty: DataTy,
     pub mutbl: Mutability,
 }
 
@@ -47,20 +53,32 @@ pub struct Expr {
     pub expr: ExprKind,
     pub ty: Option<Ty>,
     #[span_derive_ignore]
-    pub span: Option<Span>
+    pub span: Option<Span>,
 }
 
 impl Expr {
     pub fn new(expr: ExprKind) -> Expr {
-        Expr { expr, ty: None, span: None }
+        Expr {
+            expr,
+            ty: None,
+            span: None,
+        }
     }
 
     pub fn with_span(expr: ExprKind, span: Span) -> Expr {
-        Expr { expr, ty: None, span: Some(span) }
+        Expr {
+            expr,
+            ty: None,
+            span: Some(span),
+        }
     }
 
     pub fn with_type(expr: ExprKind, ty: Ty) -> Expr {
-        Expr { expr, ty: Some(ty), span: None }
+        Expr {
+            expr,
+            ty: Some(ty),
+            span: None,
+        }
     }
 }
 
@@ -71,19 +89,13 @@ impl fmt::Display for Expr {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum ParIndex {
-    GroupId,
-    ThreadId,
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ExprKind {
     // TODO remove GlobalFunIdent
     //  instead? Maybe differentiate between FunctionCall where function is Ident
     //  and Function call where function is expression (so must be lambda)
     //  This is currently wrong, because an global fun ident is not an Expr (has no value).
     //  Or we say it has the value of a function pointer type (like C or Rust) which may be better.
-    GlobalFunIdent(String),
+    FunIdent(Ident),
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
     PlaceExpr(PlaceExpr),
@@ -97,13 +109,13 @@ pub enum ExprKind {
     Assign(PlaceExpr, Box<Expr>),
     // Variable declaration, assignment and sequencing
     // let x: ty = e1; e2
-    Let(Mutability, Ident, Ty, Box<Expr>, Box<Expr>),
+    Let(Mutability, Ident, Option<Ty>, Box<Expr>, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     // TODO: Add types for parameters.
-    Lambda(Vec<ParamDecl>, ExecLoc, Ty, Box<Expr>),
+    Lambda(Vec<ParamDecl>, ExecLoc, DataTy, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     // Todo make this the only apply and use template params
@@ -120,7 +132,7 @@ pub enum ExprKind {
     //  elements and amount of threads need to be equal.
     // Parallel for (global) thread with input, syncing at the end.
     // for x in view-expr across parallelism-config-expr { body }
-    ParForSync(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
+    ParForAcross(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
 }
@@ -131,14 +143,17 @@ impl fmt::Display for ExprKind {
             Self::Lit(l) => write!(f, "{}", l),
             Self::PlaceExpr(pl_expr) => write!(f, "{}", pl_expr),
             Self::Index(pl_expr, n) => write!(f, "{}[{}]", pl_expr, n),
-            // TODO display kind
             Self::Ref(prv, own, pl_expr) => write!(f, "&{} {} {}", prv, own, pl_expr),
             Self::BorrowIndex(prv, own, pl_expr, n) => {
                 write!(f, "&{} {} {}[{}]", prv, own, pl_expr, n)
             }
             Self::Assign(pl_expr, e) => write!(f, "{} = {}", pl_expr, e),
             Self::Let(mutab, ident, ty, e1, e2) => {
-                write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
+                if let Some(ty) = ty {
+                    write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
+                } else {
+                    write!(f, "let {} {} = {}; {}", mutab, ident, e1, e2)
+                }
             }
             Self::Seq(e1, e2) => write!(f, "{}; {}", e1, e2),
             /*            Self::Lambda(params, exec, ty, e) => {
@@ -158,20 +173,21 @@ impl fmt::Display for ExprKind {
 pub struct Ident {
     pub name: String,
     #[span_derive_ignore]
-    pub span: Option<Span>
+    pub span: Option<Span>,
 }
 
 impl Ident {
     pub fn new(name: &str) -> Self {
         Self {
             name: String::from(name),
-            span: None
+            span: None,
         }
     }
 
     pub fn with_span(name: String, span: Span) -> Self {
         Self {
-            name, span: Some(span)
+            name,
+            span: Some(span),
         }
     }
 }
@@ -203,7 +219,7 @@ pub enum Lit {
 //     }
 // }
 
-impl Eq for Lit{}
+impl Eq for Lit {}
 
 impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -330,8 +346,6 @@ impl fmt::Display for Kind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgKinded {
-    // TODO this exists only for the parser?
-    //  talk to parser group to figure out how to do this properly
     Ident(Ident),
     Nat(Nat),
     Memory(Memory),
@@ -339,8 +353,21 @@ pub enum ArgKinded {
     Provenance(Provenance),
     Frame(FrameExpr),
     Exec(ExecLoc),
-    // TODO remove ownership?
-    //    Own(Ownership),
+}
+
+impl ArgKinded {
+    fn kind(&self) -> Kind {
+        use ArgKinded::*;
+        match self {
+            Ident(_) => panic!("Identifier's kind depends on the kinding context."),
+            Nat(_) => Kind::Nat,
+            Memory(_) => Kind::Memory,
+            Ty(_) => Kind::Ty,
+            Provenance(_) => Kind::Provenance,
+            Frame(_) => Kind::Frame,
+            Exec(_) => Kind::Exec,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -359,6 +386,7 @@ impl PlaceExpr {
         }
     }
 
+    // The inner constructs are prefixes of the outer constructs.
     pub fn prefix_of(&self, other: &Self) -> bool {
         if self != other {
             match other {
@@ -368,6 +396,46 @@ impl PlaceExpr {
             }
         } else {
             true
+        }
+    }
+
+    // TODO refactor. Places are only needed during typechecking and codegen
+    pub fn to_place(&self) -> Option<Place> {
+        if self.is_place() {
+            Some(self.to_pl_ctx_and_most_specif_pl().1)
+        } else {
+            None
+        }
+    }
+
+    // TODO refactor see to_place
+    pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, Place) {
+        match self {
+            PlaceExpr::Deref(inner_ple) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (internal::PlaceCtx::Deref(Box::new(pl_ctx)), pl)
+            }
+            PlaceExpr::Proj(inner_ple, n) => {
+                let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                match pl_ctx {
+                    internal::PlaceCtx::Hole => {
+                        pl.path.push(n.clone());
+                        (pl_ctx, Place::new(pl.ident, pl.path))
+                    }
+                    _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
+                }
+            }
+            PlaceExpr::Ident(ident) => {
+                (internal::PlaceCtx::Hole, Place::new(ident.clone(), vec![]))
+            }
+        }
+    }
+
+    pub fn equiv(&'_ self, place: &'_ Place) -> bool {
+        if let (internal::PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
+            &pl == place
+        } else {
+            false
         }
     }
 }
@@ -382,41 +450,98 @@ impl fmt::Display for PlaceExpr {
     }
 }
 
+// TODO refactor find proper location for this
+pub type Path = Vec<Nat>;
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Place {
+    pub ident: Ident,
+    pub path: Path,
+}
+impl Place {
+    pub fn new(ident: Ident, path: Path) -> Self {
+        Place { ident, path }
+    }
+
+    pub fn to_place_expr(&self) -> PlaceExpr {
+        self.path.iter().fold(
+            PlaceExpr::Ident(self.ident.clone()),
+            |pl_expr, path_entry| PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone()),
+        )
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Ty {
-    Scalar(ScalarTy),
-    Tuple(Vec<Ty>),
-    Array(Box<Ty>, Nat),
-    ArrayView(Box<Ty>, Nat),
-    At(Box<Ty>, Memory),
-    Fn(
-        Vec<IdentKinded>,
-        Vec<Ty>,
-        Box<internal::FrameExpr>,
-        ExecLoc,
-        Box<Ty>,
-    ),
-    // TODO better syntactical support for dead and maybe dead types would maybe be safer for prgramming,
-    //  but this requires a better understanding of where a type can be dead in order to be done
-    //  without too much boilerplate.
-    Dead(Box<Ty>),
-    Ref(Provenance, Ownership, Memory, Box<Ty>),
-    Ident(Ident),
+    Data(DataTy),
+    View(ViewTy),
 }
 
 impl Ty {
-    pub fn non_copyable(&self) -> bool {
-        use Ty::*;
+    pub fn dty(&self) -> &DataTy {
         match self {
-            Scalar(_) => false,
+            Ty::Data(dty) => dty,
+            _ => panic!("Expected data type but found {:?}", self),
+        }
+    }
+
+    pub fn non_copyable(&self) -> bool {
+        match self {
+            Ty::Data(dty) => dty.non_copyable(),
+            Ty::View(vty) => vty.non_copyable(),
+        }
+    }
+
+    pub fn copyable(&self) -> bool {
+        !self.non_copyable()
+    }
+
+    pub fn is_fully_alive(&self) -> bool {
+        match self {
+            Ty::Data(dty) => dty.is_fully_alive(),
+            Ty::View(vty) => vty.is_fully_alive(),
+        }
+    }
+
+    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
+        match self {
+            Ty::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
+            Ty::View(vty) => vty.contains_ref_to_prv(prv_val_name),
+        }
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        match self {
+            Ty::Data(dty) => Ty::Data(dty.subst_ident_kinded(ident_kinded, with)),
+            Ty::View(vty) => Ty::View(vty.subst_ident_kinded(ident_kinded, with)),
+        }
+    }
+}
+
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Ty::Data(dty) => write!(f, "{}", dty),
+            Ty::View(vty) => write!(f, "{}", vty),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum ViewTy {
+    Ident(Ident),
+    Array(Box<Ty>, Nat),
+    Tuple(Vec<Ty>),
+    // Only for type checking purposes.
+    Dead(Box<ViewTy>),
+}
+
+impl ViewTy {
+    pub fn non_copyable(&self) -> bool {
+        use ViewTy::*;
+        match self {
             Ident(_) => true,
-            Ref(_, Ownership::Uniq, _, _) => true,
-            Ref(_, Ownership::Shrd, _, _) => false,
-            Fn(_, _, _, _, _) => false,
-            At(_, _) => true,
-            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
-            ArrayView(ty, _) => ty.non_copyable(),
+            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }
@@ -426,15 +551,9 @@ impl Ty {
     }
 
     pub fn is_fully_alive(&self) -> bool {
-        use Ty::*;
+        use ViewTy::*;
         match self {
-            Scalar(_)
-            | Ident(_)
-            | Ref(_, _, _, _)
-            | Fn(_, _, _, _, _)
-            | At(_, _)
-            | Array(_, _)
-            | ArrayView(_, _) => true,
+            Ident(_) | Array(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -443,9 +562,113 @@ impl Ty {
     }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
-        use Ty::*;
         match self {
-            Scalar(_) | Ident(_) | Dead(_) => false,
+            ViewTy::Ident(_) | ViewTy::Dead(_) => false,
+            ViewTy::Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            ViewTy::Tuple(elem_tys) => elem_tys
+                .iter()
+                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
+        }
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use ViewTy::*;
+        match self {
+            ViewTy::Ident(id) => {
+                if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
+                    match with {
+                        ArgKinded::Ident(idk) => Ident(idk.clone()),
+                        ArgKinded::Ty(Ty::View(vty)) => vty.clone(),
+                        _ => panic!("Trying to substitute type identifier with non-type value."),
+                    }
+                } else {
+                    self.clone()
+                }
+            }
+            Tuple(elem_tys) => Tuple(
+                elem_tys
+                    .iter()
+                    .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
+            ),
+            Array(ty, n) => Array(
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),
+        }
+    }
+}
+
+impl fmt::Display for ViewTy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum DataTy {
+    Ident(Ident),
+    Scalar(ScalarTy),
+    Tuple(Vec<DataTy>),
+    Array(Box<DataTy>, Nat),
+    At(Box<DataTy>, Memory),
+    Fn(
+        Vec<IdentKinded>,
+        Vec<Ty>,
+        Box<internal::FrameExpr>,
+        ExecLoc,
+        Box<Ty>,
+    ),
+    Ref(Provenance, Ownership, Memory, Box<DataTy>),
+    GridConfig(Nat, Nat),
+    // Only for type checking purposes.
+    Dead(Box<DataTy>),
+}
+
+impl DataTy {
+    pub fn non_copyable(&self) -> bool {
+        use DataTy::*;
+
+        match self {
+            Scalar(_) => false,
+            Ident(_) => true,
+            Ref(_, Ownership::Uniq, _, _) => true,
+            Ref(_, Ownership::Shrd, _, _) => false,
+            Fn(_, _, _, _, _) => false,
+            At(_, _) => true,
+            GridConfig(_, _) => false,
+            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
+            Array(ty, _) => ty.non_copyable(),
+            Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
+        }
+    }
+
+    pub fn copyable(&self) -> bool {
+        !self.non_copyable()
+    }
+
+    pub fn is_fully_alive(&self) -> bool {
+        use DataTy::*;
+        match self {
+            Scalar(_)
+            | Ident(_)
+            | Ref(_, _, _, _)
+            | Fn(_, _, _, _, _)
+            | At(_, _)
+            | Array(_, _)
+            | GridConfig(_, _) => true,
+            Tuple(elem_tys) => elem_tys
+                .iter()
+                .fold(true, |acc, ty| acc & ty.is_fully_alive()),
+            Dead(_) => false,
+        }
+    }
+
+    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
+        use DataTy::*;
+        match self {
+            Scalar(_) | Ident(_) | GridConfig(_, _) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -463,15 +686,60 @@ impl Ty {
             }
             At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
-            ArrayView(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
         }
     }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use DataTy::*;
+        match self {
+            Scalar(_) => self.clone(),
+            Ident(id) => {
+                if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
+                    match with {
+                        ArgKinded::Ident(idk) => Ident(idk.clone()),
+                        ArgKinded::Ty(Ty::Data(dty)) => dty.clone(),
+                        _ => panic!("Trying to substitute type identifier with non-type value."),
+                    }
+                } else {
+                    self.clone()
+                }
+            }
+            Ref(prv, own, mem, ty) => Ref(
+                prv.subst_ident_kinded(ident_kinded, with),
+                own.clone(),
+                mem.subst_ident_kinded(ident_kinded, with),
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+            ),
+            Fn(_, _, _, _, _) => {
+                unimplemented!("No function definitions allowed in another function definition.")
+            }
+            At(ty, mem) => At(
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                mem.subst_ident_kinded(ident_kinded, with),
+            ),
+            GridConfig(n1, n2) => GridConfig(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+            ),
+            Tuple(elem_tys) => Tuple(
+                elem_tys
+                    .iter()
+                    .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
+            ),
+            Array(ty, n) => Array(
+                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),
+        }
+    }
 }
 
-impl fmt::Display for Ty {
+impl fmt::Display for DataTy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         panic!("not yet implemented")
         //        write!(f, "{}:{}", self.name, self.kind)
@@ -493,6 +761,26 @@ pub enum Provenance {
     Ident(Ident),
 }
 
+impl Provenance {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        if ident_kinded.kind == Kind::Provenance {
+            match self {
+                Provenance::Ident(id) if id == &ident_kinded.ident => match with {
+                    ArgKinded::Ident(idk) => Provenance::Ident(idk.clone()),
+                    ArgKinded::Provenance(prv) => prv.clone(),
+                    err => panic!(
+                        "Trying to create provenance value from non-provenance `{:?}`",
+                        err
+                    ),
+                },
+                _ => self.clone(),
+            }
+        } else {
+            self.clone()
+        }
+    }
+}
+
 impl fmt::Display for Provenance {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -511,6 +799,23 @@ pub enum Memory {
     // TODO refactor?
     // only exists for pointers to the stack. Must not be used for At types.
     CpuStack,
+}
+
+impl Memory {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Memory {
+        if ident_kinded.kind == Kind::Memory {
+            match self {
+                Memory::Ident(id) if id == &ident_kinded.ident => match with {
+                    ArgKinded::Ident(kid) => Memory::Ident(kid.clone()),
+                    ArgKinded::Memory(m) => m.clone(),
+                    err => panic!("Trying to create Memory value from non-memory `{:?}`", err),
+                },
+                _ => self.clone(),
+            }
+        } else {
+            self.clone()
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -553,7 +858,37 @@ pub enum Nat {
 
 impl Nat {
     pub fn eval(&self) -> usize {
-        panic!("not implemented yet")
+        match self {
+            Nat::Ident(_) => panic!("Cannot evaluate identifier."),
+            Nat::Lit(n) => *n,
+            Nat::BinOp(op, l, r) => match op {
+                BinOpNat::Add => l.eval() + r.eval(),
+                BinOpNat::Sub => l.eval() - r.eval(),
+                BinOpNat::Mul => l.eval() * r.eval(),
+                BinOpNat::Div => l.eval() / r.eval(),
+                BinOpNat::Mod => l.eval() % r.eval(),
+            },
+        }
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Nat {
+        if ident_kinded.kind == Kind::Nat {
+            match self {
+                Nat::Ident(id) if id == &ident_kinded.ident => match with {
+                    ArgKinded::Ident(idk) => Nat::Ident(idk.clone()),
+                    ArgKinded::Nat(n) => n.clone(),
+                    err => panic!("Trying to create nat value from non-nat `{:?}`", err),
+                },
+                Nat::BinOp(op, n1, n2) => Nat::BinOp(
+                    op.clone(),
+                    Box::new(n1.subst_ident_kinded(ident_kinded, with)),
+                    Box::new(n2.subst_ident_kinded(ident_kinded, with)),
+                ),
+                _ => self.clone(),
+            }
+        } else {
+            self.clone()
+        }
     }
 }
 

@@ -51,6 +51,8 @@ pub(super) enum Stmt {
 
 #[derive(Clone, Debug)]
 pub(super) enum Expr {
+    // TODO Is there a better way to represent Unit values in C++?
+    Empty,
     Ident(String),
     Lit(Lit),
     Assign {
@@ -158,6 +160,8 @@ pub(super) enum Ty {
     Const(Box<Ty>),
     // Template parameter identifer
     Ident(String),
+    // TODO generalise to TemplateInstance
+    GridConfig(Nat, Nat),
 }
 
 // TODO this is not really a Cuda type and should maybe be represented by a generic type construct

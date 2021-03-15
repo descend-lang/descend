@@ -1,37 +1,40 @@
 //! Module for components related to parsing
+// TODO test expression_let for views (tuple and array)
+// TODO test for tuple view in tuple test similar to array and array view
 
 mod helpers;
 mod source;
 use peg::{error::ParseError, str::LineCol};
 pub use source::*;
 
-use crate::ast::{Nat, Ty, ScalarTy, ExecLoc, Memory, Provenance, Kind, GlobalFunDef, IdentKinded, ArgKinded, ParamDecl};
-use crate::ast::{Ownership, Mutability, Ident, Lit, PlaceExpr, Expr, ExprKind, BinOp, UnOp, Span};
+use crate::ast::{
+    ArgKinded, DataTy, ExecLoc, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl, Provenance,
+    ScalarTy, Ty, ViewTy,
+};
+use crate::ast::{BinOp, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp};
 
-use crate::dsl::fun_ty;
-
-pub fn parse_global_fun_def(src: &str) -> Result<GlobalFunDef, ParseError<LineCol>> {
+pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
     descend::global_fun_def(src)
 }
 
-peg::parser!{
+peg::parser! {
     pub(crate) grammar descend() for str {
 
         // TODO: PreDeclaredGlobalFun missing Syntax
-        pub(crate) rule global_fun_def() -> GlobalFunDef
+        pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
-            "-[" _ exec:execution_location() _ "]->" _ ret_ty:ty() _
+            "-[" _ exec:execution_location() _ "]->" _ ret_dty:dty() _
             "{" _ body_expr:expression_seq() _"}" {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
                     None => vec![]
                 };
-                GlobalFunDef {
+                FunDef {
                   name,
                   generic_params,
                   params,
-                  ret_ty,
+                  ret_dty,
                   exec,
                   prv_rels: vec![], // TODO: What even is this?
                   body_expr
@@ -44,9 +47,9 @@ peg::parser!{
             }
 
         rule fun_parameter() -> ParamDecl
-            = mutbl:mutability()? ident:ident() _ ":" _ ty:ty() {
+            = mutbl:mutability()? ident:ident() _ ":" _ dty:dty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                ParamDecl { ident, ty, mutbl }
+                ParamDecl { ident, dty, mutbl }
             }
 
         /// Parse a sequence of expressions (might also just be one)
@@ -64,12 +67,12 @@ peg::parser!{
                     }
                 }
             }
-            / start:position!() "let" __ m:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() _ "=" _ expr:expression() _ ";" _
+            / start:position!() "let" __ m:(m:mutability() __ {m})? ident:ident() typ:(_ ":" _ ty:ty() { ty })? _ "=" _ expr:expression() _ ";" _
                 tail:expression_seq() end:position!()
             {
                 let tail_ty = tail.ty.clone();
                 Expr {
-                    expr:ExprKind::Let(m.unwrap_or(Mutability::Const), ident, ty, Box::new(expr), Box::new(tail)),
+                    expr:ExprKind::Let(m.unwrap_or(Mutability::Const), ident, typ, Box::new(expr), Box::new(tail)),
                     ty: tail_ty,
                     span: Some(Span::new(start, end))
                 }
@@ -107,14 +110,14 @@ peg::parser!{
             }
             // TODO: Integrate this properly into the precedence parser (irrelevant for now
             // since there are no lambda functions yet)
-            start:position!() func:place_expression() place_end:position!() _ 
-                kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })? 
-                "(" _ args:expression() ** (_ "," _) _ ")" end:position!() 
+            start:position!() func:ident() place_end:position!() _
+                kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {
                 Expr::new(
                     ExprKind::App(
                         Box::new(Expr::with_span(
-                            ExprKind::PlaceExpr(func),
+                            ExprKind::FunIdent(func),
                             Span::new(start, place_end)
                         )),
                         kind_args.unwrap_or(vec![]),
@@ -126,7 +129,7 @@ peg::parser!{
                 // Do not use a let statement here. It makes rust-peg angry
                 Expr::with_type(
                     ExprKind::Lit(l.clone()),
-                    helpers::type_from_lit(&l)
+                    Ty::Data(helpers::type_from_lit(&l))
                 )
             }
             p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? expr:(_ "=" _ e:expression() {e})? {
@@ -156,33 +159,33 @@ peg::parser!{
             "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
                 Expr::new(ExprKind::Tuple(expressions))
             }
-            "if" _ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
+            "if" __ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
                 Expr::new(
                     ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse))
                 )
             }
-            "letprov" _ "<" _ identifier() ** (_ "," _)  _ ">" _
+            "letprov" _ "<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _
                 "{" _ body:expression_seq() _ "}"
             {
-                // TODO: ast structure for letprov? Return body for now
-                body
+                Expr::new(
+                    ExprKind::LetProv(prov_values, Box::new(body))
+                )
             }
-            sync_threads:("sync_threads" _ "[" _ gpu_expr:expression() _ ";" _ threads:nat() _ "]" _ {(gpu_expr, threads)})?
-                "for" __ ident:ident() __ "in" _ collection:expression() _ "{" _ body:expression_seq() _ "}"
+            "for" __ ident:ident() __ "in" __ collection:expression()
+                across:(__ "across" __ parallel_cfg:expression() { parallel_cfg })?
+                _ "{" _ body:expression_seq() _ "}"
             {
-                match sync_threads {
+                match across {
                     None => Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body))),
-                    Some(_) => todo!() // TODO: new syntax
-                    // Some((gpu_expr, threads)) => Expr::new(
-                    //     ExprKind::ParForSync(
-                    //         Box::new(gpu_expr), threads,
-                    //         ident, Box::new(collection), Box::new(body)),
-                    // )
+                    Some(parallel_cfg) => Expr::new(
+                        ExprKind::ParForAcross(
+                            ident, Box::new(collection), Box::new(parallel_cfg), Box::new(body)),
+                    )
                 }
             }
             // Parentheses to override precedence
             "(" _ expression:expression() _ ")" { expression }
-        } 
+        }
 
         /// Parse a kind argument
         pub(crate) rule kind_argument() -> ArgKinded
@@ -197,7 +200,8 @@ peg::parser!{
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
-            = derefs:("*" _)* ident:ident() _ ns:("." _ n:nat() _ {n})* {
+            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat() _ {n})+ {ns})? {
+                let ns = ns.unwrap_or(vec![]);
                 let root = PlaceExpr::Ident(ident);
                 // . operator binds stronger
                 let proj = ns.into_iter().fold(root, |prev,n| PlaceExpr::Proj(Box::new(prev), n));
@@ -207,9 +211,9 @@ peg::parser!{
             }
 
         /// Parse nat token
-        pub(crate) rule nat() -> Nat 
+        pub(crate) rule nat() -> Nat
             = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
-                // TODO: Getting the cause of the parse error is unstable for now. Fix this once 
+                // TODO: Getting the cause of the parse error is unstable for now. Fix this once
                 // int_error_matching becomes stable
                 match s.parse::<usize>() {
                     Ok(val) => Ok(Nat::Lit(val)),
@@ -222,26 +226,36 @@ peg::parser!{
             // TODO: binary operations are currently disabled
             // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
 
-        /// Parse a type token
         pub(crate) rule ty() -> Ty
-            = first:ty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
-                mems.into_iter().fold(first, |prev,mem| Ty::At(Box::new(prev), mem))
+            = dty:dty() { Ty::Data(dty) }
+            / vty:vty() { Ty::View(vty) }
+
+        /// Parse a type token
+        pub(crate) rule dty() -> DataTy
+            = first:dty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
+                mems.into_iter().fold(first, |prev,mem| DataTy::At(Box::new(prev), mem))
             }
 
         /// Helper for "type @ memory" left-recursion
-        rule ty_term() -> Ty
-            = "f32" { Ty::Scalar(ScalarTy::F32) }
-            / "i32" { Ty::Scalar(ScalarTy::I32) }
-            / "bool" { Ty::Scalar(ScalarTy::Bool) }
-            / "()" { Ty::Scalar(ScalarTy::Unit) }
-            // / "GPU" { Ty::GPU } // TODO: GPU removed?
-            / name:ident() { Ty::Ident(name) }
-            / "(" _ types:ty() ** ( _ "," _ ) _ ")" { Ty::Tuple(types) }
-            / "[" _ t:ty() _ ";" _ n:nat() _ "]" { Ty::Array(Box::new(t), n) }
-            / "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { Ty::ArrayView(Box::new(t), n) }
-            / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ ty:ty() {
-                Ty::Ref(prov, own, mem, Box::new(ty))
+        rule dty_term() -> DataTy
+            = "f32" { DataTy::Scalar(ScalarTy::F32) }
+            / "i32" { DataTy::Scalar(ScalarTy::I32) }
+            / "bool" { DataTy::Scalar(ScalarTy::Bool) }
+            / "()" { DataTy::Scalar(ScalarTy::Unit) }
+            / "Gpu" { DataTy::Scalar(ScalarTy::Gpu) }
+            / name:ident() { DataTy::Ident(name) }
+            / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTy::Tuple(types) }
+            / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTy::Array(Box::new(t), n) }
+            / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ dty:dty() {
+                DataTy::Ref(prov, own, mem, Box::new(dty))
             }
+            / "GridConfig" _ "<" _ num_blocks:nat() _ "," _ num_threads:nat() _ ">" {
+                DataTy::GridConfig(num_blocks, num_threads)
+            }
+
+        pub(crate) rule vty() -> ViewTy
+            = "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { ViewTy::Array(Box::new(t), n) }
+            / "[[" _ tys:ty() **<2,> (_ "," _) _ "]]" { ViewTy::Tuple(tys) }
 
         pub(crate) rule ownership() -> Ownership
         = "shrd" { Ownership::Shrd }
@@ -290,7 +304,7 @@ peg::parser!{
 
         /// Parse an identifier
         rule identifier() -> String
-        = s:$(!keyword() (['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']* 
+        = s:$(!keyword() (['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*
             / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*))
         {
             s.into()
@@ -298,13 +312,13 @@ peg::parser!{
 
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
-                / "f32" / "i32" / "bool" / "GPU" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
-                / "let"("prov")? / "if" / "else" / "for" / "in" / "sync_threads" / "fn")
+                / "f32" / "i32" / "bool" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
+                / "let"("prov")? / "if" / "else" / "for" / "in" / "across" / "fn" / "GridConfig")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.stack" / "cpu.heap" / "gpu.global" / "gpu.shared"
             / "cpu.thread" / "gpu.group" / "gpu.thread"
-        
+
         // Literal may be one of Unit, bool, i32, f32
         pub(crate) rule literal() -> Lit
             = &"()" {
@@ -361,7 +375,10 @@ mod tests {
     fn nat_literal() {
         assert_eq!(descend::nat("0"), Ok(Nat::Lit(0)), "cannot parse 0");
         assert_eq!(descend::nat("42"), Ok(Nat::Lit(42)), "cannot parse 42");
-        assert!(descend::nat("100000000000000000000").is_err(), "overflow not handled");
+        assert!(
+            descend::nat("100000000000000000000").is_err(),
+            "overflow not handled"
+        );
         assert!(descend::nat("-1").is_err(), "negative numbers not handled");
         assert!(descend::nat("3abc").is_err(), "garbage not handled");
         assert!(descend::nat("").is_err(), "matches empty");
@@ -370,9 +387,16 @@ mod tests {
     #[test]
     #[ignore = "Unimplemented"]
     fn nat_identifier() {
-        assert_eq!(descend::nat("N"), Ok(Nat::Ident(Ident::new("N"))), "cannot parse N");
-        assert_eq!(descend::nat("my_long_ident"), Ok(Nat::Ident(Ident::new("my_long_ident"))),
-            "cannot parse long identifer");
+        assert_eq!(
+            descend::nat("N"),
+            Ok(Nat::Ident(Ident::new("N"))),
+            "cannot parse N"
+        );
+        assert_eq!(
+            descend::nat("my_long_ident"),
+            Ok(Nat::Ident(Ident::new("my_long_ident"))),
+            "cannot parse long identifer"
+        );
     }
 
     #[test]
@@ -383,358 +407,559 @@ mod tests {
 
     #[test]
     fn ty_scalar() {
-        assert_eq!(descend::ty("f32"), Ok(Ty::Scalar(ScalarTy::F32)), 
-            "does not recognize f32 type");
-        assert_eq!(descend::ty("i32"), Ok(Ty::Scalar(ScalarTy::I32)), 
-            "does not recognize i32 type");
-        assert_eq!(descend::ty("()"), Ok(Ty::Scalar(ScalarTy::Unit)), 
-            "does not recognize unit type");
-        assert_eq!(descend::ty("bool"), Ok(Ty::Scalar(ScalarTy::Bool)), 
-            "does not recognize Boolean type");
+        assert_eq!(
+            descend::ty("f32"),
+            Ok(Ty::Data(DataTy::Scalar(ScalarTy::F32))),
+            "does not recognize f32 type"
+        );
+        assert_eq!(
+            descend::ty("i32"),
+            Ok(Ty::Data(DataTy::Scalar(ScalarTy::I32))),
+            "does not recognize i32 type"
+        );
+        assert_eq!(
+            descend::ty("()"),
+            Ok(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
+            "does not recognize unit type"
+        );
+        assert_eq!(
+            descend::ty("bool"),
+            Ok(Ty::Data(DataTy::Scalar(ScalarTy::Bool))),
+            "does not recognize Boolean type"
+        );
     }
 
     // #[test]
     // fn ty_gpu() {
-    //     assert_eq!(descend::ty("GPU"), Ok(Ty::GPU), 
+    //     assert_eq!(descend::ty("GPU"), Ok(Ty::GPU),
     //         "does not recognize GPU type");
     // }
 
     #[test]
-    fn ty_tuple() {
-        let ty_f32 = Ty::Scalar(ScalarTy::F32);
-        let ty_i32 = Ty::Scalar(ScalarTy::I32);
-        let ty_unit = Ty::Scalar(ScalarTy::Unit);
-        assert_eq!(descend::ty("(f32)"), Ok(Ty::Tuple(vec![ty_f32])), 
-            "does not recognize (f32) tuple type");
-        assert_eq!(descend::ty("(i32,i32)"), Ok(Ty::Tuple(vec![ty_i32.clone(), ty_i32])), 
-            "does not recognize (i32) tuple type");
-        assert_eq!(descend::ty("((),(),())"), Ok(Ty::Tuple(vec![
-            ty_unit.clone(), ty_unit.clone(), ty_unit.clone()])), 
-            "does not recognize (unit,unit,unit) tuple type");
+    fn dty_tuple() {
+        let ty_f32 = DataTy::Scalar(ScalarTy::F32);
+        let ty_i32 = DataTy::Scalar(ScalarTy::I32);
+        let ty_unit = DataTy::Scalar(ScalarTy::Unit);
+        assert_eq!(
+            descend::dty("(f32)"),
+            Ok(DataTy::Tuple(vec![ty_f32])),
+            "does not recognize (f32) tuple type"
+        );
+        assert_eq!(
+            descend::dty("(i32,i32)"),
+            Ok(DataTy::Tuple(vec![ty_i32.clone(), ty_i32])),
+            "does not recognize (i32) tuple type"
+        );
+        assert_eq!(
+            descend::dty("((),(),())"),
+            Ok(DataTy::Tuple(vec![
+                ty_unit.clone(),
+                ty_unit.clone(),
+                ty_unit.clone()
+            ])),
+            "does not recognize (unit,unit,unit) tuple type"
+        );
     }
 
     #[test]
-    fn ty_array_view() {
-        assert_eq!(descend::ty("[f32;42]"), Ok(Ty::Array(Box::new(
-            Ty::Scalar(ScalarTy::F32)),
-            Nat::Lit(42)
-        )), "does not recognize [f32;42] type");
+    fn ty_array_and_array_view() {
+        assert_eq!(
+            descend::ty("[f32;42]"),
+            Ok(Ty::Data(DataTy::Array(
+                Box::new(DataTy::Scalar(ScalarTy::F32)),
+                Nat::Lit(42)
+            ))),
+            "does not recognize [f32;42] type"
+        );
         // TODO: Implement identifer parsing in nat
         // assert_eq!(descend::ty("[();N]"), Ok(Ty::Array(Box::new(
         //     Ty::Scalar(ScalarTy::Unit)),
         //     Nat::Ident(Nat::new_ident("N")))
         // ), "does not recognize [();N] type");
-        assert_eq!(descend::ty("[[i32;24]]"), Ok(Ty::ArrayView(Box::new(
-            Ty::Scalar(ScalarTy::I32)),
-            Nat::Lit(24)
-        )), "does not recognize [[f32;24]] type");
+        assert_eq!(
+            descend::ty("[[i32;24]]"),
+            Ok(Ty::View(ViewTy::Array(
+                Box::new(Ty::Data(DataTy::Scalar(ScalarTy::I32))),
+                Nat::Lit(24)
+            ))),
+            "does not recognize [[f32;24]] type"
+        );
     }
 
     #[test]
     fn ty_identifier() {
-        assert_eq!(descend::ty("T"), Ok(Ty::Ident(Ident::new("T"))), 
-            "does not recognize T type");
+        assert_eq!(
+            descend::ty("T"),
+            Ok(Ty::Data(DataTy::Ident(Ident::new("T")))),
+            "does not recognize T type"
+        );
     }
 
     #[test]
     fn ty_reference() {
-        assert_eq!(descend::ty("&'a uniq cpu.heap i32"), Ok(Ty::Ref(
+        assert_eq!(
+            descend::ty("&'a uniq cpu.heap i32"),
+            Ok(Ty::Data(DataTy::Ref(
                 Provenance::Value("'a".into()),
                 Ownership::Uniq,
                 Memory::CpuHeap,
-                Box::new(Ty::Scalar(ScalarTy::I32))
-            )), "does not recognize type of unique i32 reference in cpu heap with provenance 'a");
-        assert_eq!(descend::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::Ref(
+                Box::new(DataTy::Scalar(ScalarTy::I32))
+            ))),
+            "does not recognize type of unique i32 reference in cpu heap with provenance 'a"
+        );
+        assert_eq!(descend::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::Data(DataTy::Ref(
                 Provenance::Ident(Ident::new("b")),
                 Ownership::Shrd,
                 Memory::GpuGlobal,
-                Box::new(Ty::Array(
-                    Box::new(Ty::Scalar(ScalarTy::F32)),
+                Box::new(DataTy::Array(
+                    Box::new(DataTy::Scalar(ScalarTy::F32)),
                     Nat::Ident(Ident::new("N"))
                 ))
-            )), "does not recognize type of shared [f32] reference in gpu global memory with provenance b");
+            ))), "does not recognize type of shared [f32] reference in gpu global memory with provenance b");
     }
 
     #[test]
     fn ty_memory_kind() {
-        assert_eq!(descend::ty("i32 @ cpu.stack"), Ok(Ty::At(
-            Box::new(Ty::Scalar(ScalarTy::I32)),
-            Memory::CpuStack
-        )), "does not recognize f32 @ cpu.stack type");
-        assert_eq!(descend::ty("[f32;42] @ gpu.global"), Ok(Ty::At(
-            Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::F32)), Nat::Lit(42))),
-            Memory::GpuGlobal
-        )), "does not recognize [f32;42] @ gpu.global type");
+        assert_eq!(
+            descend::ty("i32 @ cpu.stack"),
+            Ok(Ty::Data(DataTy::At(
+                Box::new(DataTy::Scalar(ScalarTy::I32)),
+                Memory::CpuStack
+            ))),
+            "does not recognize f32 @ cpu.stack type"
+        );
+        assert_eq!(
+            descend::ty("[f32;42] @ gpu.global"),
+            Ok(Ty::Data(DataTy::At(
+                Box::new(DataTy::Array(
+                    Box::new(DataTy::Scalar(ScalarTy::F32)),
+                    Nat::Lit(42)
+                )),
+                Memory::GpuGlobal
+            ))),
+            "does not recognize [f32;42] @ gpu.global type"
+        );
     }
 
     #[test]
     fn ownership() {
-        assert_eq!(descend::ownership("shrd"), Ok(Ownership::Shrd), 
-            "does not recognize shrd ownership qualifier");
-        assert_eq!(descend::ownership("uniq"), Ok(Ownership::Uniq), 
-            "does not recognize uniq ownership qualifier");
+        assert_eq!(
+            descend::ownership("shrd"),
+            Ok(Ownership::Shrd),
+            "does not recognize shrd ownership qualifier"
+        );
+        assert_eq!(
+            descend::ownership("uniq"),
+            Ok(Ownership::Uniq),
+            "does not recognize uniq ownership qualifier"
+        );
     }
 
     #[test]
     #[ignore = "Mutability does not implement Eq"]
     fn mutability() {
         // TODO: Missing Eq implementation in AST
-        // assert_eq!(descend::mutability("const"), Ok(Mutability::Const), 
+        // assert_eq!(descend::mutability("const"), Ok(Mutability::Const),
         //     "does not recognize const mutability qualifier");
-        // assert_eq!(descend::mutability("mut"), Ok(Mutability::Mut), 
+        // assert_eq!(descend::mutability("mut"), Ok(Mutability::Mut),
         //     "does not recognize mut mutability qualifier");
     }
 
     #[test]
     fn memory_kind() {
-        assert_eq!(descend::memory_kind("cpu.stack"), Ok(Memory::CpuStack), 
-            "does not recognize cpu.stack memory kind");
-        assert_eq!(descend::memory_kind("cpu.heap"), Ok(Memory::CpuHeap), 
-            "does not recognize cpu.heap memory kind");
-        assert_eq!(descend::memory_kind("gpu.global"), Ok(Memory::GpuGlobal), 
-            "does not recognize gpu.global memory kind");
-        assert_eq!(descend::memory_kind("gpu.shared"), Ok(Memory::GpuShared), 
-            "does not recognize gpu.shared memory kind");
-        assert_eq!(descend::memory_kind("M"), Ok(Memory::Ident(Ident::new("M"))), 
-            "does not recognize M memory kind");
+        assert_eq!(
+            descend::memory_kind("cpu.stack"),
+            Ok(Memory::CpuStack),
+            "does not recognize cpu.stack memory kind"
+        );
+        assert_eq!(
+            descend::memory_kind("cpu.heap"),
+            Ok(Memory::CpuHeap),
+            "does not recognize cpu.heap memory kind"
+        );
+        assert_eq!(
+            descend::memory_kind("gpu.global"),
+            Ok(Memory::GpuGlobal),
+            "does not recognize gpu.global memory kind"
+        );
+        assert_eq!(
+            descend::memory_kind("gpu.shared"),
+            Ok(Memory::GpuShared),
+            "does not recognize gpu.shared memory kind"
+        );
+        assert_eq!(
+            descend::memory_kind("M"),
+            Ok(Memory::Ident(Ident::new("M"))),
+            "does not recognize M memory kind"
+        );
     }
 
     #[test]
     fn execution_location() {
-        assert_eq!(descend::execution_location("cpu.thread"), Ok(ExecLoc::CpuThread), 
-            "does not recognize cpu.stack memory kind");
-        assert_eq!(descend::execution_location("gpu.group"), Ok(ExecLoc::GpuGroup), 
-            "does not recognize cpu.heap memory kind");
-        assert_eq!(descend::execution_location("gpu.thread"), Ok(ExecLoc::GpuThread), 
-            "does not recognize gpu.global memory kind");
+        assert_eq!(
+            descend::execution_location("cpu.thread"),
+            Ok(ExecLoc::CpuThread),
+            "does not recognize cpu.stack memory kind"
+        );
+        assert_eq!(
+            descend::execution_location("gpu.group"),
+            Ok(ExecLoc::GpuGroup),
+            "does not recognize cpu.heap memory kind"
+        );
+        assert_eq!(
+            descend::execution_location("gpu.thread"),
+            Ok(ExecLoc::GpuThread),
+            "does not recognize gpu.global memory kind"
+        );
     }
 
     #[test]
     fn literal() {
-        assert_eq!(descend::literal("true"), Ok(Lit::Bool(true)), "does not parse boolean correctly");
-        assert_eq!(descend::literal("False").is_err(), true, "wrongfully parses misspelled boolean");
-        assert_eq!(descend::literal("12345"), Ok(Lit::I32(12345)), "does not parse i32 correctly");
-        assert_eq!(descend::literal("789i32"), Ok(Lit::I32(789)), "does not parse i32 correctly");
-        assert_eq!(descend::literal("-1i32"), Ok(Lit::I32(-1)), "does not correctly parse 1e05i32 to i32");
-        assert_eq!(descend::literal("1f32"), Ok(Lit::F32(1.)), "does not correctly parse 1f32 to f32");
+        assert_eq!(
+            descend::literal("true"),
+            Ok(Lit::Bool(true)),
+            "does not parse boolean correctly"
+        );
+        assert_eq!(
+            descend::literal("False").is_err(),
+            true,
+            "wrongfully parses misspelled boolean"
+        );
+        assert_eq!(
+            descend::literal("12345"),
+            Ok(Lit::I32(12345)),
+            "does not parse i32 correctly"
+        );
+        assert_eq!(
+            descend::literal("789i32"),
+            Ok(Lit::I32(789)),
+            "does not parse i32 correctly"
+        );
+        assert_eq!(
+            descend::literal("-1i32"),
+            Ok(Lit::I32(-1)),
+            "does not correctly parse 1e05i32 to i32"
+        );
+        assert_eq!(
+            descend::literal("1f32"),
+            Ok(Lit::F32(1.)),
+            "does not correctly parse 1f32 to f32"
+        );
         // TODO: Do proper float comparison (test error against threshold)
-        assert_eq!(descend::literal("1.0"), Ok(Lit::F32(1.0)), "does not parse f32 correctly");
-        assert_eq!(descend::literal("2.0f32"), Ok(Lit::F32(2.0)), "does not parse f32 correctly");
-        assert_eq!(descend::literal("777.7e0f32"), Ok(Lit::F32(777.7)), "does not parse f32 correctly");
-        assert_eq!(descend::literal("777.7e01f32"), Ok(Lit::F32(7777.0)), "does not parse f32 correctly");
-        assert_eq!(descend::literal("1.0e2"), Ok(Lit::F32(100.0)), "does not parse f32 in scientific notation correctly");
-        assert_eq!(descend::literal("1.0e-2"), Ok(Lit::F32(0.01)), "does not parse f32 in scientific notation correctly");
-        assert_eq!(descend::literal("3.7f32"), Ok(Lit::F32(3.7)), "does not parse f32 correctly");
-        assert_eq!(descend::literal("3.75e3"), Ok(Lit::F32(3750.0)), "does not parse scientific notation f32 correctly");
-        assert_eq!(descend::literal("-1234.5e-0005"), Ok(Lit::F32(-0.012345)), "does not parse negative scientific notation f32 correctly");
-        assert_eq!(descend::literal("3.14159265358979323846264338327950288"), // std::f64::consts::PI
-                                    Ok(Lit::F32(3.1415927)), "not parsing f32 float as expected");
-        assert_eq!(descend::literal("12345ad").is_err(), true, "incorrectly parsing invalid literal");
-        assert_eq!(descend::literal("e54").is_err(), true, "incorrectly parsing e-notation only to literal");
-        assert_eq!(descend::literal("-i32").is_err(), true, "incorrectly parsing 'negative data type' to literal");
+        assert_eq!(
+            descend::literal("1.0"),
+            Ok(Lit::F32(1.0)),
+            "does not parse f32 correctly"
+        );
+        assert_eq!(
+            descend::literal("2.0f32"),
+            Ok(Lit::F32(2.0)),
+            "does not parse f32 correctly"
+        );
+        assert_eq!(
+            descend::literal("777.7e0f32"),
+            Ok(Lit::F32(777.7)),
+            "does not parse f32 correctly"
+        );
+        assert_eq!(
+            descend::literal("777.7e01f32"),
+            Ok(Lit::F32(7777.0)),
+            "does not parse f32 correctly"
+        );
+        assert_eq!(
+            descend::literal("1.0e2"),
+            Ok(Lit::F32(100.0)),
+            "does not parse f32 in scientific notation correctly"
+        );
+        assert_eq!(
+            descend::literal("1.0e-2"),
+            Ok(Lit::F32(0.01)),
+            "does not parse f32 in scientific notation correctly"
+        );
+        assert_eq!(
+            descend::literal("3.7f32"),
+            Ok(Lit::F32(3.7)),
+            "does not parse f32 correctly"
+        );
+        assert_eq!(
+            descend::literal("3.75e3"),
+            Ok(Lit::F32(3750.0)),
+            "does not parse scientific notation f32 correctly"
+        );
+        assert_eq!(
+            descend::literal("-1234.5e-0005"),
+            Ok(Lit::F32(-0.012345)),
+            "does not parse negative scientific notation f32 correctly"
+        );
+        assert_eq!(
+            descend::literal("3.14159265358979323846264338327950288"), // std::f64::consts::PI
+            Ok(Lit::F32(3.1415927)),
+            "not parsing f32 float as expected"
+        );
+        assert_eq!(
+            descend::literal("12345ad").is_err(),
+            true,
+            "incorrectly parsing invalid literal"
+        );
+        assert_eq!(
+            descend::literal("e54").is_err(),
+            true,
+            "incorrectly parsing e-notation only to literal"
+        );
+        assert_eq!(
+            descend::literal("-i32").is_err(),
+            true,
+            "incorrectly parsing 'negative data type' to literal"
+        );
     }
 
     #[test]
     fn kind() {
-        assert_eq!(descend::kind("nat"), Ok(Kind::Nat), 
-            "does not recognize nat kind");
-        assert_eq!(descend::kind("mem"), Ok(Kind::Memory), 
-            "does not recognize mem kind");
-        assert_eq!(descend::kind("ty"), Ok(Kind::Ty), 
-            "does not recognize ty kind");
-        assert_eq!(descend::kind("prv"), Ok(Kind::Provenance), 
-            "does not recognize prv kind");
-        assert_eq!(descend::kind("frm"), Ok(Kind::Frame), 
-            "does not recognize frm kind");
+        assert_eq!(
+            descend::kind("nat"),
+            Ok(Kind::Nat),
+            "does not recognize nat kind"
+        );
+        assert_eq!(
+            descend::kind("mem"),
+            Ok(Kind::Memory),
+            "does not recognize mem kind"
+        );
+        assert_eq!(
+            descend::kind("ty"),
+            Ok(Kind::Ty),
+            "does not recognize ty kind"
+        );
+        assert_eq!(
+            descend::kind("prv"),
+            Ok(Kind::Provenance),
+            "does not recognize prv kind"
+        );
+        assert_eq!(
+            descend::kind("frm"),
+            Ok(Kind::Frame),
+            "does not recognize frm kind"
+        );
     }
 
     #[test]
     fn place_expression() {
-        assert_eq!(descend::place_expression("*x"), Ok(
-            PlaceExpr::Deref(Box::new(
-                PlaceExpr::Ident(Ident::new("x"))
-            ))), "does not recognize place expression *x");
-        assert_eq!(descend::place_expression("x.0"), Ok(
-            PlaceExpr::Proj(
+        assert_eq!(
+            descend::place_expression("*x"),
+            Ok(PlaceExpr::Deref(Box::new(PlaceExpr::Ident(Ident::new(
+                "x"
+            ))))),
+            "does not recognize place expression *x"
+        );
+        assert_eq!(
+            descend::place_expression("x.0"),
+            Ok(PlaceExpr::Proj(
                 Box::new(PlaceExpr::Ident(Ident::new("x"))),
                 Nat::Lit(0)
-            )), "does not recognize place expression *x");
-        assert_eq!(descend::place_expression("*x.0"), Ok(
-            PlaceExpr::Deref(Box::new(
-                PlaceExpr::Proj(
-                    Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                    Nat::Lit(0)
-            )))), "does not recognize place expression *x.0");
+            )),
+            "does not recognize place expression *x"
+        );
+        assert_eq!(
+            descend::place_expression("*x.0"),
+            Ok(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
+                Box::new(PlaceExpr::Ident(Ident::new("x"))),
+                Nat::Lit(0)
+            )))),
+            "does not recognize place expression *x.0"
+        );
     }
-    
+
     #[test]
     fn expression_literal() {
-        assert_eq!(descend::expression("7"), Ok(Expr::with_type(
-            ExprKind::Lit(Lit::I32(7)),
-            Ty::Scalar(ScalarTy::I32)
-        )));
+        assert_eq!(
+            descend::expression("7"),
+            Ok(Expr::with_type(
+                ExprKind::Lit(Lit::I32(7)),
+                Ty::Data(DataTy::Scalar(ScalarTy::I32))
+            ))
+        );
         dbg!(descend::expression("7").unwrap());
     }
 
     #[test]
     fn expression_addition() {
-        assert_eq!(descend::expression("7+8"), Ok(Expr::new(
-            ExprKind::BinOp(
+        assert_eq!(
+            descend::expression("7+8"),
+            Ok(Expr::new(ExprKind::BinOp(
                 BinOp::Add,
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::I32(7)),
-                    Ty::Scalar(ScalarTy::I32)
+                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
                 )),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::I32(8)),
-                    Ty::Scalar(ScalarTy::I32)
-                ))),
-        )));
+                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                ))
+            ),))
+        );
     }
 
     #[test]
     fn expression_parenthesis() {
-        assert_eq!(descend::expression_seq("(5+6) * 7"), Ok(Expr::new(
-            ExprKind::BinOp(
+        assert_eq!(
+            descend::expression_seq("(5+6) * 7"),
+            Ok(Expr::new(ExprKind::BinOp(
                 BinOp::Mul,
                 Box::new(Expr::new(ExprKind::BinOp(
-                    BinOp::Add, 
+                    BinOp::Add,
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(5)),
-                        Ty::Scalar(ScalarTy::I32)
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
                     )),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(6)),
-                        Ty::Scalar(ScalarTy::I32)
-                    ))),
-                )),
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                    ))
+                ),)),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::I32(7)),
-                    Ty::Scalar(ScalarTy::I32)
-                ))),
-        )));
+                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                ))
+            ),))
+        );
     }
 
     #[test]
     fn expression_place_expr() {
-        assert_eq!(descend::expression_seq("someIdentifier"), Ok(Expr::new(
-            ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("someIdentifier")))
-        )));
-        assert_eq!(descend::expression_seq("*x"), Ok(Expr::new(
-            ExprKind::PlaceExpr(
-                PlaceExpr::Deref(
-                    Box::new(PlaceExpr::Ident(Ident::new("x"))))),
-        )));
-        assert_eq!(descend::expression_seq("**x.7"), Ok(Expr::new(
-            ExprKind::PlaceExpr(
-                PlaceExpr::Deref(
-                    Box::new(PlaceExpr::Deref(
-                        Box::new(PlaceExpr::Proj(
-                            Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                            Nat::Lit(7)
-            )))))),
-        )));
-        assert_eq!(descend::expression_seq("x.2.3"), Ok(Expr::new(
-            ExprKind::PlaceExpr(
-                PlaceExpr::Proj(
-                    Box::new(PlaceExpr::Proj(
-                        Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                        Nat::Lit(2))),
-                    Nat::Lit(3)
-            )),
-        )));
+        assert_eq!(
+            descend::expression_seq("someIdentifier"),
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                Ident::new("someIdentifier")
+            ))))
+        );
+        assert_eq!(
+            descend::expression_seq("*x"),
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
+                PlaceExpr::Ident(Ident::new("x"))
+            ))),))
+        );
+        assert_eq!(
+            descend::expression_seq("**x.7"),
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
+                PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
+                    Box::new(PlaceExpr::Ident(Ident::new("x"))),
+                    Nat::Lit(7)
+                )))
+            ))),))
+        );
+        assert_eq!(
+            descend::expression_seq("x.2.3"),
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Proj(
+                Box::new(PlaceExpr::Proj(
+                    Box::new(PlaceExpr::Ident(Ident::new("x"))),
+                    Nat::Lit(2)
+                )),
+                Nat::Lit(3)
+            )),))
+        );
     }
 
     #[test]
     fn expression_indexing() {
-        assert_eq!(descend::expression_seq("place_expression[12]"), Ok(Expr::new(
-            ExprKind::Index(
+        assert_eq!(
+            descend::expression_seq("place_expression[12]"),
+            Ok(Expr::new(ExprKind::Index(
                 PlaceExpr::Ident(Ident::new("place_expression")),
-                Nat::Lit(12))
-        )));
+                Nat::Lit(12)
+            )))
+        );
     }
 
     #[test]
     fn expression_assignment() {
-        assert_eq!(descend::expression_seq("var_token = 7.3e2"), Ok(Expr::new(
-            ExprKind::Assign(
+        assert_eq!(
+            descend::expression_seq("var_token = 7.3e2"),
+            Ok(Expr::new(ExprKind::Assign(
                 PlaceExpr::Ident(Ident::new("var_token")),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::F32(730.0)),
-                    Ty::Scalar(ScalarTy::F32)
+                    Ty::Data(DataTy::Scalar(ScalarTy::F32))
+                ))
             )))
-        )));
-        assert_eq!(descend::expression_seq("*var_token = 3 + 4"), Ok(Expr::new(
-            ExprKind::Assign(
-                PlaceExpr::Deref(
-                    Box::new(PlaceExpr::Ident(Ident::new("var_token")))
-                ), 
+        );
+        assert_eq!(
+            descend::expression_seq("*var_token = 3 + 4"),
+            Ok(Expr::new(ExprKind::Assign(
+                PlaceExpr::Deref(Box::new(PlaceExpr::Ident(Ident::new("var_token")))),
                 Box::new(Expr::new(ExprKind::BinOp(
                     BinOp::Add,
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(3)),
-                        Ty::Scalar(ScalarTy::I32)
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
                     )),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(4)),
-                        Ty::Scalar(ScalarTy::I32)
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                    ))
                 )))
             )))
-        )));
+        );
     }
 
     #[test]
     fn expression_references() {
-        assert_eq!(descend::expression_seq("&'prov uniq variable"), Ok(Expr::new(
-            ExprKind::Ref(
+        assert_eq!(
+            descend::expression_seq("&'prov uniq variable"),
+            Ok(Expr::new(ExprKind::Ref(
                 Provenance::Value(String::from("'prov")),
                 Ownership::Uniq,
-                PlaceExpr::Ident(Ident::new("variable"))),
-        )));
-        assert_eq!(descend::expression_seq("&prov_var shrd variable"), Ok(Expr::new(
-            ExprKind::Ref(
+                PlaceExpr::Ident(Ident::new("variable"))
+            ),))
+        );
+        assert_eq!(
+            descend::expression_seq("&prov_var shrd variable"),
+            Ok(Expr::new(ExprKind::Ref(
                 Provenance::Ident(Ident::new("prov_var")),
                 Ownership::Shrd,
-                PlaceExpr::Ident(Ident::new("variable"))),
-        )));
-        assert_eq!(descend::expression_seq("&'prov uniq var[7]"), Ok(Expr::new(
-            ExprKind::BorrowIndex(
-                Provenance::Value(String::from("'prov")), 
-                Ownership::Uniq,
-                PlaceExpr::Ident(Ident::new("var")),
-                Nat::Lit(7)),
-        )));
-        assert_eq!(descend::expression_seq("&'prov uniq var[token]"), Ok(Expr::new(
-            ExprKind::BorrowIndex(
+                PlaceExpr::Ident(Ident::new("variable"))
+            ),))
+        );
+        assert_eq!(
+            descend::expression_seq("&'prov uniq var[7]"),
+            Ok(Expr::new(ExprKind::BorrowIndex(
                 Provenance::Value(String::from("'prov")),
                 Ownership::Uniq,
                 PlaceExpr::Ident(Ident::new("var")),
-                Nat::Ident(Ident::new("token"))),
-        )));
+                Nat::Lit(7)
+            ),))
+        );
+        assert_eq!(
+            descend::expression_seq("&'prov uniq var[token]"),
+            Ok(Expr::new(ExprKind::BorrowIndex(
+                Provenance::Value(String::from("'prov")),
+                Ownership::Uniq,
+                PlaceExpr::Ident(Ident::new("var")),
+                Nat::Ident(Ident::new("token"))
+            ),))
+        );
         let result = descend::expression_seq("&'a uniq var[7][3]");
         assert!(result.is_err());
     }
 
     #[test]
     fn expression_array() {
-        assert_eq!(descend::expression_seq("[12, x[3], true]"), Ok(Expr::new(
-            ExprKind::Array(vec![
+        assert_eq!(
+            descend::expression_seq("[12, x[3], true]"),
+            Ok(Expr::new(ExprKind::Array(vec![
                 Expr::with_type(
                     ExprKind::Lit(Lit::I32(12)),
-                    Ty::Scalar(ScalarTy::I32)
+                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
                 ),
-                Expr::new(
-                    ExprKind::Index(
-                        PlaceExpr::Ident(Ident::new("x")),
-                        Nat::Lit(3)
-                    )
-                ),
+                Expr::new(ExprKind::Index(
+                    PlaceExpr::Ident(Ident::new("x")),
+                    Nat::Lit(3)
+                )),
                 Expr::with_type(
                     ExprKind::Lit(Lit::Bool(true)),
-                    Ty::Scalar(ScalarTy::Bool)
+                    Ty::Data(DataTy::Scalar(ScalarTy::Bool))
                 )
-            ])
-        )));
+            ])))
+        );
     }
 
     #[test]
@@ -751,24 +976,23 @@ mod tests {
 
     #[test]
     fn expression_tupel() {
-        assert_eq!(descend::expression_seq("(12, x[3], true)"), Ok(Expr::new(
-            ExprKind::Tuple(vec![
+        assert_eq!(
+            descend::expression_seq("(12, x[3], true)"),
+            Ok(Expr::new(ExprKind::Tuple(vec![
                 Expr::with_type(
                     ExprKind::Lit(Lit::I32(12)),
-                    Ty::Scalar(ScalarTy::I32)
+                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
                 ),
-                Expr::new(
-                    ExprKind::Index(
-                        PlaceExpr::Ident(Ident::new("x")),
-                        Nat::Lit(3)
-                    )
-                ),
+                Expr::new(ExprKind::Index(
+                    PlaceExpr::Ident(Ident::new("x")),
+                    Nat::Lit(3)
+                )),
                 Expr::with_type(
                     ExprKind::Lit(Lit::Bool(true)),
-                    Ty::Scalar(ScalarTy::Bool)
+                    Ty::Data(DataTy::Scalar(ScalarTy::Bool))
                 )
-            ])
-        )));
+            ])))
+        );
     }
 
     #[test]
@@ -776,60 +1000,62 @@ mod tests {
         macro_rules! common_expr {
             ($binop: expr) => {
                 Box::new(Expr::new(ExprKind::BinOp(
-                    $binop, 
+                    $binop,
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::Scalar(ScalarTy::I32)
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32)),
                     )),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(8)),
-                        Ty::Scalar(ScalarTy::I32)
-                    ))
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32)),
+                    )),
                 )))
-            }
+            };
         };
-        assert_eq!(descend::expression_seq("if 7<8 {7+8} else {7*8}"), Ok(Expr::new(
-            ExprKind::IfElse(
+        assert_eq!(
+            descend::expression_seq("if 7<8 {7+8} else {7*8}"),
+            Ok(Expr::new(ExprKind::IfElse(
                 common_expr!(BinOp::Lt),
                 common_expr!(BinOp::Add),
                 common_expr!(BinOp::Mul),
-        ))));
+            )))
+        );
     }
 
     #[test]
     fn expression_for_loop() {
         let x = Ident::new("x");
-        assert_eq!(descend::expression_seq("for x in [1,2,3] {x = x+1}"), Ok(Expr::new(
-            ExprKind::For(
-                x.clone(), 
+        assert_eq!(
+            descend::expression_seq("for x in [1,2,3] {x = x+1}"),
+            Ok(Expr::new(ExprKind::For(
+                x.clone(),
                 Box::new(Expr::new(ExprKind::Array(vec![
                     Expr::with_type(
                         ExprKind::Lit(Lit::I32(1)),
-                        Ty::Scalar(ScalarTy::I32)
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
                     ),
                     Expr::with_type(
                         ExprKind::Lit(Lit::I32(2)),
-                        Ty::Scalar(ScalarTy::I32)
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
                     ),
                     Expr::with_type(
                         ExprKind::Lit(Lit::I32(3)),
-                        Ty::Scalar(ScalarTy::I32)
-                )]))),
-                Box::new(Expr::new(
-                    ExprKind::Assign(
-                        PlaceExpr::Ident(x.clone()),
-                        Box::new(Expr::new(ExprKind::BinOp(
-                            BinOp::Add,
-                            Box::new(Expr::new(
-                                ExprKind::PlaceExpr(PlaceExpr::Ident(x.clone()))
-                            )),
-                            Box::new(Expr::with_type(
-                                ExprKind::Lit(Lit::I32(1)),
-                                Ty::Scalar(ScalarTy::I32)
-                            ))),
-                    ))),
-                ))),
-        )));
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                    )
+                ]))),
+                Box::new(Expr::new(ExprKind::Assign(
+                    PlaceExpr::Ident(x.clone()),
+                    Box::new(Expr::new(ExprKind::BinOp(
+                        BinOp::Add,
+                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(x.clone())))),
+                        Box::new(Expr::with_type(
+                            ExprKind::Lit(Lit::I32(1)),
+                            Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                        ))
+                    ),))
+                ),))
+            ),))
+        );
     }
 
     #[test]
@@ -838,61 +1064,61 @@ mod tests {
         assert!(result_expect_ident.is_err());
     }
 
-    // #[test]
-    // fn expression_sync_threads() {
-    //     let elems = Ident::new("elems");
-    //     assert_eq!(descend::expression_seq("sync_threads[gpu; 1024] for elems in elems_grouped {*elems.0 = *elems.0 + *elems.1;}"), Ok(Expr::new(
-    //         ExprKind::ParForGlobalSync(
-    //             Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("gpu"))))),
-    //             Nat::Lit(1024),
-    //             elems.clone(),
-    //             Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("elems_grouped"))))),
-    //             Box::new(Expr::new(ExprKind::Assign(
-    //                 PlaceExpr::Deref(
-    //                     Box::new(PlaceExpr::Proj(
-    //                         Box::new(PlaceExpr::Ident(elems.clone())),
-    //                         Nat::Lit(0)))),
-    //                 Box::new(Expr::new(ExprKind::BinOp(
-    //                     BinOp::Add,
-    //                     Box::new(Expr::new(ExprKind::PlaceExpr(
-    //                         PlaceExpr::Deref(
-    //                             Box::new(PlaceExpr::Proj(
-    //                                 Box::new(PlaceExpr::Ident(elems.clone())),
-    //                                 Nat::Lit(0))))
-    //                     ))),
-    //                     Box::new(Expr::new(ExprKind::PlaceExpr(
-    //                         PlaceExpr::Deref(
-    //                             Box::new(PlaceExpr::Proj(
-    //                                 Box::new(PlaceExpr::Ident(elems.clone())),
-    //                                 Nat::Lit(1))))
-    //                     )))
-    //                 )))
-    //             )))
-    //         )
-    //     )));
-    //     //Negative test
-    //     let result = descend::expression_seq("sync_threads[gpu; 10.24] for elems in elems_grouped {*elems.0 = *elems.0 + *elems.1;}");
-    //     assert!(result.is_err()); //expected Integer - read Float
-    // }
+    #[test]
+    fn expression_parallel_for_loop() {
+        let elems = Ident::new("elems");
+        assert_eq!(
+            descend::expression_seq(
+                "for elems in elems_grouped across grid {*elems.0 = *elems.0 + *elems.1;}"
+            ),
+            Ok(Expr::new(ExprKind::ParForAcross(
+                elems.clone(),
+                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                    Ident::new("elems_grouped")
+                )))),
+                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                    Ident::new("grid")
+                )))),
+                Box::new(Expr::new(ExprKind::Assign(
+                    PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
+                        Box::new(PlaceExpr::Ident(elems.clone())),
+                        Nat::Lit(0)
+                    ))),
+                    Box::new(Expr::new(ExprKind::BinOp(
+                        BinOp::Add,
+                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
+                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), Nat::Lit(0))
+                        ))))),
+                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
+                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), Nat::Lit(1))
+                        )))))
+                    )))
+                )))
+            )))
+        );
+    }
 
     #[test]
     fn expression_let() {
-        assert_eq!(descend::expression_seq("let mut x : f32 = 17.123f32; true"), Ok(Expr::with_type(
-            ExprKind::Let(
-                Mutability::Mut,
-                Ident::new("x"),
-                Ty::Scalar(ScalarTy::F32),
-                Box::new(Expr::with_type(
-                    ExprKind::Lit(Lit::F32(17.123)),
-                    Ty::Scalar(ScalarTy::F32)
-                )),
-                Box::new(Expr::with_type(
-                    ExprKind::Lit(Lit::Bool(true)),
-                    Ty::Scalar(ScalarTy::Bool)
-                ))
-            ),
-            Ty::Scalar(ScalarTy::Bool)
-        )));
+        assert_eq!(
+            descend::expression_seq("let mut x : f32 = 17.123f32; true"),
+            Ok(Expr::with_type(
+                ExprKind::Let(
+                    Mutability::Mut,
+                    Ident::new("x"),
+                    Some(Ty::Data(DataTy::Scalar(ScalarTy::F32))),
+                    Box::new(Expr::with_type(
+                        ExprKind::Lit(Lit::F32(17.123)),
+                        Ty::Data(DataTy::Scalar(ScalarTy::F32))
+                    )),
+                    Box::new(Expr::with_type(
+                        ExprKind::Lit(Lit::Bool(true)),
+                        Ty::Data(DataTy::Scalar(ScalarTy::Bool))
+                    ))
+                ),
+                Ty::Data(DataTy::Scalar(ScalarTy::Bool))
+            ))
+        );
     }
 
     #[test]
@@ -903,8 +1129,6 @@ mod tests {
         let result = descend::expression_seq("let mut x : 32 = 17.123f32; true");
         assert!(result.is_err());
         let result = descend::expression_seq("let mut x:bool@gpu.shared@ = false; true");
-        assert!(result.is_err());
-        let result = descend::expression_seq("let x = 17.123; true");
         assert!(result.is_err());
         let result = descend::expression_seq("let x:bool@Memory.Location = false; true");
         assert!(result.is_err());
@@ -937,33 +1161,36 @@ mod tests {
     #[test]
     fn expression_parenthesis_overriding_precedence() {
         // "natural" operator precendence without parenthesis
-        assert_eq!(descend::expression("-1 + 2 * 3 + 4 + 5 * 6 * 7"), Ok(Expr::new(
-            ExprKind::BinOp(BinOp::Add,
+        assert_eq!(
+            descend::expression("-1 + 2 * 3 + 4 + 5 * 6 * 7"),
+            Ok(Expr::new(ExprKind::BinOp(
+                BinOp::Add,
                 Box::new(Expr::new(ExprKind::BinOp(
                     BinOp::Add,
                     Box::new(Expr::new(ExprKind::BinOp(
                         BinOp::Add,
-                        Box::new(Expr::new(ExprKind::UnOp(UnOp::Neg,
+                        Box::new(Expr::new(ExprKind::UnOp(
+                            UnOp::Neg,
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(1)),
-                                Ty::Scalar(ScalarTy::I32)
+                                Ty::Data(DataTy::Scalar(ScalarTy::I32))
                             ))
                         ))),
                         Box::new(Expr::new(ExprKind::BinOp(
                             BinOp::Mul,
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(2)),
-                                Ty::Scalar(ScalarTy::I32)
+                                Ty::Data(DataTy::Scalar(ScalarTy::I32))
                             )),
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(3)),
-                                Ty::Scalar(ScalarTy::I32)
+                                Ty::Data(DataTy::Scalar(ScalarTy::I32))
                             ))
                         )))
                     ))),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(4)),
-                        Ty::Scalar(ScalarTy::I32)                  
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
                     ))
                 ))),
                 Box::new(Expr::new(ExprKind::BinOp(
@@ -972,73 +1199,74 @@ mod tests {
                         BinOp::Mul,
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(5)),
-                            Ty::Scalar(ScalarTy::I32)
+                            Ty::Data(DataTy::Scalar(ScalarTy::I32))
                         )),
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(6)),
-                            Ty::Scalar(ScalarTy::I32)
-                        )))
-                    )),
+                            Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                        ))
+                    ))),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::Scalar(ScalarTy::I32)
-                    )))
-                ))
-            ),
-        )));
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                    ))
+                )))
+            ),))
+        );
 
         // precedences overridden via parentheses
-        assert_eq!(descend::expression("-(1 + 2) * ((3 + (4 + 5) * 6) * 7)"), Ok(Expr::new(
-            ExprKind::BinOp(
-                BinOp::Mul, 
+        assert_eq!(
+            descend::expression("-(1 + 2) * ((3 + (4 + 5) * 6) * 7)"),
+            Ok(Expr::new(ExprKind::BinOp(
+                BinOp::Mul,
                 Box::new(Expr::new(ExprKind::UnOp(
-                    UnOp::Neg, 
+                    UnOp::Neg,
                     Box::new(Expr::new(ExprKind::BinOp(
-                        BinOp::Add, 
+                        BinOp::Add,
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(1)),
-                            Ty::Scalar(ScalarTy::I32)
-                        )), 
+                            Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                        )),
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(2)),
-                            Ty::Scalar(ScalarTy::I32)
-                        ))),
-                    ))),
-                )), 
+                            Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                        ))
+                    ),))
+                ),)),
                 Box::new(Expr::new(ExprKind::BinOp(
-                    BinOp::Mul, 
+                    BinOp::Mul,
                     Box::new(Expr::new(ExprKind::BinOp(
-                        BinOp::Add, 
+                        BinOp::Add,
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(3)),
-                            Ty::Scalar(ScalarTy::I32)
+                            Ty::Data(DataTy::Scalar(ScalarTy::I32))
                         )),
                         Box::new(Expr::new(ExprKind::BinOp(
-                            BinOp::Mul, 
+                            BinOp::Mul,
                             Box::new(Expr::new(ExprKind::BinOp(
-                                BinOp::Add, 
+                                BinOp::Add,
                                 Box::new(Expr::with_type(
                                     ExprKind::Lit(Lit::I32(4)),
-                                    Ty::Scalar(ScalarTy::I32)
-                                )), 
+                                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                                )),
                                 Box::new(Expr::with_type(
                                     ExprKind::Lit(Lit::I32(5)),
-                                    Ty::Scalar(ScalarTy::I32)
+                                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
                                 ))
                             ))),
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(6)),
-                                Ty::Scalar(ScalarTy::I32)
+                                Ty::Data(DataTy::Scalar(ScalarTy::I32))
                             ))
                         )))
-                    ))), 
+                    ))),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::Scalar(ScalarTy::I32)
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
                     ))
                 )))
-            ),
-        )));
+            ),))
+        );
     }
 
     // #[test]
@@ -1049,10 +1277,10 @@ mod tests {
     // ) -[cpu.thread]-> () {
     //     letprov <a, b, c, d, e, f, g, h> {
     //         let gpu: GPU = gpu(/* GPU info */);
-        
+
     //         let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
     //         let b_array: [i32; n] @ gpu.global = copy_to_gpu<[i32; n]>(&d uniq gpu, hb_array);
-        
+
     //         let view_a: [[&a uniq gpu.global i32; n]] = to_view<a, uniq, gpu.global, n, i32>(&a uniq a_array);
     //         let view_b: [[&b shrd gpu.global i32; n]] = to_view<b, shrd, gpu.global, n, i32>(&b shrd b_array);
     //         let elems_grouped_for_threads: [[(&a uniq gpu.global i32, &b shrd gpu.global i32); n]] =
@@ -1071,7 +1299,7 @@ mod tests {
     // };
 
     // let expr_seq = r#"let gpu: GPU = gpu(/* GPU info */);
-        
+
     // let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
     // let b_array: [i32; n] @ gpu.global = copy_to_gpu<[i32; n]>(&d uniq gpu, hb_array);
 
@@ -1094,13 +1322,13 @@ mod tests {
     // };
     // let params = vec!{
     //     IdentTyped::new(Ident::new("ha_array"), Ty::Ref(
-    //         Provenance::Value("\'a".into()), 
+    //         Provenance::Value("\'a".into()),
     //         Ownership::Uniq,
     //         Memory::CpuHeap,
     //         Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::I32)), Nat::Ident(Ident::new("n"))))
     //     )),
     //     IdentTyped::new(Ident::new("hb_array"), Ty::Ref(
-    //         Provenance::Value("\'b".into()), 
+    //         Provenance::Value("\'b".into()),
     //         Ownership::Shrd,
     //         Memory::CpuHeap,
     //         Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::I32)), Nat::Ident(Ident::new("n"))))
@@ -1120,7 +1348,7 @@ mod tests {
     //     &ret_ty,
     // );
 
-    // let intended = GlobalFunDef{
+    // let intended = FunDef{
     //     name,
     //     ty_idents,
     //     params,
@@ -1140,7 +1368,7 @@ mod tests {
     //     let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
     //         ha_array: &'a uniq cpu.heap [i32; n]
     //     ) -[cpu.thread]-> () {
-    //         letprov <some, stuff> {     
+    //         letprov <some, stuff> {
     //             let answer_to_everything :i32 = 42;
     //             answer_to_everything
     //         }
@@ -1161,7 +1389,7 @@ mod tests {
     //     };
     //     let params = vec!{
     //         IdentTyped::new(Ident::new("ha_array"), Ty::Ref(
-    //             Provenance::Value("\'a".into()), 
+    //             Provenance::Value("\'a".into()),
     //             Ownership::Uniq,
     //             Memory::CpuHeap,
     //             Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::I32)), Nat::Ident(Ident::new("n"))))
@@ -1181,7 +1409,7 @@ mod tests {
     //         &ret_ty,
     //     );
 
-    //     let intended = GlobalFunDef{
+    //     let intended = FunDef{
     //         name,
     //         ty_idents,
     //         params,
@@ -1215,6 +1443,8 @@ mod tests {
 
         let result_1 = descend::global_fun_def(src_1);
         let result_2 = descend::global_fun_def(src_2);
+
+        print!("{:?}", result_1);
 
         assert!(result_1.is_ok());
         assert!(result_2.is_ok());
@@ -1258,9 +1488,9 @@ mod tests {
             let gpu: GPU = gpu(/* GPU info */);
             let mut gpu_arr : [i32; n] = copy_to_gpu<g, 'a, [i32; n]>(&g uniq gpu, ha_array);
                 // // Modified: added ` : [i32; n]`, parse broke here otherwise
-            let view_arr: [[&r shrd gpu.global i32; n]] = 
+            let view_arr: [[&r shrd gpu.global i32; n]] =
                 to_view<r, uniq, gpu.global, n, i32>(&r uniq gpu_arr);
-            let chunks: [[ [[&r uniq gpu.global i32; n/1024]]; 1024]] = 
+            let chunks: [[ [[&r uniq gpu.global i32; n/1024]]; 1024]] =
                 group<n/1024, n, &r uniq gpu.global i32>(view_arr);
             // transpose for coalescing
             let chunks_for_threads: [[ [[&r uniq gpu.global i32; 1024]]; n/1024]] =
@@ -1277,7 +1507,7 @@ mod tests {
                 // chunk[0] = other_borrow: &r uniq gpu.global i32
                 *(chunck[0]) = acc;
             }
-            
+
             // drop uniq borrows of gpu_arr before out is constructed
             let out_view: [[&s shrd gpu.global i32; n]] =
                 to_view<s, shrd, gpu.global, n, i32>(&s shrd gpu_arr);
@@ -1286,7 +1516,7 @@ mod tests {
             let part_res_only_host: [[&h uniq cpu.heap i32; 64*1024]] =
                 take<64*1024>(to_view(&h uniq cpu.heap ha_array));
             view_copy_to_host<64*1024, h, s, i32>(part_res_only_host, part_res_only_gpu);
-        
+
             // host-side reduction of the partial results
             let mut acc: i32 = 0;
             for elem in part_res_only_host { // elem: &h uniq cpu.heap i32

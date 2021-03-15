@@ -15,19 +15,19 @@ inline void check_cuda_err(const cudaError_t err, const char * const file, const
 
 namespace descend {
 
-using i32_t = std::int32_t;
+using i32 = std::int32_t;
 // FIXME there is no way to guarantee that float holds 32 bits
-using f32_t = float;
+using f32 = float;
 
 template<typename T, std::size_t n>
-using array_t = std::array<T, n>;
+using array = std::array<T, n>;
 
 template<typename ... Types>
-using tuple_t = std::tuple<Types...>;
+using tuple = std::tuple<Types...>;
 
 using Gpu = size_t;
 
-Gpu create_gpu(size_t device_id) {
+Gpu gpu(size_t device_id) {
     return device_id;
 };
 
@@ -95,17 +95,17 @@ public:
 };
 
 template<typename DescendType, std::size_t n>
-class Buffer<Memory::CpuHeap, descend::array_t<DescendType, n>> {
-    descend::array_t<DescendType, n> * const ptr_;
+class Buffer<Memory::CpuHeap, descend::array<DescendType, n>> {
+    descend::array<DescendType, n> * const ptr_;
 
 public:
-    static constexpr std::size_t size = size_in_bytes<descend::array_t<DescendType, n>>();
+    static constexpr std::size_t size = size_in_bytes<descend::array<DescendType, n>>();
 
-    Buffer(const descend::array_t<DescendType, n> init) : ptr_{new descend::array_t<DescendType, n>} {
+    Buffer(const descend::array<DescendType, n> init) : ptr_{new descend::array<DescendType, n>} {
         std::copy(init.begin(), init.end(), ptr_->data());
     }
 
-    Buffer(const DescendType * const __restrict__ init_ptr) : ptr_{new descend::array_t<DescendType, n>} {
+    Buffer(const DescendType * const __restrict__ init_ptr) : ptr_{new descend::array<DescendType, n>} {
         std::copy(init_ptr, init_ptr + size, ptr_->data());
     }
     ~Buffer() {
@@ -153,12 +153,12 @@ public:
 };
 
 template<typename DescendType, std::size_t n>
-class Buffer<Memory::GpuGlobal, descend::array_t<DescendType, n>> {
+class Buffer<Memory::GpuGlobal, descend::array<DescendType, n>> {
     const Gpu gpu_;
     DescendType * dev_ptr_;
 
 public:
-    static constexpr std::size_t size = size_in_bytes<array_t<DescendType, n>>();
+    static constexpr std::size_t size = size_in_bytes<array<DescendType, n>>();
 
     Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{*gpu} {
         CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
@@ -202,7 +202,7 @@ __global__ void launch(F f, Args... args)
 }
 
 template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
-auto par_for_across(const GridConfig<num_blocks, num_threads> * const thread_config, F &&f, Args... args) -> void {
+auto par_for(const GridConfig<num_blocks, num_threads> * const thread_config, F &&f, Args... args) -> void {
     CHECK_CUDA_ERR( cudaSetDevice(thread_config->gpu) );
     launch<<<num_blocks, num_threads>>>(f, args...);
     CHECK_CUDA_ERR( cudaPeekAtLastError() );
@@ -212,7 +212,7 @@ auto par_for_across(const GridConfig<num_blocks, num_threads> * const thread_con
 namespace detail
 {
     template <typename T, std::size_t ... Is>
-    constexpr descend::array_t<T, sizeof...(Is)>
+    constexpr descend::array<T, sizeof...(Is)>
     create_array(T value, std::index_sequence<Is...>)
     {
         // cast Is to void to remove the warning: unused value
@@ -221,7 +221,7 @@ namespace detail
 };
 
 template <std::size_t N, typename T>
-constexpr descend::array_t<T, N> create_array(const T& value)
+constexpr descend::array<T, N> create_array(const T& value)
 {
     return detail::create_array(value, std::make_index_sequence<N>());
 }

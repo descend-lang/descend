@@ -40,8 +40,8 @@ impl std::fmt::Display for Item {
                 }
                 writeln!(
                     f,
-                    "{} auto {}(",
-                    if *is_dev_fun { "__device__" } else { "" },
+                    "{}auto {}(",
+                    if *is_dev_fun { "__device__ " } else { "" },
                     name
                 )?;
                 fmt_vec(f, params, ",\n")?;
@@ -58,7 +58,10 @@ impl std::fmt::Display for Stmt {
         use Stmt::*;
         match self {
             VarDecl { name, ty, expr } => {
-                write!(f, "{} {}", ty, name)?;
+                if let Ty::Const(_) = ty {
+                    write!(f, "const ")?
+                }
+                write!(f, "auto {}", name)?;
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
                 }
@@ -107,6 +110,7 @@ impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Expr::*;
         match self {
+            Empty => Ok(()),
             Ident(name) => write!(f, "{}", name),
             Lit(l) => write!(f, "{}", l),
             Assign {
@@ -124,7 +128,7 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, &params, ",\n")?;
                 writeln!(f, ") -> {} {{", ret_ty)?;
                 writeln!(f, "{}", &body)?;
-                writeln!(f, "}}")
+                write!(f, "}}")
             }
             FunCall {
                 fun,
@@ -137,7 +141,7 @@ impl std::fmt::Display for Expr {
                     fmt_vec(f, template_args, ", ")?;
                     write!(f, ">")?;
                 }
-                write!(f, ".(")?;
+                write!(f, "(")?;
                 fmt_vec(f, args, ", ")?;
                 write!(f, ")")
             }
@@ -170,7 +174,7 @@ impl std::fmt::Display for Lit {
 
 impl std::fmt::Display for ParamDecl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.name, self.ty)
+        write!(f, "{} {}", self.ty, self.name)
     }
 }
 
@@ -228,6 +232,7 @@ impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
+            // TODO print __restrict__
             Ptr(ty) => write!(f, "{} *", ty),
             PtrConst(ty) => write!(f, "const {} *", ty),
             Const(ty) => match ty.as_ref() {
@@ -248,6 +253,7 @@ impl std::fmt::Display for Ty {
             },
             Scalar(sty) => write!(f, "{}", sty),
             Ident(name) => write!(f, "{}", name),
+            GridConfig(nb, nt) => write!(f, "GridConfig<{}, {}>", nb, nt),
         }
     }
 }

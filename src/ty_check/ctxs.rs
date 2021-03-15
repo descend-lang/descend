@@ -1,6 +1,5 @@
-use super::pre_decl::FunDecl;
-use super::{Path, Place};
-use crate::ast::internal::{Frame, FrameTyping, IdentTyped, Loan, PrvMapping};
+use crate::ast::internal::{FrameEntry, FrameTyping, IdentTyped, Loan, PrvMapping};
+use crate::ast::Ty::Data;
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
@@ -26,14 +25,14 @@ impl TyCtx {
 
     pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
         let frame_typing = self.frame_tys.iter_mut().last().unwrap();
-        frame_typing.push(Frame::Var(id_typed));
+        frame_typing.push(FrameEntry::Var(id_typed));
         self
     }
 
     pub fn drop_ident(mut self, ident: &Ident) -> Option<Self> {
         for frame in self.frame_tys.iter_mut().rev() {
             let rev_pos_if_exists = frame.iter().rev().position(|ty_entry| match ty_entry {
-                Frame::Var(ident_typed) => &ident_typed.ident == ident,
+                FrameEntry::Var(ident_typed) => &ident_typed.ident == ident,
                 _ => false,
             });
             if let Some(rev_pos) = rev_pos_if_exists {
@@ -47,13 +46,13 @@ impl TyCtx {
 
     pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
         let frame_typing = self.frame_tys.iter_mut().last().unwrap();
-        frame_typing.push(Frame::PrvMapping(prv_mapping));
+        frame_typing.push(FrameEntry::PrvMapping(prv_mapping));
         self
     }
 
     pub fn idents_typed(&self) -> impl Iterator<Item = &'_ IdentTyped> {
         self.frame_tys.iter().flatten().filter_map(|fe| {
-            if let Frame::Var(ident_typed) = fe {
+            if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
                 None
@@ -63,7 +62,7 @@ impl TyCtx {
 
     pub fn idents_typed_mut(&mut self) -> impl Iterator<Item = &'_ mut IdentTyped> {
         self.frame_tys.iter_mut().flatten().filter_map(|fe| {
-            if let Frame::Var(ident_typed) = fe {
+            if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
                 None
@@ -73,7 +72,7 @@ impl TyCtx {
 
     pub fn prv_mappings(&self) -> impl Iterator<Item = &'_ PrvMapping> {
         self.frame_tys.iter().flatten().filter_map(|fe| {
-            if let Frame::PrvMapping(prv_mapping) = fe {
+            if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
                 None
@@ -83,7 +82,7 @@ impl TyCtx {
 
     pub fn prv_mappings_mut(&mut self) -> impl Iterator<Item = &'_ mut PrvMapping> {
         self.frame_tys.iter_mut().flatten().filter_map(|fe| {
-            if let Frame::PrvMapping(prv_mapping) = fe {
+            if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
                 None
@@ -97,7 +96,7 @@ impl TyCtx {
         loan_set: HashSet<Loan>,
     ) -> Result<Self, String> {
         for fe in self.frame_tys.iter_mut().flatten() {
-            if let Frame::PrvMapping(prv_mapping) = fe {
+            if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 if prv_mapping.prv == prv_val_name {
                     prv_mapping.loans = loan_set;
                     return Ok(self);
@@ -168,19 +167,31 @@ impl TyCtx {
         }
 
         fn explode(pl: Place, ty: Ty) -> Vec<TypedPlace> {
-            use Ty::*;
+            use DataTy as d;
+            use ViewTy as v;
 
             match &ty {
-                Scalar(_)
-                | Array(_, _)
-                // TODO maybe introduce places for this type
-                | ArrayView(_, _)
-                | At(_, _)
-                | Ref(_, _, _, _)
-                | Fn(_, _, _, _, _)
-                | Ident(_)
-                | Dead(_) => vec![(pl, ty.clone())],
-                Tuple(tys) => {
+                Ty::Data(d::Scalar(_))
+                | Ty::Data(d::Array(_, _))
+                | Ty::Data(d::At(_, _))
+                | Ty::Data(d::Ref(_, _, _, _))
+                | Ty::Data(d::Fn(_, _, _, _, _))
+                | Ty::Data(d::Ident(_))
+                | Ty::Data(d::GridConfig(_, _))
+                | Ty::Data(d::Dead(_))
+                | Ty::View(v::Ident(_))
+                | Ty::View(v::Array(_, _))
+                | Ty::View(v::Dead(_)) => vec![(pl, ty.clone())],
+                Ty::Data(d::Tuple(tys)) => {
+                    let mut place_frame = vec![(pl.clone(), ty.clone())];
+                    for (index, proj_ty) in tys.iter().enumerate() {
+                        let mut exploded_index =
+                            explode(proj(pl.clone(), Nat::Lit(index)), Ty::Data(proj_ty.clone()));
+                        place_frame.append(&mut exploded_index);
+                    }
+                    place_frame
+                }
+                Ty::View(v::Tuple(tys)) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index =
@@ -203,16 +214,20 @@ impl TyCtx {
     }
 
     pub fn place_ty(&self, place: &Place) -> Result<Ty, String> {
-        fn proj_ty(ty: Ty, path: &Path) -> Ty {
+        fn proj_ty(ty: Ty, path: &[Nat]) -> Ty {
             let mut res_ty = ty;
             for n in path {
-                if let Ty::Tuple(elem_tys) = res_ty {
-                    // TODO should probably use usize here and not Nat, because Nat is not always
-                    //  evaluable.
-                    let idx = n.eval();
-                    res_ty = elem_tys[idx].clone();
-                } else {
-                    panic!("Trying to project element data type of a non tuple type.");
+                // TODO should maybe use usize here and not Nat, because Nat is not always
+                //  evaluable.
+                let idx = n.eval();
+                match &res_ty {
+                    Ty::Data(DataTy::Tuple(elem_tys)) => {
+                        res_ty = Ty::Data(elem_tys[idx].clone());
+                    }
+                    Ty::View(ViewTy::Tuple(elem_tys)) => {
+                        res_ty = elem_tys[idx].clone();
+                    }
+                    _ => panic!("Trying to project element data type of a non tuple type."),
                 }
             }
             res_ty
@@ -224,13 +239,27 @@ impl TyCtx {
     pub fn set_place_ty(mut self, pl: &Place, pl_ty: Ty) -> Self {
         fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[Nat], part_ty: Ty) -> Ty {
             if path.is_empty() {
-                part_ty
-            } else if let Ty::Tuple(mut elem_tys) = orig_ty {
-                let idx = path.first().unwrap().eval();
-                elem_tys[idx] = set_ty_for_path_in_ty(elem_tys[idx].clone(), &path[1..], part_ty);
-                Ty::Tuple(elem_tys)
-            } else {
-                panic!("Path not compatible with type.")
+                return part_ty;
+            }
+
+            let idx = path.first().unwrap().eval();
+            match orig_ty {
+                Ty::Data(DataTy::Tuple(mut elem_tys)) => {
+                    elem_tys[idx] = if let Ty::Data(dty) =
+                        set_ty_for_path_in_ty(Ty::Data(elem_tys[idx].clone()), &path[1..], part_ty)
+                    {
+                        dty
+                    } else {
+                        panic!("Trying create non-data type as part of data type.")
+                    };
+                    Ty::Data(DataTy::Tuple(elem_tys))
+                }
+                Ty::View(ViewTy::Tuple(mut elem_tys)) => {
+                    elem_tys[idx] =
+                        set_ty_for_path_in_ty(elem_tys[idx].clone(), &path[1..], part_ty);
+                    Ty::View(ViewTy::Tuple(elem_tys))
+                }
+                _ => panic!("Path not compatible with type."),
             }
         }
 
@@ -245,7 +274,13 @@ impl TyCtx {
 
     pub fn kill_place(self, pl: &Place) -> Self {
         if let Ok(pl_ty) = self.place_ty(pl) {
-            self.set_place_ty(pl, Ty::Dead(Box::new(pl_ty)))
+            self.set_place_ty(
+                pl,
+                match pl_ty {
+                    Ty::Data(dty) => Ty::Data(DataTy::Dead(Box::new(dty))),
+                    Ty::View(vty) => Ty::View(ViewTy::Dead(Box::new(vty))),
+                },
+            )
         } else {
             panic!("Trying to kill the type of a place that doesn't exist.")
         }
@@ -271,6 +306,43 @@ impl TyCtx {
                 .update_loan_set(prv.as_str(), HashSet::new())
                 .unwrap()
         })
+    }
+
+    // Γ ▷- p = Γ′
+    pub(super) fn without_reborrow_loans(&self, pl_expr: &PlaceExpr) -> TyCtx {
+        let res_frame_tys = self
+            .frame_tys
+            .iter()
+            .map(|frm_ty| {
+                frm_ty
+                    .iter()
+                    .map(|frame| match frame {
+                        FrameEntry::Var(ident_typed) => FrameEntry::Var(ident_typed.clone()),
+                        FrameEntry::PrvMapping(PrvMapping { prv, loans }) => {
+                            let without_reborrow: HashSet<Loan> = loans
+                                .iter()
+                                .filter_map(|loan| {
+                                    if !PlaceExpr::Deref(Box::new(pl_expr.clone()))
+                                        .prefix_of(&loan.place_expr)
+                                    {
+                                        Some(loan.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            FrameEntry::PrvMapping(PrvMapping {
+                                prv: prv.clone(),
+                                loans: without_reborrow,
+                            })
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        TyCtx {
+            frame_tys: res_frame_tys,
+        }
     }
 }
 
@@ -375,9 +447,7 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    // HashMap is correct. We have a direct mapping between name and type only, and also want to
-    // be able to ask for types by name.
-    items: HashMap<String, Ty>,
+    items: HashMap<String, DataTy>,
 }
 
 impl GlobalCtx {
@@ -387,7 +457,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn append_from_gl_fun_defs(mut self, gl_fun_defs: &[GlobalFunDef]) -> Self {
+    pub fn append_from_gl_fun_defs(mut self, gl_fun_defs: &[FunDef]) -> Self {
         self.items.extend(
             gl_fun_defs
                 .iter()
@@ -396,16 +466,16 @@ impl GlobalCtx {
         self
     }
 
-    pub fn append_fun_decls(mut self, fun_decls: &[FunDecl]) -> Self {
+    pub fn append_fun_decls(mut self, fun_decls: &[(&str, DataTy)]) -> Self {
         self.items.extend(
             fun_decls
                 .iter()
-                .map(|FunDecl { name, ty }| (name.clone(), ty.clone())),
+                .map(|(name, ty)| (String::from(*name), ty.clone())),
         );
         self
     }
 
-    pub fn fun_ty_by_name(&self, name: &str) -> Result<&Ty, String> {
+    pub fn fun_ty_by_name(&self, name: &str) -> Result<&DataTy, String> {
         match self.items.get(name) {
             Some(ty) => Ok(ty),
             None => Err(format!(
@@ -419,12 +489,12 @@ impl GlobalCtx {
 #[test]
 fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
-    let x = IdentTyped::new(Ident::new("x"), Ty::Scalar(ScalarTy::I32));
+    let x = IdentTyped::new(Ident::new("x"), Ty::Data(DataTy::Scalar(ScalarTy::I32)));
     let place = Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);
     ty_ctx = ty_ctx.kill_place(&place);
     assert!(
-        if let Ty::Dead(_) = ty_ctx.idents_typed().next().unwrap().ty {
+        if let Ty::Data(DataTy::Dead(_)) = ty_ctx.idents_typed().next().unwrap().ty {
             true
         } else {
             false

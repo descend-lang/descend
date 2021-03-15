@@ -1,29 +1,29 @@
 //! Helper functions for parsing
 
-use crate::ast::{BinOp, Expr, ExprKind, Lit, UnOp, ScalarTy, Ty};
+use crate::ast::{BinOp, DataTy, Expr, ExprKind, Lit, ScalarTy, UnOp};
 
-pub fn type_from_lit(lit: &Lit) -> Ty {
-    Ty::Scalar(match lit {
+pub fn type_from_lit(lit: &Lit) -> DataTy {
+    DataTy::Scalar(match lit {
         Lit::Bool(_) => ScalarTy::Bool,
         Lit::Unit => ScalarTy::Unit,
         Lit::I32(_) => ScalarTy::I32,
-        Lit::F32(_) => ScalarTy::F32
+        Lit::F32(_) => ScalarTy::F32,
     })
 }
 
-pub fn make_binary(op:BinOp, lhs: Expr, rhs:Expr) -> Expr {
+pub fn make_binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
     Expr {
         expr: ExprKind::BinOp(op, Box::new(lhs), Box::new(rhs)),
         ty: None,
-        span: None
+        span: None,
     }
 }
 
-pub fn make_unary(op:UnOp, rhs:Expr) -> Expr {
+pub fn make_unary(op: UnOp, rhs: Expr) -> Expr {
     Expr {
         expr: ExprKind::UnOp(op, Box::new(rhs)),
         ty: None,
-        span: None
+        span: None,
     }
 }
 

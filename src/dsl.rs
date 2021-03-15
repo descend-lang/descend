@@ -34,7 +34,7 @@ pub fn ident(name: &str) -> Expr {
 }
 
 pub fn fun_name(name: &str) -> Expr {
-    Expr::new(ExprKind::GlobalFunIdent(name.to_string()))
+    Expr::new(ExprKind::FunIdent(Ident::new(name)))
 }
 
 pub fn deref(pl_expr: Expr) -> Expr {
@@ -47,22 +47,22 @@ pub fn deref(pl_expr: Expr) -> Expr {
 pub fn fdef(
     name: &str,
     generic_params: Vec<(&str, Kind)>,
-    params: Vec<(Mutability, &str, &Ty)>,
-    ret_ty: &Ty,
+    params: Vec<(Mutability, &str, &DataTy)>,
+    ret_ty: &DataTy,
     exec: ExecLoc,
     prv_rels: Vec<PrvRel>,
     body: Expr,
-) -> GlobalFunDef {
+) -> FunDef {
     let generic_idents: Vec<_> = generic_params
         .iter()
         .map(|(name, kind)| IdentKinded::new(&Ident::new(name), *kind))
         .collect();
 
-    GlobalFunDef {
+    FunDef {
         name: String::from(name),
         generic_params: generic_idents,
         params: param_list(params),
-        ret_ty: ret_ty.clone(),
+        ret_dty: ret_ty.clone(),
         exec,
         prv_rels,
         body_expr: body,
@@ -71,12 +71,12 @@ pub fn fdef(
 
 // creates a list of identifier expressions; every expression has a set type and
 // mutability qualifier
-fn param_list(params: Vec<(Mutability, &str, &Ty)>) -> Vec<ParamDecl> {
+fn param_list(params: Vec<(Mutability, &str, &DataTy)>) -> Vec<ParamDecl> {
     params
         .into_iter()
         .map(|(mutbl, ident_name, ty)| ParamDecl {
             ident: Ident::new(ident_name),
-            ty: ty.clone(),
+            dty: ty.clone(),
             mutbl,
         })
         .collect()
@@ -177,7 +177,7 @@ pub fn r#let(m: Mutability, id_name: &str, ident_ty: &Ty, value: Expr, body: Exp
     Expr::new(ExprKind::Let(
         m,
         Ident::new(id_name),
-        ident_ty.clone(),
+        Some(ident_ty.clone()),
         Box::new(value),
         Box::new(body),
     ))
@@ -256,16 +256,16 @@ pub fn prov_ident(name: &str) -> IdentKinded {
     IdentKinded::new(&Ident::new(name), Kind::Provenance)
 }
 
-pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &Ty) -> Ty {
-    Ty::Ref(prv.clone(), own, mem.clone(), Box::new(dt.clone()))
+pub fn ref_ty(prv: &Provenance, own: Ownership, mem: &Memory, dt: &DataTy) -> DataTy {
+    DataTy::Ref(prv.clone(), own, mem.clone(), Box::new(dt.clone()))
 }
 
-pub fn arr_ty(size: Nat, ty: &Ty) -> Ty {
-    Ty::Array(Box::new(ty.clone()), size)
+pub fn arr_ty(size: Nat, ty: &DataTy) -> DataTy {
+    DataTy::Array(Box::new(ty.clone()), size)
 }
 
-pub fn at_ty(ty: &Ty, mem: &Memory) -> Ty {
-    Ty::At(Box::new(ty.clone()), mem.clone())
+pub fn at_ty(ty: &DataTy, mem: &Memory) -> DataTy {
+    DataTy::At(Box::new(ty.clone()), mem.clone())
 }
 
 //
@@ -293,8 +293,8 @@ pub fn fun_ty(
     frame_expr: &internal::FrameExpr,
     exec: ExecLoc,
     ret_ty: &Ty,
-) -> Ty {
-    Ty::Fn(
+) -> DataTy {
+    DataTy::Fn(
         generic_param,
         param_tys,
         Box::new(frame_expr.clone()),
@@ -305,10 +305,10 @@ pub fn fun_ty(
 
 // Scalar Types
 #[allow(non_upper_case_globals)]
-pub static i32: Ty = Ty::Scalar(ScalarTy::I32);
+pub static i32: DataTy = DataTy::Scalar(ScalarTy::I32);
 #[allow(non_upper_case_globals)]
-pub static f32: Ty = Ty::Scalar(ScalarTy::F32);
+pub static f32: DataTy = DataTy::Scalar(ScalarTy::F32);
 #[allow(non_upper_case_globals)]
-pub static bool: Ty = Ty::Scalar(ScalarTy::Bool);
+pub static bool: DataTy = DataTy::Scalar(ScalarTy::Bool);
 #[allow(non_upper_case_globals)]
-pub static unit_ty: Ty = Ty::Scalar(ScalarTy::Unit);
+pub static unit_ty: DataTy = DataTy::Scalar(ScalarTy::Unit);

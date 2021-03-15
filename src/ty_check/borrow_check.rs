@@ -1,8 +1,6 @@
 use super::ctxs::{KindCtx, TyCtx};
-use super::Place;
-use crate::ast::internal::{Loan, PrvMapping};
+use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
-use crate::ty_check::PlaceCtx;
 use std::collections::HashSet;
 
 //
@@ -23,17 +21,19 @@ pub(super) fn ownership_safe(
         let pl_ctx_no_deref = pl_ctx.without_innermost_deref();
         // Γ(π) = &r ωπ τπ
         match ty_ctx.place_ty(&most_spec_pl)? {
-            Ty::Ref(Provenance::Value(prv_val_name), ref_own, _, _) => ownership_safe_deref(
-                kind_ctx,
-                ty_ctx,
-                reborrows,
-                own,
-                &pl_ctx_no_deref,
-                &most_spec_pl,
-                prv_val_name.as_str(),
-                ref_own,
-            ),
-            Ty::Ref(Provenance::Ident(_), ref_own, _, _) => ownership_safe_deref_abs(
+            Ty::Data(DataTy::Ref(Provenance::Value(prv_val_name), ref_own, _, _)) => {
+                ownership_safe_deref(
+                    kind_ctx,
+                    ty_ctx,
+                    reborrows,
+                    own,
+                    &pl_ctx_no_deref,
+                    &most_spec_pl,
+                    prv_val_name.as_str(),
+                    ref_own,
+                )
+            }
+            Ty::Data(DataTy::Ref(Provenance::Ident(_), ref_own, _, _)) => ownership_safe_deref_abs(
                 kind_ctx,
                 ty_ctx,
                 reborrows,
@@ -61,7 +61,7 @@ fn ownership_safe_place(
         });
         Ok(loan_set)
     } else {
-        Err("A borrow is being violated.".to_string())
+        Err(format!("Trying to violate existing borrow of {:?}.", p))
     }
 }
 
@@ -101,12 +101,15 @@ fn ownership_safe_deref(
                 },
             )
     }
+
+    // Γ(r) = { ω′pi }
+    let loans_for_ref_prv = ty_ctx.loans_for_prv(ref_prv_val_name)?;
     // ω ≲ ωπ
     check_own_lte_ref(own, ref_own)?;
-    let loans_for_ref_prv = ty_ctx.loans_for_prv(ref_prv_val_name)?;
+    // List<pi = pi□ [πi]>
     let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_from_loans(loans_for_ref_prv);
     // List<πe>, List<πi>, π
-    // Refactor into own function
+    // TODO Refactor into own function
     let mut extended_reborrows = Vec::from(reborrows);
     extended_reborrows.extend(pl_ctxs_and_places_in_loans.map(|(_, pl)| pl));
     extended_reborrows.extend(std::iter::once(most_spec_pl.clone()));
@@ -115,7 +118,7 @@ fn ownership_safe_deref(
     let mut potential_prvs_after_subst = subst_pl_with_potential_prvs_ownership_safe(
         kind_ctx,
         ty_ctx,
-        reborrows,
+        &extended_reborrows,
         own,
         &pl_ctx_no_deref,
         loans_for_ref_prv,
@@ -200,6 +203,7 @@ fn no_uniq_loan_overlap(own: Ownership, pl_expr: &PlaceExpr, loans: &HashSet<Loa
     })
 }
 
+// TODO does this not have to include views?
 fn exists_place_with_ref_to_prv_all_in_reborrow(
     ty_ctx: &TyCtx,
     prv_name: &str,
@@ -207,14 +211,14 @@ fn exists_place_with_ref_to_prv_all_in_reborrow(
 ) -> bool {
     let all_places = ty_ctx.all_places();
     let at_least_one = all_places.iter().any(|(_, ty)| {
-        if let Ty::Ref(Provenance::Value(pn), _, _, _) = ty {
+        if let Ty::Data(DataTy::Ref(Provenance::Value(pn), _, _, _)) = ty {
             prv_name == pn
         } else {
             false
         }
     });
     let all_in_reborrows = all_places.iter().all(|(place, ty)| {
-        if let Ty::Ref(Provenance::Value(pn), _, _, _) = ty {
+        if let Ty::Data(DataTy::Ref(Provenance::Value(pn), _, _, _)) = ty {
             if prv_name == pn {
                 reborrows.iter().any(|reb_pl| reb_pl == place)
             } else {

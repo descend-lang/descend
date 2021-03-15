@@ -4,10 +4,9 @@ pub mod ctxs;
 pub mod pre_decl;
 mod subty;
 
-use crate::ast::internal::{IdentTyped, Loan};
+use crate::ast::internal::{IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
-use pre_decl::FunDecl;
 use std::ops::Deref;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -19,7 +18,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), String> {
 
 pub fn ty_check_with_pre_decl_funs(
     compil_unit: &mut CompilUnit,
-    pre_decl_funs: &[FunDecl],
+    pre_decl_funs: &[(&str, DataTy)],
 ) -> Result<(), String> {
     let gl_ctx = GlobalCtx::new()
         .append_from_gl_fun_defs(compil_unit)
@@ -45,7 +44,7 @@ pub fn ty_check_with_pre_decl_funs(
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
-fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<(), String> {
+fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> Result<(), String> {
     let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())?;
 
     // Build frame typing for this function
@@ -53,9 +52,9 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<
         &vec![],
         gf.params
             .iter()
-            .map(|ParamDecl { ident, ty, .. }| IdentTyped {
+            .map(|ParamDecl { ident, dty, .. }| IdentTyped {
                 ident: ident.clone(),
-                ty: ty.clone(),
+                ty: Ty::Data(dty.clone()),
             })
             .collect(),
     );
@@ -67,8 +66,8 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<
     let empty_ty_ctx = subty::check(
         &kind_ctx,
         TyCtx::new(),
-        gf.body_expr.ty.as_ref().unwrap(),
-        &gf.ret_ty,
+        gf.body_expr.ty.as_ref().unwrap().dty(),
+        &gf.ret_dty,
     )?;
     //TODO why is this the case?
     assert!(
@@ -80,8 +79,6 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut GlobalFunDef) -> Result<
     );
 
     Ok(())
-    // TODO IMPORTANT write function that computes the function type for a global fun
-    //  compare existing type with computed type here.
 }
 
 // TODO find out if Gamma is always correct by construction (similarly to Delta), also all 3 combined
@@ -100,12 +97,18 @@ fn ty_check_expr(
     // TODO input contexts are well-formed
     //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
     let (res_ty_ctx, ty) = match &mut expr.expr {
-        ExprKind::GlobalFunIdent(name) => (ty_ctx, gl_ctx.fun_ty_by_name(name)?.clone()),
+        ExprKind::FunIdent(ident) => (
+            ty_ctx,
+            Ty::Data(gl_ctx.fun_ty_by_name(&ident.name)?.clone()),
+        ),
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
             ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, exec, pl_expr)?
         }
         ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
             ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+        }
+        ExprKind::LetProv(prvs, body) => {
+            ty_check_letprov(gl_ctx, kind_ctx, ty_ctx, exec, prvs, body)?
         }
         // TODO respect mutability
         ExprKind::Let(mutable, ident, ty, ref mut e1, ref mut e2) => {
@@ -119,7 +122,7 @@ fn ty_check_expr(
             ty_check_app(gl_ctx, kind_ctx, ty_ctx, exec, ef, k_args, args)?
         }
         ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
-            ty_check_ref(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
+            ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
         }
         ExprKind::BinOp(bin_op, lhs, rhs) => {
             ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
@@ -130,7 +133,12 @@ fn ty_check_expr(
         ExprKind::Assign(pl_expr, e) if pl_expr.is_place() => {
             ty_check_assign_place(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
         }
-        ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => unimplemented!(),
+        ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => {
+            ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
+        }
+        ExprKind::ParForAcross(id, view_expr, parall_cfg, body) => ty_check_par_for_sync(
+            gl_ctx, kind_ctx, ty_ctx, exec, id, view_expr, parall_cfg, body,
+        )?,
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
@@ -139,47 +147,83 @@ fn ty_check_expr(
     Ok(res_ty_ctx)
 }
 
-fn ty_check_par_for_global(
+fn ty_check_par_for_sync(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: ExecLoc,
-    gpu_expr: &mut Expr,
-    n: &Nat,
     ident: &Ident,
-    array_view: &mut Expr,
+    view: &mut Expr,
+    parall_cfg: &mut Expr,
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    let gpu_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, gpu_expr)?;
-    if !matches!(gpu_expr.ty, Some(Ty::Scalar(ScalarTy::Gpu))) {
+    let view_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, view)?;
+    if !matches!(view.ty, Some(Ty::View(ViewTy::Array(_, _)))) {
         return Err(format!(
-            "Expected an expression of type GPU, instead found an expression of type {:?}",
-            gpu_expr.ty
+            "Expected an expression of type ArrayView, found an expression of type {:?} instead.",
+            view.ty
         ));
     }
-    let array_view_ctx = ty_check_expr(gl_ctx, kind_ctx, gpu_ty_ctx, exec, array_view)?;
-    if let Some(Ty::ArrayView(elem_ty, m)) = &array_view.ty {
-        if m != n {
-            return Err(
-                "The amount of started threads is not equal to the amount of elements passed to the function."
-                    .to_string());
-        }
 
-        // TODO fresh ident
+    let parall_cfg_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, view_ty_ctx, exec, parall_cfg)?;
+    if !matches!(parall_cfg.ty, Some(Ty::Data(DataTy::GridConfig(_, _)))) {
+        return Err(format!(
+            "Expected an expression of type GridConfig, found an expression of type {:?} instead.",
+            parall_cfg.ty
+        ));
+    }
+
+    if let (Ty::View(ViewTy::Array(elem_ty, m)), Ty::Data(DataTy::GridConfig(nb, nt))) =
+        (view.ty.as_ref().unwrap(), parall_cfg.ty.as_ref().unwrap())
+    {
+        // TODO
+        // if m != Nat::BinOp(BinOpNat::Mul, nb, nt) {
+        //     return Err(
+        //         "The amount of started threads is not equal to the amount of elements passed to the function."
+        //             .to_string());
+        // }
+        println!(
+            "Warning: Did not check equality of {} and {}",
+            m,
+            Nat::BinOp(BinOpNat::Mul, Box::new(nb.clone()), Box::new(nt.clone()))
+        );
+
         // Use a new context to disable capturing variables.
         // In the long run, capturing places of copy data types and allowing shared borrowing
         // should probably be the goal.
-        let ctx_with_ident = TyCtx::new()
+        // TODO Danger this allows capturing of any values
+        //  really needed: Keep prvonance mappings, identifiers with copyable types
+        //  (maybe even non-copyable and therefore everything again in order to allow
+        //  shared borrowing inside).
+        let ctx_with_ident = parall_cfg_ty_ctx
+            .clone()
             .append_ident_typed(IdentTyped::new(ident.clone(), elem_ty.deref().clone()));
         // TODO check that type of the identifier is dead? Meaning that it has been used in the loop.
-        let body_ctx = ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
-        Ok((array_view_ctx, Ty::Scalar(ScalarTy::Unit)))
+        ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
+        Ok((parall_cfg_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
     } else {
-        Err(format!(
-            "Expected array type, but found {:?}",
-            array_view.ty.clone().unwrap()
-        ))
+        panic!("unreachable")
     }
+}
+
+fn ty_check_letprov(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    prvs: &[String],
+    body: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    let mut ty_ctx_with_prvs = ty_ctx;
+    for prv in prvs {
+        ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping {
+            prv: prv.clone(),
+            loans: std::collections::HashSet::new(),
+        })
+    }
+    // TODO do we have to check that the prvs in res_ty_ctx have loans now?
+    let res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx_with_prvs, exec, body)?;
+    Ok((res_ty_ctx, body.ty.as_ref().unwrap().clone()))
 }
 
 fn ty_check_assign_place(
@@ -194,7 +238,15 @@ fn ty_check_assign_place(
     let place = pl_expr.to_place().unwrap();
     let place_ty = assigned_val_ty_ctx.place_ty(&place)?;
 
-    if !matches!(place_ty, Ty::Dead(_)) {
+    if matches!(place_ty, Ty::View(_)) {
+        return Err(format!(
+            "Assigning views is forbidden. Trying to assign view {:?}",
+            e
+        ));
+    }
+
+    // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
+    if !matches!(place_ty, Ty::Data(DataTy::Dead(_))) {
         let pl_uniq_loans = borrow_check::ownership_safe(
             kind_ctx,
             &assigned_val_ty_ctx,
@@ -215,11 +267,53 @@ fn ty_check_assign_place(
     let after_subty_ctx = subty::check(
         kind_ctx,
         assigned_val_ty_ctx,
-        &e.ty.as_ref().unwrap(),
-        &place_ty,
+        e.ty.as_ref().unwrap().dty(),
+        &place_ty.dty(),
     )?;
-    let res_ty_ctx = after_subty_ctx.set_place_ty(&place, e.ty.as_ref().unwrap().clone());
-    Err("missing last operation".to_string())
+    let adjust_place_ty_ctx = after_subty_ctx.set_place_ty(&place, e.ty.as_ref().unwrap().clone());
+    Ok((
+        adjust_place_ty_ctx.without_reborrow_loans(pl_expr),
+        Ty::Data(DataTy::Scalar(ScalarTy::Unit)),
+    ))
+}
+
+fn ty_check_assign_deref(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    deref_expr: &mut PlaceExpr,
+    e: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    let assigned_val_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
+    let deref_ty =
+        place_expr_ty_under_own(kind_ctx, &assigned_val_ty_ctx, Ownership::Uniq, deref_expr)?
+            .clone();
+
+    if !deref_ty.is_fully_alive() {
+        return Err(
+            "Trying to assign through reference, to a type which is not fully alive.".to_string(),
+        );
+    }
+
+    borrow_check::ownership_safe(
+        kind_ctx,
+        &assigned_val_ty_ctx,
+        &[],
+        Ownership::Uniq,
+        deref_expr,
+    )?;
+
+    let after_subty_ctx = subty::check(
+        kind_ctx,
+        assigned_val_ty_ctx,
+        e.ty.as_ref().unwrap().dty(),
+        &deref_ty,
+    )?;
+    Ok((
+        after_subty_ctx.without_reborrow_loans(deref_expr),
+        Ty::Data(DataTy::Scalar(ScalarTy::Unit)),
+    ))
 }
 
 fn ty_check_index_copy(
@@ -233,9 +327,9 @@ fn ty_check_index_copy(
     borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
     let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr)?;
     let elem_ty = match pl_expr_ty {
-        Ty::Array(elem_ty, n) => elem_ty,
-        Ty::At(arr_ty, _) => {
-            if let Ty::Array(elem_ty, n) = arr_ty.as_ref() {
+        DataTy::Array(elem_ty, n) => elem_ty,
+        DataTy::At(arr_ty, _) => {
+            if let DataTy::Array(elem_ty, n) = arr_ty.as_ref() {
                 elem_ty
             } else {
                 return Err("Trying to index into non array type.".to_string());
@@ -246,7 +340,7 @@ fn ty_check_index_copy(
     // TODO check that index is smaller than n here!?
     if elem_ty.copyable() {
         let res_ty = *elem_ty.clone();
-        Ok((ty_ctx, res_ty))
+        Ok((ty_ctx, Ty::Data(res_ty)))
     } else {
         Err("Cannot move out of array type.".to_string())
     }
@@ -267,8 +361,8 @@ fn ty_check_binary_op(
     let lhs_ty = lhs.ty.as_ref().unwrap();
     let rhs_ty = rhs.ty.as_ref().unwrap();
     match (lhs_ty, rhs_ty) {
-        (Ty::Scalar(ScalarTy::F32), Ty::Scalar(ScalarTy::F32))
-        | (Ty::Scalar(ScalarTy::I32), Ty::Scalar(ScalarTy::I32)) => {
+        (Ty::Data(DataTy::Scalar(ScalarTy::F32)), Ty::Data(DataTy::Scalar(ScalarTy::F32)))
+        | (Ty::Data(DataTy::Scalar(ScalarTy::I32)), Ty::Data(DataTy::Scalar(ScalarTy::I32))) => {
             Ok((rhs_ty_ctx, lhs_ty.clone()))
         }
         _ => Err(format!(
@@ -301,26 +395,25 @@ fn ty_check_app(
             //  KindedArg::Frame(_) if expected == &Kind::Frame => Ok(()),
             ArgKinded::Ident(k_ident) if expected == kind_ctx.get_kind(k_ident)? => Ok(()),
             _ => Err(format!(
-                "expected argument of kind {:?}, but the provided argument has another kind",
-                expected
+                "expected argument of kind {:?}, but the provided argument is {:?}",
+                expected, kv
             )),
         }
     }
 
     // TODO check well-kinded: FrameTyping, Prv, Ty
     let mut res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, ef)?;
-    if let Ty::Fn(gen_params, param_tys, _, _, out_ty) = ef.ty.as_ref().unwrap() {
-        if !(gen_params.len() == k_args.len()) {
+    if let Ty::Data(DataTy::Fn(gen_params, param_tys, _, _, out_ty)) = ef.ty.as_ref().unwrap() {
+        if gen_params.len() != k_args.len() {
             return Err(format!(
                 "Wrong amount of generic arguments. Expected {}, found {}",
                 gen_params.len(),
                 k_args.len()
             ));
         }
-        for (gp, kv) in gen_params.iter().zip(k_args) {
+        for (gp, kv) in gen_params.iter().zip(&*k_args) {
             check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
         }
-
         if args.len() != param_tys.len() {
             return Err(format!(
                 "Wrong amount of arguments. Expected {}, found {}",
@@ -328,13 +421,36 @@ fn ty_check_app(
                 args.len()
             ));
         }
-        for (arg, f_arg_ty) in args.iter_mut().zip(param_tys) {
+        let subst_param_tys: Vec<_> = param_tys
+            .iter()
+            .map(|ty| {
+                let mut subst_ty = ty.clone();
+                for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
+                    subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
+                }
+                subst_ty
+            })
+            .collect();
+
+        for (arg, param_ty) in args.iter_mut().zip(subst_param_tys) {
             res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, res_ty_ctx, exec, arg)?;
-            if arg.ty.as_ref().unwrap() != f_arg_ty {
-                return Err("Argument types do not match.".to_string());
+            if arg.ty.as_ref().unwrap() != &param_ty {
+                return Err(format!(
+                    "Argument types do not match.\n Expected {:?}, but found {:?}.",
+                    param_ty,
+                    arg.ty.as_ref().unwrap()
+                ));
             }
         }
-        Ok((res_ty_ctx, *out_ty.clone()))
+        // TODO check provenance relations
+        let subst_out_ty = {
+            let mut subst_ty = out_ty.as_ref().clone();
+            for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
+                subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
+            }
+            subst_ty
+        };
+        Ok((res_ty_ctx, subst_out_ty))
     } else {
         Err(format!(
             "The provided function expression\n {:?}\n does not have a function type.",
@@ -354,8 +470,14 @@ fn ty_check_tuple(
     for elem in elems.iter_mut() {
         tmp_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, tmp_ty_ctx, exec, elem)?;
     }
-    let elem_tys: Vec<_> = elems.iter().map(|elem| elem.ty.clone().unwrap()).collect();
-    Ok((tmp_ty_ctx, Ty::Tuple(elem_tys)))
+    let elem_tys: Result<Vec<_>, _> = elems
+        .iter()
+        .map(|elem| match elem.ty.as_ref().unwrap() {
+            Ty::Data(dty) => Ok(dty.clone()),
+            Ty::View(_) => Err("Tuple elements cannot be views.".to_string()),
+        })
+        .collect();
+    Ok((tmp_ty_ctx, Ty::Data(DataTy::Tuple(elem_tys?))))
 }
 
 fn ty_check_array(
@@ -371,12 +493,18 @@ fn ty_check_array(
         tmp_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, tmp_ty_ctx, exec, elem)?;
     }
     let ty = elems.first().unwrap().ty.clone();
+    if !matches!(ty, Some(Ty::Data(_))) {
+        return Err("Array elements cannot be views.".to_string());
+    }
     if elems.iter().any(|elem| ty != elem.ty) {
         Err("Not all provided elements have the same type.".to_string())
     } else {
         Ok((
             tmp_ty_ctx,
-            Ty::Array(Box::new(ty.unwrap()), Nat::Lit(elems.len())),
+            Ty::Data(DataTy::Array(
+                Box::new(ty.as_ref().unwrap().dty().clone()),
+                Nat::Lit(elems.len()),
+            )),
         ))
     }
 }
@@ -388,7 +516,7 @@ fn ty_check_literal(ty_ctx: TyCtx, l: &mut Lit) -> (TyCtx, Ty) {
         Lit::I32(_) => ScalarTy::I32,
         Lit::F32(_) => ScalarTy::F32,
     };
-    (ty_ctx, Ty::Scalar(scalar_data))
+    (ty_ctx, Ty::Data(DataTy::Scalar(scalar_data)))
 }
 
 fn ty_check_let(
@@ -397,12 +525,32 @@ fn ty_check_let(
     ty_ctx: TyCtx,
     exec: ExecLoc,
     ident: &mut Ident,
-    ty: &Ty,
+    ty: &Option<Ty>,
     e1: &mut Expr,
     e2: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let ty_ctx_e1 = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e1)?;
-    let ty_ctx_sub = subty::check(kind_ctx, ty_ctx_e1, &e1.ty.as_ref().unwrap(), ty)?;
+    let e1_ty = e1.ty.as_ref().unwrap();
+    let ty = if let Some(tty) = ty { tty } else { e1_ty };
+
+    let ty_ctx_sub = match (ty, e1_ty) {
+        (Ty::View(_), Ty::View(_)) => {
+            if ty != e1_ty {
+                return Err(format!(
+                    "Trying to bind view expression of type {:?} to identifier of type {:?}",
+                    e1_ty, ty
+                ));
+            }
+            ty_ctx_e1
+        }
+        (Ty::Data(dty), Ty::Data(e1_dty)) => subty::check(kind_ctx, ty_ctx_e1, e1_dty, dty)?,
+        _ => {
+            return Err(format!(
+                "Trying to bind expression of type {:?} to identifier of type {:?}",
+                e1_ty, ty
+            ))
+        }
+    };
     let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone());
     let garbage_coll_ty_ctx_with_ident = ty_ctx_sub
         .append_ident_typed(ident_with_annotated_ty)
@@ -449,7 +597,7 @@ fn ty_check_pl_expr_with_deref(
         if ty.copyable() {
             // this line is a trick to release a life time that is connected to ty_ctx
             let ty = ty.clone();
-            Ok((ty_ctx, ty))
+            Ok((ty_ctx, Ty::Data(ty)))
         } else {
             Err("Data type is not copyable.".to_string())
         }
@@ -471,7 +619,6 @@ fn ty_check_pl_expr_without_deref(
     }
     let res_ty_ctx = if pl_ty.copyable() {
         borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
-        // TODO check whether the shared type checking of a place expr will be needed
         ty_ctx
     } else {
         borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)?;
@@ -480,7 +627,7 @@ fn ty_check_pl_expr_without_deref(
     Ok((res_ty_ctx, pl_ty))
 }
 
-fn ty_check_ref(
+fn ty_check_borrow(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
@@ -500,18 +647,18 @@ fn ty_check_ref(
         return Err("The place was at least partially moved before.".to_string());
     }
     let (reffed_ty, mem) = match &ty {
-        Ty::Dead(_) => panic!("Cannot happen because of the alive check."),
-        Ty::At(inner_ty, m) => (inner_ty.deref().clone(), m.clone()),
+        DataTy::Dead(_) => panic!("Cannot happen because of the alive check."),
+        DataTy::At(inner_ty, m) => (inner_ty.deref().clone(), m.clone()),
         _ => (ty.clone(), Memory::CpuStack),
     };
-    let res_ty = Ty::Ref(
+    let res_ty = DataTy::Ref(
         Provenance::Value(prv_val_name.to_string()),
         own,
         mem,
         Box::new(reffed_ty),
     );
     let res_ty_ctx = ty_ctx.extend_loans_for_prv(prv_val_name, loans)?;
-    Ok((res_ty_ctx, res_ty))
+    Ok((res_ty_ctx, Ty::Data(res_ty)))
 }
 
 // Δ; Γ ⊢ω p:τ
@@ -521,7 +668,7 @@ fn place_expr_ty_under_own<'a>(
     ty_ctx: &'a TyCtx,
     own: Ownership,
     pl_expr: &PlaceExpr,
-) -> Result<&'a Ty, String> {
+) -> Result<&'a DataTy, String> {
     let (ty, _) = place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, pl_expr)?;
     Ok(ty)
 }
@@ -533,7 +680,7 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
     ty_ctx: &'a TyCtx,
     own: Ownership,
     pl_expr: &PlaceExpr,
-) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
+) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
     match pl_expr {
         // TC-Var
         PlaceExpr::Ident(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
@@ -544,7 +691,7 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
         // TC-Deref
         // TODO respect memory
         PlaceExpr::Deref(borr_expr) => {
-            borr_pl_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)
+            deref_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)
         }
     }
 }
@@ -552,12 +699,15 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
 fn var_expr_ty_and_empty_prvs_under_own<'a>(
     ty_ctx: &'a TyCtx,
     ident: &Ident,
-) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
+) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
     let ty = ty_ctx.ident_ty(&ident)?;
-    if !ty.is_fully_alive() {
-        return Err("The value in this identifier has been moved out.".to_string());
+    if let Ty::Data(dty) = ty {
+        if !dty.is_fully_alive() {
+            return Err("The value in this identifier has been moved out.".to_string());
+        }
+        return Ok((dty, vec![]));
     }
-    Ok((ty, vec![]))
+    panic!("Trying to give type under ownership for view type. View types can never be borrowed.")
 }
 
 fn proj_expr_ty_and_passed_prvs_under_own<'a>(
@@ -566,10 +716,10 @@ fn proj_expr_ty_and_passed_prvs_under_own<'a>(
     own: Ownership,
     tuple_expr: &PlaceExpr,
     n: &Nat,
-) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
+) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
     let (pl_expr_ty, passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, tuple_expr)?;
-    if let Ty::Tuple(elem_tys) = pl_expr_ty {
+    if let DataTy::Tuple(elem_tys) = pl_expr_ty {
         if let Some(ty) = elem_tys.get(n.eval()) {
             Ok((ty, passed_prvs))
         } else {
@@ -580,15 +730,15 @@ fn proj_expr_ty_and_passed_prvs_under_own<'a>(
     }
 }
 
-fn borr_pl_expr_ty_and_passed_prvs_under_own<'a>(
+fn deref_expr_ty_and_passed_prvs_under_own<'a>(
     kind_ctx: &KindCtx,
     ty_ctx: &'a TyCtx,
     own: Ownership,
     borr_expr: &PlaceExpr,
-) -> Result<(&'a Ty, Vec<&'a Provenance>), String> {
+) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
     let (pl_expr_ty, mut passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)?;
-    if let Ty::Ref(prv, ref_own, mem, ty) = pl_expr_ty {
+    if let DataTy::Ref(prv, ref_own, mem, ty) = pl_expr_ty {
         if ref_own < &own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
         }
@@ -601,96 +751,23 @@ fn borr_pl_expr_ty_and_passed_prvs_under_own<'a>(
     }
 }
 
-type Path = Vec<Nat>;
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-struct Place {
-    pub ident: Ident,
-    pub path: Path,
-}
-impl Place {
-    fn new(ident: Ident, path: Path) -> Self {
-        Place { ident, path }
-    }
+#[cfg(test)]
+mod tests {
+    use crate::ty_check::ty_check_global_fun_def;
 
-    fn to_place_expr(&self) -> PlaceExpr {
-        self.path.iter().fold(
-            PlaceExpr::Ident(self.ident.clone()),
-            |pl_expr, path_entry| PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone()),
-        )
-    }
-}
+    #[test]
+    fn test_dummy_fun() -> Result<(), String> {
+        let dummy_fun_src = r#"fn dummy_fun<a: prv>(
+            h_array: &a uniq cpu.heap [i32; 4096]
+        ) -[cpu.thread]-> [i32; 3] {
+            let answer_to_everything = [1,2,42];
+            answer_to_everything
+        }"#;
 
-enum PlaceCtx {
-    Proj(Box<PlaceCtx>, Nat),
-    Deref(Box<PlaceCtx>),
-    Hole,
-}
-
-impl PlaceCtx {
-    fn insert_pl_expr(&self, pl_expr: PlaceExpr) -> PlaceExpr {
-        match self {
-            Self::Hole => pl_expr,
-            Self::Proj(pl_ctx, n) => {
-                PlaceExpr::Proj(Box::new(pl_ctx.insert_pl_expr(pl_expr)), n.clone())
-            }
-            Self::Deref(pl_ctx) => PlaceExpr::Deref(Box::new(pl_ctx.insert_pl_expr(pl_expr))),
-        }
-    }
-
-    // Assumes the PlaceCtx HAS an innermost deref, meaning the Hole is wrapped by a Deref.
-    // This is always true for PlaceCtxs created by PlaceExpr.to_pl_ctx_and_most_specif_pl
-    fn without_innermost_deref(&self) -> Self {
-        match self {
-            Self::Hole => Self::Hole,
-            Self::Proj(pl_ctx, _) => {
-                if let Self::Hole = **pl_ctx {
-                    panic!("There must an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
-                } else {
-                    pl_ctx.without_innermost_deref()
-                }
-            }
-            Self::Deref(pl_ctx) => {
-                if let Self::Hole = **pl_ctx {
-                    Self::Hole
-                } else {
-                    pl_ctx.without_innermost_deref()
-                }
-            }
-        }
-    }
-}
-
-impl crate::ast::PlaceExpr {
-    fn to_pl_ctx_and_most_specif_pl(&self) -> (PlaceCtx, Place) {
-        match self {
-            PlaceExpr::Deref(inner_ple) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                (PlaceCtx::Deref(Box::new(pl_ctx)), pl)
-            }
-            PlaceExpr::Proj(inner_ple, n) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                match pl_ctx {
-                    PlaceCtx::Hole => (pl_ctx, Place::new(pl.ident, vec![n.clone()])),
-                    _ => (PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
-                }
-            }
-            PlaceExpr::Ident(ident) => (PlaceCtx::Hole, Place::new(ident.clone(), vec![])),
-        }
-    }
-
-    fn to_place(&self) -> Option<Place> {
-        if self.is_place() {
-            Some(self.to_pl_ctx_and_most_specif_pl().1)
-        } else {
-            None
-        }
-    }
-
-    fn equiv(&'_ self, place: &'_ Place) -> bool {
-        if let (PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
-            &pl == place
-        } else {
-            false
-        }
+        let dummy_fun = crate::parser::parse_global_fun_def(dummy_fun_src).unwrap();
+        let mut compil_unit = vec![dummy_fun];
+        super::ty_check(&mut compil_unit)?;
+        print!("{:?}", compil_unit[0]);
+        Ok(())
     }
 }
