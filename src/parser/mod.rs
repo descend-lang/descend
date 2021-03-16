@@ -484,11 +484,11 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn ty_gpu() {
-    //     assert_eq!(descend::ty("GPU"), Ok(Ty::GPU),
-    //         "does not recognize GPU type");
-    // }
+    #[test]
+    fn ty_gpu() {
+        assert_eq!(descend::ty("Gpu"), Ok(Ty::Data(DataTy::Scalar(ScalarTy::Gpu))),
+            "does not recognize GPU type");
+    }
 
     #[test]
     fn dty_tuple() {
