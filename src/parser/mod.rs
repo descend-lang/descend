@@ -1484,61 +1484,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // TODO: This test is to be completed when binary operations for Nat Type are implemented
-    /*
-    #[test]
-    fn par_reduce() {
-        let src = r#"fn par_reduce<n: nat, a: prv>(     // update to current syntax: 'a => a for prv
-        ha_array: &'a uniq cpu.heap [i32; n]
-    ) -[cpu.thread]-> i32 {
-        letprov <e, g, r, s, h> {
-            let gpu: GPU = gpu(/* GPU info */);
-            let mut gpu_arr : [i32; n] = copy_to_gpu<g, 'a, [i32; n]>(&g uniq gpu, ha_array);
-                // // Modified: added ` : [i32; n]`, parse broke here otherwise
-            let view_arr: [[&r shrd gpu.global i32; n]] =
-                to_view<r, uniq, gpu.global, n, i32>(&r uniq gpu_arr);
-            let chunks: [[ [[&r uniq gpu.global i32; n/1024]]; 1024]] =
-                group<n/1024, n, &r uniq gpu.global i32>(view_arr);
-            // transpose for coalescing
-            let chunks_for_threads: [[ [[&r uniq gpu.global i32; 1024]]; n/1024]] =
-                transpose<1024, n/1024, &r uniq gpu.global i32>(chunks_for_threads);
-            // hoisted runtime check: n/1024 == 64 * 1024
-            // reduce chunks in parallel
-            sync_threads[gpu, 64 * 1024] for chunck in chunks_for_threads {
-                let mut acc: i32 = 0;
-                for elem in chunck { // elem: &r uniq gpu.global i32
-                    acc = acc + *elem;
-                }
-                // This works because array views themselves are immutable.
-                // Hence, chunk is immutable and we would not be able to write something like
-                // chunk[0] = other_borrow: &r uniq gpu.global i32
-                *(chunck[0]) = acc;
-            }
-
-            // drop uniq borrows of gpu_arr before out is constructed
-            let out_view: [[&s shrd gpu.global i32; n]] =
-                to_view<s, shrd, gpu.global, n, i32>(&s shrd gpu_arr);
-            let part_res_only_gpu: [[&s shrd gpu.global i32; 64*1024]] =
-                take<64*1024, n, &s shrd gpu.global i32>(out_view);
-            let part_res_only_host: [[&h uniq cpu.heap i32; 64*1024]] =
-                take<64*1024>(to_view(&h uniq cpu.heap ha_array));
-            view_copy_to_host<64*1024, h, s, i32>(part_res_only_host, part_res_only_gpu);
-
-            // host-side reduction of the partial results
-            let mut acc: i32 = 0;
-            for elem in part_res_only_host { // elem: &h uniq cpu.heap i32
-                acc = acc + *elem;
-            }
-
-            acc // return result from function
-        }
-    }"#;
-    let result = descend::global_item(src);
-    // TODO: Do proper check against expected AST
-    assert!(result.is_err()); // Currently not parsed properly due to Nat binOp Terms (i.e. 64*1024, n/1024 as Nat values)
-    }
-    */
-
     //span testing
     #[test]
     fn span_test_let_expression() {
