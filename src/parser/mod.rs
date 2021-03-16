@@ -8,7 +8,7 @@ use peg::{error::ParseError, str::LineCol};
 pub use source::*;
 
 use crate::ast::{
-    ArgKinded, DataTy, ExecLoc, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl, Provenance,
+    ArgKinded, DataTy, ExecLoc, FunDef, IdentKinded, Kind, Memory, Nat, BinOpNat, ParamDecl, Provenance,
     ScalarTy, Ty, ViewTy,
 };
 use crate::ast::{BinOp, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp};
@@ -211,20 +211,30 @@ peg::parser! {
             }
 
         /// Parse nat token
-        pub(crate) rule nat() -> Nat
+        pub(crate) rule nat() -> Nat = precedence! {
+            x:(@) _ "+" _ y:@ { helpers::make_binary_nat(BinOpNat::Add, x, y) }
+            x:(@) _ "-" _ y:@ { helpers::make_binary_nat(BinOpNat::Sub, x, y) }
+            --
+            x:(@) _ "*" _ y:@ { helpers::make_binary_nat(BinOpNat::Mul, x, y) }
+            x:(@) _ "/" _ y:@ { helpers::make_binary_nat(BinOpNat::Div, x, y) }
+            x:(@) _ "%" _ y:@ { helpers::make_binary_nat(BinOpNat::Mod, x, y) }
+            --
+            literal:nat_literal() { Nat::Lit(literal) }
+            name:ident() { Nat::Ident(name) }
+            "(" _ n:nat() _ ")" { n }
+        }
+            // TODO: binary operations are currently disabled
+            // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
+
+        rule nat_literal() -> usize
             = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
                 // TODO: Getting the cause of the parse error is unstable for now. Fix this once
                 // int_error_matching becomes stable
                 match s.parse::<usize>() {
-                    Ok(val) => Ok(Nat::Lit(val)),
+                    Ok(val) => Ok(val),
                     Err(_) => { Err("Cannot parse natural number") }
                 }
             }
-            / name:ident() {
-                Nat::Ident(name)
-            }
-            // TODO: binary operations are currently disabled
-            // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
 
         pub(crate) rule ty() -> Ty
             = dty:dty() { Ty::Data(dty) }
@@ -369,6 +379,8 @@ peg::parser! {
 
 #[cfg(test)]
 mod tests {
+    use helpers::make_binary_nat;
+
     use super::*;
 
     #[test]
@@ -385,7 +397,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Unimplemented"]
     fn nat_identifier() {
         assert_eq!(
             descend::nat("N"),
@@ -400,9 +411,53 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Unimplemented"]
     fn nat_binary_operation() {
-        todo!()
+        // Test trivial cases
+        assert_eq!(
+            descend::nat("N+1"),
+            Ok(helpers::make_binary_nat(BinOpNat::Add, Nat::Ident(Ident::new("N")), Nat::Lit(1))),
+            "cannot parse N+1"
+        );
+        assert_eq!(
+            descend::nat("N-1"),
+            Ok(helpers::make_binary_nat(BinOpNat::Sub, Nat::Ident(Ident::new("N")), Nat::Lit(1))),
+            "cannot parse N-1"
+        );
+        assert_eq!(
+            descend::nat("N*1"),
+            Ok(helpers::make_binary_nat(BinOpNat::Mul, Nat::Ident(Ident::new("N")), Nat::Lit(1))),
+            "cannot parse N*1"
+        );
+        assert_eq!(
+            descend::nat("N/1"),
+            Ok(helpers::make_binary_nat(BinOpNat::Div, Nat::Ident(Ident::new("N")), Nat::Lit(1))),
+            "cannot parse N/1"
+        );
+        assert_eq!(
+            descend::nat("N%1"),
+            Ok(helpers::make_binary_nat(BinOpNat::Mod, Nat::Ident(Ident::new("N")), Nat::Lit(1))),
+            "cannot parse N%1"
+        );
+        // Test composite case with precedence
+        assert_eq!(
+            descend::nat("N+1*2"),
+            Ok(helpers::make_binary_nat(BinOpNat::Add,
+                    Nat::Ident(Ident::new("N")),
+                    helpers::make_binary_nat(BinOpNat::Mul,
+                        Nat::Lit(1),
+                        Nat::Lit(2)
+            ))),
+            "cannot parse N+1*2"
+        );
+        assert_eq!(
+            descend::nat("(N+1)*2"),
+            Ok(helpers::make_binary_nat(BinOpNat::Mul,
+                helpers::make_binary_nat(BinOpNat::Add,
+                    Nat::Ident(Ident::new("N")),
+                    Nat::Lit(1)),
+                Nat::Lit(2))),
+            "cannot parse (N+1)*2"
+        );
     }
 
     #[test]
