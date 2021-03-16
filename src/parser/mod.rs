@@ -556,13 +556,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Mutability does not implement Eq"]
     fn mutability() {
-        // TODO: Missing Eq implementation in AST
-        // assert_eq!(descend::mutability("const"), Ok(Mutability::Const),
-        //     "does not recognize const mutability qualifier");
-        // assert_eq!(descend::mutability("mut"), Ok(Mutability::Mut),
-        //     "does not recognize mut mutability qualifier");
+        assert_eq!(descend::mutability("const"), Ok(Mutability::Const),
+            "does not recognize const mutability qualifier");
+        assert_eq!(descend::mutability("mut"), Ok(Mutability::Mut),
+            "does not recognize mut mutability qualifier");
     }
 
     #[test]
