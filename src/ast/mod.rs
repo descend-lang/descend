@@ -12,7 +12,7 @@ use internal::FrameExpr;
 
 pub type CompilUnit = Vec<FunDef>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,

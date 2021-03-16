@@ -1370,66 +1370,65 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn global_fun_def_all_function_kinds() {
-    //     // all currently available kinds are tested
-    //     let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
-    //         ha_array: &'a uniq cpu.heap [i32; n]
-    //     ) -[cpu.thread]-> () {
-    //         letprov <some, stuff> {
-    //             let answer_to_everything :i32 = 42;
-    //             answer_to_everything
-    //         }
-    //     }"#;
-    //     let body = r#"let answer_to_everything :i32 = 42;
-    //         answer_to_everything"#;
+    #[test]
+    fn global_fun_def_all_function_kinds() {
+        // all currently available kinds are tested
+        let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
+            ha_array: &a uniq cpu.heap [i32; n]
+        ) -[cpu.thread]-> () {
+            42
+        }"#;
+        let body = r#"42"#;
 
-    //     let result = descend::global_fun_def(src);
+        let result = descend::global_fun_def(src).expect("Parsing failed");
 
-    //     // TODO: Do proper check against expected AST
-    //     let name = "test_kinds".into();
-    //     let ty_idents = vec!{
-    //         IdentKinded::new(&Ident::new("n"), Kind::Nat),
-    //         IdentKinded::new(&Ident::new("a"), Kind::Provenance),
-    //         IdentKinded::new(&Ident::new("t"), Kind::Ty),
-    //         IdentKinded::new(&Ident::new("m"), Kind::Memory),
-    //         IdentKinded::new(&Ident::new("f"), Kind::Frame),
-    //     };
-    //     let params = vec!{
-    //         IdentTyped::new(Ident::new("ha_array"), Ty::Ref(
-    //             Provenance::Value("\'a".into()),
-    //             Ownership::Uniq,
-    //             Memory::CpuHeap,
-    //             Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::I32)), Nat::Ident(Ident::new("n"))))
-    //         )),
-    //     };
-    //     let ret_ty = Ty::Scalar(ScalarTy::Unit);
-    //     let exec = ExecLoc::CpuThread;
-    //     let prv_rels = vec![];
+        // TODO: Do proper check against expected AST
+        let name = "test_kinds".into();
+        let generic_params = vec!{
+            IdentKinded::new(&Ident::new("n"), Kind::Nat),
+            IdentKinded::new(&Ident::new("a"), Kind::Provenance),
+            IdentKinded::new(&Ident::new("t"), Kind::Ty),
+            IdentKinded::new(&Ident::new("m"), Kind::Memory),
+            IdentKinded::new(&Ident::new("f"), Kind::Frame),
+        };
+        let params = vec![
+            ParamDecl{
+                ident: Ident::new("ha_array"),
+                dty: DataTy::Ref(
+                    Provenance::Ident(Ident::new("a")),
+                    Ownership::Uniq,
+                    Memory::CpuHeap,
+                    Box::new(DataTy::Array(
+                        Box::new(DataTy::Scalar(ScalarTy::I32)),
+                        Nat::Ident(Ident::new("n")))
+                    )
+                ),
+                mutbl: Mutability::Const
+            }
+        ];
+        let ret_dty = DataTy::Scalar(ScalarTy::Unit);
+        let exec = ExecLoc::CpuThread;
+        let prv_rels = vec![];
 
-    //     let f_ty = fun_ty(
-    //         params
-    //             .iter()
-    //             .map(|ident| -> Ty { ident.ty.clone() })
-    //             .collect(),
-    //         &FrameExpr::FrTy(vec![]),
-    //         exec,
-    //         &ret_ty,
-    //     );
+        let intended = FunDef{
+            name,
+            params,
+            exec,
+            prv_rels,
+            body_expr: descend::expression_seq(body).unwrap(),
+            generic_params,
+            ret_dty
+        };
 
-    //     let intended = FunDef{
-    //         name,
-    //         ty_idents,
-    //         params,
-    //         ret_ty,
-    //         exec,
-    //         prv_rels,
-    //         body_expr: descend::expression_seq(body).unwrap(),
-    //         fun_ty: f_ty
-    //     };
-
-    //     assert_eq!(result.unwrap(), intended);
-    // }
+        // assert_eq!(result.name, intended.name);
+        // assert_eq!(result.params, intended.params);
+        // assert_eq!(result.exec, intended.exec);
+        // assert_eq!(result.prv_rels, intended.prv_rels);
+        // assert_eq!(result.body_expr, intended.body_expr);
+        // assert_eq!(result.generic_params, intended.generic_params);
+        // assert_eq!(result.ret_dty, intended.ret_dty);
+        assert_eq!(result, intended);
+    }
 
     #[test]
     fn global_fun_def_kind_parameters_optional() {
