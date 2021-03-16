@@ -189,8 +189,7 @@ peg::parser! {
 
         /// Parse a kind argument
         pub(crate) rule kind_argument() -> ArgKinded
-            = //o:ownership() { ArgKinded::Own(o) } / // TODO: ownership removed?
-            !identifier() result:(
+            = !identifier() result:(
                 n:nat() { ArgKinded::Nat(n) }
                 / mem:memory_kind() { ArgKinded::Memory(mem) }
                 / ty:ty() { ArgKinded::Ty(ty) }
