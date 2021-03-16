@@ -1099,6 +1099,54 @@ mod tests {
     }
 
     #[test]
+    fn expression_letprov() {
+        assert_eq!(
+            descend::expression_seq("letprov<'a,'b,'c>{result;}"),
+            Ok(Expr::new(ExprKind::LetProv(
+                vec!("'a".into(), "'b".into(), "'c".into()),
+                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                    Ident::new("result")
+                ))))
+            )))
+        );
+        assert_eq!(
+            descend::expression_seq("letprov < 'a, 'b , 'c> {result;}"),
+            Ok(Expr::new(ExprKind::LetProv(
+                vec!("'a".into(), "'b".into(), "'c".into()),
+                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                    Ident::new("result")
+                ))))
+            )))
+        );
+        assert_eq!(
+            descend::expression_seq("letprov <'long_prov_Name> {result;}"),
+            Ok(Expr::new(ExprKind::LetProv(
+                vec!("'long_prov_Name".into()),
+                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                    Ident::new("result")
+                ))))
+            )))
+        );
+        assert_eq!(
+            descend::expression_seq("letprov <> {result;}"),
+            Ok(Expr::new(ExprKind::LetProv(
+                vec!(),
+                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                    Ident::new("result")
+                ))))
+            )))
+        );
+    }
+
+    #[test]
+    fn expression_letprov_negative() {
+        assert!(descend::expression_seq("letprov <'a, 'a, 'a >{result;}").is_ok()); //part of type checker or parser 
+        assert!(descend::expression_seq("letprov <'a, 'b, c >{result;}").is_err());
+        assert!(descend::expression_seq("letprov <'a, 'b, ''c >{result;}").is_err());
+        assert!(descend::expression_seq("letprov <'a, 'b, c' >{result;}").is_err());
+    }
+
+    #[test]
     fn expression_let() {
         assert_eq!(
             descend::expression_seq("let mut x : f32 = 17.123f32; true"),
