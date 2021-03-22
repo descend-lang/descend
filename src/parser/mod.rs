@@ -13,12 +13,17 @@ use crate::ast::{
 };
 use crate::ast::{BinOp, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp};
 
-pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
-    descend::global_fun_def(src)
+pub fn parse_unit(src: &str) -> Result<Vec<FunDef>, ParseError<LineCol>> {
+    descend::unit(src)
 }
 
 peg::parser! {
     pub(crate) grammar descend() for str {
+
+        pub(crate) rule unit() -> Vec<FunDef>
+            = _ funcs:(fun:global_fun_def() { fun }) ** _ _ {
+                funcs
+            }
 
         // TODO: PreDeclaredGlobalFun missing Syntax
         pub(crate) rule global_fun_def() -> FunDef
@@ -47,7 +52,7 @@ peg::parser! {
             }
 
         rule fun_parameter() -> ParamDecl
-            = mutbl:mutability()? ident:ident() _ ":" _ dty:dty() {
+            = mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ dty:dty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
                 ParamDecl { ident, dty, mutbl }
             }
@@ -378,8 +383,6 @@ peg::parser! {
 
 #[cfg(test)]
 mod tests {
-    use helpers::make_binary_nat;
-
     use super::*;
 
     #[test]
@@ -1519,5 +1522,40 @@ mod tests {
             _ => None
         };
         assert_eq!(result, Some((1,9)), "cannot extract correct line and column from span");
+    }
+
+    #[test]
+    fn unit_test_one() {
+        let src = r#"
+        
+        fn foo() -[cpu.thread]-> () {
+            42
+        }
+        
+        "#;
+        let result = descend::unit(src).expect("Cannot parse unit with one function");
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn unit_test_multiple() {
+        let src = r#"
+        
+        fn foo() -[cpu.thread]-> () {
+            42
+        }
+
+        fn bar() -[cpu.thread]-> () {
+            24
+        }
+
+
+        fn baz() -[cpu.thread]-> () {
+            1337
+        }
+        
+        "#;
+        let result = descend::unit(src).expect("Cannot parse unit with multiple functions");
+        assert_eq!(result.len(), 3);
     }
 }

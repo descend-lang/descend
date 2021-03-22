@@ -17,6 +17,6 @@ fn main() {
     let source = fs::read_to_string(opts.source_file).expect("Cannot open source file");
     let source_file = SourceFile::new(source);
     // Try to parse a global item
-    let global_item = source_file.parse_global_fun_def().expect("Parser error");
-    println!("{:?}", global_item)
+    let unit = source_file.parse_unit().expect("Parser error");
+    println!("{:?}", unit)
 }

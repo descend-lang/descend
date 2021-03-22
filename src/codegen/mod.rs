@@ -808,7 +808,7 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let res = crate::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
-        print!("{}", gen_fun_def(&res));
+        let res = crate::parser::parse_unit(sclar_mult_fun).unwrap();
+        print!("{}", gen_fun_def(&res[0]));
     }
 }

@@ -30,8 +30,7 @@ fn test_inplace_vector_add_fixed_sizes_inlined() -> Result<(), String> {
         }
     }"#;
 
-    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_unit(inplace_vector_add_fun).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -70,8 +69,7 @@ fn test_inplace_vector_add() -> Result<(), String> {
         }
     }"#;
 
-    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_unit(inplace_vector_add_fun).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -109,8 +107,7 @@ fn test_inplace_vector_add_fixed_sizes() -> Result<(), String> {
         }
     }"#;
 
-    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_unit(inplace_vector_add_fun).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -144,8 +141,7 @@ fn test_scalar_mult() -> Result<(), String> {
         }
     }"#;
 
-    let res = descend::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_unit(sclar_mult_fun).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -174,8 +170,7 @@ fn test_scalar_mult_no_type_annotation() -> Result<(), String> {
         }
     }"#;
 
-    let res = descend::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_unit(sclar_mult_fun).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
