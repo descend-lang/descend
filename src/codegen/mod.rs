@@ -437,7 +437,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
         Data(d::Scalar(s)) => match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
-            desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::I32),
+            desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
         },
