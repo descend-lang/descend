@@ -11,7 +11,9 @@ use crate::ast::{
     ArgKinded, DataTy, ExecLoc, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl, Provenance,
     ScalarTy, Ty, ViewTy,
 };
-use crate::ast::{BinOp, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp};
+use crate::ast::{
+    BinOp, BinOpNat, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp,
+};
 
 pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
     descend::global_fun_def(src)
@@ -47,9 +49,9 @@ peg::parser! {
             }
 
         rule fun_parameter() -> ParamDecl
-            = mutbl:mutability()? ident:ident() _ ":" _ dty:dty() {
+            = mutbl:mutability()? ident:ident() _ ":" _ ty:ty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                ParamDecl { ident, dty, mutbl }
+                ParamDecl { ident, ty, mutbl }
             }
 
         /// Parse a sequence of expressions (might also just be one)
@@ -108,8 +110,7 @@ peg::parser! {
                 };
                 expr
             }
-            // TODO: Integrate this properly into the precedence parser (irrelevant for now
-            // since there are no lambda functions yet)
+            // TODO: Integrate this properly into the precedence parser
             start:position!() func:ident() place_end:position!() _
                 kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
@@ -171,6 +172,13 @@ peg::parser! {
                     ExprKind::LetProv(prov_values, Box::new(body))
                 )
             }
+            "for_nat" __ ident:ident() __ "in" __ range:nat() _ "{" _ body:expression_seq() _ "}" {
+                Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
+            }
+            "for" __ parall_collec:expression() __ "with" __ input:expression() __
+                "do" __ funs:expression() {
+                Expr::new(ExprKind::ParFor(Box::new(parall_collec), Box::new(input), Box::new(funs)))
+            }
             "for" __ ident:ident() __ "in" __ collection:expression()
                 across:(__ "across" __ parallel_cfg:expression() { parallel_cfg })?
                 _ "{" _ body:expression_seq() _ "}"
@@ -183,10 +191,24 @@ peg::parser! {
                     )
                 }
             }
+            "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
+            "-[" _ exec:execution_location() _ "]->" _ ret_dty:dty() _
+            "{" _ body_expr:expression_seq() _"}" {
+                Expr::new(ExprKind::Lambda(params, exec, ret_dty, Box::new(body_expr)))
+            }
+            "across" __ parall:expression() __ view:expression() {
+                Expr::new(
+                    ExprKind::Across(Box::new(parall), Box::new(view))
+                )
+            }
             // Parentheses to override precedence
             "(" _ expression:expression() _ ")" { expression }
         }
 
+        // TODO make nat expressions aside from literals parsable.
+        //  the current problem is, that a nat expression cannot be recognized as such, if it starts
+        //  with an identifier, because identifiers are parsed generically. Just assuming the ident
+        //  is nat would be wrong too (i.e., simply checking for nat first and then for generic ident).
         /// Parse a kind argument
         pub(crate) rule kind_argument() -> ArgKinded
             = //o:ownership() { ArgKinded::Own(o) } / // TODO: ownership removed?
@@ -211,24 +233,38 @@ peg::parser! {
             }
 
         /// Parse nat token
-        pub(crate) rule nat() -> Nat
-            = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
+        pub(crate) rule nat() -> Nat = precedence!{
+            start:position!() func:ident() place_end:position!() _
+                "(" _ args:nat() ** (_ "," _) _ ")" end:position!()
+            {
+                Nat::App(func, args)
+            }
+            x:(@) _ "/" _ y:@ { Nat::BinOp(BinOpNat::Div, Box::new(x), Box::new(y)) }
+            x:(@) _ "*" _ y:@ { Nat::BinOp(BinOpNat::Mul, Box::new(x), Box::new(y)) }
+            --
+            lit:nat_lit() { lit }
+            ident:ident() {
+                Nat::Ident(ident)
+            }
+
+            // TODO: binary operations are currently disabled
+            // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
+        }
+
+        pub(crate) rule nat_lit() -> Nat
+            = l:$("0" / (['1'..='9']['0'..='9']*)) { ?
                 // TODO: Getting the cause of the parse error is unstable for now. Fix this once
                 // int_error_matching becomes stable
-                match s.parse::<usize>() {
+                match l.parse::<usize>() {
                     Ok(val) => Ok(Nat::Lit(val)),
                     Err(_) => { Err("Cannot parse natural number") }
                 }
             }
-            / name:ident() {
-                Nat::Ident(name)
-            }
-            // TODO: binary operations are currently disabled
-            // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
+
 
         pub(crate) rule ty() -> Ty
-            = dty:dty() { Ty::Data(dty) }
-            / vty:vty() { Ty::View(vty) }
+            = vty:vty() { Ty::View(vty) }
+            / dty:dty() { Ty::Data(dty) }
 
         /// Parse a type token
         pub(crate) rule dty() -> DataTy
@@ -249,13 +285,18 @@ peg::parser! {
             / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ dty:dty() {
                 DataTy::Ref(prov, own, mem, Box::new(dty))
             }
-            / "GridConfig" _ "<" _ num_blocks:nat() _ "," _ num_threads:nat() _ ">" {
-                DataTy::GridConfig(num_blocks, num_threads)
-            }
+            / "Thread" { DataTy::Scalar(ScalarTy::Thread) }
+            // The Grid/Block types should be defined better.
+            / "Grid" _ "<" _ grid_elems:dty_term() _ "," _ n:nat() ">" {
+                DataTy::Grid(Box::new(grid_elems), n)
+              }
+            / "Block" _ "<" _ block_elems:dty_term() _ "," _ n:nat() ">" {
+                DataTy::Block(Box::new(block_elems), n)
+              }
 
         pub(crate) rule vty() -> ViewTy
             = "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { ViewTy::Array(Box::new(t), n) }
-            / "[[" _ tys:ty() **<2,> (_ "," _) _ "]]" { ViewTy::Tuple(tys) }
+            / "{" _ tys:ty() **<2,> (_ "," _) _ "}" { ViewTy::Tuple(tys) }
 
         pub(crate) rule ownership() -> Ownership
         = "shrd" { Ownership::Shrd }
@@ -276,6 +317,7 @@ peg::parser! {
             = "cpu.thread" { ExecLoc::CpuThread }
             / "gpu.group" { ExecLoc::GpuGroup }
             / "gpu.thread" { ExecLoc::GpuThread }
+            / "gpu" { ExecLoc::Gpu }
 
         pub(crate) rule kind() -> Kind
             = "nat" { Kind::Nat }
@@ -313,7 +355,8 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
                 / "f32" / "i32" / "bool" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
-                / "let"("prov")? / "if" / "else" / "for" / "in" / "across" / "fn" / "GridConfig")
+                / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "in" / "across" / "fn" / "Grid"
+                / "Block" / "Thread" / "with" / "do")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.stack" / "cpu.heap" / "gpu.global" / "gpu.shared"

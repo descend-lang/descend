@@ -2,9 +2,10 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::Kind::Provenance;
+use crate::ast::{Ident, PlaceExpr};
 use cu_ast as cu;
 use std::collections::HashMap;
+use std::iter;
 
 // Precondition. all function defitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -35,10 +36,11 @@ fn gen_fun_def(gl_fun: &desc::FunDef) -> cu::Item {
         name: name.clone(),
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
-        ret_ty: gen_ty(&desc::Ty::Data(ret_ty.clone()), desc::Mutability::Mut),
+        ret_ty: gen_ty(&desc::Ty::Data(ret_ty.clone()), desc::Mutability::Mut).unwrap(),
         body: gen_stmt(
             body_expr,
             !matches!(ret_ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
+            &mut HashMap::new(),
             &mut HashMap::new(),
         ),
         is_dev_fun: is_dev_fun(*exec),
@@ -48,6 +50,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef) -> cu::Item {
 fn gen_stmt(
     expr: &desc::Expr,
     return_value: bool,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
 ) -> cu::Stmt {
     use desc::ExprKind::*;
@@ -65,17 +68,32 @@ fn gen_stmt(
                         new = ViewExpr::create_from(e1, view_ctx)
                     )
                 }
-                gen_stmt(e2, return_value, view_ctx)
+                gen_stmt(e2, return_value, parall_ctx, view_ctx)
             // Let Expression
-            } else {
+            } else if is_parall_collec_ty(e1.ty.as_ref().unwrap()) {
+                if let Some(old) = parall_ctx.insert(
+                    ident.name.clone(),
+                    ParallelityCollec::create_from(e1, parall_ctx),
+                ) {
+                    panic!(
+                        "Reassigning parallel collection expression identifier from `{i} = {old:?}` to `{i} = {new:?}`",
+                        i = ident.name,
+                        old = old,
+                        new = ParallelityCollec::create_from(e1, parall_ctx)
+                    )
+                }
+                gen_stmt(e2, return_value, parall_ctx, view_ctx)
+            } else if let Some(tty) = gen_ty(e1.ty.as_ref().unwrap(), mutbl.clone()) {
                 cu::Stmt::Seq(
                     Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
-                        ty: gen_ty(e1.ty.as_ref().unwrap(), *mutbl),
-                        expr: Some(gen_expr(e1, view_ctx)),
+                        ty: tty,
+                        expr: Some(gen_expr(e1, parall_ctx, view_ctx)),
                     }),
-                    Box::new(gen_stmt(e2, return_value, view_ctx)),
+                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx)),
                 )
+            } else {
+                gen_stmt(e2, return_value, parall_ctx, view_ctx)
             }
         }
         LetProv(prv_idents, expr) => {
@@ -85,13 +103,56 @@ fn gen_stmt(
             //         .iter()
             //         .map(|id| (id.clone(), desc::Kind::Provenance)),
             // );
-            gen_stmt(expr, return_value, view_ctx)
+            gen_stmt(expr, return_value, parall_ctx, view_ctx)
         }
         // e1 ; e2
         Seq(e1, e2) => cu::Stmt::Seq(
-            Box::new(gen_stmt(e1, false, view_ctx)),
-            Box::new(gen_stmt(e2, return_value, view_ctx)),
+            Box::new(gen_stmt(e1, false, parall_ctx, view_ctx)),
+            Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx)),
         ),
+        ForNat(ident, range, body) => {
+            if return_value {
+                panic!("A descend loop cannot return a value.");
+            }
+            let i = cu::Expr::Ident(ident.name.clone());
+            let (init, cond, iter) = match range {
+                desc::Nat::App(r_name, input) => {
+                    let init_decl = cu::Stmt::VarDecl {
+                        name: ident.name.clone(),
+                        ty: cu::Ty::Scalar(cu::ScalarTy::I32),
+                        expr: Some(cu::Expr::Nat(input[0].clone())),
+                    };
+                    let (cond, iter) = match r_name.name.as_str() {
+                        "halfed_range" => {
+                            let cond = cu::Expr::BinOp {
+                                op: cu::BinOp::Ge,
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(0))),
+                            };
+                            let iter = cu::Expr::Assign {
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::BinOp {
+                                    op: cu::BinOp::Div,
+                                    lhs: Box::new(i),
+                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(2))),
+                                }),
+                            };
+                            (cond, iter)
+                        }
+                        _ => unimplemented!(),
+                    };
+                    (init_decl, cond, iter)
+                }
+                _ => panic!("Currently ranges are assumed to be predeclared functions."),
+            };
+
+            cu::Stmt::ForLoop {
+                init: Box::new(init),
+                cond,
+                iter,
+                stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx)),
+            }
+        }
         For(ident, coll_expr, body) => {
             if return_value {
                 panic!("Cannot return a value from for-loop.");
@@ -120,22 +181,39 @@ fn gen_stmt(
                         rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
                     }),
                 },
-                stmt: Box::new(gen_stmt(body, false, view_ctx)),
+                stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx)),
             }
         }
-        ParForAcross(ident, view_expr, glb_cfg_expr, body) => {
-            gen_par_for_sync(ident, view_expr, glb_cfg_expr, body, view_ctx)
+        ParForAcross(ident, view_expr, glb_cfg_expr, body) => unimplemented!(),
+        ParFor(parall_collec, input, funs) => {
+            gen_par_for(parall_collec, input, funs, parall_ctx, view_ctx)
         }
-        _ if return_value => cu::Stmt::Return(Some(gen_expr(&expr, view_ctx))),
-        _ => cu::Stmt::Expr(gen_expr(&expr, view_ctx)),
+        App(fun, kinded_args, args) => match &fun.expr {
+            desc::ExprKind::FunIdent(name) if name.name == "exec" => gen_exec(
+                &kinded_args[0],
+                &kinded_args[1],
+                &kinded_args[5],
+                &args[0],
+                &args[1],
+                &args[2],
+                parall_ctx,
+                view_ctx,
+            ),
+            _ => cu::Stmt::Expr(gen_expr(&expr, parall_ctx, view_ctx)),
+        },
+        _ if return_value => cu::Stmt::Return(Some(gen_expr(&expr, parall_ctx, view_ctx))),
+        _ => cu::Stmt::Expr(gen_expr(&expr, parall_ctx, view_ctx)),
     }
 }
 
-fn gen_par_for_sync(
-    ident: &desc::Ident,
+fn gen_exec(
+    blocks: &desc::ArgKinded,
+    threads: &desc::ArgKinded,
+    view_size: &desc::ArgKinded,
+    gpu_expr: &desc::Expr,
     view_expr: &desc::Expr,
-    glb_cfg_expr: &desc::Expr,
     body: &desc::Expr,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
 ) -> cu::Stmt {
     let mut v = ViewExpr::create_from(view_expr, view_ctx);
@@ -144,53 +222,120 @@ fn gen_par_for_sync(
         .iter()
         .map(|(name, pl_expr)| cu::ParamDecl {
             name: name.clone(),
-            ty: gen_ty(pl_expr.ty.as_ref().unwrap(), desc::Mutability::Const),
+            ty: gen_ty(pl_expr.ty.as_ref().unwrap(), desc::Mutability::Const).unwrap(),
         })
         .collect();
-    let global_id = desc::Nat::BinOp(
-        desc::BinOpNat::Add,
-        Box::new(desc::Nat::BinOp(
-            desc::BinOpNat::Mul,
-            Box::new(desc::Nat::Ident(desc::Ident::new("blockIdx.x"))),
-            Box::new(desc::Nat::Ident(desc::Ident::new("blockDim.x"))),
-        )),
-        Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-    );
-    let mut scope_view_ctx: HashMap<String, ViewExpr> = HashMap::new();
-    let res = scope_view_ctx.insert(
-        ident.name.clone(),
-        ViewExpr::Idx {
-            idx: global_id,
-            view: Box::new(v),
-        },
-    );
-    if res.is_some() {
-        panic!(
-            "Conflicting names. View variable `{}` used twice.",
-            ident.name
-        )
-    }
-    let glb_cfg = cu::Expr::Ref(Box::new(gen_expr(glb_cfg_expr, &mut HashMap::new())));
-    let loop_body = cu::Expr::Lambda {
-        params: param_decls,
-        body: Box::new(gen_stmt(body, false, &mut scope_view_ctx)),
-        ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
-        is_dev_fun: true,
+
+    let gpu = gen_expr(gpu_expr, &mut HashMap::new(), &mut HashMap::new());
+
+    let dev_fun = if let desc::ExprKind::Lambda(params, _, _, b) = &body.expr {
+        let parall_collec = params[0].ident.clone();
+        let mut scope_parall_ctx: HashMap<String, ParallelityCollec> = HashMap::new();
+        scope_parall_ctx.insert(
+            parall_collec.name.clone(),
+            ParallelityCollec::Ident(parall_collec),
+        );
+        let in_name = params[1].ident.name.clone();
+        let mut scope_view_ctx: HashMap<String, ViewExpr> = HashMap::new();
+        scope_view_ctx.insert(in_name, v);
+        let dev_fun = cu::Expr::Lambda {
+            params: param_decls,
+            body: Box::new(gen_stmt(
+                b,
+                false,
+                &mut scope_parall_ctx,
+                &mut scope_view_ctx,
+            )),
+            ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
+            is_dev_fun: true,
+        };
+        dev_fun
+    } else {
+        panic!("Currently only lambdas can be passed.")
     };
+
     let mut input: Vec<_> = name_to_pl_exprs
         .iter()
-        .map(|(_, pl_expr)| gen_expr(pl_expr, &mut HashMap::new()))
+        .map(|(_, pl_expr)| gen_expr(pl_expr, &mut HashMap::new(), &mut HashMap::new()))
         .collect();
-    let mut args: Vec<cu::Expr> = vec![glb_cfg, loop_body];
+    let template_args =
+        gen_args_kinded(vec![blocks.clone(), threads.clone(), view_size.clone()].as_slice());
+    let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
     args.append(&mut input);
     cu::Stmt::Expr(cu::Expr::FunCall {
-        fun: Box::new(cu::Expr::Ident("descend::par_for".to_string())),
-        template_args: vec![],
+        fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+        template_args,
         args,
     })
 }
 
-fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::Expr {
+fn gen_par_for(
+    parall_collec: &desc::Expr,
+    input_view: &desc::Expr,
+    funs: &desc::Expr,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+) -> cu::Stmt {
+    let mut v = ViewExpr::create_from(input_view, view_ctx);
+    let pid = match parall_collec.ty.as_ref().unwrap() {
+        desc::Ty::Data(desc::DataTy::Grid(_, _)) => {
+            desc::Nat::Ident(desc::Ident::new("blockIdx.x"))
+        }
+        desc::Ty::Data(desc::DataTy::Block(_, _)) => {
+            desc::Nat::Ident(desc::Ident::new("threadIdx.x"))
+        }
+        _ => panic!("Not a parallel collection type."),
+    };
+
+    // let condition = match parall_collec.expr {
+    //     desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(_)) => {
+    //         None
+    //     }
+    //     desc::ExprKind::PlaceExpr(desc::PlaceExpr::Proj())
+    // }
+
+    // FIXME this assumes that the only functions given are syntactically lambdas
+    let fun_bodies = match funs.ty.as_ref().unwrap() {
+        desc::Ty::View(desc::ViewTy::Tuple(_)) => unimplemented!(),
+        desc::Ty::Data(_) => {
+            if let desc::ExprKind::Lambda(params, _, _, body) = &funs.expr {
+                let parall_collec = params[0].ident.clone();
+                let mut scope_parall_ctx: HashMap<String, ParallelityCollec> = HashMap::new();
+                scope_parall_ctx.insert(
+                    parall_collec.name.clone(),
+                    ParallelityCollec::Ident(parall_collec),
+                );
+                let input_ident = &params[1].ident;
+                let mut scope_view_ctx: HashMap<String, ViewExpr> = HashMap::new();
+                let res = scope_view_ctx.insert(
+                    input_ident.name.clone(),
+                    ViewExpr::Idx {
+                        idx: pid,
+                        view: Box::new(v),
+                    },
+                );
+                if res.is_some() {
+                    panic!(
+                        "Conflicting names. View variable `{}` used twice.",
+                        input_ident.name
+                    )
+                }
+                gen_stmt(body, false, &mut scope_parall_ctx, &mut scope_view_ctx)
+            } else {
+                panic!("Did not find a lambda as argument to par_for.")
+            }
+        }
+        _ => panic!("Expected Lambda or tuple view of Lambda."),
+    };
+
+    fun_bodies
+}
+
+fn gen_expr(
+    expr: &desc::Expr,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+) -> cu::Expr {
     use desc::ExprKind::*;
     match &expr.expr {
         FunIdent(ident) => {
@@ -222,8 +367,8 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
                 desc::BinOp::Ge => cu::BinOp::Ge,
                 desc::BinOp::Neq => cu::BinOp::Neq,
             },
-            lhs: Box::new(gen_expr(lhs, view_ctx)),
-            rhs: Box::new(gen_expr(rhs, view_ctx)),
+            lhs: Box::new(gen_expr(lhs, parall_ctx, view_ctx)),
+            rhs: Box::new(gen_expr(rhs, parall_ctx, view_ctx)),
         },
         UnOp(op, arg) => cu::Expr::UnOp {
             op: match op {
@@ -231,7 +376,7 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
                 desc::UnOp::Not => cu::UnOp::Not,
                 desc::UnOp::Neg => cu::UnOp::Neg,
             },
-            arg: Box::new(gen_expr(arg, view_ctx)),
+            arg: Box::new(gen_expr(arg, parall_ctx, view_ctx)),
         },
         Index(pl_expr, i) => cu::Expr::ArraySubscript {
             array: Box::new(gen_pl_expr(pl_expr, view_ctx)),
@@ -244,24 +389,25 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
         })),
         Assign(pl_expr, expr) => cu::Expr::Assign {
             lhs: Box::new(gen_pl_expr(pl_expr, view_ctx)),
-            rhs: Box::new(gen_expr(expr, view_ctx)),
+            rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx)),
         },
         Lambda(params, exec, ty, expr) => cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
                 expr,
                 !matches!(ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
+                parall_ctx,
                 view_ctx,
             )),
-            ret_ty: gen_ty(&desc::Ty::Data(ty.clone()), desc::Mutability::Mut),
+            ret_ty: gen_ty(&desc::Ty::Data(ty.clone()), desc::Mutability::Mut).unwrap(),
             is_dev_fun: is_dev_fun(*exec),
         },
         App(fun, kinded_args, args) => cu::Expr::FunCall {
-            fun: Box::new(gen_expr(fun, view_ctx)),
+            fun: Box::new(gen_expr(fun, parall_ctx, view_ctx)),
             template_args: gen_args_kinded(kinded_args),
             args: args
                 .iter()
-                .map(|e| gen_expr(e, view_ctx))
+                .map(|e| gen_expr(e, parall_ctx, view_ctx))
                 .collect::<Vec<_>>(),
         },
         IfElse(cond, e_tt, e_ff) => unimplemented!(),
@@ -270,13 +416,13 @@ fn gen_expr(expr: &desc::Expr, view_ctx: &mut HashMap<String, ViewExpr>) -> cu::
             template_args: vec![],
             args: elems
                 .iter()
-                .map(|e| gen_expr(e, view_ctx))
+                .map(|e| gen_expr(e, parall_ctx, view_ctx))
                 .collect::<Vec<_>>(),
         },
         Tuple(elems) => cu::Expr::Tuple(
             elems
                 .iter()
-                .map(|el| gen_expr(el, view_ctx))
+                .map(|el| gen_expr(el, parall_ctx, view_ctx))
                 .collect::<Vec<_>>(),
         ),
         _ => panic!(
@@ -316,6 +462,17 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
     }
 }
 
+fn gen_parall_cond(pid: &desc::Nat, parall_collec: &ParallelityCollec) -> Option<cu::Expr> {
+    match parall_collec {
+        ParallelityCollec::Ident(_) => None,
+        ParallelityCollec::Proj { parall_expr, i } => cu::Expr::BinOp {
+            op: cu::BinOp::Lt,
+            lhs: Box::new(pid),
+            rhs: Box::new(Expr::Empty),
+        },
+    }
+}
+
 fn gen_view(view_expr: &ViewExpr, mut path: Vec<desc::Nat>) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[desc::Nat]) -> cu::Expr {
         path.iter().fold(expr, |e, idx| cu::Expr::ArraySubscript {
@@ -327,28 +484,81 @@ fn gen_view(view_expr: &ViewExpr, mut path: Vec<desc::Nat>) -> cu::Expr {
     match (view_expr, path.as_slice()) {
         (ViewExpr::ToView { ref_expr, .. }, _) => {
             path.reverse();
-            gen_indexing(gen_expr(ref_expr, &mut HashMap::new()), &path)
+            gen_indexing(
+                gen_expr(ref_expr, &mut HashMap::new(), &mut HashMap::new()),
+                &path,
+            )
         }
         (ViewExpr::Idx { idx, view }, _) => {
             path.push(idx.clone());
             gen_view(view, path)
         }
+        (ViewExpr::Proj { view, i }, _) => {
+            path.push(i.clone());
+            gen_view(view, path)
+        }
+        (ViewExpr::SplitAt { pos, view }, _) => {
+            let proj = path.pop();
+            let idx = path.pop();
+            match (proj, idx) {
+                (Some(pr), Some(i)) => match pr.eval() {
+                    Ok(v) => {
+                        if v == 0 {
+                            path.push(i);
+                            gen_view(view, path)
+                        } else if v == 1 {
+                            path.push(desc::Nat::BinOp(
+                                desc::BinOpNat::Add,
+                                Box::new(i),
+                                Box::new(pos.clone()),
+                            ));
+                            gen_view(view, path)
+                        } else {
+                            panic!("split_at can only generate a 2-tuple view.")
+                        }
+                    }
+                    Err(m) => panic!(m),
+                },
+                _ => panic!("Cannot create SplitAt view. Index or projection missing."),
+            }
+        }
         (ViewExpr::Join { m, n, view }, _) => unimplemented!(),
-        (ViewExpr::Group { size, n, view }, _) => unimplemented!(),
+        (ViewExpr::Group { size, n, view }, _) => {
+            let i = path.pop();
+            let j = path.pop();
+            match (i, j) {
+                (Some(i), Some(j)) => {
+                    path.push(desc::Nat::BinOp(
+                        desc::BinOpNat::Add,
+                        Box::new(desc::Nat::BinOp(
+                            desc::BinOpNat::Mul,
+                            Box::new(i),
+                            Box::new(size.clone()),
+                        )),
+                        Box::new(j),
+                    ));
+                    gen_view(view, path)
+                }
+                _ => panic!("Cannot generate Group view. One or more indices missing."),
+            }
+        }
         (ViewExpr::Zip { n, views }, _) => {
             let idx = path.pop();
             let proj = path.pop();
             match (idx, proj) {
-                (Some(i), Some(pr)) => {
-                    let inner_view = &views[pr.eval()];
-                    path.push(i);
-                    gen_view(inner_view, path)
-                }
+                (Some(i), Some(pr)) => match pr.eval() {
+                    Ok(v) => {
+                        let inner_view = &views[v];
+                        path.push(i);
+                        gen_view(inner_view, path)
+                    }
+                    Err(m) => panic!(m),
+                },
                 _ => panic!("Cannot generate Zip View. Index or projection missing."),
             }
         }
         (ViewExpr::Transpose { m, n, view }, _) => unimplemented!(),
-        _ => panic!("unexpected"),
+        ve => panic!("unexpected, found: {:?}", ve),
     }
 }
 
@@ -384,18 +594,19 @@ fn gen_templ_param(ty_ident: &desc::IdentKinded) -> cu::TemplParam {
 }
 
 fn gen_param_decls(param_decls: &[desc::ParamDecl]) -> Vec<cu::ParamDecl> {
-    param_decls.iter().map(gen_param_decl).collect()
+    param_decls.iter().filter_map(gen_param_decl).collect()
 }
 
-fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
-    let desc::ParamDecl {
-        ident,
-        dty: ty,
-        mutbl,
-    } = param_decl;
-    cu::ParamDecl {
-        name: ident.name.clone(),
-        ty: gen_ty(&desc::Ty::Data(ty.clone()), *mutbl),
+fn gen_param_decl(param_decl: &desc::ParamDecl) -> Option<cu::ParamDecl> {
+    let desc::ParamDecl { ident, ty, mutbl } = param_decl;
+    let ty = gen_ty(ty, *mutbl);
+    if let Some(tty) = ty {
+        Some(cu::ParamDecl {
+            name: ident.name.clone(),
+            ty: tty,
+        })
+    } else {
+        None
     }
 }
 
@@ -415,7 +626,17 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
         //     }
         // },
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
-        desc::ArgKinded::Ty(ty) => Some(cu::TemplateArg::Ty(gen_ty(ty, desc::Mutability::Mut))),
+        desc::ArgKinded::Ty(ty @ desc::Ty::Data(_)) => {
+            if let Some(tty) = gen_ty(ty, desc::Mutability::Mut) {
+                Some(cu::TemplateArg::Ty(tty))
+            } else {
+                None
+            }
+        }
+        desc::ArgKinded::Ty(desc::Ty::Ident(_)) => unimplemented!("This will require inlining all view types \
+         such that we know that the only identifiers left are data types. This will enable simply passing the \
+         identifiers around in C."),
+        desc::ArgKinded::Ty(desc::Ty::View(_)) => None,
         desc::ArgKinded::Memory(_)
         | desc::ArgKinded::Exec(_)
         | desc::ArgKinded::Provenance(_)
@@ -426,27 +647,38 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
 
 // Param mutbl is not strictly necessary because every const type can just be wrapped
 // in cu::Ty::Const. However, the formalism uses this, because it shows the generated code
-// as opposed to a Cuda-AST and there, the order of the const is odd
+// as opposed to a Cuda-AST and there, the order of the const is different
 // when it comes to pointers (C things).
-fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
+fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
     use desc::DataTy as d;
     use desc::Ty::*;
 
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
-        Data(d::Scalar(s)) => match s {
+        Ident(ident) => Some(cu::Ty::Ident(ident.name.clone())),
+        Data(d::Scalar(s)) => Some(match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
-        },
+            desc::ScalarTy::Thread => panic!("This should only exist for type checking."),
+        }),
         Data(d::Tuple(tys)) => {
-            cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect())
+            let gened_tys: Vec<_> = tys
+                .iter()
+                .filter_map(|ty| gen_ty(&Data(ty.clone()), m))
+                .collect();
+            if gened_tys.len() == 0 {
+                None
+            } else {
+                Some(cu::Ty::Tuple(gened_tys))
+            }
         }
-        Data(d::Array(ty, n)) => {
-            cu::Ty::Array(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), n.clone())
-        }
+        Data(d::Array(ty, n)) => Some(cu::Ty::Array(
+            Box::new(gen_ty(&Data(ty.as_ref().clone()), m).unwrap()),
+            n.clone(),
+        )),
         Data(d::At(ty, mem)) => {
             let buff_kind = match mem {
                 desc::Memory::CpuHeap => cu::BufferKind::Heap,
@@ -457,48 +689,62 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> cu::Ty {
                     panic!("CpuStack is not valid for At types. Should never appear here.")
                 }
             };
-            cu::Ty::Buffer(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), buff_kind)
+            Some(cu::Ty::Buffer(
+                Box::new(gen_ty(&Data(ty.as_ref().clone()), m).unwrap()),
+                buff_kind,
+            ))
         }
         Data(d::Fn(_, _, _, _, _)) => unimplemented!("needed?"),
         Data(d::Dead(_)) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
         Data(d::Ref(_, own, _, ty)) => {
-            let tty = Box::new(gen_ty(
-                &Data(match ty.as_ref() {
-                    // Pointers to arrays point to the element type.
-                    desc::DataTy::Array(elem_ty, _) => elem_ty.as_ref().clone(),
-                    _ => ty.as_ref().clone(),
-                }),
-                m,
-            ));
-            if matches!(own, desc::Ownership::Uniq) {
+            let tty = Box::new(
+                gen_ty(
+                    &Data(match ty.as_ref() {
+                        // Pointers to arrays point to the element type.
+                        desc::DataTy::Array(elem_ty, _) => elem_ty.as_ref().clone(),
+                        _ => ty.as_ref().clone(),
+                    }),
+                    m,
+                )
+                .unwrap(),
+            );
+            Some(if matches!(own, desc::Ownership::Uniq) {
                 cu::Ty::Ptr(tty)
             } else {
                 cu::Ty::PtrConst(tty)
-            }
+            })
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
-        Data(d::Ident(ident)) => cu::Ty::Ident(ident.name.clone()),
+        Data(d::Ident(ident)) => Some(cu::Ty::Ident(ident.name.clone())),
         Data(d::GridConfig(num_blocks, num_threads)) => {
-            cu::Ty::GridConfig(num_blocks.clone(), num_threads.clone())
+            //cu::Ty::GridConfig(num_blocks.clone(), num_threads.clone())
+            unimplemented!()
         }
-        View(_) => panic!(
-            "Cannot generate view types. Anything with this type should have been compiled away."
-        ),
+        Data(d::Grid(_, _)) | Data(d::Block(_, _)) => None,
+        Data(d::DistribBorrow(_, _)) => unimplemented!(),
+        View(_) => None,
+        //     panic!(
+        //     "Cannot generate view types. Anything with this type should have been compiled away."
+        // ),
     };
 
     if matches!(mutbl, desc::Mutability::Mut) {
         cu_ty
     } else {
-        cu::Ty::Const(Box::new(cu_ty))
+        if let Some(cu_tty) = cu_ty {
+            Some(cu::Ty::Const(Box::new(cu_tty)))
+        } else {
+            None
+        }
     }
 }
 
 // TODO correct?
 fn is_dev_fun(exec: desc::ExecLoc) -> bool {
     match exec {
-        desc::ExecLoc::GpuGroup | desc::ExecLoc::GpuThread => true,
+        desc::ExecLoc::Gpu | desc::ExecLoc::GpuGroup | desc::ExecLoc::GpuThread => true,
         desc::ExecLoc::CpuThread | desc::ExecLoc::View => false,
     }
 }
@@ -507,6 +753,87 @@ fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
     match ty {
         desc::Ty::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
         _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ParallelityCollec {
+    Ident(Ident),
+    Proj {
+        parall_expr: Box<ParallelityCollec>,
+        i: desc::Nat,
+    },
+    Split {
+        pos: desc::Nat,
+        parall_expr: Box<ParallelityCollec>,
+    },
+}
+
+impl ParallelityCollec {
+    fn create_from(
+        expr: &desc::Expr,
+        parall_ctx: &HashMap<String, ParallelityCollec>,
+    ) -> ParallelityCollec {
+        match &expr.expr {
+            desc::ExprKind::App(f, gen_args, args) => {
+                if let desc::ExprKind::FunIdent(ident) = &f.expr {
+                    if ident.name == crate::ty_check::pre_decl::SPLIT {
+                        if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
+                            return ParallelityCollec::Split {
+                                pos: k.clone(),
+                                parall_expr: Box::new(ParallelityCollec::create_from(
+                                    p, parall_ctx,
+                                )),
+                            };
+                        }
+                        panic!("Cannot create `group` from the provided arguments.");
+                    } else {
+                        unimplemented!()
+                    }
+                } else {
+                    panic!(
+                        "Non-globally defined functions that can transform parallel collections \
+                     do not exist."
+                    )
+                }
+            }
+            desc::ExprKind::PlaceExpr(pl_expr) => {
+                ParallelityCollec::create_parall_pl_expr(pl_expr, parall_ctx)
+            }
+            _ => panic!(
+                "Expected a function application, identifer or projection, but found {:?}",
+                expr.expr
+            ),
+        }
+    }
+
+    fn create_parall_pl_expr(
+        parall_expr: &desc::PlaceExpr,
+        parall_ctx: &HashMap<String, ParallelityCollec>,
+    ) -> ParallelityCollec {
+        match parall_expr {
+            desc::PlaceExpr::Ident(ident) => parall_ctx.get(&ident.name).unwrap().clone(),
+            desc::PlaceExpr::Proj(pp, i) => ParallelityCollec::Proj {
+                parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
+                i: i.clone(),
+            },
+            desc::PlaceExpr::Deref(_) => panic!(
+                "It is not possible to take references of Grids or Blocks.\
+                This should never happen."
+            ),
+        }
+    }
+}
+
+fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
+    match ty {
+        desc::Ty::Data(desc::DataTy::Grid(_, _)) | desc::Ty::Data(desc::DataTy::Block(_, _)) => {
+            true
+        }
+        desc::Ty::Data(desc::DataTy::Tuple(vec)) => vec
+            .iter()
+            .all(|dty| is_parall_collec_ty(&desc::Ty::Data(dty.clone()))),
+        _ => false,
     }
 }
 
@@ -520,6 +847,14 @@ enum ViewExpr {
     },
     Idx {
         idx: desc::Nat,
+        view: Box<ViewExpr>,
+    },
+    Proj {
+        view: Box<ViewExpr>,
+        i: desc::Nat,
+    },
+    SplitAt {
+        pos: desc::Nat,
         view: Box<ViewExpr>,
     },
     Group {
@@ -578,6 +913,8 @@ impl ViewExpr {
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {
                         ViewExpr::create_to_view_view(args)
+                    } else if ident.name == crate::ty_check::pre_decl::SPLIT_AT {
+                        ViewExpr::create_split_at_view(gen_args, args, view_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::GROUP {
                         ViewExpr::create_group_view(gen_args, args, view_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::JOIN {
@@ -593,11 +930,9 @@ impl ViewExpr {
                     panic!("Non-globally defined view functions do not exist.")
                 }
             }
-            desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) => {
-                view_ctx.get(&ident.name).unwrap().clone()
-            }
+            desc::ExprKind::PlaceExpr(pl_expr) => ViewExpr::create_pl_expr_view(pl_expr, view_ctx),
             _ => panic!(
-                "Expected a function application or identifer, but found {:?}",
+                "Expected a function application, identifer or projection, but found {:?}",
                 expr.expr
             ),
         }
@@ -616,6 +951,36 @@ impl ViewExpr {
         }
     }
 
+    fn create_pl_expr_view(
+        view: &desc::PlaceExpr,
+        view_ctx: &HashMap<String, ViewExpr>,
+    ) -> ViewExpr {
+        match view {
+            desc::PlaceExpr::Ident(ident) => view_ctx.get(&ident.name).unwrap().clone(),
+            desc::PlaceExpr::Proj(vv, i) => ViewExpr::Proj {
+                view: Box::new(ViewExpr::create_pl_expr_view(vv, view_ctx)),
+                i: i.clone(),
+            },
+            desc::PlaceExpr::Deref(_) => {
+                panic!("It is not possible to take references of views. This should never happen.")
+            }
+        }
+    }
+
+    fn create_split_at_view(
+        gen_args: &[desc::ArgKinded],
+        args: &[desc::Expr],
+        view_ctx: &HashMap<String, ViewExpr>,
+    ) -> ViewExpr {
+        if let (desc::ArgKinded::Nat(s), Some(v)) = (&gen_args[0], args.first()) {
+            return ViewExpr::SplitAt {
+                pos: s.clone(),
+                view: Box::new(ViewExpr::create_from(v, view_ctx)),
+            };
+        }
+        panic!("Cannot create `split_at` from the provided arguments.");
+    }
+
     fn create_group_view(
         gen_args: &[desc::ArgKinded],
         args: &[desc::Expr],
@@ -630,7 +995,7 @@ impl ViewExpr {
                 view: Box::new(ViewExpr::create_from(v, view_ctx)),
             };
         }
-        panic!("Cannot create `to_view` from the provided arguments.");
+        panic!("Cannot create `group` from the provided arguments.");
     }
 
     fn create_join_view(
@@ -782,6 +1147,11 @@ fn replace_arg_kinded_idents(fun_def: &desc::FunDef) -> desc::FunDef {
                         }
                     }
                     walk_list!(self, visit_expr, args)
+                }
+                ExprKind::ForNat(ident, _, body) => {
+                    self.kinds
+                        .extend(iter::once((ident.name.clone(), Kind::Nat)));
+                    self.visit_expr(body)
                 }
                 _ => visit::walk_expr(self, expr),
             }

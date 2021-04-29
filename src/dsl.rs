@@ -47,7 +47,7 @@ pub fn deref(pl_expr: Expr) -> Expr {
 pub fn fdef(
     name: &str,
     generic_params: Vec<(&str, Kind)>,
-    params: Vec<(Mutability, &str, &DataTy)>,
+    params: Vec<(Mutability, &str, &Ty)>,
     ret_ty: &DataTy,
     exec: ExecLoc,
     prv_rels: Vec<PrvRel>,
@@ -71,12 +71,12 @@ pub fn fdef(
 
 // creates a list of identifier expressions; every expression has a set type and
 // mutability qualifier
-fn param_list(params: Vec<(Mutability, &str, &DataTy)>) -> Vec<ParamDecl> {
+fn param_list(params: Vec<(Mutability, &str, &Ty)>) -> Vec<ParamDecl> {
     params
         .into_iter()
         .map(|(mutbl, ident_name, ty)| ParamDecl {
             ident: Ident::new(ident_name),
-            dty: ty.clone(),
+            ty: ty.clone(),
             mutbl,
         })
         .collect()

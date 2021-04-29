@@ -55,6 +55,10 @@ pub fn walk_nat<V: Visitor>(visitor: &mut V, n: &mut Nat) {
             visitor.visit_nat(r)
         }
         Nat::Lit(_) => {}
+        Nat::App(func, args) => {
+            visitor.visit_ident(func);
+            walk_list!(visitor, visit_nat, args)
+        }
     }
 }
 
@@ -125,6 +129,18 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_nat(grid_size);
             visitor.visit_nat(block_size)
         }
+        DataTy::Grid(elems, size) => {
+            visitor.visit_dty(elems);
+            visitor.visit_nat(size)
+        }
+        DataTy::Block(elems, size) => {
+            visitor.visit_dty(elems);
+            visitor.visit_nat(size)
+        }
+        DataTy::DistribBorrow(parall_exec_loc, data) => {
+            visitor.visit_vty(parall_exec_loc);
+            visitor.visit_vty(data)
+        }
         DataTy::Dead(dty) => visitor.visit_dty(dty),
     }
 }
@@ -133,6 +149,7 @@ pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
     match ty {
         Ty::Data(dty) => visitor.visit_dty(dty),
         Ty::View(vty) => visitor.visit_vty(vty),
+        Ty::Ident(ident) => visitor.visit_ident(ident),
     }
 }
 
@@ -162,6 +179,10 @@ pub fn walk_arg_kinded<V: Visitor>(visitor: &mut V, arg_kinded: &mut ArgKinded) 
 pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
     // For now, only visit ExprKind
     match &mut expr.expr {
+        ExprKind::Across(exec_group, view) => {
+            visitor.visit_expr(exec_group);
+            visitor.visit_expr(view)
+        }
         ExprKind::FunIdent(ident) => visitor.visit_ident(ident),
         ExprKind::Lit(l) => visitor.visit_lit(l),
         ExprKind::PlaceExpr(pl_expr) => visitor.visit_pl_expr(pl_expr),
@@ -232,6 +253,16 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(schedule);
             visitor.visit_expr(body)
         }
+        ExprKind::ParFor(parall_collec, input, funs) => {
+            visitor.visit_expr(parall_collec);
+            visitor.visit_expr(input);
+            visitor.visit_expr(funs)
+        }
+        ExprKind::ForNat(ident, range, body) => {
+            visitor.visit_ident(ident);
+            visitor.visit_nat(range);
+            visitor.visit_expr(body)
+        }
         ExprKind::BinOp(op, l, r) => {
             visitor.visit_binary_op(op);
             visitor.visit_expr(l);
@@ -245,9 +276,9 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
 }
 
 pub fn walk_param_decl<V: Visitor>(visitor: &mut V, param_decl: &mut ParamDecl) {
-    let ParamDecl { ident, dty, mutbl } = param_decl;
+    let ParamDecl { ident, ty, mutbl } = param_decl;
     visitor.visit_ident(ident);
-    visitor.visit_dty(dty);
+    visitor.visit_ty(ty);
     visitor.visit_mutability(mutbl)
 }
 

@@ -5,6 +5,7 @@ pub mod pre_decl;
 mod subty;
 
 use crate::ast::internal::{IdentTyped, Loan, PrvMapping};
+use crate::ast::DataTy::Scalar;
 use crate::ast::*;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use std::ops::Deref;
@@ -52,9 +53,9 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> Result<(), St
         &vec![],
         gf.params
             .iter()
-            .map(|ParamDecl { ident, dty, .. }| IdentTyped {
+            .map(|ParamDecl { ident, ty, .. }| IdentTyped {
                 ident: ident.clone(),
-                ty: Ty::Data(dty.clone()),
+                ty: ty.clone(),
             })
             .collect(),
     );
@@ -124,6 +125,9 @@ fn ty_check_expr(
         ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
             ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
         }
+        ExprKind::Across(parall, data) => {
+            ty_check_across(gl_ctx, kind_ctx, ty_ctx, exec, parall, data)?
+        }
         ExprKind::BinOp(bin_op, lhs, rhs) => {
             ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
         }
@@ -136,9 +140,18 @@ fn ty_check_expr(
         ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => {
             ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
         }
-        ExprKind::ParForAcross(id, view_expr, parall_cfg, body) => ty_check_par_for_sync(
+        ExprKind::ParForAcross(id, view_expr, parall_cfg, body) => ty_check_par_for_across(
             gl_ctx, kind_ctx, ty_ctx, exec, id, view_expr, parall_cfg, body,
         )?,
+        ExprKind::ParFor(parall_collec, input, funs) => {
+            ty_check_par_for(gl_ctx, kind_ctx, ty_ctx, exec, parall_collec, input, funs)?
+        }
+        ExprKind::ForNat(var, range, body) => {
+            ty_check_for_nat(gl_ctx, kind_ctx, ty_ctx, exec, var, range, body)?
+        }
+        ExprKind::Lambda(params, exec, ret_ty, body) => {
+            ty_check_lambda(gl_ctx, kind_ctx, ty_ctx, *exec, params, ret_ty, body)?
+        }
         e => panic!(format!("Impl missing for: {:?}", e)),
     };
 
@@ -146,8 +159,199 @@ fn ty_check_expr(
     expr.ty = Some(ty);
     Ok(res_ty_ctx)
 }
+fn ty_check_for_nat(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    var: &Ident,
+    range: &Nat,
+    body: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    let mut scoped_kind_ctx: KindCtx = kind_ctx.clone().append_idents(vec![IdentKinded {
+        ident: var.clone(),
+        kind: Kind::Nat,
+    }]);
+    let ty_ctx_1 = ty_check_expr(gl_ctx, &scoped_kind_ctx, ty_ctx, exec, body)?;
+    // let ty_ctx_2 = ty_check_expr(gl_ctx, &scoped_kind_ctx, ty_ctx_1.clone(), exec, body)?;
+    // if &ty_ctx_1 != &ty_ctx_2 {
+    //    return Err("Using a data type in loop that can only be used once.".to_string());
+    // }
+    Ok((ty_ctx_1, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
+}
 
-fn ty_check_par_for_sync(
+// TODO split up groupings, i.e., deal with TupleViews and require enough functions.
+fn ty_check_par_for(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    parall_collec: &mut Expr,
+    input: &mut Expr,
+    funs: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    fn to_exec_and_size(parall_collec: &Expr) -> (ExecLoc, Nat) {
+        match parall_collec.ty.as_ref().unwrap() {
+            Ty::Data(DataTy::Grid(_, n)) => (ExecLoc::Gpu, n.clone()),
+            Ty::Data(DataTy::Block(_, n)) => (ExecLoc::GpuGroup, n.clone()),
+            _ => panic!("Expected a parallel collection: Grid or Block."),
+        }
+    }
+    fn executable_over_parall_collec_and_input(
+        funs: &Expr,
+        parall_collec: &Expr,
+        input: &Expr,
+    ) -> Result<(), String> {
+        match funs.ty.as_ref().unwrap() {
+            Ty::Data(DataTy::Fn(_, param_tys, _, fun_exec, ret_ty)) => {
+                if param_tys.len() != 2 {
+                    return Err(
+                        "Wrong amount of parameters in provided function. Expected 2,\
+                    one for parallelism expression and one for input."
+                            .to_string(),
+                    );
+                }
+                let fun_parall_elem_ty = &param_tys[0];
+                let fun_input_elem_ty = &param_tys[1];
+                let parall_elem_dty = match parall_collec.ty.as_ref().unwrap() {
+                    Ty::Data(dty) => match dty {
+                        DataTy::Grid(pe_dty, _) => pe_dty.as_ref(),
+                        DataTy::Block(pe_dty, _) => pe_dty.as_ref(),
+                        _ => {
+                            return Err(
+                                "Provided expression is not a parallel collection.".to_string()
+                            )
+                        }
+                    },
+                    _ => {
+                        return Err("Provided expression is not a parallel collection.".to_string())
+                    }
+                };
+                let input_elem_ty = match input.ty.as_ref().unwrap() {
+                    // TODO function should probably just take the view type of the View Arrays (i.e., so that
+                    //  for tuples this function can be applied to the combination of all elements).
+                    Ty::View(vty) => match vty {
+                        ViewTy::Array(elem_ty, _) => elem_ty.as_ref(),
+                        _ => panic!("Check earlier or so.")
+                    }
+                    _ => panic!("The input expression must be a view. This should have been checked earlier.")
+                };
+                if fun_parall_elem_ty != &Ty::Data(parall_elem_dty.clone()) {
+                    return Err(
+                        "Function does not fit the provided parallel collection.".to_string()
+                    );
+                }
+                if fun_input_elem_ty != input_elem_ty {
+                    return Err("Function does not fit the provided input.".to_string());
+                }
+                let exec = match parall_elem_dty {
+                    DataTy::Block(_, _) => ExecLoc::GpuGroup,
+                    DataTy::Scalar(ScalarTy::Thread) => ExecLoc::GpuThread,
+                    _ => unimplemented!(),
+                };
+                if fun_exec != &exec {
+                    return Err("Execution location does not fit.".to_string());
+                }
+                if ret_ty.as_ref() != &Ty::Data(Scalar(ScalarTy::Unit)) {
+                    return Err("Function has wrong return type. Expected ().".to_string());
+                }
+
+                Ok(())
+            }
+            _ => Err("The provided expression is not a function.".to_string()),
+        }
+    }
+    let parall_collec_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, parall_collec)?;
+    let (allowed_exec, parall_collec_size) = to_exec_and_size(parall_collec);
+    if allowed_exec != exec {
+        return Err(format!(
+            "Trying to run a parallel for-loop over {:?} inside of {:?}",
+            parall_collec, exec
+        ));
+    }
+    let input_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, parall_collec_ty_ctx, exec, input)?;
+    match input.ty.as_ref().unwrap() {
+        Ty::View(ViewTy::Array(_, n)) => {
+            if n != &parall_collec_size {
+                return Err(format!(
+                    "Trying to distribute a collection of size {} over {} threads or blocks",
+                    parall_collec_size, n
+                ));
+            }
+        }
+        Ty::Data(_) => return Err("Provided input expression is not a view.".to_string()),
+        _ => unimplemented!(),
+    }
+    let funs_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, input_ty_ctx, exec, funs)?;
+    executable_over_parall_collec_and_input(funs, parall_collec, input)?;
+    Ok((funs_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
+}
+
+fn ty_check_across(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    parall: &mut Expr,
+    data: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    unimplemented!()
+}
+
+fn ty_check_lambda(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: ExecLoc,
+    params: &mut [ParamDecl],
+    ret_dty: &DataTy,
+    body: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    // TODO WARNING: Currently allows capturing freely. There are not checks assoicated with this.
+    //  This is clearly not correct.
+    // Build frame typing for this function
+    let fun_frame = internal::append_idents_typed(
+        &vec![],
+        params
+            .iter()
+            .map(|ParamDecl { ident, ty, .. }| IdentTyped {
+                ident: ident.clone(),
+                ty: ty.clone(),
+            })
+            .collect(),
+    );
+    let fun_ty_ctx = ty_ctx.clone().append_frm_ty(fun_frame);
+
+    ty_check_expr(gl_ctx, &kind_ctx, fun_ty_ctx, exec, body)?;
+
+    // t <= t_f
+    let empty_ty_ctx = subty::check(
+        &kind_ctx,
+        TyCtx::new(),
+        body.ty.as_ref().unwrap().dty(),
+        &ret_dty,
+    )?;
+
+    assert!(
+        empty_ty_ctx.is_empty(),
+        format!(
+            "Expected typing context to be empty. But TyCtx:\n {:?}",
+            empty_ty_ctx
+        )
+    );
+
+    let fun_ty = Ty::Data(DataTy::Fn(
+        vec![],
+        params.iter().map(|decl| decl.ty.clone()).collect(),
+        Box::new(internal::FrameExpr::Empty),
+        exec,
+        Box::new(Ty::Data(ret_dty.clone())),
+    ));
+
+    Ok((ty_ctx, fun_ty))
+}
+
+fn ty_check_par_for_across(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
@@ -296,24 +500,28 @@ fn ty_check_assign_deref(
         );
     }
 
-    borrow_check::ownership_safe(
-        kind_ctx,
-        &assigned_val_ty_ctx,
-        &[],
-        Ownership::Uniq,
-        deref_expr,
-    )?;
+    if let Ty::Data(deref_dty) = deref_ty {
+        borrow_check::ownership_safe(
+            kind_ctx,
+            &assigned_val_ty_ctx,
+            &[],
+            Ownership::Uniq,
+            deref_expr,
+        )?;
 
-    let after_subty_ctx = subty::check(
-        kind_ctx,
-        assigned_val_ty_ctx,
-        e.ty.as_ref().unwrap().dty(),
-        &deref_ty,
-    )?;
-    Ok((
-        after_subty_ctx.without_reborrow_loans(deref_expr),
-        Ty::Data(DataTy::Scalar(ScalarTy::Unit)),
-    ))
+        let after_subty_ctx = subty::check(
+            kind_ctx,
+            assigned_val_ty_ctx,
+            e.ty.as_ref().unwrap().dty(),
+            &deref_dty,
+        )?;
+        Ok((
+            after_subty_ctx.without_reborrow_loans(deref_expr),
+            Ty::Data(DataTy::Scalar(ScalarTy::Unit)),
+        ))
+    } else {
+        Err("Trying to dereference view type which is not allowed.".to_string())
+    }
 }
 
 fn ty_check_index_copy(
@@ -327,20 +535,20 @@ fn ty_check_index_copy(
     borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
     let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr)?;
     let elem_ty = match pl_expr_ty {
-        DataTy::Array(elem_ty, n) => elem_ty,
-        DataTy::At(arr_ty, _) => {
-            if let DataTy::Array(elem_ty, n) = arr_ty.as_ref() {
-                elem_ty
+        Ty::Data(DataTy::Array(elem_ty, n)) => *elem_ty,
+        Ty::Data(DataTy::At(arr_ty, _)) => {
+            if let DataTy::Array(elem_ty, n) = *arr_ty {
+                *elem_ty
             } else {
                 return Err("Trying to index into non array type.".to_string());
             }
         }
+        Ty::View(_) => unimplemented!(),
         _ => return Err("Trying to index into non array type.".to_string()),
     };
     // TODO check that index is smaller than n here!?
     if elem_ty.copyable() {
-        let res_ty = *elem_ty.clone();
-        Ok((ty_ctx, Ty::Data(res_ty)))
+        Ok((ty_ctx, Ty::Data(elem_ty)))
     } else {
         Err("Cannot move out of array type.".to_string())
     }
@@ -475,6 +683,9 @@ fn ty_check_tuple(
         .map(|elem| match elem.ty.as_ref().unwrap() {
             Ty::Data(dty) => Ok(dty.clone()),
             Ty::View(_) => Err("Tuple elements cannot be views.".to_string()),
+            Ty::Ident(_) => Err(
+                "Tuple elements must be data types, but found general type identifier.".to_string(),
+            ),
         })
         .collect();
     Ok((tmp_ty_ctx, Ty::Data(DataTy::Tuple(elem_tys?))))
@@ -592,12 +803,12 @@ fn ty_check_pl_expr_with_deref(
     borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)?;
     if let Ok(ty) = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr) {
         if !ty.is_fully_alive() {
-            return Err("Place was moved before.".to_string());
+            return Err(format!("Part of Place {:?} was moved before.", pl_expr));
         }
         if ty.copyable() {
             // this line is a trick to release a life time that is connected to ty_ctx
             let ty = ty.clone();
-            Ok((ty_ctx, Ty::Data(ty)))
+            Ok((ty_ctx, ty))
         } else {
             Err("Data type is not copyable.".to_string())
         }
@@ -615,7 +826,7 @@ fn ty_check_pl_expr_without_deref(
     let place = pl_expr.to_place().unwrap();
     let pl_ty = ty_ctx.place_ty(&place)?;
     if !pl_ty.is_fully_alive() {
-        return Err("Place was moved before.".to_string());
+        return Err(format!("Part of Place {:?} was moved before.", pl_expr));
     }
     let res_ty_ctx = if pl_ty.copyable() {
         borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
@@ -647,9 +858,17 @@ fn ty_check_borrow(
         return Err("The place was at least partially moved before.".to_string());
     }
     let (reffed_ty, mem) = match &ty {
-        DataTy::Dead(_) => panic!("Cannot happen because of the alive check."),
-        DataTy::At(inner_ty, m) => (inner_ty.deref().clone(), m.clone()),
-        _ => (ty.clone(), Memory::CpuStack),
+        Ty::Data(DataTy::Dead(_)) => panic!("Cannot happen because of the alive check."),
+        Ty::Data(DataTy::At(inner_ty, m)) => (inner_ty.deref().clone(), m.clone()),
+        Ty::Data(dty) => (dty.clone(), Memory::CpuStack),
+        Ty::View(_) => return Err("Trying to borrow a view.".to_string()),
+        Ty::Ident(_) => {
+            return Err(
+                "Borrowing from value of unspecified type. This could be a view.\
+            Therefore it is not allowed to borrow."
+                    .to_string(),
+            )
+        }
     };
     let res_ty = DataTy::Ref(
         Provenance::Value(prv_val_name.to_string()),
@@ -663,24 +882,24 @@ fn ty_check_borrow(
 
 // Δ; Γ ⊢ω p:τ
 // p in an ω context has type τ under Δ and Γ
-fn place_expr_ty_under_own<'a>(
+fn place_expr_ty_under_own(
     kind_ctx: &KindCtx,
-    ty_ctx: &'a TyCtx,
+    ty_ctx: &TyCtx,
     own: Ownership,
     pl_expr: &PlaceExpr,
-) -> Result<&'a DataTy, String> {
+) -> Result<Ty, String> {
     let (ty, _) = place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, pl_expr)?;
     Ok(ty)
 }
 
 // Δ; Γ ⊢ω p:τ,{ρ}
 // p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
-fn place_expr_ty_and_passed_prvs_under_own<'a>(
+fn place_expr_ty_and_passed_prvs_under_own(
     kind_ctx: &KindCtx,
-    ty_ctx: &'a TyCtx,
+    ty_ctx: &TyCtx,
     own: Ownership,
     pl_expr: &PlaceExpr,
-) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
+) -> Result<(Ty, Vec<Provenance>), String> {
     match pl_expr {
         // TC-Var
         PlaceExpr::Ident(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
@@ -696,56 +915,81 @@ fn place_expr_ty_and_passed_prvs_under_own<'a>(
     }
 }
 
-fn var_expr_ty_and_empty_prvs_under_own<'a>(
-    ty_ctx: &'a TyCtx,
+fn var_expr_ty_and_empty_prvs_under_own(
+    ty_ctx: &TyCtx,
     ident: &Ident,
-) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
+) -> Result<(Ty, Vec<Provenance>), String> {
     let ty = ty_ctx.ident_ty(&ident)?;
-    if let Ty::Data(dty) = ty {
-        if !dty.is_fully_alive() {
-            return Err("The value in this identifier has been moved out.".to_string());
+    match ty {
+        Ty::Data(dty) => {
+            if !dty.is_fully_alive() {
+                return Err("The value in this identifier has been moved out.".to_string());
+            }
+            return Ok((ty.clone(), vec![]));
         }
-        return Ok((dty, vec![]));
+        Ty::View(vty) => {
+            if !vty.is_fully_alive() {
+                return Err("The value in this identifier has been moved out.".to_string());
+            }
+            return Ok((ty.clone(), vec![]));
+        }
+        Ty::Ident(ident) => panic!("Identifier {} found. Expected instantiated type.", ident),
     }
-    panic!("Trying to give type under ownership for view type. View types can never be borrowed.")
+    //
+    // panic!(
+    //     "Trying to give type under ownership for identifier {} which is a view type. \
+    //     View types can never be borrowed.",
+    //     ident
+    // )
 }
 
 fn proj_expr_ty_and_passed_prvs_under_own<'a>(
     kind_ctx: &KindCtx,
-    ty_ctx: &'a TyCtx,
+    ty_ctx: &TyCtx,
     own: Ownership,
     tuple_expr: &PlaceExpr,
     n: &Nat,
-) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
+) -> Result<(Ty, Vec<Provenance>), String> {
     let (pl_expr_ty, passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, tuple_expr)?;
-    if let DataTy::Tuple(elem_tys) = pl_expr_ty {
-        if let Some(ty) = elem_tys.get(n.eval()) {
-            Ok((ty, passed_prvs))
-        } else {
-            Err("Trying to access non existing tuple element.".to_string())
+    match pl_expr_ty {
+        Ty::Data(DataTy::Tuple(elem_dtys)) => {
+            if let Some(ty) = elem_dtys.get(n.eval()?) {
+                Ok((Ty::Data(ty.clone()), passed_prvs))
+            } else {
+                Err("Trying to access non existing tuple element.".to_string())
+            }
         }
-    } else {
-        Err("Trying to project from a non tuple type.".to_string())
+        Ty::View(ViewTy::Tuple(elem_tys)) => {
+            if let Some(ty) = elem_tys.get(n.eval()?) {
+                Ok((ty.clone(), passed_prvs))
+            } else {
+                Err("Trying to access non existing tuple element.".to_string())
+            }
+        }
+        Ty::Ident(_) => {
+            Err("Type unspecified. Cannot project from potentially non tuple type.".to_string())
+        }
+        _ => Err("Trying to project from non tuple value.".to_string()),
     }
 }
 
 fn deref_expr_ty_and_passed_prvs_under_own<'a>(
     kind_ctx: &KindCtx,
-    ty_ctx: &'a TyCtx,
+    ty_ctx: &TyCtx,
     own: Ownership,
     borr_expr: &PlaceExpr,
-) -> Result<(&'a DataTy, Vec<&'a Provenance>), String> {
+) -> Result<(Ty, Vec<Provenance>), String> {
     let (pl_expr_ty, mut passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)?;
-    if let DataTy::Ref(prv, ref_own, mem, ty) = pl_expr_ty {
-        if ref_own < &own {
+    if let Ty::Data(DataTy::Ref(prv, ref_own, mem, dty)) = pl_expr_ty {
+        if ref_own < own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
         }
-        let outl_rels = passed_prvs.iter().map(|&passed_prv| (prv, passed_prv));
+        let outl_rels = passed_prvs.iter().map(|passed_prv| (&prv, passed_prv));
         subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
         passed_prvs.push(prv);
-        Ok((ty, passed_prvs))
+        Ok((Ty::Data(*dty), passed_prvs))
     } else {
         Err("Trying to dereference non reference type.".to_string())
     }

@@ -89,12 +89,14 @@ fn ownership_safe_deref(
             .try_fold(
                 HashSet::<Loan>::new(),
                 |mut loans, pl_expr| -> Result<HashSet<Loan>, String> {
+                    let insert_dereferenced_pl_expr =
+                        &pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
                     let loans_for_possible_prv_pl_expr = ownership_safe(
                         kind_ctx,
                         ty_ctx,
                         reborrows,
                         own,
-                        &pl_ctx_no_deref.insert_pl_expr(pl_expr.clone()),
+                        insert_dereferenced_pl_expr,
                     )?;
                     loans.extend(loans_for_possible_prv_pl_expr);
                     Ok(loans)
@@ -189,17 +191,26 @@ fn ownership_safe_under_existing_loans(
     own: Ownership,
     pl_expr: &PlaceExpr,
 ) -> bool {
-    ty_ctx.prv_mappings().all(|prv_mapping| {
-        let PrvMapping { prv, loans } = prv_mapping;
-        no_uniq_loan_overlap(own, pl_expr, loans)
-            || exists_place_with_ref_to_prv_all_in_reborrow(ty_ctx, prv, reborrows)
-    })
+    println!("WARNING: Ownership safety (overlapping loan) checks disabled.");
+    // ty_ctx.prv_mappings().all(|prv_mapping| {
+    //     let PrvMapping { prv, loans } = prv_mapping;
+    //     no_uniq_loan_overlap(own, pl_expr, loans)
+    //         || exists_place_with_ref_to_prv_all_in_reborrow(ty_ctx, prv, reborrows)
+    // })
+    true
 }
 
 fn no_uniq_loan_overlap(own: Ownership, pl_expr: &PlaceExpr, loans: &HashSet<Loan>) -> bool {
     loans.iter().all(|loan| {
         !(own == Ownership::Uniq || loan.own == Ownership::Uniq)
-            || !overlap(&loan.place_expr, &pl_expr)
+            || !overlap(
+                &loan
+                    .place_expr
+                    .to_pl_ctx_and_most_specif_pl()
+                    .1
+                    .to_place_expr(),
+                &pl_expr,
+            )
     })
 }
 
@@ -209,6 +220,10 @@ fn exists_place_with_ref_to_prv_all_in_reborrow(
     prv_name: &str,
     reborrows: &[Place],
 ) -> bool {
+    println!(
+        "Check exists place with ref to prv all in reborrow for reborrow list:\n {:?}",
+        reborrows
+    );
     let all_places = ty_ctx.all_places();
     let at_least_one = all_places.iter().any(|(_, ty)| {
         if let Ty::Data(DataTy::Ref(Provenance::Value(pn), _, _, _)) = ty {
@@ -220,7 +235,12 @@ fn exists_place_with_ref_to_prv_all_in_reborrow(
     let all_in_reborrows = all_places.iter().all(|(place, ty)| {
         if let Ty::Data(DataTy::Ref(Provenance::Value(pn), _, _, _)) = ty {
             if prv_name == pn {
-                reborrows.iter().any(|reb_pl| reb_pl == place)
+                if reborrows.iter().any(|reb_pl| reb_pl == place) {
+                    true
+                } else {
+                    println!("{:?} not in reborrow list", place);
+                    false
+                }
             } else {
                 true
             }
@@ -233,5 +253,13 @@ fn exists_place_with_ref_to_prv_all_in_reborrow(
 }
 
 fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {
-    pll.prefix_of(plr) || plr.prefix_of(pll)
+    if pll.prefix_of(plr) || plr.prefix_of(pll) {
+        println!(
+            "There is an overlap between the borrows {} and {}.",
+            pll, plr
+        );
+        true
+    } else {
+        false
+    }
 }

@@ -94,7 +94,7 @@ impl std::fmt::Display for Stmt {
                 cond,
                 iter,
                 stmt,
-            } => write!(f, "for ({}; {}; {}) {}", init, cond, iter, stmt),
+            } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
             Return(expr) => {
                 write!(f, "return")?;
                 if let Some(e) = expr {

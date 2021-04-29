@@ -4,6 +4,7 @@ pub mod ast;
 #[macro_use]
 pub mod dsl;
 pub mod codegen;
+pub mod nat;
 pub mod parser;
 pub mod ty_check;
 mod utils;

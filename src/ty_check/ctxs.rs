@@ -23,6 +23,11 @@ impl TyCtx {
         }
     }
 
+    pub fn append_frm_ty(mut self, frm_ty: FrameTyping) -> Self {
+        self.frame_tys.append(&mut vec![frm_ty]);
+        self
+    }
+
     pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
         let frame_typing = self.frame_tys.iter_mut().last().unwrap();
         frame_typing.push(FrameEntry::Var(id_typed));
@@ -171,13 +176,17 @@ impl TyCtx {
             use ViewTy as v;
 
             match &ty {
-                Ty::Data(d::Scalar(_))
+                Ty::Ident(_)
+                | Ty::Data(d::Scalar(_))
                 | Ty::Data(d::Array(_, _))
                 | Ty::Data(d::At(_, _))
                 | Ty::Data(d::Ref(_, _, _, _))
                 | Ty::Data(d::Fn(_, _, _, _, _))
                 | Ty::Data(d::Ident(_))
                 | Ty::Data(d::GridConfig(_, _))
+                | Ty::Data(d::Grid(_, _))
+                | Ty::Data(d::Block(_, _))
+                | Ty::Data(d::DistribBorrow(_, _))
                 | Ty::Data(d::Dead(_))
                 | Ty::View(v::Ident(_))
                 | Ty::View(v::Array(_, _))
@@ -214,12 +223,12 @@ impl TyCtx {
     }
 
     pub fn place_ty(&self, place: &Place) -> Result<Ty, String> {
-        fn proj_ty(ty: Ty, path: &[Nat]) -> Ty {
+        fn proj_ty(ty: Ty, path: &[Nat]) -> Result<Ty, String> {
             let mut res_ty = ty;
             for n in path {
                 // TODO should maybe use usize here and not Nat, because Nat is not always
                 //  evaluable.
-                let idx = n.eval();
+                let idx = n.eval()?;
                 match &res_ty {
                     Ty::Data(DataTy::Tuple(elem_tys)) => {
                         res_ty = Ty::Data(elem_tys[idx].clone());
@@ -227,13 +236,16 @@ impl TyCtx {
                     Ty::View(ViewTy::Tuple(elem_tys)) => {
                         res_ty = elem_tys[idx].clone();
                     }
-                    _ => panic!("Trying to project element data type of a non tuple type."),
+                    t => panic!(
+                        "Trying to project element data type of a non tuple type:\n {:?}",
+                        t
+                    ),
                 }
             }
-            res_ty
+            Ok(res_ty)
         }
         let ident_ty = self.ident_ty(&place.ident)?;
-        Ok(proj_ty(ident_ty.clone(), &place.path))
+        proj_ty(ident_ty.clone(), &place.path)
     }
 
     pub fn set_place_ty(mut self, pl: &Place, pl_ty: Ty) -> Self {
@@ -242,7 +254,10 @@ impl TyCtx {
                 return part_ty;
             }
 
-            let idx = path.first().unwrap().eval();
+            let idx = match path.first().unwrap().eval() {
+                Ok(v) => v,
+                Err(m) => panic!(m),
+            };
             match orig_ty {
                 Ty::Data(DataTy::Tuple(mut elem_tys)) => {
                     elem_tys[idx] = if let Ty::Data(dty) =
@@ -277,6 +292,7 @@ impl TyCtx {
             self.set_place_ty(
                 pl,
                 match pl_ty {
+                    Ty::Ident(ident) => unimplemented!(),
                     Ty::Data(dty) => Ty::Data(DataTy::Dead(Box::new(dty))),
                     Ty::View(vty) => Ty::View(ViewTy::Dead(Box::new(vty))),
                 },
@@ -352,6 +368,7 @@ enum KindingCtxEntry {
     PrvRel(PrvRel),
 }
 
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct KindCtx {
     vec: Vec<KindingCtxEntry>,
 }

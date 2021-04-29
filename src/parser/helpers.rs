@@ -1,6 +1,6 @@
 //! Helper functions for parsing
 
-use crate::ast::{BinOp, DataTy, Expr, ExprKind, Lit, ScalarTy, UnOp};
+use crate::ast::{BinOp, DataTy, Expr, ExprKind, Lit, Nat, ScalarTy, UnOp};
 
 pub fn type_from_lit(lit: &Lit) -> DataTy {
     DataTy::Scalar(match lit {

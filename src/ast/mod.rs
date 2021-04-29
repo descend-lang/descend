@@ -25,11 +25,7 @@ pub struct FunDef {
 
 impl FunDef {
     pub fn ty(&self) -> DataTy {
-        let param_tys: Vec<_> = self
-            .params
-            .iter()
-            .map(|p_decl| Ty::Data(p_decl.dty.clone()))
-            .collect();
+        let param_tys: Vec<_> = self.params.iter().map(|p_decl| p_decl.ty.clone()).collect();
         DataTy::Fn(
             self.generic_params.clone(),
             param_tys,
@@ -43,7 +39,7 @@ impl FunDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamDecl {
     pub ident: Ident,
-    pub dty: DataTy,
+    pub ty: Ty,
     pub mutbl: Mutability,
 }
 
@@ -90,7 +86,8 @@ impl fmt::Display for Expr {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ExprKind {
-    // TODO remove GlobalFunIdent
+    Across(Box<Expr>, Box<Expr>),
+    // TODO remove FunIdent
     //  instead? Maybe differentiate between FunctionCall where function is Ident
     //  and Function call where function is expression (so must be lambda)
     //  This is currently wrong, because an global fun ident is not an Expr (has no value).
@@ -133,6 +130,8 @@ pub enum ExprKind {
     // Parallel for (global) thread with input, syncing at the end.
     // for x in view-expr across parallelism-config-expr { body }
     ParForAcross(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
+    ParFor(Box<Expr>, Box<Expr>, Box<Expr>),
+    ForNat(Ident, Nat, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
 }
@@ -470,10 +469,25 @@ impl Place {
     }
 }
 
+#[test]
+fn test_path_eq() {
+    let path1 = vec![Nat::Lit(0)];
+    let path2 = vec![Nat::Lit(0)];
+    assert!(path1 == path2)
+}
+
+#[test]
+fn test_place_eq() {
+    let pl1 = Place::new(Ident::new("inp"), vec![Nat::Lit(0)]);
+    let pl2 = Place::new(Ident::new("inp"), vec![Nat::Lit(0)]);
+    assert!(pl1 == pl2)
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Ty {
     Data(DataTy),
     View(ViewTy),
+    Ident(Ident),
 }
 
 impl Ty {
@@ -488,6 +502,7 @@ impl Ty {
         match self {
             Ty::Data(dty) => dty.non_copyable(),
             Ty::View(vty) => vty.non_copyable(),
+            Ty::Ident(_) => true,
         }
     }
 
@@ -499,6 +514,7 @@ impl Ty {
         match self {
             Ty::Data(dty) => dty.is_fully_alive(),
             Ty::View(vty) => vty.is_fully_alive(),
+            Ty::Ident(_) => true,
         }
     }
 
@@ -506,6 +522,7 @@ impl Ty {
         match self {
             Ty::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
             Ty::View(vty) => vty.contains_ref_to_prv(prv_val_name),
+            Ty::Ident(_) => false,
         }
     }
 
@@ -513,6 +530,17 @@ impl Ty {
         match self {
             Ty::Data(dty) => Ty::Data(dty.subst_ident_kinded(ident_kinded, with)),
             Ty::View(vty) => Ty::View(vty.subst_ident_kinded(ident_kinded, with)),
+            Ty::Ident(ident) => {
+                if &ident_kinded.ident == ident && ident_kinded.kind == Kind::Ty {
+                    match with {
+                        ArgKinded::Ident(idk) => Ty::Ident(idk.clone()),
+                        ArgKinded::Ty(ty) => ty.clone(),
+                        _ => panic!("Trying to substitute type identifier with non-type value."),
+                    }
+                } else {
+                    self.clone()
+                }
+            }
         }
     }
 }
@@ -522,6 +550,7 @@ impl fmt::Display for Ty {
         match self {
             Ty::Data(dty) => write!(f, "{}", dty),
             Ty::View(vty) => write!(f, "{}", vty),
+            Ty::Ident(ident) => write!(f, "{}", ident),
         }
     }
 }
@@ -621,7 +650,12 @@ pub enum DataTy {
         Box<Ty>,
     ),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
+    // TODO remove
     GridConfig(Nat, Nat),
+    Grid(Box<DataTy>, Nat),
+    Block(Box<DataTy>, Nat),
+    // TODO should not be a data type because it contains views?
+    DistribBorrow(ViewTy, ViewTy),
     // Only for type checking purposes.
     Dead(Box<DataTy>),
 }
@@ -638,6 +672,10 @@ impl DataTy {
             Fn(_, _, _, _, _) => false,
             At(_, _) => true,
             GridConfig(_, _) => false,
+            Grid(_, _) => false,
+            Block(_, _) => false,
+            DistribBorrow(parall_exec_loc, input) =>
+                parall_exec_loc.non_copyable() && input.non_copyable(),
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
@@ -657,7 +695,10 @@ impl DataTy {
             | Fn(_, _, _, _, _)
             | At(_, _)
             | Array(_, _)
-            | GridConfig(_, _) => true,
+            | GridConfig(_, _)
+            | Grid(_, _)
+            | Block(_, _)
+            | DistribBorrow(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -668,7 +709,11 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | GridConfig(_, _) | Dead(_) => false,
+            Scalar(_) | Ident(_) | GridConfig(_, _) | Grid(_, _) | Block(_, _) | Dead(_) => false,
+            DistribBorrow(parall_exec_loc, data) => {
+                parall_exec_loc.contains_ref_to_prv(prv_val_name)
+                    || data.contains_ref_to_prv(prv_val_name)
+            }
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -701,7 +746,9 @@ impl DataTy {
                     match with {
                         ArgKinded::Ident(idk) => Ident(idk.clone()),
                         ArgKinded::Ty(Ty::Data(dty)) => dty.clone(),
-                        _ => panic!("Trying to substitute type identifier with non-type value."),
+                        _ => {
+                            panic!("Trying to substitute data type identifier with non-type value.")
+                        }
                     }
                 } else {
                     self.clone()
@@ -709,12 +756,22 @@ impl DataTy {
             }
             Ref(prv, own, mem, ty) => Ref(
                 prv.subst_ident_kinded(ident_kinded, with),
-                own.clone(),
+                *own,
                 mem.subst_ident_kinded(ident_kinded, with),
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
             ),
-            Fn(_, _, _, _, _) => {
-                unimplemented!("No function definitions allowed in another function definition.")
+            Fn(gen_params, params, exec, frame, ret) => {
+                Fn(
+                    gen_params.clone(),
+                    params
+                        .iter()
+                        .map(|param| param.subst_ident_kinded(ident_kinded, with))
+                        .collect(),
+                    // TODO substitute in frame?
+                    exec.clone(),
+                    frame.clone(),
+                    Box::new(ret.subst_ident_kinded(ident_kinded, with)),
+                )
             }
             At(ty, mem) => At(
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
@@ -723,6 +780,18 @@ impl DataTy {
             GridConfig(n1, n2) => GridConfig(
                 n1.subst_ident_kinded(ident_kinded, with),
                 n2.subst_ident_kinded(ident_kinded, with),
+            ),
+            Grid(elem, n) => Grid(
+                Box::new(elem.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            Block(elem, n) => Block(
+                Box::new(elem.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            DistribBorrow(parall_exec_loc, data) => DistribBorrow(
+                parall_exec_loc.subst_ident_kinded(ident_kinded, with),
+                data.subst_ident_kinded(ident_kinded, with),
             ),
             Tuple(elem_tys) => Tuple(
                 elem_tys
@@ -753,6 +822,7 @@ pub enum ScalarTy {
     F32,
     Bool,
     Gpu,
+    Thread,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -821,6 +891,7 @@ impl Memory {
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum ExecLoc {
     CpuThread,
+    Gpu,
     GpuGroup,
     GpuThread,
     View,
@@ -849,25 +920,27 @@ impl IdentKinded {
 }
 
 // TODO should this really be part of the AST? Nats are also part of the Cuda-AST. Separate module.
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(Eq, Hash, Debug, Clone)]
 pub enum Nat {
     Ident(Ident),
     Lit(usize),
     BinOp(BinOpNat, Box<Nat>, Box<Nat>),
+    App(Ident, Vec<Nat>),
 }
 
 impl Nat {
-    pub fn eval(&self) -> usize {
+    pub fn eval(&self) -> Result<usize, String> {
         match self {
-            Nat::Ident(_) => panic!("Cannot evaluate identifier."),
-            Nat::Lit(n) => *n,
+            Nat::Ident(i) => Err(format!("Cannot evaluate identifier `{}`.", i)),
+            Nat::Lit(n) => Ok(*n),
             Nat::BinOp(op, l, r) => match op {
-                BinOpNat::Add => l.eval() + r.eval(),
-                BinOpNat::Sub => l.eval() - r.eval(),
-                BinOpNat::Mul => l.eval() * r.eval(),
-                BinOpNat::Div => l.eval() / r.eval(),
-                BinOpNat::Mod => l.eval() % r.eval(),
+                BinOpNat::Add => Ok(l.eval()? + r.eval()?),
+                BinOpNat::Sub => Ok(l.eval()? - r.eval()?),
+                BinOpNat::Mul => Ok(l.eval()? * r.eval()?),
+                BinOpNat::Div => Ok(l.eval()? / r.eval()?),
+                BinOpNat::Mod => Ok(l.eval()? % r.eval()?),
             },
+            Nat::App(fun, args) => unimplemented!(),
         }
     }
 
@@ -892,12 +965,37 @@ impl Nat {
     }
 }
 
+impl PartialEq for Nat {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Nat::Lit(l), Nat::Lit(o)) => l == o,
+            (Nat::Ident(i), Nat::Ident(o)) => i == o,
+            (Nat::BinOp(op, lhs, rhs), Nat::BinOp(oop, olhs, orhs))
+                if op == oop && lhs == olhs && rhs == orhs =>
+            {
+                true
+            }
+            _ => match (self.eval(), other.eval()) {
+                (Ok(n), Ok(o)) => n == o,
+                _ => {
+                    println!(
+                        "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                        self, other
+                    );
+                    true
+                }
+            },
+        }
+    }
+}
+
 impl fmt::Display for Nat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Ident(ident) => write!(f, "{}", ident),
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
+            Self::App(func, args) => write!(f, "{}(...)", func),
         }
     }
 }
