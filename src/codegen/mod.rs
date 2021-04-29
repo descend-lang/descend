@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{Ident, PlaceExpr};
+use crate::ast::{BinOpNat, Ident, PlaceExpr};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -150,7 +150,9 @@ fn gen_stmt(
                 init: Box::new(init),
                 cond,
                 iter,
-                stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx)),
+                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
+                    body, false, parall_ctx, view_ctx,
+                )))),
             }
         }
         For(ident, coll_expr, body) => {
@@ -277,22 +279,21 @@ fn gen_par_for(
     view_ctx: &mut HashMap<String, ViewExpr>,
 ) -> cu::Stmt {
     let mut v = ViewExpr::create_from(input_view, view_ctx);
-    let pid = match parall_collec.ty.as_ref().unwrap() {
-        desc::Ty::Data(desc::DataTy::Grid(_, _)) => {
-            desc::Nat::Ident(desc::Ident::new("blockIdx.x"))
-        }
-        desc::Ty::Data(desc::DataTy::Block(_, _)) => {
-            desc::Nat::Ident(desc::Ident::new("threadIdx.x"))
-        }
+    let (pid, sync_stmt) = match parall_collec.ty.as_ref().unwrap() {
+        desc::Ty::Data(desc::DataTy::Grid(_, _)) => (
+            desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
+            cu::Stmt::Expr(cu::Expr::Empty),
+        ),
+        desc::Ty::Data(desc::DataTy::Block(_, _)) => (
+            desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
+            cu::Stmt::Expr(cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                template_args: vec![],
+                args: vec![],
+            }),
+        ),
         _ => panic!("Not a parallel collection type."),
     };
-
-    // let condition = match parall_collec.expr {
-    //     desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(_)) => {
-    //         None
-    //     }
-    //     desc::ExprKind::PlaceExpr(desc::PlaceExpr::Proj())
-    // }
 
     // FIXME this assumes that the only functions given are syntactically lambdas
     let fun_bodies = match funs.ty.as_ref().unwrap() {
@@ -310,7 +311,7 @@ fn gen_par_for(
                 let res = scope_view_ctx.insert(
                     input_ident.name.clone(),
                     ViewExpr::Idx {
-                        idx: pid,
+                        idx: pid.clone(),
                         view: Box::new(v),
                     },
                 );
@@ -328,7 +329,17 @@ fn gen_par_for(
         _ => panic!("Expected Lambda or tuple view of Lambda."),
     };
 
-    fun_bodies
+    let p = ParallelityCollec::create_from(parall_collec, parall_ctx);
+    let body = if let Some((Some(parall_cond), _)) = gen_parall_cond(&pid, &p) {
+        cu::Stmt::If {
+            cond: parall_cond,
+            body: Box::new(cu::Stmt::Block(Box::new(fun_bodies))),
+        }
+    } else {
+        fun_bodies
+    };
+
+    cu::Stmt::Seq(Box::new(body), Box::new(sync_stmt))
 }
 
 fn gen_expr(
@@ -462,14 +473,87 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
     }
 }
 
-fn gen_parall_cond(pid: &desc::Nat, parall_collec: &ParallelityCollec) -> Option<cu::Expr> {
+enum ParallRange {
+    Range(desc::Nat, desc::Nat),
+    SplitRange(desc::Nat, desc::Nat, desc::Nat),
+}
+
+// FIXME this currently assumes that there is only one branch, i.e., some threads work (those which
+//  fullfill the condition) and the rest is idle.
+fn gen_parall_cond(
+    pid: &desc::Nat,
+    parall_collec: &ParallelityCollec,
+) -> Option<(Option<cu::Expr>, ParallRange)> {
     match parall_collec {
         ParallelityCollec::Ident(_) => None,
-        ParallelityCollec::Proj { parall_expr, i } => cu::Expr::BinOp {
-            op: cu::BinOp::Lt,
-            lhs: Box::new(pid),
-            rhs: Box::new(Expr::Empty),
-        },
+        ParallelityCollec::Proj { parall_expr, i } => {
+            if let Some((cond, ParallRange::SplitRange(l, m, u))) =
+                gen_parall_cond(pid, parall_expr)
+            {
+                let (cond_stmt, range) = match i.eval() {
+                    Ok(v) => {
+                        if v == 0 {
+                            (
+                                cu::Expr::BinOp {
+                                    op: cu::BinOp::Lt,
+                                    lhs: Box::new(cu::Expr::Nat(pid.clone())),
+                                    rhs: Box::new(cu::Expr::Nat(m.clone())),
+                                },
+                                ParallRange::Range(l, m),
+                            )
+                        } else if v == 1 {
+                            (
+                                cu::Expr::BinOp {
+                                    op: cu::BinOp::Ge,
+                                    lhs: Box::new(cu::Expr::Nat(m.clone())),
+                                    rhs: Box::new(cu::Expr::Nat(pid.clone())),
+                                },
+                                ParallRange::Range(m, u),
+                            )
+                        } else {
+                            panic!("Split can only create a 2-tuple.")
+                        }
+                    }
+                    Err(m) => panic!(m),
+                };
+
+                if let Some(c) = cond {
+                    Some((
+                        Some(cu::Expr::BinOp {
+                            op: cu::BinOp::And,
+                            lhs: Box::new(cond_stmt),
+                            rhs: Box::new(c),
+                        }),
+                        range,
+                    ))
+                } else {
+                    Some((Some(cond_stmt), range))
+                }
+            } else {
+                panic!()
+            }
+        }
+        ParallelityCollec::Split {
+            pos,
+            coll_size,
+            parall_expr,
+        } => {
+            if let Some((cond, ParallRange::Range(l, u))) = gen_parall_cond(pid, parall_expr) {
+                Some((
+                    cond,
+                    ParallRange::SplitRange(
+                        l.clone(),
+                        desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(l), Box::new(pos.clone())),
+                        u,
+                    ),
+                ))
+            } else {
+                Some((
+                    None,
+                    ParallRange::SplitRange(desc::Nat::Lit(0), pos.clone(), coll_size.clone()),
+                ))
+            }
+        }
     }
 }
 
@@ -765,6 +849,7 @@ enum ParallelityCollec {
     },
     Split {
         pos: desc::Nat,
+        coll_size: desc::Nat,
         parall_expr: Box<ParallelityCollec>,
     },
 }
@@ -778,9 +863,12 @@ impl ParallelityCollec {
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::FunIdent(ident) = &f.expr {
                     if ident.name == crate::ty_check::pre_decl::SPLIT {
-                        if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
+                        if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
+                            (&gen_args[0], &gen_args[1], args.first())
+                        {
                             return ParallelityCollec::Split {
                                 pos: k.clone(),
+                                coll_size: n.clone(),
                                 parall_expr: Box::new(ParallelityCollec::create_from(
                                     p, parall_ctx,
                                 )),
