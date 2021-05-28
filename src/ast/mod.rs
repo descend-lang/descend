@@ -115,9 +115,7 @@ pub enum ExprKind {
     Lambda(Vec<ParamDecl>, ExecLoc, DataTy, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
-    // Todo make this the only apply and use template params
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
-    // TODO If
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),

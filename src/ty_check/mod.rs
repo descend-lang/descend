@@ -125,9 +125,6 @@ fn ty_check_expr(
         ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
             ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
         }
-        ExprKind::Across(parall, data) => {
-            ty_check_across(gl_ctx, kind_ctx, ty_ctx, exec, parall, data)?
-        }
         ExprKind::BinOp(bin_op, lhs, rhs) => {
             ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
         }
@@ -140,9 +137,6 @@ fn ty_check_expr(
         ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => {
             ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
         }
-        ExprKind::ParForAcross(id, view_expr, parall_cfg, body) => ty_check_par_for_across(
-            gl_ctx, kind_ctx, ty_ctx, exec, id, view_expr, parall_cfg, body,
-        )?,
         ExprKind::ParFor(parall_collec, input, funs) => {
             ty_check_par_for(gl_ctx, kind_ctx, ty_ctx, exec, parall_collec, input, funs)?
         }
@@ -168,7 +162,7 @@ fn ty_check_for_nat(
     range: &Nat,
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    let mut scoped_kind_ctx: KindCtx = kind_ctx.clone().append_idents(vec![IdentKinded {
+    let scoped_kind_ctx: KindCtx = kind_ctx.clone().append_idents(vec![IdentKinded {
         ident: var.clone(),
         kind: Kind::Nat,
     }]);

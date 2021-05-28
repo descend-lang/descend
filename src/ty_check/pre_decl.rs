@@ -8,8 +8,6 @@ pub static GPU: &str = "gpu";
 pub static GPU_ALLOC: &str = "gpu_alloc";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
-pub static PAR_EXEC_GROUP: &str = "par_exec_group";
-//pub static SPAWN_THREADS: &str = "spawn_threads";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -28,7 +26,6 @@ pub fn fun_decls() -> Vec<(&'static str, DataTy)> {
         (GPU_ALLOC, gpu_alloc_ty()),
         (COPY_TO_HOST, copy_to_host_ty()),
         (EXEC, exec_ty()),
-        (PAR_EXEC_GROUP, par_exec_group_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -148,18 +145,18 @@ fn gpu_alloc_ty() -> DataTy {
 }
 
 // copy_to_host:
-//   <a: prv, b: prv, t: ty>(&a shrd gpu.global ty, &b uniq cpu.heap ty)
+//   <r1: prv, r2: prv, t: ty>(&r1 shrd gpu.global ty, &r2 uniq cpu.heap ty)
 //      -[cpu.thread]-> ()
 fn copy_to_host_ty() -> DataTy {
-    let a = Ident::new("a");
-    let b = Ident::new("b");
+    let r1 = Ident::new("r1");
+    let r2 = Ident::new("r2");
     let t = Ident::new("t");
-    let a_prv = IdentKinded {
-        ident: a.clone(),
+    let r1_prv = IdentKinded {
+        ident: r1.clone(),
         kind: Kind::Provenance,
     };
-    let b_prv = IdentKinded {
-        ident: b.clone(),
+    let r2_prv = IdentKinded {
+        ident: r2.clone(),
         kind: Kind::Provenance,
     };
     let t_ty = IdentKinded {
@@ -167,16 +164,16 @@ fn copy_to_host_ty() -> DataTy {
         kind: Kind::Ty,
     };
     DataTy::Fn(
-        vec![a_prv, b_prv, t_ty],
+        vec![r1_prv, r2_prv, t_ty],
         vec![
             Ty::Data(DataTy::Ref(
-                Provenance::Ident(a),
+                Provenance::Ident(r1),
                 Ownership::Shrd,
                 Memory::GpuGlobal,
                 Box::new(DataTy::Ident(t.clone())),
             )),
             Ty::Data(DataTy::Ref(
-                Provenance::Ident(b),
+                Provenance::Ident(r2),
                 Ownership::Uniq,
                 Memory::CpuHeap,
                 Box::new(DataTy::Ident(t)),
@@ -185,43 +182,6 @@ fn copy_to_host_ty() -> DataTy {
         Box::new(internal::FrameExpr::Empty),
         ExecLoc::CpuThread,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-    )
-}
-
-// spawn_threads:
-//  <nb: nat, nt: nat, a: prv>(&a shrd gpu) -> GridConfig<nb, nt>
-fn spawn_threads_ty() -> DataTy {
-    let nb = Ident::new("nb");
-    let nt = Ident::new("nt");
-    let a = Ident::new("a");
-    let m = Ident::new("m");
-    let nb_nat = IdentKinded {
-        ident: nb.clone(),
-        kind: Kind::Nat,
-    };
-    let nt_nat = IdentKinded {
-        ident: nt.clone(),
-        kind: Kind::Nat,
-    };
-    let a_prv = IdentKinded {
-        ident: a.clone(),
-        kind: Kind::Provenance,
-    };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
-    DataTy::Fn(
-        vec![nb_nat, nt_nat, a_prv, m_mem],
-        vec![Ty::Data(DataTy::Ref(
-            Provenance::Ident(a),
-            Ownership::Shrd,
-            Memory::Ident(m),
-            Box::new(DataTy::Scalar(ScalarTy::Gpu)),
-        ))],
-        Box::new(internal::FrameExpr::Empty),
-        ExecLoc::CpuThread,
-        Box::new(Ty::Data(DataTy::GridConfig(Nat::Ident(nb), Nat::Ident(nt)))),
     )
 }
 
@@ -300,60 +260,6 @@ fn exec_ty() -> DataTy {
         ],
         Box::new(internal::FrameExpr::Empty),
         ExecLoc::CpuThread,
-        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-    )
-}
-
-fn par_exec_group_ty() -> DataTy {
-    let blocks = Ident::new("blocks");
-    let threads = Ident::new("threads");
-    let elem = Ident::new("elem");
-    let n = Ident::new("n");
-    let blocks_nat = IdentKinded {
-        ident: blocks.clone(),
-        kind: Kind::Nat,
-    };
-    let threads_nat = IdentKinded {
-        ident: threads.clone(),
-        kind: Kind::Nat,
-    };
-    let elem_ty = IdentKinded {
-        ident: elem.clone(),
-        kind: Kind::Ty,
-    };
-    let n_nat = IdentKinded {
-        ident: n.clone(),
-        kind: Kind::Nat,
-    };
-    DataTy::Fn(
-        vec![blocks_nat, threads_nat, elem_ty, n_nat],
-        vec![
-            Ty::Data(DataTy::DistribBorrow(
-                ViewTy::Array(
-                    Box::new(Ty::View(ViewTy::Array(
-                        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Thread))),
-                        Nat::Ident(threads.clone()),
-                    ))),
-                    Nat::Ident(blocks),
-                ),
-                ViewTy::Array(Box::new(Ty::Ident(elem.clone())), Nat::Ident(n.clone())),
-            )),
-            Ty::Data(DataTy::Fn(
-                vec![],
-                vec![
-                    Ty::View(ViewTy::Array(
-                        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Thread))),
-                        Nat::Ident(threads),
-                    )),
-                    Ty::Ident(elem),
-                ],
-                Box::new(internal::FrameExpr::Empty),
-                ExecLoc::GpuGroup,
-                Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-            )),
-        ],
-        Box::new(internal::FrameExpr::Empty),
-        ExecLoc::Gpu,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
     )
 }
