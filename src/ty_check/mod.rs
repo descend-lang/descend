@@ -314,17 +314,6 @@ fn ty_check_par_for(
     Ok((funs_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
 }
 
-fn ty_check_across(
-    gl_ctx: &GlobalCtx,
-    kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
-    exec: Exec,
-    parall: &mut Expr,
-    data: &mut Expr,
-) -> Result<(TyCtx, Ty), String> {
-    unimplemented!()
-}
-
 fn ty_check_lambda(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
@@ -375,65 +364,6 @@ fn ty_check_lambda(
     );
 
     Ok((ty_ctx, fun_ty))
-}
-
-fn ty_check_par_for_across(
-    gl_ctx: &GlobalCtx,
-    kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
-    exec: Exec,
-    ident: &Ident,
-    view: &mut Expr,
-    parall_cfg: &mut Expr,
-    body: &mut Expr,
-) -> Result<(TyCtx, Ty), String> {
-    let view_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, view)?;
-    if !matches!(view.ty, Some(Ty::View(ViewTy::Array(_, _)))) {
-        return Err(format!(
-            "Expected an expression of type ArrayView, found an expression of type {:?} instead.",
-            view.ty
-        ));
-    }
-
-    let parall_cfg_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, view_ty_ctx, exec, parall_cfg)?;
-    if !matches!(parall_cfg.ty, Some(Ty::Data(DataTy::GridConfig(_, _)))) {
-        return Err(format!(
-            "Expected an expression of type GridConfig, found an expression of type {:?} instead.",
-            parall_cfg.ty
-        ));
-    }
-
-    if let (Ty::View(ViewTy::Array(elem_ty, m)), Ty::Data(DataTy::GridConfig(nb, nt))) =
-        (view.ty.as_ref().unwrap(), parall_cfg.ty.as_ref().unwrap())
-    {
-        // TODO
-        // if m != Nat::BinOp(BinOpNat::Mul, nb, nt) {
-        //     return Err(
-        //         "The amount of started threads is not equal to the amount of elements passed to the function."
-        //             .to_string());
-        // }
-        println!(
-            "Warning: Did not check equality of {} and {}",
-            m,
-            Nat::BinOp(BinOpNat::Mul, Box::new(nb.clone()), Box::new(nt.clone()))
-        );
-
-        // Use a new context to disable capturing variables.
-        // In the long run, capturing places of copy data types and allowing shared borrowing
-        // should probably be the goal.
-        // TODO Danger this allows capturing of any values
-        //  really needed: Keep prvonance mappings, identifiers with copyable types
-        //  (maybe even non-copyable and therefore everything again in order to allow
-        //  shared borrowing inside).
-        let ctx_with_ident = parall_cfg_ty_ctx
-            .clone()
-            .append_ident_typed(IdentTyped::new(ident.clone(), elem_ty.deref().clone()));
-        // TODO check that type of the identifier is dead? Meaning that it has been used in the loop.
-        ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, Exec::GpuThread, body)?;
-        Ok((parall_cfg_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
-    } else {
-        panic!("unreachable")
-    }
 }
 
 fn ty_check_letprov(
