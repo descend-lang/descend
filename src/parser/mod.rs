@@ -8,7 +8,7 @@ use peg::{error::ParseError, str::LineCol};
 pub use source::*;
 
 use crate::ast::{
-    ArgKinded, DataTy, ExecLoc, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl, Provenance,
+    ArgKinded, DataTy, Exec, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl, Provenance,
     ScalarTy, Ty, ViewTy,
 };
 use crate::ast::{
@@ -313,11 +313,11 @@ peg::parser! {
             / "gpu.shared" { Memory::GpuShared }
             / name:ident() { Memory::Ident(name) }
 
-        pub(crate) rule execution_location() -> ExecLoc
-            = "cpu.thread" { ExecLoc::CpuThread }
-            / "gpu.group" { ExecLoc::GpuGroup }
-            / "gpu.thread" { ExecLoc::GpuThread }
-            / "gpu" { ExecLoc::Gpu }
+        pub(crate) rule execution_location() -> Exec
+            = "cpu.thread" { Exec::CpuThread }
+            / "gpu.group" { Exec::GpuBlock }
+            / "gpu.thread" { Exec::GpuThread }
+            / "gpu" { Exec::GpuGrid }
 
         pub(crate) rule kind() -> Kind
             = "nat" { Kind::Nat }
@@ -641,17 +641,17 @@ mod tests {
     fn execution_location() {
         assert_eq!(
             descend::execution_location("cpu.thread"),
-            Ok(ExecLoc::CpuThread),
+            Ok(Exec::CpuThread),
             "does not recognize cpu.stack memory kind"
         );
         assert_eq!(
             descend::execution_location("gpu.group"),
-            Ok(ExecLoc::GpuGroup),
+            Ok(Exec::GpuBlock),
             "does not recognize cpu.heap memory kind"
         );
         assert_eq!(
             descend::execution_location("gpu.thread"),
-            Ok(ExecLoc::GpuThread),
+            Ok(Exec::GpuThread),
             "does not recognize gpu.global memory kind"
         );
     }

@@ -826,10 +826,10 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
 }
 
 // TODO correct?
-fn is_dev_fun(exec: desc::ExecLoc) -> bool {
+fn is_dev_fun(exec: desc::Exec) -> bool {
     match exec {
-        desc::ExecLoc::Gpu | desc::ExecLoc::GpuGroup | desc::ExecLoc::GpuThread => true,
-        desc::ExecLoc::CpuThread | desc::ExecLoc::View => false,
+        desc::Exec::GpuGrid | desc::Exec::GpuBlock | desc::Exec::GpuThread => true,
+        desc::Exec::CpuThread | desc::Exec::View => false,
     }
 }
 

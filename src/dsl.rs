@@ -49,7 +49,7 @@ pub fn fdef(
     generic_params: Vec<(&str, Kind)>,
     params: Vec<(Mutability, &str, &Ty)>,
     ret_ty: &DataTy,
-    exec: ExecLoc,
+    exec: Exec,
     prv_rels: Vec<PrvRel>,
     body: Expr,
 ) -> FunDef {
@@ -291,7 +291,7 @@ pub fn fun_ty(
     generic_param: Vec<IdentKinded>,
     param_tys: Vec<Ty>,
     frame_expr: &internal::FrameExpr,
-    exec: ExecLoc,
+    exec: Exec,
     ret_ty: &Ty,
 ) -> DataTy {
     DataTy::Fn(

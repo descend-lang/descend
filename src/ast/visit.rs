@@ -8,7 +8,7 @@ pub trait Visitor: Sized {
     fn visit_nat(&mut self, n: &mut Nat) { walk_nat(self, n) }
     fn visit_ident_kinded(&mut self, id_kind: &mut IdentKinded) { walk_ident_kinded(self, id_kind)}
     fn visit_prv_rel(&mut self, prv_rel: &mut PrvRel) { walk_prv_rel(self, prv_rel) }
-    fn visit_exec(&mut self, _exec: &mut ExecLoc) {}
+    fn visit_exec(&mut self, _exec: &mut Exec) {}
     fn visit_mem(&mut self, mem: &mut Memory) { walk_mem(self, mem) }
     fn visit_prv(&mut self, prv: &mut Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}

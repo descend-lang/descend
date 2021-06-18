@@ -9,6 +9,7 @@ use std::fmt;
 
 use descend_derive::span_derive;
 use internal::FrameExpr;
+use std::fmt::Formatter;
 
 pub type CompilUnit = Vec<FunDef>;
 
@@ -18,7 +19,7 @@ pub struct FunDef {
     pub generic_params: Vec<IdentKinded>,
     pub params: Vec<ParamDecl>,
     pub ret_dty: DataTy,
-    pub exec: ExecLoc,
+    pub exec: Exec,
     pub prv_rels: Vec<PrvRel>,
     pub body_expr: Expr,
 }
@@ -105,14 +106,14 @@ pub enum ExprKind {
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
     // Variable declaration, assignment and sequencing
-    // let x: ty = e1; e2
+    // let w x: ty = e1; e2
     Let(Mutability, Ident, Option<Ty>, Box<Expr>, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     // TODO: Add types for parameters.
-    Lambda(Vec<ParamDecl>, ExecLoc, DataTy, Box<Expr>),
+    Lambda(Vec<ParamDecl>, Exec, DataTy, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
@@ -349,7 +350,7 @@ pub enum ArgKinded {
     Ty(Ty),
     Provenance(Provenance),
     Frame(FrameExpr),
-    Exec(ExecLoc),
+    Exec(Exec),
 }
 
 impl ArgKinded {
@@ -644,7 +645,7 @@ pub enum DataTy {
         Vec<IdentKinded>,
         Vec<Ty>,
         Box<internal::FrameExpr>,
-        ExecLoc,
+        Exec,
         Box<Ty>,
     ),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
@@ -886,13 +887,37 @@ impl Memory {
     }
 }
 
+impl fmt::Display for Memory {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Memory::CpuStack => write!(f, "cpu.stack"),
+            Memory::CpuHeap => write!(f, "cpu.heap"),
+            Memory::GpuGlobal => write!(f, "gpu.global"),
+            Memory::GpuShared => write!(f, "gpu.shared"),
+            Memory::Ident(x) => write!(f, "{}", x),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
-pub enum ExecLoc {
+pub enum Exec {
     CpuThread,
-    Gpu,
-    GpuGroup,
+    GpuGrid,
+    GpuBlock,
     GpuThread,
     View,
+}
+
+impl fmt::Display for Exec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Exec::CpuThread => write!(f, "cpu.thread"),
+            Exec::GpuGrid => write!(f, "gpu.grid"),
+            Exec::GpuBlock => write!(f, "gpu.block"),
+            Exec::GpuThread => write!(f, "gpu.thread"),
+            Exec::View => write!(f, "view"),
+        }
+    }
 }
 
 // Provenance Relation: varrho_1:varrho_2

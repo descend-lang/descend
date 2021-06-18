@@ -150,7 +150,8 @@ fn ownership_safe_deref_abs(
 ) -> Result<HashSet<Loan>, String> {
     let currently_checked_pl_expr =
         pl_ctx_no_deref.insert_pl_expr(PlaceExpr::Deref(Box::new(most_spec_pl.to_place_expr())));
-    let ty = super::place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
+    // TODO why would this check be needed if it is not needed for dereferencing with prv values?
+    //let ty = super::place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
     check_own_lte_ref(own, ref_own)?;
     if ownership_safe_under_existing_loans(ty_ctx, reborrows, own, &currently_checked_pl_expr) {
         let mut passed_through_prvs = HashSet::new();

@@ -1,7 +1,7 @@
 use crate::ast::DataTy::Scalar;
 use crate::ast::{
-    internal, BinOpNat, DataTy, ExecLoc, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
-    Provenance, ScalarTy, Ty, ViewTy,
+    internal, BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance,
+    ScalarTy, Ty, ViewTy,
 };
 
 pub static GPU: &str = "gpu";
@@ -59,7 +59,7 @@ fn split_ty() -> DataTy {
             Nat::Ident(n.clone()),
         ))],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::View,
+        Exec::View,
         Box::new(Ty::Data(DataTy::Tuple(vec![
             DataTy::Block(
                 Box::new(DataTy::Scalar(ScalarTy::Thread)),
@@ -84,7 +84,7 @@ fn gpu_ty() -> DataTy {
         vec![],
         vec![Ty::Data(DataTy::Scalar(ScalarTy::I32))],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::CpuThread,
+        Exec::CpuThread,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Gpu))),
     )
 }
@@ -136,7 +136,7 @@ fn gpu_alloc_ty() -> DataTy {
             )),
         ],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::CpuThread,
+        Exec::CpuThread,
         Box::new(Ty::Data(DataTy::At(
             Box::new(DataTy::Ident(t)),
             Memory::GpuGlobal,
@@ -180,7 +180,7 @@ fn copy_to_host_ty() -> DataTy {
             )),
         ],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::CpuThread,
+        Exec::CpuThread,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
     )
 }
@@ -254,12 +254,12 @@ fn exec_ty() -> DataTy {
                     Ty::View(ViewTy::Array(Box::new(Ty::Ident(elem)), Nat::Ident(n))),
                 ],
                 Box::new(internal::FrameExpr::Empty),
-                ExecLoc::Gpu,
+                Exec::GpuGrid,
                 Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
             )),
         ],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::CpuThread,
+        Exec::CpuThread,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
     )
 }
@@ -303,7 +303,7 @@ fn to_view_ty(own: Ownership) -> DataTy {
             )),
         ))],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::View,
+        Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::Data(DataTy::Ref(
                 Provenance::Ident(r),
@@ -341,7 +341,7 @@ fn group_ty() -> DataTy {
             Nat::Ident(n.clone()),
         ))],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::View,
+        Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Array(
                 Box::new(Ty::Ident(t.clone())),
@@ -384,7 +384,7 @@ fn join_ty() -> DataTy {
             Nat::Ident(m.clone()),
         ))],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::View,
+        Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::Ident(t)),
             Nat::BinOp(
@@ -424,7 +424,7 @@ fn transpose_ty() -> DataTy {
             Nat::Ident(m.clone()),
         ))],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::View,
+        Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Array(
                 Box::new(Ty::Ident(t)),
@@ -466,7 +466,7 @@ fn zip_ty() -> DataTy {
             )),
         ],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::View,
+        Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Tuple(vec![Ty::Ident(t1), Ty::Ident(t2)]))),
             Nat::Ident(n),
@@ -499,7 +499,7 @@ fn split_at_ty() -> DataTy {
             Nat::Ident(n.clone()),
         ))],
         Box::new(internal::FrameExpr::Empty),
-        ExecLoc::View,
+        Exec::View,
         Box::new(Ty::View(ViewTy::Tuple(vec![
             Ty::View(ViewTy::Array(
                 Box::new(Ty::Ident(t.clone())),

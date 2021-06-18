@@ -8,6 +8,7 @@ use crate::ast::internal::{IdentTyped, Loan, PrvMapping};
 use crate::ast::DataTy::Scalar;
 use crate::ast::*;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
+use std::collections::HashMap;
 use std::ops::Deref;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -92,7 +93,7 @@ fn ty_check_expr(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     expr: &mut Expr,
 ) -> Result<TyCtx, String> {
     // TODO input contexts are well-formed
@@ -157,7 +158,7 @@ fn ty_check_for_nat(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     var: &Ident,
     range: &Nat,
     body: &mut Expr,
@@ -179,15 +180,15 @@ fn ty_check_par_for(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     parall_collec: &mut Expr,
     input: &mut Expr,
     funs: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    fn to_exec_and_size(parall_collec: &Expr) -> (ExecLoc, Nat) {
+    fn to_exec_and_size(parall_collec: &Expr) -> (Exec, Nat) {
         match parall_collec.ty.as_ref().unwrap() {
-            Ty::Data(DataTy::Grid(_, n)) => (ExecLoc::Gpu, n.clone()),
-            Ty::Data(DataTy::Block(_, n)) => (ExecLoc::GpuGroup, n.clone()),
+            Ty::Data(DataTy::Grid(_, n)) => (Exec::GpuGrid, n.clone()),
+            Ty::Data(DataTy::Block(_, n)) => (Exec::GpuBlock, n.clone()),
             _ => panic!("Expected a parallel collection: Grid or Block."),
         }
     }
@@ -239,8 +240,8 @@ fn ty_check_par_for(
                     return Err("Function does not fit the provided input.".to_string());
                 }
                 let exec = match parall_elem_dty {
-                    DataTy::Block(_, _) => ExecLoc::GpuGroup,
-                    DataTy::Scalar(ScalarTy::Thread) => ExecLoc::GpuThread,
+                    DataTy::Block(_, _) => Exec::GpuBlock,
+                    DataTy::Scalar(ScalarTy::Thread) => Exec::GpuThread,
                     _ => unimplemented!(),
                 };
                 if fun_exec != &exec {
@@ -285,7 +286,7 @@ fn ty_check_across(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     parall: &mut Expr,
     data: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
@@ -296,7 +297,7 @@ fn ty_check_lambda(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     params: &mut [ParamDecl],
     ret_dty: &DataTy,
     body: &mut Expr,
@@ -349,7 +350,7 @@ fn ty_check_par_for_across(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     ident: &Ident,
     view: &mut Expr,
     parall_cfg: &mut Expr,
@@ -397,7 +398,7 @@ fn ty_check_par_for_across(
             .clone()
             .append_ident_typed(IdentTyped::new(ident.clone(), elem_ty.deref().clone()));
         // TODO check that type of the identifier is dead? Meaning that it has been used in the loop.
-        ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, ExecLoc::GpuThread, body)?;
+        ty_check_expr(gl_ctx, kind_ctx, ctx_with_ident, Exec::GpuThread, body)?;
         Ok((parall_cfg_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
     } else {
         panic!("unreachable")
@@ -408,7 +409,7 @@ fn ty_check_letprov(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     prvs: &[String],
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
@@ -428,7 +429,7 @@ fn ty_check_assign_place(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     pl_expr: &mut PlaceExpr,
     e: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
@@ -479,14 +480,19 @@ fn ty_check_assign_deref(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     deref_expr: &mut PlaceExpr,
     e: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let assigned_val_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
-    let deref_ty =
-        place_expr_ty_under_own(kind_ctx, &assigned_val_ty_ctx, Ownership::Uniq, deref_expr)?
-            .clone();
+    let deref_ty = place_expr_ty_under_own(
+        kind_ctx,
+        &assigned_val_ty_ctx,
+        exec,
+        Ownership::Uniq,
+        deref_expr,
+    )?
+    .clone();
 
     if !deref_ty.is_fully_alive() {
         return Err(
@@ -522,12 +528,12 @@ fn ty_check_index_copy(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     pl_expr: &mut PlaceExpr,
     index: &mut Nat,
 ) -> Result<(TyCtx, Ty), String> {
     borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
-    let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr)?;
+    let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
     let elem_ty = match pl_expr_ty {
         Ty::Data(DataTy::Array(elem_ty, n)) => *elem_ty,
         Ty::Data(DataTy::At(arr_ty, _)) => {
@@ -552,7 +558,7 @@ fn ty_check_binary_op(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     bin_op: &BinOp,
     lhs: &mut Expr,
     rhs: &mut Expr,
@@ -578,7 +584,7 @@ fn ty_check_app(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     ef: &mut Expr,
     k_args: &mut [ArgKinded],
     args: &mut [Expr],
@@ -665,7 +671,7 @@ fn ty_check_tuple(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     elems: &mut [Expr],
 ) -> Result<(TyCtx, Ty), String> {
     let mut tmp_ty_ctx = ty_ctx;
@@ -689,7 +695,7 @@ fn ty_check_array(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     elems: &mut Vec<Expr>,
 ) -> Result<(TyCtx, Ty), String> {
     assert!(!elems.is_empty());
@@ -728,7 +734,7 @@ fn ty_check_let(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     ident: &mut Ident,
     ty: &Option<Ty>,
     e1: &mut Expr,
@@ -772,7 +778,7 @@ fn ty_check_seq(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     e1: &mut Expr,
     e2: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
@@ -790,12 +796,11 @@ fn ty_check_seq(
 fn ty_check_pl_expr_with_deref(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
-    let own = Ownership::Shrd;
-    borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)?;
-    if let Ok(ty) = place_expr_ty_under_own(kind_ctx, &ty_ctx, Ownership::Shrd, pl_expr) {
+    borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
+    if let Ok(ty) = place_expr_ty_under_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr) {
         if !ty.is_fully_alive() {
             return Err(format!("Part of Place {:?} was moved before.", pl_expr));
         }
@@ -814,7 +819,7 @@ fn ty_check_pl_expr_with_deref(
 fn ty_check_pl_expr_without_deref(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     let place = pl_expr.to_place().unwrap();
@@ -836,7 +841,7 @@ fn ty_check_borrow(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: ExecLoc,
+    exec: Exec,
     prv_val_name: &str,
     own: Ownership,
     pl_expr: &mut PlaceExpr,
@@ -847,7 +852,7 @@ fn ty_check_borrow(
         );
     }
     let loans = borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)?;
-    let ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, own, pl_expr)?;
+    let ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, exec, own, pl_expr)?;
     if !ty.is_fully_alive() {
         return Err("The place was at least partially moved before.".to_string());
     }
@@ -879,10 +884,11 @@ fn ty_check_borrow(
 fn place_expr_ty_under_own(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     own: Ownership,
     pl_expr: &PlaceExpr,
 ) -> Result<Ty, String> {
-    let (ty, _) = place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, pl_expr)?;
+    let (ty, _) = place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, pl_expr)?;
     Ok(ty)
 }
 
@@ -891,6 +897,7 @@ fn place_expr_ty_under_own(
 fn place_expr_ty_and_passed_prvs_under_own(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     own: Ownership,
     pl_expr: &PlaceExpr,
 ) -> Result<(Ty, Vec<Provenance>), String> {
@@ -899,12 +906,11 @@ fn place_expr_ty_and_passed_prvs_under_own(
         PlaceExpr::Ident(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
         // TC-Proj
         PlaceExpr::Proj(tuple_expr, n) => {
-            proj_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, tuple_expr, n)
+            proj_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, tuple_expr, n)
         }
         // TC-Deref
-        // TODO respect memory
         PlaceExpr::Deref(borr_expr) => {
-            deref_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)
+            deref_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, borr_expr)
         }
     }
 }
@@ -937,15 +943,16 @@ fn var_expr_ty_and_empty_prvs_under_own(
     // )
 }
 
-fn proj_expr_ty_and_passed_prvs_under_own<'a>(
+fn proj_expr_ty_and_passed_prvs_under_own(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     own: Ownership,
     tuple_expr: &PlaceExpr,
     n: &Nat,
 ) -> Result<(Ty, Vec<Provenance>), String> {
     let (pl_expr_ty, passed_prvs) =
-        place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, tuple_expr)?;
+        place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, tuple_expr)?;
     match pl_expr_ty {
         Ty::Data(DataTy::Tuple(elem_dtys)) => {
             if let Some(ty) = elem_dtys.get(n.eval()?) {
@@ -971,21 +978,41 @@ fn proj_expr_ty_and_passed_prvs_under_own<'a>(
 fn deref_expr_ty_and_passed_prvs_under_own<'a>(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     own: Ownership,
     borr_expr: &PlaceExpr,
 ) -> Result<(Ty, Vec<Provenance>), String> {
     let (pl_expr_ty, mut passed_prvs) =
-        place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, own, borr_expr)?;
+        place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, borr_expr)?;
     if let Ty::Data(DataTy::Ref(prv, ref_own, mem, dty)) = pl_expr_ty {
         if ref_own < own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
         }
         let outl_rels = passed_prvs.iter().map(|passed_prv| (&prv, passed_prv));
         subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
+        accessible_memory(exec, &mem)?;
         passed_prvs.push(prv);
         Ok((Ty::Data(*dty), passed_prvs))
     } else {
         Err("Trying to dereference non reference type.".to_string())
+    }
+}
+
+fn accessible_memory(exec: Exec, mem: &Memory) -> Result<(), String> {
+    let gpu_exec_to_mem = vec![
+        (Exec::CpuThread, Memory::CpuStack),
+        (Exec::CpuThread, Memory::CpuHeap),
+        (Exec::GpuThread, Memory::GpuGlobal),
+        (Exec::GpuThread, Memory::GpuShared),
+    ];
+
+    if gpu_exec_to_mem.contains(&(exec, mem.clone())) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Trying to dereference pointer to `{}` from execution resource `{}`",
+            mem, exec
+        ))
     }
 }
 
