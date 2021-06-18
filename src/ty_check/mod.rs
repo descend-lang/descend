@@ -99,11 +99,12 @@ fn ty_check_expr(
     // TODO input contexts are well-formed
     //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
     let (res_ty_ctx, ty) = match &mut expr.expr {
-        ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
-            ty_check_pl_expr_without_deref(&gl_ctx, kind_ctx, ty_ctx, pl_expr)?
-        }
-        ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
-            ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+        ExprKind::PlaceExpr(pl_expr) => {
+            if pl_expr.is_place() {
+                ty_check_pl_expr_without_deref(&gl_ctx, kind_ctx, ty_ctx, pl_expr)?
+            } else {
+                ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+            }
         }
         ExprKind::LetProv(prvs, body) => {
             ty_check_letprov(gl_ctx, kind_ctx, ty_ctx, exec, prvs, body)?
@@ -111,6 +112,9 @@ fn ty_check_expr(
         // TODO respect mutability
         ExprKind::Let(mutable, ident, ty, ref mut e1, ref mut e2) => {
             ty_check_let(gl_ctx, kind_ctx, ty_ctx, exec, ident, ty, e1, e2)?
+        }
+        ExprKind::LetUninit(ident, ty, e) => {
+            ty_check_let_uninit(gl_ctx, kind_ctx, ty_ctx, exec, ident, ty, e)?
         }
         ExprKind::Seq(e1, e2) => ty_check_seq(gl_ctx, kind_ctx, ty_ctx, exec, e1, e2)?,
         ExprKind::Lit(l) => ty_check_literal(ty_ctx, l),
@@ -122,17 +126,15 @@ fn ty_check_expr(
         ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
             ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
         }
-        ExprKind::BinOp(bin_op, lhs, rhs) => {
-            ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
-        }
         ExprKind::Index(pl_expr, index) => {
             ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
         }
-        ExprKind::Assign(pl_expr, e) if pl_expr.is_place() => {
-            ty_check_assign_place(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
-        }
-        ExprKind::Assign(pl_expr, e) if !pl_expr.is_place() => {
-            ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
+        ExprKind::Assign(pl_expr, e) => {
+            if pl_expr.is_place() {
+                ty_check_assign_place(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
+            } else {
+                ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
+            }
         }
         ExprKind::ParFor(parall_collec, input, funs) => {
             ty_check_par_for(gl_ctx, kind_ctx, ty_ctx, exec, parall_collec, input, funs)?
@@ -143,7 +145,11 @@ fn ty_check_expr(
         ExprKind::Lambda(params, exec, ret_ty, body) => {
             ty_check_lambda(gl_ctx, kind_ctx, ty_ctx, *exec, params, ret_ty, body)?
         }
-        e => panic!(format!("Impl missing for: {:?}", e)),
+        ExprKind::BinOp(bin_op, lhs, rhs) => {
+            ty_check_binary_op(gl_ctx, kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
+        }
+        ExprKind::UnOp(un_op, e) => ty_check_unary_op(gl_ctx, kind_ctx, ty_ctx, exec, un_op, e)?,
+        ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
     };
 
     // TODO type well formed under output contexts
@@ -549,6 +555,8 @@ fn ty_check_index_copy(
     }
 }
 
+// FIXME currently assumes that binary operators exist only for f32 and i32 and that both
+//  arguments have to be of the same type
 fn ty_check_binary_op(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
@@ -571,6 +579,28 @@ fn ty_check_binary_op(
         _ => Err(format!(
             "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
             bin_op, lhs, rhs
+        )),
+    }
+}
+
+// FIXME currently assumes that binary operators exist only for f32 and i32
+fn ty_check_unary_op(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    un_op: &UnOp,
+    e: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    let res_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
+    let e_ty = e.ty.as_ref().unwrap();
+    match e_ty {
+        Ty::Data(DataTy::Scalar(ScalarTy::F32)) | Ty::Data(DataTy::Scalar(ScalarTy::I32)) => {
+            Ok((res_ctx, e_ty.clone()))
+        }
+        _ => Err(format!(
+            "Exected a number type (i.e., f32 or i32), but found {:?}",
+            e_ty
         )),
     }
 }
@@ -777,6 +807,33 @@ fn ty_check_let(
     let ty_ctx_e2 = ty_check_expr(gl_ctx, kind_ctx, garbage_coll_ty_ctx_with_ident, exec, e2)?;
     let ty_ctx_e2_no_ident = ty_ctx_e2.drop_ident(ident).unwrap();
     Ok((ty_ctx_e2_no_ident, e2.ty.as_ref().unwrap().clone()))
+}
+
+// TODO respect mutability, uninit vars must always be mutable
+fn ty_check_let_uninit(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    ident: &Ident,
+    ty: &Ty,
+    expr: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    if let Ty::Data(dty) = ty {
+        let ident_with_ty =
+            IdentTyped::new(ident.clone(), Ty::Data(DataTy::Dead(Box::new(dty.clone()))));
+        let final_ty_ctx = ty_check_expr(
+            gl_ctx,
+            kind_ctx,
+            ty_ctx.append_ident_typed(ident_with_ty),
+            exec,
+            expr,
+        )?;
+        Ok((final_ty_ctx, expr.ty.as_ref().unwrap().clone()))
+    } else {
+        Err("Cannot create mutable variable of non data type.".to_string())
+    }
+    // TODO check if ident is fully dead after e?
 }
 
 fn ty_check_seq(

@@ -100,7 +100,7 @@ pub enum ExprKind {
     LetProv(Vec<String>, Box<Expr>),
     // Variable declaration
     // let mut x: ty;
-    LetUninit(Ident, Ty),
+    LetUninit(Ident, Ty, Box<Expr>),
     // Variable declaration, assignment and sequencing
     // let w x: ty = e1; e2
     // TODO box Ty in Option to reduce size?

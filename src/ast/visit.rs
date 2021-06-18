@@ -187,9 +187,10 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_pl_expr(pl_expr);
         }
         ExprKind::LetProv(_, expr) => visitor.visit_expr(expr),
-        ExprKind::LetUninit(ident, ty) => {
+        ExprKind::LetUninit(ident, ty, e) => {
             visitor.visit_ident(ident);
             visitor.visit_ty(ty);
+            visitor.visit_expr(e);
         }
         ExprKind::Let(mutabl, ident, ty, e1, e2) => {
             visitor.visit_mutability(mutabl);
