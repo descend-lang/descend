@@ -1,4 +1,3 @@
-use crate::ast::DataTy::Scalar;
 use crate::ast::{
     internal, BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance,
     ScalarTy, Ty, ViewTy,
@@ -19,7 +18,7 @@ pub static TRANSPOSE: &str = "transpose";
 
 pub static SPLIT: &str = "split";
 
-pub fn fun_decls() -> Vec<(&'static str, DataTy)> {
+pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
         // Built-in functions
         (GPU, gpu_ty()),
@@ -41,7 +40,7 @@ pub fn fun_decls() -> Vec<(&'static str, DataTy)> {
 // split:
 //  <k: nat, n: nat>(Block<Thread, n>) -> (Block<Thread, k>, Block<Thread, n-k>)
 // TODO add t: ty for inner part (i.e., Thread/Warp), or do it even more correctly right away...
-fn split_ty() -> DataTy {
+fn split_ty() -> Ty {
     let k = Ident::new("k");
     let n = Ident::new("n");
     let k_nat = IdentKinded {
@@ -52,13 +51,12 @@ fn split_ty() -> DataTy {
         ident: n.clone(),
         kind: Kind::Nat,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![k_nat, n_nat],
         vec![Ty::Data(DataTy::Block(
             Box::new(DataTy::Scalar(ScalarTy::Thread)),
             Nat::Ident(n.clone()),
         ))],
-        Box::new(internal::FrameExpr::Empty),
         Exec::View,
         Box::new(Ty::Data(DataTy::Tuple(vec![
             DataTy::Block(
@@ -79,11 +77,10 @@ fn split_ty() -> DataTy {
 
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
-fn gpu_ty() -> DataTy {
-    DataTy::Fn(
+fn gpu_ty() -> Ty {
+    Ty::Fn(
         vec![],
         vec![Ty::Data(DataTy::Scalar(ScalarTy::I32))],
-        Box::new(internal::FrameExpr::Empty),
         Exec::CpuThread,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Gpu))),
     )
@@ -93,7 +90,7 @@ fn gpu_ty() -> DataTy {
 //   <r1: prv, r2: prv, m1: mem, m2: mem, t: ty>(
 //      &r1 uniq m1 Gpu, &r2 shrd m2 t
 //   ) -[cpu.thread]-> t @ gpu.global
-fn gpu_alloc_ty() -> DataTy {
+fn gpu_alloc_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
     let m1 = Ident::new("m1");
@@ -119,7 +116,7 @@ fn gpu_alloc_ty() -> DataTy {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![r1_prv, r2_prv, m1_mem, m2_mem, t_ty],
         vec![
             Ty::Data(DataTy::Ref(
@@ -135,7 +132,6 @@ fn gpu_alloc_ty() -> DataTy {
                 Box::new(DataTy::Ident(t.clone())),
             )),
         ],
-        Box::new(internal::FrameExpr::Empty),
         Exec::CpuThread,
         Box::new(Ty::Data(DataTy::At(
             Box::new(DataTy::Ident(t)),
@@ -147,7 +143,7 @@ fn gpu_alloc_ty() -> DataTy {
 // copy_to_host:
 //   <r1: prv, r2: prv, t: ty>(&r1 shrd gpu.global ty, &r2 uniq cpu.heap ty)
 //      -[cpu.thread]-> ()
-fn copy_to_host_ty() -> DataTy {
+fn copy_to_host_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
     let t = Ident::new("t");
@@ -163,7 +159,7 @@ fn copy_to_host_ty() -> DataTy {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![r1_prv, r2_prv, t_ty],
         vec![
             Ty::Data(DataTy::Ref(
@@ -179,7 +175,6 @@ fn copy_to_host_ty() -> DataTy {
                 Box::new(DataTy::Ident(t)),
             )),
         ],
-        Box::new(internal::FrameExpr::Empty),
         Exec::CpuThread,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
     )
@@ -190,7 +185,7 @@ fn copy_to_host_ty() -> DataTy {
 //        [[elem; n]],
 //        (Grid<Block<Thread, threads>, blocks>, [[elem; n]]) -[gpu]-> ())
 // -> ()
-fn exec_ty() -> DataTy {
+fn exec_ty() -> Ty {
     let blocks = Ident::new("blocks");
     let threads = Ident::new("threads");
     let r = Ident::new("r");
@@ -221,7 +216,7 @@ fn exec_ty() -> DataTy {
         ident: n.clone(),
         kind: Kind::Nat,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![blocks_nat, threads_nat, r_prv, m_mem, elem_ty, n_nat],
         vec![
             Ty::Data(DataTy::Ref(
@@ -234,7 +229,7 @@ fn exec_ty() -> DataTy {
                 Box::new(Ty::Ident(elem.clone())),
                 Nat::Ident(n.clone()),
             )),
-            Ty::Data(DataTy::Fn(
+            Ty::Fn(
                 vec![],
                 vec![
                     // Ty::View(ViewTy::Array(
@@ -253,12 +248,10 @@ fn exec_ty() -> DataTy {
                     )),
                     Ty::View(ViewTy::Array(Box::new(Ty::Ident(elem)), Nat::Ident(n))),
                 ],
-                Box::new(internal::FrameExpr::Empty),
                 Exec::GpuGrid,
                 Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-            )),
+            ),
         ],
-        Box::new(internal::FrameExpr::Empty),
         Exec::CpuThread,
         Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
     )
@@ -270,7 +263,7 @@ fn exec_ty() -> DataTy {
 //  <r: prv, m: mem, n: nat, t: ty>(&r shrd m [t; n]) -[view]-> [[&r shrd m t; n]]
 // to_view_mut:
 //  <r: prv, m: mem, n: nat, t: ty>(&r uniq m [t; n]) -[view]-> [[&r uniq m t; n]]
-fn to_view_ty(own: Ownership) -> DataTy {
+fn to_view_ty(own: Ownership) -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let n = Ident::new("n");
@@ -291,7 +284,7 @@ fn to_view_ty(own: Ownership) -> DataTy {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![r_prv, m_mem, n_nat, t_ty],
         vec![Ty::Data(DataTy::Ref(
             Provenance::Ident(r.clone()),
@@ -302,7 +295,6 @@ fn to_view_ty(own: Ownership) -> DataTy {
                 Nat::Ident(n.clone()),
             )),
         ))],
-        Box::new(internal::FrameExpr::Empty),
         Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::Data(DataTy::Ref(
@@ -318,7 +310,7 @@ fn to_view_ty(own: Ownership) -> DataTy {
 
 // group:
 //  <size: nat, n: nat, t: ty>([[t; n]]) -> [[ [[t; size]]; n/size ]]
-fn group_ty() -> DataTy {
+fn group_ty() -> Ty {
     let s = Ident::new("s");
     let n = Ident::new("n");
     let t = Ident::new("t");
@@ -334,13 +326,12 @@ fn group_ty() -> DataTy {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![s_nat, n_nat, t_ty],
         vec![Ty::View(ViewTy::Array(
             Box::new(Ty::Ident(t.clone())),
             Nat::Ident(n.clone()),
         ))],
-        Box::new(internal::FrameExpr::Empty),
         Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Array(
@@ -358,7 +349,7 @@ fn group_ty() -> DataTy {
 
 // join:
 //  <m: nat, n: nat, t: ty>([[ [[t; n]]; m]]) -> [[t; m*n]]
-fn join_ty() -> DataTy {
+fn join_ty() -> Ty {
     let m = Ident::new("m");
     let n = Ident::new("n");
     let t = Ident::new("t");
@@ -374,7 +365,7 @@ fn join_ty() -> DataTy {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![m_nat, n_nat, t_ty],
         vec![Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Array(
@@ -383,7 +374,6 @@ fn join_ty() -> DataTy {
             ))),
             Nat::Ident(m.clone()),
         ))],
-        Box::new(internal::FrameExpr::Empty),
         Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::Ident(t)),
@@ -398,7 +388,7 @@ fn join_ty() -> DataTy {
 
 // transpose:
 //  <m: nat, n: nat, t: ty>([[ [[t; n]]; m]]) -> [[ [[t; m]]; n]]
-fn transpose_ty() -> DataTy {
+fn transpose_ty() -> Ty {
     let m = Ident::new("m");
     let n = Ident::new("n");
     let t = Ident::new("t");
@@ -414,7 +404,7 @@ fn transpose_ty() -> DataTy {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![m_nat, n_nat, t_ty],
         vec![Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Array(
@@ -423,7 +413,6 @@ fn transpose_ty() -> DataTy {
             ))),
             Nat::Ident(m.clone()),
         ))],
-        Box::new(internal::FrameExpr::Empty),
         Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Array(
@@ -437,7 +426,7 @@ fn transpose_ty() -> DataTy {
 
 // zip:
 //  <n: nat, t1: ty, t2:ty>([[t1; n]], [[t2; n]]) -> [[{t1, t2}; n]]
-fn zip_ty() -> DataTy {
+fn zip_ty() -> Ty {
     let n = Ident::new("n");
     let t1 = Ident::new("t1");
     let t2 = Ident::new("t2");
@@ -453,7 +442,7 @@ fn zip_ty() -> DataTy {
         ident: t2.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![n_nat, t1_ty, t2_ty],
         vec![
             Ty::View(ViewTy::Array(
@@ -465,7 +454,6 @@ fn zip_ty() -> DataTy {
                 Nat::Ident(n.clone()),
             )),
         ],
-        Box::new(internal::FrameExpr::Empty),
         Exec::View,
         Box::new(Ty::View(ViewTy::Array(
             Box::new(Ty::View(ViewTy::Tuple(vec![Ty::Ident(t1), Ty::Ident(t2)]))),
@@ -476,7 +464,7 @@ fn zip_ty() -> DataTy {
 
 // split:
 //  <s: nat, n: nat, t: ty>([[t; n]]) -> {[[t; s]], [[t; n-s]]}
-fn split_at_ty() -> DataTy {
+fn split_at_ty() -> Ty {
     let s = Ident::new("s");
     let n = Ident::new("n");
     let t = Ident::new("t");
@@ -492,13 +480,12 @@ fn split_at_ty() -> DataTy {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    DataTy::Fn(
+    Ty::Fn(
         vec![s_nat, n_nat, t_ty],
         vec![Ty::View(ViewTy::Array(
             Box::new(Ty::Ident(t.clone())),
             Nat::Ident(n.clone()),
         ))],
-        Box::new(internal::FrameExpr::Empty),
         Exec::View,
         Box::new(Ty::View(ViewTy::Tuple(vec![
             Ty::View(ViewTy::Array(

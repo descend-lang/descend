@@ -177,11 +177,11 @@ impl TyCtx {
 
             match &ty {
                 Ty::Ident(_)
+                | Ty::Fn(_, _, _, _)
                 | Ty::Data(d::Scalar(_))
                 | Ty::Data(d::Array(_, _))
                 | Ty::Data(d::At(_, _))
                 | Ty::Data(d::Ref(_, _, _, _))
-                | Ty::Data(d::Fn(_, _, _, _, _))
                 | Ty::Data(d::Ident(_))
                 | Ty::Data(d::GridConfig(_, _))
                 | Ty::Data(d::Grid(_, _))
@@ -293,6 +293,7 @@ impl TyCtx {
                 pl,
                 match pl_ty {
                     Ty::Ident(ident) => unimplemented!(),
+                    Ty::Fn(_, _, _, _) => unimplemented!(),
                     Ty::Data(dty) => Ty::Data(DataTy::Dead(Box::new(dty))),
                     Ty::View(vty) => Ty::View(ViewTy::Dead(Box::new(vty))),
                 },
@@ -464,7 +465,7 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    items: HashMap<String, DataTy>,
+    items: HashMap<String, Ty>,
 }
 
 impl GlobalCtx {
@@ -483,7 +484,7 @@ impl GlobalCtx {
         self
     }
 
-    pub fn append_fun_decls(mut self, fun_decls: &[(&str, DataTy)]) -> Self {
+    pub fn append_fun_decls(mut self, fun_decls: &[(&str, Ty)]) -> Self {
         self.items.extend(
             fun_decls
                 .iter()
@@ -492,7 +493,7 @@ impl GlobalCtx {
         self
     }
 
-    pub fn fun_ty_by_name(&self, name: &str) -> Result<&DataTy, String> {
+    pub fn fun_ty_by_name(&self, name: &str) -> Result<&Ty, String> {
         match self.items.get(name) {
             Some(ty) => Ok(ty),
             None => Err(format!(

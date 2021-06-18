@@ -25,12 +25,11 @@ pub struct FunDef {
 }
 
 impl FunDef {
-    pub fn ty(&self) -> DataTy {
+    pub fn ty(&self) -> Ty {
         let param_tys: Vec<_> = self.params.iter().map(|p_decl| p_decl.ty.clone()).collect();
-        DataTy::Fn(
+        Ty::Fn(
             self.generic_params.clone(),
             param_tys,
-            Box::new(FrameExpr::Empty),
             self.exec,
             Box::new(Ty::Data(self.ret_dty.clone())),
         )
@@ -486,6 +485,7 @@ fn test_place_eq() {
 pub enum Ty {
     Data(DataTy),
     View(ViewTy),
+    Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
     Ident(Ident),
 }
 
@@ -501,6 +501,7 @@ impl Ty {
         match self {
             Ty::Data(dty) => dty.non_copyable(),
             Ty::View(vty) => vty.non_copyable(),
+            Ty::Fn(_, _, _, _) => false,
             Ty::Ident(_) => true,
         }
     }
@@ -513,7 +514,7 @@ impl Ty {
         match self {
             Ty::Data(dty) => dty.is_fully_alive(),
             Ty::View(vty) => vty.is_fully_alive(),
-            Ty::Ident(_) => true,
+            Ty::Ident(_) | Ty::Fn(_, _, _, _) => true,
         }
     }
 
@@ -521,6 +522,12 @@ impl Ty {
         match self {
             Ty::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
             Ty::View(vty) => vty.contains_ref_to_prv(prv_val_name),
+            Ty::Fn(_, param_tys, _, ret_ty) => {
+                param_tys
+                    .iter()
+                    .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
+                    || ret_ty.contains_ref_to_prv(prv_val_name)
+            }
             Ty::Ident(_) => false,
         }
     }
@@ -529,6 +536,15 @@ impl Ty {
         match self {
             Ty::Data(dty) => Ty::Data(dty.subst_ident_kinded(ident_kinded, with)),
             Ty::View(vty) => Ty::View(vty.subst_ident_kinded(ident_kinded, with)),
+            Ty::Fn(gen_params, params, exec, ret) => Ty::Fn(
+                gen_params.clone(),
+                params
+                    .iter()
+                    .map(|param| param.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
+                exec.clone(),
+                Box::new(ret.subst_ident_kinded(ident_kinded, with)),
+            ),
             Ty::Ident(ident) => {
                 if &ident_kinded.ident == ident && ident_kinded.kind == Kind::Ty {
                     match with {
@@ -550,6 +566,7 @@ impl fmt::Display for Ty {
             Ty::Data(dty) => write!(f, "{}", dty),
             Ty::View(vty) => write!(f, "{}", vty),
             Ty::Ident(ident) => write!(f, "{}", ident),
+            Ty::Fn(_, _, _, _) => unimplemented!(),
         }
     }
 }
@@ -641,13 +658,7 @@ pub enum DataTy {
     Tuple(Vec<DataTy>),
     Array(Box<DataTy>, Nat),
     At(Box<DataTy>, Memory),
-    Fn(
-        Vec<IdentKinded>,
-        Vec<Ty>,
-        Box<internal::FrameExpr>,
-        Exec,
-        Box<Ty>,
-    ),
+
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
     // TODO remove
     GridConfig(Nat, Nat),
@@ -668,7 +679,6 @@ impl DataTy {
             Ident(_) => true,
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
-            Fn(_, _, _, _, _) => false,
             At(_, _) => true,
             GridConfig(_, _) => false,
             Grid(_, _) => false,
@@ -691,7 +701,6 @@ impl DataTy {
             Scalar(_)
             | Ident(_)
             | Ref(_, _, _, _)
-            | Fn(_, _, _, _, _)
             | At(_, _)
             | Array(_, _)
             | GridConfig(_, _)
@@ -721,13 +730,7 @@ impl DataTy {
                 };
                 found_reference || ty.contains_ref_to_prv(prv_val_name)
             }
-            // TODO Probably need to scan frame_expr as well
-            Fn(_, param_tys, frame_expr, _, ret_ty) => {
-                param_tys
-                    .iter()
-                    .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
-                    || ret_ty.contains_ref_to_prv(prv_val_name)
-            }
+
             At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             Tuple(elem_tys) => elem_tys
@@ -759,19 +762,7 @@ impl DataTy {
                 mem.subst_ident_kinded(ident_kinded, with),
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
             ),
-            Fn(gen_params, params, exec, frame, ret) => {
-                Fn(
-                    gen_params.clone(),
-                    params
-                        .iter()
-                        .map(|param| param.subst_ident_kinded(ident_kinded, with))
-                        .collect(),
-                    // TODO substitute in frame?
-                    exec.clone(),
-                    frame.clone(),
-                    Box::new(ret.subst_ident_kinded(ident_kinded, with)),
-                )
-            }
+
             At(ty, mem) => At(
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
                 mem.subst_ident_kinded(ident_kinded, with),
@@ -906,6 +897,16 @@ pub enum Exec {
     GpuBlock,
     GpuThread,
     View,
+}
+
+impl Exec {
+    pub fn callable_in(&self, exec: &Self) -> bool {
+        if self == &Exec::View {
+            true
+        } else {
+            self == exec
+        }
+    }
 }
 
 impl fmt::Display for Exec {

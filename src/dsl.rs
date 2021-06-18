@@ -287,20 +287,8 @@ macro_rules! tuple_ty {
     }
 }
 
-pub fn fun_ty(
-    generic_param: Vec<IdentKinded>,
-    param_tys: Vec<Ty>,
-    frame_expr: &internal::FrameExpr,
-    exec: Exec,
-    ret_ty: &Ty,
-) -> DataTy {
-    DataTy::Fn(
-        generic_param,
-        param_tys,
-        Box::new(frame_expr.clone()),
-        exec,
-        Box::new(ret_ty.clone()),
-    )
+pub fn fun_ty(generic_param: Vec<IdentKinded>, param_tys: Vec<Ty>, exec: Exec, ret_ty: &Ty) -> Ty {
+    Ty::Fn(generic_param, param_tys, exec, Box::new(ret_ty.clone()))
 }
 
 // Scalar Types

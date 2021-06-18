@@ -298,7 +298,8 @@ fn gen_par_for(
     // FIXME this assumes that the only functions given are syntactically lambdas
     let fun_bodies = match funs.ty.as_ref().unwrap() {
         desc::Ty::View(desc::ViewTy::Tuple(_)) => unimplemented!(),
-        desc::Ty::Data(_) => {
+        desc::Ty::Data(_) => panic!("Cannot generate function body from expression of data type."),
+        desc::Ty::Fn(_, _, _, _) => {
             if let desc::ExprKind::Lambda(params, _, _, body) = &funs.expr {
                 let parall_collec = params[0].ident.clone();
                 let mut scope_parall_ctx: HashMap<String, ParallelityCollec> = HashMap::new();
@@ -721,6 +722,7 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
          such that we know that the only identifiers left are data types. This will enable simply passing the \
          identifiers around in C."),
         desc::ArgKinded::Ty(desc::Ty::View(_)) => None,
+        desc::ArgKinded::Ty(desc::Ty::Fn(_, _, _, _)) => unimplemented!("needed?"),
         desc::ArgKinded::Memory(_)
         | desc::ArgKinded::Exec(_)
         | desc::ArgKinded::Provenance(_)
@@ -740,6 +742,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
         Ident(ident) => Some(cu::Ty::Ident(ident.name.clone())),
+        Fn(_, _, _, _) => unimplemented!("needed?"),
         Data(d::Scalar(s)) => Some(match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
@@ -778,7 +781,6 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
                 buff_kind,
             ))
         }
-        Data(d::Fn(_, _, _, _, _)) => unimplemented!("needed?"),
         Data(d::Dead(_)) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }

@@ -112,13 +112,6 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_dty(dty);
             visitor.visit_mem(mem)
         }
-        DataTy::Fn(gen_params, params, frm_expr, exec, ret_ty) => {
-            walk_list!(visitor, visit_ident_kinded, gen_params);
-            walk_list!(visitor, visit_ty, params);
-            visitor.visit_frm_expr(frm_expr);
-            visitor.visit_exec(exec);
-            visitor.visit_ty(ret_ty)
-        }
         DataTy::Ref(prv, own, mem, dty) => {
             visitor.visit_prv(prv);
             visitor.visit_own(own);
@@ -149,6 +142,12 @@ pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
     match ty {
         Ty::Data(dty) => visitor.visit_dty(dty),
         Ty::View(vty) => visitor.visit_vty(vty),
+        Ty::Fn(gen_params, params, exec, ret_ty) => {
+            walk_list!(visitor, visit_ident_kinded, gen_params);
+            walk_list!(visitor, visit_ty, params);
+            visitor.visit_exec(exec);
+            visitor.visit_ty(ret_ty)
+        }
         Ty::Ident(ident) => visitor.visit_ident(ident),
     }
 }

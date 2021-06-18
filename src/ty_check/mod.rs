@@ -20,7 +20,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), String> {
 
 pub fn ty_check_with_pre_decl_funs(
     compil_unit: &mut CompilUnit,
-    pre_decl_funs: &[(&str, DataTy)],
+    pre_decl_funs: &[(&str, Ty)],
 ) -> Result<(), String> {
     let gl_ctx = GlobalCtx::new()
         .append_from_gl_fun_defs(compil_unit)
@@ -99,12 +99,9 @@ fn ty_check_expr(
     // TODO input contexts are well-formed
     //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
     let (res_ty_ctx, ty) = match &mut expr.expr {
-        ExprKind::FunIdent(ident) => (
-            ty_ctx,
-            Ty::Data(gl_ctx.fun_ty_by_name(&ident.name)?.clone()),
-        ),
+        ExprKind::FunIdent(ident) => (ty_ctx, gl_ctx.fun_ty_by_name(&ident.name)?.clone()),
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
-            ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+            ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, pl_expr)?
         }
         ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
             ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
@@ -198,7 +195,7 @@ fn ty_check_par_for(
         input: &Expr,
     ) -> Result<(), String> {
         match funs.ty.as_ref().unwrap() {
-            Ty::Data(DataTy::Fn(_, param_tys, _, fun_exec, ret_ty)) => {
+            Ty::Fn(_, param_tys, fun_exec, ret_ty) => {
                 if param_tys.len() != 2 {
                     return Err(
                         "Wrong amount of parameters in provided function. Expected 2,\
@@ -335,13 +332,12 @@ fn ty_check_lambda(
         )
     );
 
-    let fun_ty = Ty::Data(DataTy::Fn(
+    let fun_ty = Ty::Fn(
         vec![],
         params.iter().map(|decl| decl.ty.clone()).collect(),
-        Box::new(internal::FrameExpr::Empty),
         exec,
         Box::new(Ty::Data(ret_dty.clone())),
-    ));
+    );
 
     Ok((ty_ctx, fun_ty))
 }
@@ -611,9 +607,8 @@ fn ty_check_app(
 
     // TODO check well-kinded: FrameTyping, Prv, Ty
     let mut res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, ef)?;
-    if let Ty::Data(DataTy::Fn(gen_params, param_tys, _, exec_f, out_ty)) = ef.ty.as_ref().unwrap()
-    {
-        if exec_f != &exec {
+    if let Ty::Fn(gen_params, param_tys, exec_f, out_ty) = ef.ty.as_ref().unwrap() {
+        if !exec_f.callable_in(&exec) {
             return Err(format!(
                 "Trying to apply function for execution resource `{}` \
                 under execution resource `{}`",
@@ -694,6 +689,9 @@ fn ty_check_tuple(
             Ty::Ident(_) => Err(
                 "Tuple elements must be data types, but found general type identifier.".to_string(),
             ),
+            Ty::Fn(_, _, _, _) => {
+                Err("Tuple elements must be data types, but found function type.".to_string())
+            }
         })
         .collect();
     Ok((tmp_ty_ctx, Ty::Data(DataTy::Tuple(elem_tys?))))
@@ -827,7 +825,6 @@ fn ty_check_pl_expr_with_deref(
 fn ty_check_pl_expr_without_deref(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    exec: Exec,
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     let place = pl_expr.to_place().unwrap();
@@ -869,6 +866,7 @@ fn ty_check_borrow(
         Ty::Data(DataTy::At(inner_ty, m)) => (inner_ty.deref().clone(), m.clone()),
         Ty::Data(dty) => (dty.clone(), Memory::CpuStack),
         Ty::View(_) => return Err("Trying to borrow a view.".to_string()),
+        Ty::Fn(_, _, _, _) => return Err("Trying to borrow a function.".to_string()),
         Ty::Ident(_) => {
             return Err(
                 "Borrowing from value of unspecified type. This could be a view.\
@@ -941,6 +939,13 @@ fn var_expr_ty_and_empty_prvs_under_own(
             }
             return Ok((ty.clone(), vec![]));
         }
+        f @ Ty::Fn(_, _, _, _) => {
+            if !f.is_fully_alive() {
+                panic!("This should never happen.")
+            }
+            return Ok((ty.clone(), vec![]));
+        }
+        // TODO this is probably wrong, should probably succeed instead
         Ty::Ident(ident) => panic!("Identifier {} found. Expected instantiated type.", ident),
     }
     //
