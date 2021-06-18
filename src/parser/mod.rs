@@ -222,11 +222,16 @@ peg::parser! {
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
-            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat() _ {n})+ {ns})? {
+            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat_lit() _ {n})+ {ns})? {
                 let ns = ns.unwrap_or(vec![]);
                 let root = PlaceExpr::Ident(ident);
                 // . operator binds stronger
-                let proj = ns.into_iter().fold(root, |prev,n| PlaceExpr::Proj(Box::new(prev), n));
+                let proj = ns.into_iter().fold(root,
+                    |prev, n | PlaceExpr::Proj(Box::new(prev),
+                        match n {
+                            Nat::Lit(n) => n,
+                        _ => panic!("Expected Nat Literal but found different Nat expression.") }
+                ));
                 // * operator binds weaker
                 derefs.iter().fold(proj, |prev,_| PlaceExpr::Deref(Box::new(prev)))
                 // TODO: Allow parentheses for priority override?
@@ -791,7 +796,7 @@ mod tests {
             descend::place_expression("x.0"),
             Ok(PlaceExpr::Proj(
                 Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                Nat::Lit(0)
+                0
             )),
             "does not recognize place expression *x"
         );
@@ -799,7 +804,7 @@ mod tests {
             descend::place_expression("*x.0"),
             Ok(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
                 Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                Nat::Lit(0)
+                0
             )))),
             "does not recognize place expression *x.0"
         );
@@ -879,7 +884,7 @@ mod tests {
             Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
                 PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
                     Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                    Nat::Lit(7)
+                    7
                 )))
             ))),))
         );
@@ -888,9 +893,9 @@ mod tests {
             Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Proj(
                 Box::new(PlaceExpr::Proj(
                     Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                    Nat::Lit(2)
+                    2
                 )),
-                Nat::Lit(3)
+                3
             )),))
         );
     }
@@ -1118,15 +1123,15 @@ mod tests {
                 Box::new(Expr::new(ExprKind::Assign(
                     PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
                         Box::new(PlaceExpr::Ident(elems.clone())),
-                        Nat::Lit(0)
+                        0
                     ))),
                     Box::new(Expr::new(ExprKind::BinOp(
                         BinOp::Add,
                         Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
-                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), Nat::Lit(0))
+                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), 0)
                         ))))),
                         Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
-                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), Nat::Lit(1))
+                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), 1)
                         )))))
                     )))
                 )))

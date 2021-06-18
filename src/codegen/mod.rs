@@ -457,7 +457,7 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
     match &pl_expr {
         desc::PlaceExpr::Proj(pl, n) => cu::Expr::Proj {
             tuple: Box::new(gen_pl_expr(pl.as_ref(), view_ctx)),
-            n: n.clone(),
+            n: *n,
         },
         desc::PlaceExpr::Ident(ident) => cu::Expr::Ident(ident.name.clone()),
         desc::PlaceExpr::Deref(ple) => {
@@ -465,9 +465,10 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
             // just generate from the view expression and omit generating the dereferencing.
             // The dereferencing will happen through indexing.
             match ple.to_place() {
-                Some(pl) if view_ctx.contains_key(&pl.ident.name) => {
-                    gen_view(view_ctx.get(&pl.ident.name).unwrap(), pl.path)
-                }
+                Some(pl) if view_ctx.contains_key(&pl.ident.name) => gen_view(
+                    view_ctx.get(&pl.ident.name).unwrap(),
+                    pl.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
+                ),
                 _ => cu::Expr::Deref(Box::new(gen_pl_expr(ple.as_ref(), view_ctx))),
             }
         }
@@ -491,31 +492,26 @@ fn gen_parall_cond(
             if let Some((cond, ParallRange::SplitRange(l, m, u))) =
                 gen_parall_cond(pid, parall_expr)
             {
-                let (cond_stmt, range) = match i.eval() {
-                    Ok(v) => {
-                        if v == 0 {
-                            (
-                                cu::Expr::BinOp {
-                                    op: cu::BinOp::Lt,
-                                    lhs: Box::new(cu::Expr::Nat(pid.clone())),
-                                    rhs: Box::new(cu::Expr::Nat(m.clone())),
-                                },
-                                ParallRange::Range(l, m),
-                            )
-                        } else if v == 1 {
-                            (
-                                cu::Expr::BinOp {
-                                    op: cu::BinOp::Ge,
-                                    lhs: Box::new(cu::Expr::Nat(m.clone())),
-                                    rhs: Box::new(cu::Expr::Nat(pid.clone())),
-                                },
-                                ParallRange::Range(m, u),
-                            )
-                        } else {
-                            panic!("Split can only create a 2-tuple.")
-                        }
-                    }
-                    Err(m) => panic!(m),
+                let (cond_stmt, range) = if *i == 0 {
+                    (
+                        cu::Expr::BinOp {
+                            op: cu::BinOp::Lt,
+                            lhs: Box::new(cu::Expr::Nat(pid.clone())),
+                            rhs: Box::new(cu::Expr::Nat(m.clone())),
+                        },
+                        ParallRange::Range(l, m),
+                    )
+                } else if *i == 1 {
+                    (
+                        cu::Expr::BinOp {
+                            op: cu::BinOp::Ge,
+                            lhs: Box::new(cu::Expr::Nat(m.clone())),
+                            rhs: Box::new(cu::Expr::Nat(pid.clone())),
+                        },
+                        ParallRange::Range(m, u),
+                    )
+                } else {
+                    panic!("Split can only create a 2-tuple.")
                 };
 
                 if let Some(c) = cond {
@@ -579,7 +575,7 @@ fn gen_view(view_expr: &ViewExpr, mut path: Vec<desc::Nat>) -> cu::Expr {
             gen_view(view, path)
         }
         (ViewExpr::Proj { view, i }, _) => {
-            path.push(i.clone());
+            path.push(desc::Nat::Lit(*i));
             gen_view(view, path)
         }
         (ViewExpr::SplitAt { pos, view }, _) => {
@@ -843,7 +839,7 @@ enum ParallelityCollec {
     Ident(Ident),
     Proj {
         parall_expr: Box<ParallelityCollec>,
-        i: desc::Nat,
+        i: usize,
     },
     Split {
         pos: desc::Nat,
@@ -901,7 +897,7 @@ impl ParallelityCollec {
             desc::PlaceExpr::Ident(ident) => parall_ctx.get(&ident.name).unwrap().clone(),
             desc::PlaceExpr::Proj(pp, i) => ParallelityCollec::Proj {
                 parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
-                i: i.clone(),
+                i: *i,
             },
             desc::PlaceExpr::Deref(_) => panic!(
                 "It is not possible to take references of Grids or Blocks.\
@@ -937,7 +933,7 @@ enum ViewExpr {
     },
     Proj {
         view: Box<ViewExpr>,
-        i: desc::Nat,
+        i: usize,
     },
     SplitAt {
         pos: desc::Nat,
@@ -1045,7 +1041,7 @@ impl ViewExpr {
             desc::PlaceExpr::Ident(ident) => view_ctx.get(&ident.name).unwrap().clone(),
             desc::PlaceExpr::Proj(vv, i) => ViewExpr::Proj {
                 view: Box::new(ViewExpr::create_pl_expr_view(vv, view_ctx)),
-                i: i.clone(),
+                i: *i,
             },
             desc::PlaceExpr::Deref(_) => {
                 panic!("It is not possible to take references of views. This should never happen.")

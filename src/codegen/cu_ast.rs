@@ -85,7 +85,7 @@ pub(super) enum Expr {
     },
     Proj {
         tuple: Box<Expr>,
-        n: Nat,
+        n: usize,
     },
     Ref(Box<Expr>),
     Deref(Box<Expr>),

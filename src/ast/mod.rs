@@ -361,7 +361,7 @@ impl ArgKinded {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExpr {
-    Proj(Box<PlaceExpr>, Nat),
+    Proj(Box<PlaceExpr>, usize),
     Deref(Box<PlaceExpr>),
     Ident(Ident),
 }
@@ -408,10 +408,10 @@ impl PlaceExpr {
                 let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
-                        pl.path.push(n.clone());
+                        pl.path.push(*n);
                         (pl_ctx, Place::new(pl.ident, pl.path))
                     }
-                    _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
+                    _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
                 }
             }
             PlaceExpr::Ident(ident) => {
@@ -440,7 +440,7 @@ impl fmt::Display for PlaceExpr {
 }
 
 // TODO refactor find proper location for this
-pub type Path = Vec<Nat>;
+pub type Path = Vec<usize>;
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Place {
     pub ident: Ident,
@@ -468,8 +468,8 @@ fn test_path_eq() {
 
 #[test]
 fn test_place_eq() {
-    let pl1 = Place::new(Ident::new("inp"), vec![Nat::Lit(0)]);
-    let pl2 = Place::new(Ident::new("inp"), vec![Nat::Lit(0)]);
+    let pl1 = Place::new(Ident::new("inp"), vec![0]);
+    let pl2 = Place::new(Ident::new("inp"), vec![0]);
     assert!(pl1 == pl2)
 }
 

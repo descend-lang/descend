@@ -166,7 +166,7 @@ impl TyCtx {
     }
 
     fn explode_places(ident: &Ident, ty: &Ty) -> Vec<TypedPlace> {
-        fn proj(mut pl: Place, idx: Nat) -> Place {
+        fn proj(mut pl: Place, idx: usize) -> Place {
             pl.path.push(idx);
             pl
         }
@@ -195,7 +195,7 @@ impl TyCtx {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index =
-                            explode(proj(pl.clone(), Nat::Lit(index)), Ty::Data(proj_ty.clone()));
+                            explode(proj(pl.clone(), index), Ty::Data(proj_ty.clone()));
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
@@ -204,7 +204,7 @@ impl TyCtx {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index =
-                            explode(proj(pl.clone(), Nat::Lit(index)), proj_ty.clone());
+                            explode(proj(pl.clone(), index), proj_ty.clone());
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
@@ -223,18 +223,15 @@ impl TyCtx {
     }
 
     pub fn place_ty(&self, place: &Place) -> Result<Ty, String> {
-        fn proj_ty(ty: Ty, path: &[Nat]) -> Result<Ty, String> {
+        fn proj_ty(ty: Ty, path: &[usize]) -> Result<Ty, String> {
             let mut res_ty = ty;
             for n in path {
-                // TODO should maybe use usize here and not Nat, because Nat is not always
-                //  evaluable.
-                let idx = n.eval()?;
                 match &res_ty {
                     Ty::Data(DataTy::Tuple(elem_tys)) => {
-                        res_ty = Ty::Data(elem_tys[idx].clone());
+                        res_ty = Ty::Data(elem_tys[*n].clone());
                     }
                     Ty::View(ViewTy::Tuple(elem_tys)) => {
-                        res_ty = elem_tys[idx].clone();
+                        res_ty = elem_tys[*n].clone();
                     }
                     t => panic!(
                         "Trying to project element data type of a non tuple type:\n {:?}",
@@ -249,19 +246,16 @@ impl TyCtx {
     }
 
     pub fn set_place_ty(mut self, pl: &Place, pl_ty: Ty) -> Self {
-        fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[Nat], part_ty: Ty) -> Ty {
+        fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[usize], part_ty: Ty) -> Ty {
             if path.is_empty() {
                 return part_ty;
             }
 
-            let idx = match path.first().unwrap().eval() {
-                Ok(v) => v,
-                Err(m) => panic!(m),
-            };
+            let idx = path.first().unwrap();
             match orig_ty {
                 Ty::Data(DataTy::Tuple(mut elem_tys)) => {
-                    elem_tys[idx] = if let Ty::Data(dty) =
-                        set_ty_for_path_in_ty(Ty::Data(elem_tys[idx].clone()), &path[1..], part_ty)
+                    elem_tys[*idx] = if let Ty::Data(dty) =
+                        set_ty_for_path_in_ty(Ty::Data(elem_tys[*idx].clone()), &path[1..], part_ty)
                     {
                         dty
                     } else {
@@ -270,8 +264,8 @@ impl TyCtx {
                     Ty::Data(DataTy::Tuple(elem_tys))
                 }
                 Ty::View(ViewTy::Tuple(mut elem_tys)) => {
-                    elem_tys[idx] =
-                        set_ty_for_path_in_ty(elem_tys[idx].clone(), &path[1..], part_ty);
+                    elem_tys[*idx] =
+                        set_ty_for_path_in_ty(elem_tys[*idx].clone(), &path[1..], part_ty);
                     Ty::View(ViewTy::Tuple(elem_tys))
                 }
                 _ => panic!("Path not compatible with type."),

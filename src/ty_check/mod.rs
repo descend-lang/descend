@@ -912,7 +912,7 @@ fn place_expr_ty_and_passed_prvs_under_own(
         PlaceExpr::Ident(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
         // TC-Proj
         PlaceExpr::Proj(tuple_expr, n) => {
-            proj_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, tuple_expr, n)
+            proj_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, tuple_expr, *n)
         }
         // TC-Deref
         PlaceExpr::Deref(borr_expr) => {
@@ -962,20 +962,20 @@ fn proj_expr_ty_and_passed_prvs_under_own(
     exec: Exec,
     own: Ownership,
     tuple_expr: &PlaceExpr,
-    n: &Nat,
+    n: usize,
 ) -> Result<(Ty, Vec<Provenance>), String> {
     let (pl_expr_ty, passed_prvs) =
         place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, tuple_expr)?;
     match pl_expr_ty {
         Ty::Data(DataTy::Tuple(elem_dtys)) => {
-            if let Some(ty) = elem_dtys.get(n.eval()?) {
+            if let Some(ty) = elem_dtys.get(n) {
                 Ok((Ty::Data(ty.clone()), passed_prvs))
             } else {
                 Err("Trying to access non existing tuple element.".to_string())
             }
         }
         Ty::View(ViewTy::Tuple(elem_tys)) => {
-            if let Some(ty) = elem_tys.get(n.eval()?) {
+            if let Some(ty) = elem_tys.get(n) {
                 Ok((ty.clone(), passed_prvs))
             } else {
                 Err("Trying to access non existing tuple element.".to_string())

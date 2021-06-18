@@ -56,7 +56,7 @@ pub struct Loan {
 }
 
 pub enum PlaceCtx {
-    Proj(Box<PlaceCtx>, Nat),
+    Proj(Box<PlaceCtx>, usize),
     Deref(Box<PlaceCtx>),
     Hole,
 }

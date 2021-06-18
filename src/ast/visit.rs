@@ -156,9 +156,8 @@ pub fn walk_pl_expr<V: Visitor>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
     match pl_expr {
         PlaceExpr::Ident(ident) => visitor.visit_ident(ident),
         PlaceExpr::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
-        PlaceExpr::Proj(pl_expr, n) => {
+        PlaceExpr::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
         }
     }
 }
