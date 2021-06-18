@@ -123,8 +123,8 @@ fn ty_check_expr(
         ExprKind::App(ef, k_args, args) => {
             ty_check_app(gl_ctx, kind_ctx, ty_ctx, exec, ef, k_args, args)?
         }
-        ExprKind::Ref(Provenance::Value(prv_val_name), own, pl_expr) => {
-            ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv_val_name, *own, pl_expr)?
+        ExprKind::Ref(prv, own, pl_expr) => {
+            ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv, *own, pl_expr)?
         }
         ExprKind::Index(pl_expr, index) => {
             ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
@@ -141,6 +141,12 @@ fn ty_check_expr(
         }
         ExprKind::ForNat(var, range, body) => {
             ty_check_for_nat(gl_ctx, kind_ctx, ty_ctx, exec, var, range, body)?
+        }
+        ExprKind::IfElse(cond, case_true, case_false) => {
+            ty_check_ifelse(gl_ctx, kind_ctx, ty_ctx, exec, cond, case_true, case_false)?
+        }
+        ExprKind::For(ident, set, body) => {
+            ty_check_for(gl_ctx, kind_ctx, ty_ctx, exec, ident, set, body)?
         }
         ExprKind::Lambda(params, exec, ret_ty, body) => {
             ty_check_lambda(gl_ctx, kind_ctx, ty_ctx, *exec, params, ret_ty, body)?
@@ -175,6 +181,30 @@ fn ty_check_for_nat(
     //    return Err("Using a data type in loop that can only be used once.".to_string());
     // }
     Ok((ty_ctx_1, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
+}
+
+fn ty_check_for(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    ident: &Ident,
+    set: &mut Expr,
+    body: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    unimplemented!()
+}
+
+fn ty_check_ifelse(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    cond: &mut Expr,
+    case_true: &mut Expr,
+    case_false: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    unimplemented!()
 }
 
 // TODO split up groupings, i.e., deal with TupleViews and require enough functions.
@@ -912,10 +942,17 @@ fn ty_check_borrow(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: Exec,
-    prv_val_name: &str,
+    prv: &Provenance,
     own: Ownership,
     pl_expr: &mut PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
+    let prv_val_name = match prv {
+        Provenance::Value(prv_val_name) => prv_val_name,
+        Provenance::Ident(_) => {
+            return Err("Cannot borrow using a provenance variable.".to_string())
+        }
+    };
+
     if !ty_ctx.loans_for_prv(prv_val_name)?.is_empty() {
         return Err(
             "Trying to borrow with a provenance that is used in a different borrow.".to_string(),
