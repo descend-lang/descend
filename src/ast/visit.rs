@@ -170,8 +170,6 @@ pub fn walk_arg_kinded<V: Visitor>(visitor: &mut V, arg_kinded: &mut ArgKinded) 
         ArgKinded::Memory(mem) => visitor.visit_mem(mem),
         ArgKinded::Ty(ty) => visitor.visit_ty(ty),
         ArgKinded::Provenance(prv) => visitor.visit_prv(prv),
-        ArgKinded::Frame(frm_expr) => visitor.visit_frm_expr(frm_expr),
-        ArgKinded::Exec(exec) => visitor.visit_exec(exec),
     }
 }
 

@@ -323,8 +323,6 @@ pub enum Kind {
     Memory,
     Ty,
     Provenance,
-    Frame,
-    Exec,
 }
 
 impl fmt::Display for Kind {
@@ -334,8 +332,6 @@ impl fmt::Display for Kind {
             Kind::Memory => "mem",
             Kind::Ty => "type",
             Kind::Provenance => "prv",
-            Kind::Frame => "frm",
-            Kind::Exec => "exec",
         };
         write!(f, "{}", str)
     }
@@ -348,8 +344,6 @@ pub enum ArgKinded {
     Memory(Memory),
     Ty(Ty),
     Provenance(Provenance),
-    Frame(FrameExpr),
-    Exec(Exec),
 }
 
 impl ArgKinded {
@@ -361,8 +355,6 @@ impl ArgKinded {
             Memory(_) => Kind::Memory,
             Ty(_) => Kind::Ty,
             Provenance(_) => Kind::Provenance,
-            Frame(_) => Kind::Frame,
-            Exec(_) => Kind::Exec,
         }
     }
 }

@@ -288,10 +288,10 @@ peg::parser! {
             / "Thread" { DataTy::Scalar(ScalarTy::Thread) }
             // The Grid/Block types should be defined better.
             / "Grid" _ "<" _ grid_elems:dty_term() _ "," _ n:nat() ">" {
-                DataTy::Grid(Box::new(grid_elems), vec![n])
+                DataTy::Grid(Box::new(grid_elems), vec![n, Nat::Lit(1), Nat::Lit(1)])
               }
             / "Block" _ "<" _ block_elems:dty_term() _ "," _ n:nat() ">" {
-                DataTy::Block(Box::new(block_elems), vec![n])
+                DataTy::Block(Box::new(block_elems), vec![n, Nat::Lit(1), Nat::Lit(1)])
               }
 
         pub(crate) rule vty() -> ViewTy
@@ -324,8 +324,6 @@ peg::parser! {
             / "mem" { Kind::Memory }
             / "ty" { Kind::Ty }
             / "prv" { Kind::Provenance }
-            / "frm" { Kind::Frame }
-            /// "own" { } // TODO: Unimplemented in AST
 
         rule ident() -> Ident
             = start:position!() ident:$(identifier()) end:position!() {
@@ -777,11 +775,6 @@ mod tests {
             descend::kind("prv"),
             Ok(Kind::Provenance),
             "does not recognize prv kind"
-        );
-        assert_eq!(
-            descend::kind("frm"),
-            Ok(Kind::Frame),
-            "does not recognize frm kind"
         );
     }
 

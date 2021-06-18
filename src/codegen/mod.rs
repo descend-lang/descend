@@ -651,9 +651,7 @@ fn gen_templ_params(ty_idents: &[desc::IdentKinded]) -> Vec<cu::TemplParam> {
     ty_idents
         .iter()
         .filter_map(|ty_ident| {
-            if !(matches!(ty_ident.kind, desc::Kind::Frame)
-                || matches!(ty_ident.kind, desc::Kind::Provenance))
-            {
+            if !matches!(ty_ident.kind, desc::Kind::Provenance) {
                 Some(gen_templ_param(ty_ident))
             } else {
                 None
@@ -724,9 +722,7 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
         desc::ArgKinded::Ty(desc::Ty::View(_)) => None,
         desc::ArgKinded::Ty(desc::Ty::Fn(_, _, _, _)) => unimplemented!("needed?"),
         desc::ArgKinded::Memory(_)
-        | desc::ArgKinded::Exec(_)
         | desc::ArgKinded::Provenance(_)
-        | desc::ArgKinded::Frame(_)
         | desc::ArgKinded::Ident(_) => None,
     }
 }
@@ -1227,10 +1223,6 @@ fn replace_arg_kinded_idents(fun_def: &desc::FunDef) -> desc::FunDef {
                                     // TODO how to deal with View??!! This is a problem!
                                     //  Ident only for Ty but not for DataTy or ViewTy?
                                     *gen_arg = ArgKinded::Ty(Ty::Data(DataTy::Ident(to_be_kinded)))
-                                }
-                                Kind::Frame => {
-                                    *gen_arg =
-                                        ArgKinded::Frame(internal::FrameExpr::Ident(to_be_kinded))
                                 }
                                 _ => panic!("This kind can not be referred to with an identifier."),
                             }
