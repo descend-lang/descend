@@ -118,7 +118,7 @@ peg::parser! {
                 Expr::new(
                     ExprKind::App(
                         Box::new(Expr::with_span(
-                            ExprKind::FunIdent(func),
+                            ExprKind::PlaceExpr(PlaceExpr::Ident(func)),
                             Span::new(start, place_end)
                         )),
                         kind_args.unwrap_or(vec![]),
@@ -180,26 +180,14 @@ peg::parser! {
                 Expr::new(ExprKind::ParFor(Box::new(parall_collec), Box::new(input), Box::new(funs)))
             }
             "for" __ ident:ident() __ "in" __ collection:expression()
-                across:(__ "across" __ parallel_cfg:expression() { parallel_cfg })?
                 _ "{" _ body:expression_seq() _ "}"
             {
-                match across {
-                    None => Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body))),
-                    Some(parallel_cfg) => Expr::new(
-                        ExprKind::ParForAcross(
-                            ident, Box::new(collection), Box::new(parallel_cfg), Box::new(body)),
-                    )
-                }
+                Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body)))
             }
             "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
             "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
             "{" _ body_expr:expression_seq() _"}" {
                 Expr::new(ExprKind::Lambda(params, exec, ret_dty, Box::new(body_expr)))
-            }
-            "across" __ parall:expression() __ view:expression() {
-                Expr::new(
-                    ExprKind::Across(Box::new(parall), Box::new(view))
-                )
             }
             // Parentheses to override precedence
             "(" _ expression:expression() _ ")" { expression }
@@ -1103,40 +1091,6 @@ mod tests {
     fn expression_for_loop_negative() {
         let result_expect_ident = descend::expression_seq("for (1+2) in [1,2,3] {x = x+1}");
         assert!(result_expect_ident.is_err());
-    }
-
-    #[test]
-    fn expression_parallel_for_loop() {
-        let elems = Ident::new("elems");
-        assert_eq!(
-            descend::expression_seq(
-                "for elems in elems_grouped across grid {*elems.0 = *elems.0 + *elems.1;}"
-            ),
-            Ok(Expr::new(ExprKind::ParForAcross(
-                elems.clone(),
-                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
-                    Ident::new("elems_grouped")
-                )))),
-                Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
-                    Ident::new("grid")
-                )))),
-                Box::new(Expr::new(ExprKind::Assign(
-                    PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
-                        Box::new(PlaceExpr::Ident(elems.clone())),
-                        0
-                    ))),
-                    Box::new(Expr::new(ExprKind::BinOp(
-                        BinOp::Add,
-                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
-                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), 0)
-                        ))))),
-                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
-                            PlaceExpr::Proj(Box::new(PlaceExpr::Ident(elems.clone())), 1)
-                        )))))
-                    )))
-                )))
-            )))
-        );
     }
 
     #[test]

@@ -99,9 +99,8 @@ fn ty_check_expr(
     // TODO input contexts are well-formed
     //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
     let (res_ty_ctx, ty) = match &mut expr.expr {
-        ExprKind::FunIdent(ident) => (ty_ctx, gl_ctx.fun_ty_by_name(&ident.name)?.clone()),
         ExprKind::PlaceExpr(pl_expr) if pl_expr.is_place() => {
-            ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, pl_expr)?
+            ty_check_pl_expr_without_deref(&gl_ctx, kind_ctx, ty_ctx, pl_expr)?
         }
         ExprKind::PlaceExpr(pl_expr) if !pl_expr.is_place() => {
             ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
@@ -823,22 +822,31 @@ fn ty_check_pl_expr_with_deref(
 }
 
 fn ty_check_pl_expr_without_deref(
+    gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     let place = pl_expr.to_place().unwrap();
-    let pl_ty = ty_ctx.place_ty(&place)?;
-    if !pl_ty.is_fully_alive() {
-        return Err(format!("Part of Place {:?} was moved before.", pl_expr));
-    }
-    let res_ty_ctx = if pl_ty.copyable() {
-        borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
-        ty_ctx
+    // If place is an identifier referring to a globally declared function
+    let (res_ty_ctx, pl_ty) = if let Ok(fun_ty) = gl_ctx.fun_ty_by_name(&place.ident.name) {
+        (ty_ctx, fun_ty.clone())
     } else {
-        borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)?;
-        ty_ctx.kill_place(&place)
+        // If place is NOT referring to a globally declared function
+        let pl_ty = ty_ctx.place_ty(&place)?;
+        if !pl_ty.is_fully_alive() {
+            return Err(format!("Part of Place {:?} was moved before.", pl_expr));
+        }
+        let res_ty_ctx = if pl_ty.copyable() {
+            borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
+            ty_ctx
+        } else {
+            borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)?;
+            ty_ctx.kill_place(&place)
+        };
+        (res_ty_ctx, pl_ty)
     };
+
     Ok((res_ty_ctx, pl_ty))
 }
 

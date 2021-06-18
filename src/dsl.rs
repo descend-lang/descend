@@ -33,10 +33,6 @@ pub fn ident(name: &str) -> Expr {
     Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new(name))))
 }
 
-pub fn fun_name(name: &str) -> Expr {
-    Expr::new(ExprKind::FunIdent(Ident::new(name)))
-}
-
 pub fn deref(pl_expr: Expr) -> Expr {
     Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
         expr_to_plexpr(pl_expr),

@@ -86,52 +86,44 @@ impl fmt::Display for Expr {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ExprKind {
-    Across(Box<Expr>, Box<Expr>),
-    // TODO remove FunIdent
-    //  instead? Maybe differentiate between FunctionCall where function is Ident
-    //  and Function call where function is expression (so must be lambda)
-    //  This is currently wrong, because an global fun ident is not an Expr (has no value).
-    //  Or we say it has the value of a function pointer type (like C or Rust) which may be better.
-    FunIdent(Ident),
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
     PlaceExpr(PlaceExpr),
     // Index into array, e.g., arr[i]
     Index(PlaceExpr, Nat),
+    // e.g., [1, 2 + 3, 4]
+    Array(Vec<Expr>),
+    Tuple(Vec<Expr>),
     // Borrow Expressions
     Ref(Provenance, Ownership, PlaceExpr),
-    LetProv(Vec<String>, Box<Expr>),
     BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
-    // Assignment to existing place [expression]
-    Assign(PlaceExpr, Box<Expr>),
+    LetProv(Vec<String>, Box<Expr>),
+    // Variable declaration
+    // let mut x: ty;
+    LetUninit(Ident, Ty),
     // Variable declaration, assignment and sequencing
     // let w x: ty = e1; e2
+    // TODO box Ty in Option to reduce size?
     Let(Mutability, Ident, Option<Ty>, Box<Expr>, Box<Expr>),
+    // Assignment to existing place [expression]
+    Assign(PlaceExpr, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
-    // TODO: Add types for parameters.
     Lambda(Vec<ParamDecl>, Exec, DataTy, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
-    // e.g., [1, 2 + 3, 4]
-    Array(Vec<Expr>),
-    Tuple(Vec<Expr>),
     // For-each loop.
     // for x in e_1 { e_2 }
     For(Ident, Box<Expr>, Box<Expr>),
-    // TODO for-each is probably not a good term, at least if we stick to the notion that amount of
-    //  elements and amount of threads need to be equal.
-    // Parallel for (global) thread with input, syncing at the end.
-    // for x in view-expr across parallelism-config-expr { body }
-    ParForAcross(Ident, Box<Expr>, Box<Expr>, Box<Expr>),
-    ParFor(Box<Expr>, Box<Expr>, Box<Expr>),
+    // for n in range(..) { e }
     ForNat(Ident, Nat, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
+    ParFor(Box<Expr>, Box<Expr>, Box<Expr>),
 }
 
 impl fmt::Display for ExprKind {

@@ -175,11 +175,6 @@ pub fn walk_arg_kinded<V: Visitor>(visitor: &mut V, arg_kinded: &mut ArgKinded) 
 pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
     // For now, only visit ExprKind
     match &mut expr.expr {
-        ExprKind::Across(exec_group, view) => {
-            visitor.visit_expr(exec_group);
-            visitor.visit_expr(view)
-        }
-        ExprKind::FunIdent(ident) => visitor.visit_ident(ident),
         ExprKind::Lit(l) => visitor.visit_lit(l),
         ExprKind::PlaceExpr(pl_expr) => visitor.visit_pl_expr(pl_expr),
         ExprKind::Index(pl_expr, n) => {
@@ -192,15 +187,9 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_pl_expr(pl_expr);
         }
         ExprKind::LetProv(_, expr) => visitor.visit_expr(expr),
-        ExprKind::BorrowIndex(prv, own, pl_expr, n) => {
-            visitor.visit_prv(prv);
-            visitor.visit_own(own);
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
-        }
-        ExprKind::Assign(pl_expr, expr) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_expr(expr)
+        ExprKind::LetUninit(ident, ty) => {
+            visitor.visit_ident(ident);
+            visitor.visit_ty(ty);
         }
         ExprKind::Let(mutabl, ident, ty, e1, e2) => {
             visitor.visit_mutability(mutabl);
@@ -211,6 +200,16 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             };
             visitor.visit_expr(e1);
             visitor.visit_expr(e2)
+        }
+        ExprKind::BorrowIndex(prv, own, pl_expr, n) => {
+            visitor.visit_prv(prv);
+            visitor.visit_own(own);
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_nat(n)
+        }
+        ExprKind::Assign(pl_expr, expr) => {
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_expr(expr)
         }
         ExprKind::Seq(e1, e2) => {
             visitor.visit_expr(e1);
@@ -242,12 +241,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_ident(ident);
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
-        }
-        ExprKind::ParForAcross(ident, view, schedule, body) => {
-            visitor.visit_ident(ident);
-            visitor.visit_expr(view);
-            visitor.visit_expr(schedule);
-            visitor.visit_expr(body)
         }
         ExprKind::ParFor(parall_collec, input, funs) => {
             visitor.visit_expr(parall_collec);

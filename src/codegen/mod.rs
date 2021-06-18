@@ -186,21 +186,22 @@ fn gen_stmt(
                 stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx)),
             }
         }
-        ParForAcross(ident, view_expr, glb_cfg_expr, body) => unimplemented!(),
         ParFor(parall_collec, input, funs) => {
             gen_par_for(parall_collec, input, funs, parall_ctx, view_ctx)
         }
         App(fun, kinded_args, args) => match &fun.expr {
-            desc::ExprKind::FunIdent(name) if name.name == "exec" => gen_exec(
-                &kinded_args[0],
-                &kinded_args[1],
-                &kinded_args[5],
-                &args[0],
-                &args[1],
-                &args[2],
-                parall_ctx,
-                view_ctx,
-            ),
+            desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(name)) if name.name == "exec" => {
+                gen_exec(
+                    &kinded_args[0],
+                    &kinded_args[1],
+                    &kinded_args[5],
+                    &args[0],
+                    &args[1],
+                    &args[2],
+                    parall_ctx,
+                    view_ctx,
+                )
+            }
             _ => cu::Stmt::Expr(gen_expr(&expr, parall_ctx, view_ctx)),
         },
         _ if return_value => cu::Stmt::Return(Some(gen_expr(&expr, parall_ctx, view_ctx))),
@@ -350,17 +351,6 @@ fn gen_expr(
 ) -> cu::Expr {
     use desc::ExprKind::*;
     match &expr.expr {
-        FunIdent(ident) => {
-            let is_pre_decl_fun = crate::ty_check::pre_decl::fun_decls()
-                .iter()
-                .any(|(name, _)| &ident.name == name);
-            let name = if is_pre_decl_fun {
-                format!("descend::{}", ident.name)
-            } else {
-                ident.name.clone()
-            };
-            cu::Expr::Ident(name)
-        }
         Lit(l) => gen_lit(*l),
         PlaceExpr(pl_expr) => gen_pl_expr(pl_expr, view_ctx),
         BinOp(op, lhs, rhs) => cu::Expr::BinOp {
@@ -455,11 +445,21 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
 
 fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) -> cu::Expr {
     match &pl_expr {
+        desc::PlaceExpr::Ident(ident) => {
+            let is_pre_decl_fun = crate::ty_check::pre_decl::fun_decls()
+                .iter()
+                .any(|(name, _)| &ident.name == name);
+            let name = if is_pre_decl_fun {
+                format!("descend::{}", ident.name)
+            } else {
+                ident.name.clone()
+            };
+            cu::Expr::Ident(name)
+        }
         desc::PlaceExpr::Proj(pl, n) => cu::Expr::Proj {
             tuple: Box::new(gen_pl_expr(pl.as_ref(), view_ctx)),
             n: *n,
         },
-        desc::PlaceExpr::Ident(ident) => cu::Expr::Ident(ident.name.clone()),
         desc::PlaceExpr::Deref(ple) => {
             // If an identifier that refers to an unwrapped view expression is being dereferenced,
             // just generate from the view expression and omit generating the dereferencing.
@@ -855,7 +855,7 @@ impl ParallelityCollec {
     ) -> ParallelityCollec {
         match &expr.expr {
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::FunIdent(ident) = &f.expr {
+                if let desc::ExprKind::PlaceExpr(PlaceExpr::Ident(ident)) = &f.expr {
                     if ident.name == crate::ty_check::pre_decl::SPLIT {
                         if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
                             (&gen_args[0], &gen_args[1], args.first())
@@ -959,21 +959,6 @@ enum ViewExpr {
         n: desc::Nat,
         view: Box<ViewExpr>,
     },
-    // Split {
-    //     pos: desc::Nat,
-    //     rest: desc::Nat,
-    //     view: Box<ViewExpr>,
-    // },
-    // Take {
-    //     num: desc::Nat,
-    //     n: desc::Nat,
-    //     view: Box<ViewExpr>,
-    // },
-    // Drop {
-    //     num: desc::Nat,
-    //     n: desc::Nat,
-    //     view: Box<ViewExpr>,
-    // },
 }
 
 impl ViewExpr {
@@ -990,7 +975,7 @@ impl ViewExpr {
             // TODO this is assuming that f is an identifier
             //  We have to redesign Views to not be data types...
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::FunIdent(ident) = &f.expr {
+                if let desc::ExprKind::PlaceExpr(PlaceExpr::Ident(ident)) = &f.expr {
                     if ident.name == crate::ty_check::pre_decl::TO_VIEW
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {
