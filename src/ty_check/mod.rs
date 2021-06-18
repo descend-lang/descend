@@ -182,10 +182,10 @@ fn ty_check_par_for(
     input: &mut Expr,
     funs: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    fn to_exec_and_size(parall_collec: &Expr) -> (Exec, Nat) {
+    fn to_exec_and_size(parall_collec: &Expr) -> (Exec, &[Nat]) {
         match parall_collec.ty.as_ref().unwrap() {
-            Ty::Data(DataTy::Grid(_, n)) => (Exec::GpuGrid, n.clone()),
-            Ty::Data(DataTy::Block(_, n)) => (Exec::GpuBlock, n.clone()),
+            Ty::Data(DataTy::Grid(_, n)) => (Exec::GpuGrid, n.as_slice()),
+            Ty::Data(DataTy::Block(_, n)) => (Exec::GpuBlock, n.as_slice()),
             _ => panic!("Expected a parallel collection: Grid or Block."),
         }
     }
@@ -254,7 +254,7 @@ fn ty_check_par_for(
         }
     }
     let parall_collec_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, parall_collec)?;
-    let (allowed_exec, parall_collec_size) = to_exec_and_size(parall_collec);
+    let (allowed_exec, parall_collec_dims) = to_exec_and_size(parall_collec);
     if allowed_exec != exec {
         return Err(format!(
             "Trying to run a parallel for-loop over {:?} inside of {:?}",
@@ -264,10 +264,10 @@ fn ty_check_par_for(
     let input_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, parall_collec_ty_ctx, exec, input)?;
     match input.ty.as_ref().unwrap() {
         Ty::View(ViewTy::Array(_, n)) => {
-            if n != &parall_collec_size {
+            if n != parall_collec_dims.first().unwrap() {
                 return Err(format!(
-                    "Trying to distribute a collection of size {} over {} threads or blocks",
-                    parall_collec_size, n
+                    "Trying to distribute a collection of size {:?} over {} threads or blocks",
+                    parall_collec_dims, n
                 ));
             }
         }

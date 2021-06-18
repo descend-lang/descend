@@ -188,7 +188,7 @@ impl TyCtx {
                 | Ty::Data(d::Block(_, _))
                 | Ty::Data(d::DistribBorrow(_, _))
                 | Ty::Data(d::Dead(_))
-                | Ty::View(v::Ident(_))
+//                | Ty::View(v::Ident(_))
                 | Ty::View(v::Array(_, _))
                 | Ty::View(v::Dead(_)) => vec![(pl, ty.clone())],
                 Ty::Data(d::Tuple(tys)) => {

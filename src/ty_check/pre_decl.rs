@@ -55,21 +55,25 @@ fn split_ty() -> Ty {
         vec![k_nat, n_nat],
         vec![Ty::Data(DataTy::Block(
             Box::new(DataTy::Scalar(ScalarTy::Thread)),
-            Nat::Ident(n.clone()),
+            vec![Nat::Ident(n.clone()), Nat::Lit(1), Nat::Lit(1)],
         ))],
         Exec::View,
         Box::new(Ty::Data(DataTy::Tuple(vec![
             DataTy::Block(
                 Box::new(DataTy::Scalar(ScalarTy::Thread)),
-                Nat::Ident(k.clone()),
+                vec![Nat::Ident(k.clone()), Nat::Lit(1), Nat::Lit(1)],
             ),
             DataTy::Block(
                 Box::new(DataTy::Scalar(ScalarTy::Thread)),
-                Nat::BinOp(
-                    BinOpNat::Sub,
-                    Box::new(Nat::Ident(n)),
-                    Box::new(Nat::Ident(k)),
-                ),
+                vec![
+                    Nat::BinOp(
+                        BinOpNat::Sub,
+                        Box::new(Nat::Ident(n)),
+                        Box::new(Nat::Ident(k)),
+                    ),
+                    Nat::Lit(1),
+                    Nat::Lit(1),
+                ],
             ),
         ]))),
     )
@@ -242,9 +246,9 @@ fn exec_ty() -> Ty {
                     Ty::Data(DataTy::Grid(
                         Box::new(DataTy::Block(
                             Box::new(DataTy::Scalar(ScalarTy::Thread)),
-                            Nat::Ident(threads),
+                            vec![Nat::Ident(threads), Nat::Lit(1), Nat::Lit(1)],
                         )),
-                        Nat::Ident(blocks),
+                        vec![Nat::Ident(blocks), Nat::Lit(1), Nat::Lit(1)],
                     )),
                     Ty::View(ViewTy::Array(Box::new(Ty::Ident(elem)), Nat::Ident(n))),
                 ],

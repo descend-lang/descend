@@ -573,7 +573,7 @@ impl fmt::Display for Ty {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum ViewTy {
-    Ident(Ident),
+    //    Ident(Ident),
     Array(Box<Ty>, Nat),
     Tuple(Vec<Ty>),
     // Only for type checking purposes.
@@ -584,7 +584,7 @@ impl ViewTy {
     pub fn non_copyable(&self) -> bool {
         use ViewTy::*;
         match self {
-            Ident(_) => true,
+            //Ident(_) => true,
             Array(ty, _) => ty.non_copyable(),
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
@@ -598,7 +598,8 @@ impl ViewTy {
     pub fn is_fully_alive(&self) -> bool {
         use ViewTy::*;
         match self {
-            Ident(_) | Array(_, _) => true,
+            //Ident(_) |
+            Array(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -608,7 +609,8 @@ impl ViewTy {
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match self {
-            ViewTy::Ident(_) | ViewTy::Dead(_) => false,
+            //ViewTy::Ident(_) |
+            ViewTy::Dead(_) => false,
             ViewTy::Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
             ViewTy::Tuple(elem_tys) => elem_tys
                 .iter()
@@ -619,17 +621,17 @@ impl ViewTy {
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use ViewTy::*;
         match self {
-            ViewTy::Ident(id) => {
-                if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
-                    match with {
-                        ArgKinded::Ident(idk) => Ident(idk.clone()),
-                        ArgKinded::Ty(Ty::View(vty)) => vty.clone(),
-                        _ => panic!("Trying to substitute type identifier with non-type value."),
-                    }
-                } else {
-                    self.clone()
-                }
-            }
+            // ViewTy::Ident(id) => {
+            //     if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
+            //         match with {
+            //             ArgKinded::Ident(idk) => Ident(idk.clone()),
+            //             ArgKinded::Ty(Ty::View(vty)) => vty.clone(),
+            //             _ => panic!("Trying to substitute type identifier with non-type value."),
+            //         }
+            //     } else {
+            //         self.clone()
+            //     }
+            // }
             Tuple(elem_tys) => Tuple(
                 elem_tys
                     .iter()
@@ -655,15 +657,14 @@ impl fmt::Display for ViewTy {
 pub enum DataTy {
     Ident(Ident),
     Scalar(ScalarTy),
-    Tuple(Vec<DataTy>),
     Array(Box<DataTy>, Nat),
+    Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
-
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
     // TODO remove
     GridConfig(Nat, Nat),
-    Grid(Box<DataTy>, Nat),
-    Block(Box<DataTy>, Nat),
+    Grid(Box<DataTy>, Vec<Nat>),
+    Block(Box<DataTy>, Vec<Nat>),
     // TODO should not be a data type because it contains views?
     DistribBorrow(ViewTy, ViewTy),
     // Only for type checking purposes.
@@ -773,11 +774,15 @@ impl DataTy {
             ),
             Grid(elem, n) => Grid(
                 Box::new(elem.subst_ident_kinded(ident_kinded, with)),
-                n.subst_ident_kinded(ident_kinded, with),
+                n.iter()
+                    .map(|n| n.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
             ),
             Block(elem, n) => Block(
                 Box::new(elem.subst_ident_kinded(ident_kinded, with)),
-                n.subst_ident_kinded(ident_kinded, with),
+                n.iter()
+                    .map(|n| n.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
             ),
             DistribBorrow(parall_exec_loc, data) => DistribBorrow(
                 parall_exec_loc.subst_ident_kinded(ident_kinded, with),

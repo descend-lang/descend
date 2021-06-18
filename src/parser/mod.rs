@@ -288,10 +288,10 @@ peg::parser! {
             / "Thread" { DataTy::Scalar(ScalarTy::Thread) }
             // The Grid/Block types should be defined better.
             / "Grid" _ "<" _ grid_elems:dty_term() _ "," _ n:nat() ">" {
-                DataTy::Grid(Box::new(grid_elems), n)
+                DataTy::Grid(Box::new(grid_elems), vec![n])
               }
             / "Block" _ "<" _ block_elems:dty_term() _ "," _ n:nat() ">" {
-                DataTy::Block(Box::new(block_elems), n)
+                DataTy::Block(Box::new(block_elems), vec![n])
               }
 
         pub(crate) rule vty() -> ViewTy

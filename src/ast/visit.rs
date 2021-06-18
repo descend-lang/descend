@@ -89,7 +89,7 @@ pub fn walk_prv<V: Visitor>(visitor: &mut V, prv: &mut Provenance) {
 
 pub fn walk_vty<V: Visitor>(visitor: &mut V, vty: &mut ViewTy) {
     match vty {
-        ViewTy::Ident(ident) => visitor.visit_ident(ident),
+        //ViewTy::Ident(ident) => visitor.visit_ident(ident),
         ViewTy::Tuple(elem_tys) => walk_list!(visitor, visit_ty, elem_tys),
         ViewTy::Array(elem_ty, n) => {
             visitor.visit_ty(elem_ty);
@@ -122,13 +122,13 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_nat(grid_size);
             visitor.visit_nat(block_size)
         }
-        DataTy::Grid(elems, size) => {
+        DataTy::Grid(elems, dims) => {
             visitor.visit_dty(elems);
-            visitor.visit_nat(size)
+            walk_list!(visitor, visit_nat, dims);
         }
-        DataTy::Block(elems, size) => {
+        DataTy::Block(elems, dims) => {
             visitor.visit_dty(elems);
-            visitor.visit_nat(size)
+            walk_list!(visitor, visit_nat, dims);
         }
         DataTy::DistribBorrow(parall_exec_loc, data) => {
             visitor.visit_vty(parall_exec_loc);
