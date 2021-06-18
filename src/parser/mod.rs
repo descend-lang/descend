@@ -26,7 +26,7 @@ peg::parser! {
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
-            "-[" _ exec:execution_location() _ "]->" _ ret_dty:dty() _
+            "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
             "{" _ body_expr:expression_seq() _"}" {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
@@ -192,7 +192,7 @@ peg::parser! {
                 }
             }
             "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
-            "-[" _ exec:execution_location() _ "]->" _ ret_dty:dty() _
+            "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
             "{" _ body_expr:expression_seq() _"}" {
                 Expr::new(ExprKind::Lambda(params, exec, ret_dty, Box::new(body_expr)))
             }
@@ -313,7 +313,7 @@ peg::parser! {
             / "gpu.shared" { Memory::GpuShared }
             / name:ident() { Memory::Ident(name) }
 
-        pub(crate) rule execution_location() -> Exec
+        pub(crate) rule execution_resource() -> Exec
             = "cpu.thread" { Exec::CpuThread }
             / "gpu.group" { Exec::GpuBlock }
             / "gpu.thread" { Exec::GpuThread }
@@ -638,19 +638,19 @@ mod tests {
     }
 
     #[test]
-    fn execution_location() {
+    fn execution_resource() {
         assert_eq!(
-            descend::execution_location("cpu.thread"),
+            descend::execution_resource("cpu.thread"),
             Ok(Exec::CpuThread),
             "does not recognize cpu.stack memory kind"
         );
         assert_eq!(
-            descend::execution_location("gpu.group"),
+            descend::execution_resource("gpu.group"),
             Ok(Exec::GpuBlock),
             "does not recognize cpu.heap memory kind"
         );
         assert_eq!(
-            descend::execution_location("gpu.thread"),
+            descend::execution_resource("gpu.thread"),
             Ok(Exec::GpuThread),
             "does not recognize gpu.global memory kind"
         );

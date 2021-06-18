@@ -245,7 +245,7 @@ fn ty_check_par_for(
                     _ => unimplemented!(),
                 };
                 if fun_exec != &exec {
-                    return Err("Execution location does not fit.".to_string());
+                    return Err("Execution resource does not fit.".to_string());
                 }
                 if ret_ty.as_ref() != &Ty::Data(Scalar(ScalarTy::Unit)) {
                     return Err("Function has wrong return type. Expected ().".to_string());
@@ -611,7 +611,15 @@ fn ty_check_app(
 
     // TODO check well-kinded: FrameTyping, Prv, Ty
     let mut res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, ef)?;
-    if let Ty::Data(DataTy::Fn(gen_params, param_tys, _, _, out_ty)) = ef.ty.as_ref().unwrap() {
+    if let Ty::Data(DataTy::Fn(gen_params, param_tys, _, exec_f, out_ty)) = ef.ty.as_ref().unwrap()
+    {
+        if exec_f != &exec {
+            return Err(format!(
+                "Trying to apply function for execution resource `{}` \
+                under execution resource `{}`",
+                exec_f, exec
+            ));
+        }
         if gen_params.len() != k_args.len() {
             return Err(format!(
                 "Wrong amount of generic arguments. Expected {}, found {}",
@@ -1018,8 +1026,6 @@ fn accessible_memory(exec: Exec, mem: &Memory) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ty_check::ty_check_global_fun_def;
-
     #[test]
     fn test_dummy_fun() -> Result<(), String> {
         let dummy_fun_src = r#"fn dummy_fun<a: prv>(
