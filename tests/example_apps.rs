@@ -75,8 +75,7 @@ fn tree_reduce() -> Result<(), String> {
             let gpu: Gpu = gpu(0);
 
             let mut a_array: [i32; n] @ gpu.global =
-            // TODO cpu.stack for the reborrow seems very wrong...
-                gpu_alloc<'c, 'd, cpu.stack, cpu.stack, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+                gpu_alloc<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
             let view_a: [[&'r uniq gpu.global i32; n]] =
                 to_view_mut<'r, gpu.global, n, i32>(&'r uniq a_array);
             let block_group = group<1024, n, &'r uniq gpu.global i32>(view_a);
@@ -132,10 +131,9 @@ fn inplace_vector_add_with_across() -> Result<(), String> {
             let gpu: Gpu = gpu(0);
 
             let mut a_array: [i32; n] @ gpu.global =
-            // TODO cpu.stack for the reborrow seems very wrong...
-                gpu_alloc<'c, 'd, cpu.stack, cpu.stack, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+                gpu_alloc<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
             let b_array: [i32; n] @ gpu.global =
-                gpu_alloc<'f, 'i, cpu.stack, cpu.stack, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
+                gpu_alloc<'f, 'i, cpu.stack, cpu.heap, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
             let view_a: [[&'r uniq gpu.global i32; n]] =
                 to_view_mut<'r, gpu.global, n, i32>(&'r uniq a_array);
             let view_b: [[&'s shrd gpu.global i32; n]] =

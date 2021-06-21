@@ -842,12 +842,12 @@ impl fmt::Display for Provenance {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Memory {
     CpuHeap,
+    CpuStack,
     GpuGlobal,
     GpuShared,
+    GpuLocal,
+    None,
     Ident(Ident),
-    // TODO refactor?
-    // only exists for pointers to the stack. Must not be used for At types.
-    CpuStack,
 }
 
 impl Memory {
@@ -874,6 +874,8 @@ impl fmt::Display for Memory {
             Memory::CpuHeap => write!(f, "cpu.heap"),
             Memory::GpuGlobal => write!(f, "gpu.global"),
             Memory::GpuShared => write!(f, "gpu.shared"),
+            Memory::GpuLocal => write!(f, "gpu.local"),
+            Memory::None => write!(f, "none"),
             Memory::Ident(x) => write!(f, "{}", x),
         }
     }

@@ -101,9 +101,9 @@ fn ty_check_expr(
     let (res_ty_ctx, ty) = match &mut expr.expr {
         ExprKind::PlaceExpr(pl_expr) => {
             if pl_expr.is_place() {
-                ty_check_pl_expr_without_deref(&gl_ctx, kind_ctx, ty_ctx, pl_expr)?
+                ty_check_pl_expr_without_deref(gl_ctx, kind_ctx, ty_ctx, pl_expr)?
             } else {
-                ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
+                ty_check_pl_expr_with_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr)?
             }
         }
         ExprKind::LetProv(prvs, body) => {
@@ -127,7 +127,8 @@ fn ty_check_expr(
             ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv, *own, pl_expr)?
         }
         ExprKind::Index(pl_expr, index) => {
-            ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
+            //ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
+            unimplemented!()
         }
         ExprKind::Assign(pl_expr, e) => {
             if pl_expr.is_place() {
@@ -446,7 +447,8 @@ fn ty_check_assign_deref(
     e: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let assigned_val_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
-    let deref_ty = place_expr_ty_under_own(
+    let deref_ty = place_expr_ty_under_exec_own(
+        gl_ctx,
         kind_ctx,
         &assigned_val_ty_ctx,
         exec,
@@ -494,7 +496,8 @@ fn ty_check_index_copy(
     index: &mut Nat,
 ) -> Result<(TyCtx, Ty), String> {
     borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
-    let pl_expr_ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
+    let pl_expr_ty =
+        place_expr_ty_under_exec_own(gl_ctx, kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
     let elem_ty = match pl_expr_ty {
         Ty::Data(DataTy::Array(elem_ty, n)) => *elem_ty,
         Ty::Data(DataTy::At(arr_ty, _)) => {
@@ -816,13 +819,16 @@ fn ty_check_seq(
 }
 
 fn ty_check_pl_expr_with_deref(
+    gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: Exec,
     pl_expr: &PlaceExpr,
 ) -> Result<(TyCtx, Ty), String> {
     borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
-    if let Ok(ty) = place_expr_ty_under_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr) {
+    if let Ok(ty) =
+        place_expr_ty_under_exec_own(gl_ctx, kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)
+    {
         if !ty.is_fully_alive() {
             return Err(format!("Part of Place {:?} was moved before.", pl_expr));
         }
@@ -889,14 +895,15 @@ fn ty_check_borrow(
         );
     }
     let loans = borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)?;
-    let ty = place_expr_ty_under_own(kind_ctx, &ty_ctx, exec, own, pl_expr)?;
+    let (ty, mem) =
+        place_expr_ty_mem_under_exec_own(gl_ctx, kind_ctx, &ty_ctx, exec, own, pl_expr)?;
     if !ty.is_fully_alive() {
         return Err("The place was at least partially moved before.".to_string());
     }
-    let (reffed_ty, mem) = match &ty {
+    let (reffed_ty, rmem) = match &ty {
         Ty::Data(DataTy::Dead(_)) => panic!("Cannot happen because of the alive check."),
         Ty::Data(DataTy::At(inner_ty, m)) => (inner_ty.deref().clone(), m.clone()),
-        Ty::Data(dty) => (dty.clone(), Memory::CpuStack),
+        Ty::Data(dty) => (dty.clone(), mem),
         Ty::View(_) => return Err("Trying to borrow a view.".to_string()),
         Ty::Fn(_, _, _, _) => return Err("Trying to borrow a function.".to_string()),
         Ty::Ident(_) => {
@@ -910,7 +917,7 @@ fn ty_check_borrow(
     let res_ty = DataTy::Ref(
         Provenance::Value(prv_val_name.to_string()),
         own,
-        mem,
+        rmem,
         Box::new(reffed_ty),
     );
     let res_ty_ctx = ty_ctx.extend_loans_for_prv(prv_val_name, loans)?;
@@ -919,96 +926,135 @@ fn ty_check_borrow(
 
 // Δ; Γ ⊢ω p:τ
 // p in an ω context has type τ under Δ and Γ
-fn place_expr_ty_under_own(
+fn place_expr_ty_under_exec_own(
+    gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     exec: Exec,
     own: Ownership,
     pl_expr: &PlaceExpr,
 ) -> Result<Ty, String> {
-    let (ty, _) = place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, pl_expr)?;
+    let (ty, _) = place_expr_ty_mem_under_exec_own(gl_ctx, kind_ctx, ty_ctx, exec, own, pl_expr)?;
     Ok(ty)
 }
 
-// Δ; Γ ⊢ω p:τ,{ρ}
-// p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
-fn place_expr_ty_and_passed_prvs_under_own(
+fn place_expr_ty_mem_under_exec_own(
+    gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     exec: Exec,
     own: Ownership,
     pl_expr: &PlaceExpr,
-) -> Result<(Ty, Vec<Provenance>), String> {
+) -> Result<(Ty, Memory), String> {
+    let (ty, mem, _) =
+        place_expr_ty_mem_passed_prvs_under_exec_own(gl_ctx, kind_ctx, ty_ctx, exec, own, pl_expr)?;
+    Ok((ty, mem))
+}
+
+// Δ; Γ ⊢ω p:τ,{ρ}
+// p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
+fn place_expr_ty_mem_passed_prvs_under_exec_own(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: &TyCtx,
+    exec: Exec,
+    own: Ownership,
+    pl_expr: &PlaceExpr,
+) -> Result<(Ty, Memory, Vec<Provenance>), String> {
     match pl_expr {
         // TC-Var
-        PlaceExpr::Ident(ident) => var_expr_ty_and_empty_prvs_under_own(ty_ctx, &ident),
+        PlaceExpr::Ident(ident) => {
+            var_expr_ty_mem_empty_prvs_under_exec_own(gl_ctx, ty_ctx, exec, &ident)
+        }
         // TC-Proj
-        PlaceExpr::Proj(tuple_expr, n) => {
-            proj_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, tuple_expr, *n)
-        }
+        PlaceExpr::Proj(tuple_expr, n) => proj_expr_ty_mem_passed_prvs_under_exec_own(
+            gl_ctx, kind_ctx, ty_ctx, exec, own, tuple_expr, *n,
+        ),
         // TC-Deref
-        PlaceExpr::Deref(borr_expr) => {
-            deref_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, borr_expr)
-        }
+        PlaceExpr::Deref(borr_expr) => deref_expr_ty_mem_passed_prvs_under_exec_own(
+            gl_ctx, kind_ctx, ty_ctx, exec, own, borr_expr,
+        ),
     }
 }
 
-fn var_expr_ty_and_empty_prvs_under_own(
+fn var_expr_ty_mem_empty_prvs_under_exec_own(
+    gl_ctx: &GlobalCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     ident: &Ident,
-) -> Result<(Ty, Vec<Provenance>), String> {
-    let ty = ty_ctx.ident_ty(&ident)?;
+) -> Result<(Ty, Memory, Vec<Provenance>), String> {
+    let ty = if let Ok(tty) = ty_ctx.ident_ty(&ident) {
+        tty
+    } else {
+        gl_ctx.fun_ty_by_name(&ident.name)?
+    };
+
     match ty {
         Ty::Data(dty) => {
             if !dty.is_fully_alive() {
                 return Err("The value in this identifier has been moved out.".to_string());
             }
-            return Ok((ty.clone(), vec![]));
+            let mem = default_mem_by_exec(exec)?;
+            return Ok((ty.clone(), mem, vec![]));
         }
         Ty::View(vty) => {
             if !vty.is_fully_alive() {
                 return Err("The value in this identifier has been moved out.".to_string());
             }
-            return Ok((ty.clone(), vec![]));
+            return Ok((ty.clone(), Memory::None, vec![]));
         }
-        f @ Ty::Fn(_, _, _, _) => {
-            if !f.is_fully_alive() {
+        fty @ Ty::Fn(_, _, _, _) => {
+            if !fty.is_fully_alive() {
                 panic!("This should never happen.")
             }
-            return Ok((ty.clone(), vec![]));
+            return Ok((ty.clone(), Memory::None, vec![]));
         }
         // TODO this is probably wrong, should probably succeed instead
+        //  but not in all cases. as long as these functions return the accessed memory region,
+        //  the type MUST be known to do so.
         Ty::Ident(ident) => panic!("Identifier {} found. Expected instantiated type.", ident),
     }
-    //
-    // panic!(
-    //     "Trying to give type under ownership for identifier {} which is a view type. \
-    //     View types can never be borrowed.",
-    //     ident
-    // )
 }
 
-fn proj_expr_ty_and_passed_prvs_under_own(
+fn default_mem_by_exec(exec: Exec) -> Result<Memory, String> {
+    let mem = match exec {
+        Exec::CpuThread => Memory::CpuStack,
+        Exec::GpuThread => Memory::GpuLocal,
+        Exec::GpuBlock => return Err("Trying to access memory from block level.".to_string()),
+        Exec::GpuGrid => return Err("Trying to access memory from grid level.".to_string()),
+        Exec::View => panic!("Data type variables cannot be used inside of view functions."),
+    };
+    Ok(mem)
+}
+
+fn proj_expr_ty_mem_passed_prvs_under_exec_own(
+    gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     exec: Exec,
     own: Ownership,
     tuple_expr: &PlaceExpr,
     n: usize,
-) -> Result<(Ty, Vec<Provenance>), String> {
-    let (pl_expr_ty, passed_prvs) =
-        place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, tuple_expr)?;
+) -> Result<(Ty, Memory, Vec<Provenance>), String> {
+    let (pl_expr_ty, mem, passed_prvs) = place_expr_ty_mem_passed_prvs_under_exec_own(
+        gl_ctx, kind_ctx, ty_ctx, exec, own, tuple_expr,
+    )?;
     match pl_expr_ty {
         Ty::Data(DataTy::Tuple(elem_dtys)) => {
             if let Some(ty) = elem_dtys.get(n) {
-                Ok((Ty::Data(ty.clone()), passed_prvs))
+                Ok((Ty::Data(ty.clone()), mem, passed_prvs))
             } else {
                 Err("Trying to access non existing tuple element.".to_string())
             }
         }
         Ty::View(ViewTy::Tuple(elem_tys)) => {
             if let Some(ty) = elem_tys.get(n) {
-                Ok((ty.clone(), passed_prvs))
+                let mem = if let Ty::Data(_) = ty {
+                    default_mem_by_exec(exec)?
+                } else {
+                    Memory::None
+                };
+                Ok((ty.clone(), mem, passed_prvs))
             } else {
                 Err("Trying to access non existing tuple element.".to_string())
             }
@@ -1020,15 +1066,17 @@ fn proj_expr_ty_and_passed_prvs_under_own(
     }
 }
 
-fn deref_expr_ty_and_passed_prvs_under_own<'a>(
+fn deref_expr_ty_mem_passed_prvs_under_exec_own(
+    gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     exec: Exec,
     own: Ownership,
     borr_expr: &PlaceExpr,
-) -> Result<(Ty, Vec<Provenance>), String> {
-    let (pl_expr_ty, mut passed_prvs) =
-        place_expr_ty_and_passed_prvs_under_own(kind_ctx, ty_ctx, exec, own, borr_expr)?;
+) -> Result<(Ty, Memory, Vec<Provenance>), String> {
+    let (pl_expr_ty, _, mut passed_prvs) = place_expr_ty_mem_passed_prvs_under_exec_own(
+        gl_ctx, kind_ctx, ty_ctx, exec, own, borr_expr,
+    )?;
     if let Ty::Data(DataTy::Ref(prv, ref_own, mem, dty)) = pl_expr_ty {
         if ref_own < own {
             return Err("Trying to dereference and mutably use a shrd reference.".to_string());
@@ -1037,7 +1085,7 @@ fn deref_expr_ty_and_passed_prvs_under_own<'a>(
         subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
         accessible_memory(exec, &mem)?;
         passed_prvs.push(prv);
-        Ok((Ty::Data(*dty), passed_prvs))
+        Ok((Ty::Data(*dty), mem, passed_prvs))
     } else {
         Err("Trying to dereference non reference type.".to_string())
     }

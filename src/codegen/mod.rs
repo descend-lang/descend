@@ -764,6 +764,12 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
                 desc::Memory::GpuGlobal => cu::BufferKind::Gpu,
                 desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
                 desc::Memory::GpuShared => unimplemented!("big TODO!"),
+                desc::Memory::None => {
+                    panic!("No memory is not valid for At types. should never appear here.")
+                }
+                desc::Memory::GpuLocal => {
+                    panic!("GpuLocal is not valid for At types. Should never appear here.")
+                }
                 desc::Memory::CpuStack => {
                     panic!("CpuStack is not valid for At types. Should never appear here.")
                 }
