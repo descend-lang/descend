@@ -74,7 +74,7 @@ peg::parser! {
             {
                 let tail_ty = tail.ty.clone();
                 Expr {
-                    expr:ExprKind::Let(m.unwrap_or(Mutability::Const), ident, typ, Box::new(expr), Box::new(tail)),
+                    expr:ExprKind::Let(m.unwrap_or(Mutability::Const), ident, Box::new(typ), Box::new(expr), Box::new(tail)),
                     ty: tail_ty,
                     span: Some(Span::new(start, end))
                 }
@@ -1128,7 +1128,7 @@ mod tests {
                 ExprKind::Let(
                     Mutability::Mut,
                     Ident::new("x"),
-                    Some(Ty::Data(DataTy::Scalar(ScalarTy::F32))),
+                    Box::new(Some(Ty::Data(DataTy::Scalar(ScalarTy::F32)))),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::F32(17.123)),
                         Ty::Data(DataTy::Scalar(ScalarTy::F32))

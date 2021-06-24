@@ -100,11 +100,10 @@ pub enum ExprKind {
     LetProv(Vec<String>, Box<Expr>),
     // Variable declaration
     // let mut x: ty;
-    LetUninit(Ident, Ty, Box<Expr>),
+    LetUninit(Ident, Box<Ty>, Box<Expr>),
     // Variable declaration, assignment and sequencing
     // let w x: ty = e1; e2
-    // TODO box Ty in Option to reduce size?
-    Let(Mutability, Ident, Option<Ty>, Box<Expr>, Box<Expr>),
+    Let(Mutability, Ident, Box<Option<Ty>>, Box<Expr>, Box<Expr>),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
     // e1 ; e2
@@ -139,7 +138,7 @@ impl fmt::Display for ExprKind {
             }
             Self::Assign(pl_expr, e) => write!(f, "{} = {}", pl_expr, e),
             Self::Let(mutab, ident, ty, e1, e2) => {
-                if let Some(ty) = ty {
+                if let Some(ty) = ty.as_ref() {
                     write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
                 } else {
                     write!(f, "let {} {} = {}; {}", mutab, ident, e1, e2)
@@ -892,8 +891,8 @@ pub enum Exec {
 }
 
 impl Exec {
-    pub fn callable_in(&self, exec: &Self) -> bool {
-        if self == &Exec::View {
+    pub fn callable_in(self, exec: Self) -> bool {
+        if self == Exec::View {
             true
         } else {
             self == exec

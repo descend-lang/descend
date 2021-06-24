@@ -173,7 +173,7 @@ pub fn r#let(m: Mutability, id_name: &str, ident_ty: &Ty, value: Expr, body: Exp
     Expr::new(ExprKind::Let(
         m,
         Ident::new(id_name),
-        Some(ident_ty.clone()),
+        Box::new(Some(ident_ty.clone())),
         Box::new(value),
         Box::new(body),
     ))

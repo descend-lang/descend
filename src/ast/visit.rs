@@ -195,7 +195,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Let(mutabl, ident, ty, e1, e2) => {
             visitor.visit_mutability(mutabl);
             visitor.visit_ident(ident);
-            match ty {
+            match ty.as_mut() {
                 Some(ty) => visitor.visit_ty(ty),
                 None => {}
             };

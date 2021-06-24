@@ -601,7 +601,7 @@ fn ty_check_app(
     // TODO check well-kinded: FrameTyping, Prv, Ty
     let mut res_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, ef)?;
     if let Ty::Fn(gen_params, param_tys, exec_f, out_ty) = ef.ty.as_ref().unwrap() {
-        if !exec_f.callable_in(&exec) {
+        if !exec_f.callable_in(exec) {
             return Err(format!(
                 "Trying to apply function for execution resource `{}` \
                 under execution resource `{}`",
