@@ -193,7 +193,7 @@ peg::parser! {
             "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
             "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
             "{" _ body_expr:expression_seq() _"}" {
-                Expr::new(ExprKind::Lambda(params, exec, ret_dty, Box::new(body_expr)))
+                Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
             }
             // Parentheses to override precedence
             "(" _ expression:expression() _ ")" { expression }

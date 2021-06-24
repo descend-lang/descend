@@ -397,11 +397,11 @@ fn gen_expr(
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
                 expr,
-                !matches!(ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
+                !matches!(ty.as_ref(), desc::DataTy::Scalar(desc::ScalarTy::Unit)),
                 parall_ctx,
                 view_ctx,
             )),
-            ret_ty: gen_ty(&desc::Ty::Data(ty.clone()), desc::Mutability::Mut).unwrap(),
+            ret_ty: gen_ty(&desc::Ty::Data(ty.as_ref().clone()), desc::Mutability::Mut).unwrap(),
             is_dev_fun: is_dev_fun(*exec),
         },
         App(fun, kinded_args, args) => cu::Expr::FunCall {

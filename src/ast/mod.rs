@@ -110,7 +110,7 @@ pub enum ExprKind {
     Seq(Box<Expr>, Box<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
-    Lambda(Vec<ParamDecl>, Exec, DataTy, Box<Expr>),
+    Lambda(Vec<ParamDecl>, Exec, Box<DataTy>, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
