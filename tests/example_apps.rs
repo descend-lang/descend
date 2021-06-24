@@ -23,7 +23,7 @@ fn tree_reduce_shared_mem() -> Result<(), String> {
                 | grid: Grid<Block<Thread, 1024>, 64>,
                   input: [[[[&'r uniq gpu.global i32; 1024]]; 64]]| -[gpu]-> () {
                     let tmp: [i32; 1024] @ gpu.shared = shared_alloc<[i32; 1024]>();
-                    for grid with input, tmp do 
+                    for grid with <input, tmp> do 
                         | block: Block<Thread, 1024>,
                           ib: [[&'r uniq gpu.global i32; 1024]] | -[gpu.group]-> () {
                              for block with
@@ -75,13 +75,13 @@ fn tree_reduce() -> Result<(), String> {
             let gpu: Gpu = gpu(0);
 
             let mut a_array: [i32; n] @ gpu.global =
-                gpu_alloc<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+                gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
             let view_a: [[&'r uniq gpu.global i32; n]] =
-                to_view_mut<'r, gpu.global, n, i32>(&'r uniq a_array);
-            let block_group = group<1024, n, &'r uniq gpu.global i32>(view_a);
+                to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
+            let block_group = group::<1024, n, &'r uniq gpu.global i32>(view_a);
             // exec: <b: nat, t: nat, r: prv, m: mem, elem_ty: ty, n: nat>(
             //        &r uniq m Gpu, [[elem_ty; n]], ([[[[Thread; t]]; b]], [[elem_ty; n]]) -[gpu]-> ()) -> ()
-            exec<64, 1024, 'h, cpu.stack, [[&'r uniq gpu.global i32; 1024]], 64>(
+            exec::<64, 1024, 'h, cpu.stack, [[&'r uniq gpu.global i32; 1024]], 64>(
                 &'h uniq gpu,
                 block_group,
                 | grid: Grid<Block<Thread, 1024>, 64>,
@@ -90,12 +90,12 @@ fn tree_reduce() -> Result<(), String> {
                         | block: Block<Thread, 1024>,
                           ib: [[&'r uniq gpu.global i32; 1024]] | -[gpu.group]-> () {
                              for_nat k in halfed_range(512) {
-                                 let active_non_active = split_at<2*k, 1024, &'r uniq gpu.global i32>(ib);
-                                 let active_halves = split_at<k, 2*k, &'r uniq gpu.global i32>(active_non_active.0);
-                                 let active_non_active_threads = split<k, 1024>(block);
+                                 let active_non_active = split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib);
+                                 let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(active_non_active.0);
+                                 let active_non_active_threads = split::<k, 1024>(block);
                                  let active_threads = active_non_active_threads.0;
                                  for active_threads
-                                 with zip<k, &'r uniq gpu.global i32, &'r uniq gpu.global i32>(
+                                 with zip::<k, &'r uniq gpu.global i32, &'r uniq gpu.global i32>(
                                     active_halves.0, active_halves.1)
                                  do
                                     | thread: Thread,
@@ -106,7 +106,7 @@ fn tree_reduce() -> Result<(), String> {
                          };
                 }
             );
-            copy_to_host<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
+            copy_to_host::<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
         }
     }"#;
 
@@ -131,20 +131,20 @@ fn inplace_vector_add_with_across() -> Result<(), String> {
             let gpu: Gpu = gpu(0);
 
             let mut a_array: [i32; n] @ gpu.global =
-                gpu_alloc<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+                gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
             let b_array: [i32; n] @ gpu.global =
-                gpu_alloc<'f, 'i, cpu.stack, cpu.heap, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
+                gpu_alloc::<'f, 'i, cpu.stack, cpu.heap, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
             let view_a: [[&'r uniq gpu.global i32; n]] =
-                to_view_mut<'r, gpu.global, n, i32>(&'r uniq a_array);
+                to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
             let view_b: [[&'s shrd gpu.global i32; n]] =
-                to_view<'s, gpu.global, n, i32>(&'s shrd b_array);
+                to_view::<'s, gpu.global, n, i32>(&'s shrd b_array);
             let elems: [[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; n]] =
-                zip<n, &'r uniq gpu.global i32, &'s shrd gpu.global i32>(view_a, view_b);
+                zip::<n, &'r uniq gpu.global i32, &'s shrd gpu.global i32>(view_a, view_b);
             let grouped_elems: [[[[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; 1024]]; n/1024]] =
-                group<1024, n, {&'r uniq gpu.global i32, &'s shrd gpu.global i32}>(elems);
+                group::<1024, n, {&'r uniq gpu.global i32, &'s shrd gpu.global i32}>(elems);
             // exec: <b: nat, t: nat, r: prv, m: mem, elem_ty: ty, n: nat>(
             //        &r uniq m Gpu, [[elem_ty; n]], ([[[[Thread; t]]; b]], [[elem_ty; n]]) -[gpu]-> ()) -> ()
-            exec<64, 1024, 'h, cpu.stack, [[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; 1024]], 64>(
+            exec::<64, 1024, 'h, cpu.stack, [[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; 1024]], 64>(
                 &'h uniq gpu,
                 grouped_elems,
                 | grid: Grid<Block<Thread, 1024>, 64>,
@@ -160,7 +160,7 @@ fn inplace_vector_add_with_across() -> Result<(), String> {
                          };
                 }
             );
-            copy_to_host<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
+            copy_to_host::<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
         }
     }"#;
 

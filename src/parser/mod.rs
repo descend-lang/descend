@@ -112,7 +112,7 @@ peg::parser! {
             }
             // TODO: Integrate this properly into the precedence parser
             start:position!() func:ident() place_end:position!() _
-                kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {
                 Expr::new(
