@@ -124,6 +124,7 @@ pub enum ExprKind {
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
     ParFor(Box<Expr>, Box<Expr>, Box<Expr>),
+    TupleView(Vec<Expr>),
 }
 
 impl fmt::Display for ExprKind {

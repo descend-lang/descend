@@ -120,6 +120,7 @@ fn ty_check_expr(
         ExprKind::Lit(l) => ty_check_literal(ty_ctx, l),
         ExprKind::Array(elems) => ty_check_array(gl_ctx, kind_ctx, ty_ctx, exec, elems)?,
         ExprKind::Tuple(elems) => ty_check_tuple(gl_ctx, kind_ctx, ty_ctx, exec, elems)?,
+        ExprKind::TupleView(elems) => ty_check_tuple_view(gl_ctx, kind_ctx, ty_ctx, exec, elems)?,
         ExprKind::App(ef, k_args, args) => {
             ty_check_app(gl_ctx, kind_ctx, ty_ctx, exec, ef, k_args, args)?
         }
@@ -687,6 +688,24 @@ fn ty_check_tuple(
         })
         .collect();
     Ok((tmp_ty_ctx, Ty::Data(DataTy::Tuple(elem_tys?))))
+}
+
+fn ty_check_tuple_view(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    elems: &mut [Expr],
+) -> Result<(TyCtx, Ty), String> {
+    let mut tmp_ty_ctx = ty_ctx;
+    for elem in elems.iter_mut() {
+        tmp_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, tmp_ty_ctx, exec, elem)?;
+    }
+    let elem_tys: Vec<_> = elems
+        .iter()
+        .map(|elem| elem.ty.as_ref().unwrap().clone())
+        .collect();
+    Ok((tmp_ty_ctx, Ty::View(ViewTy::Tuple(elem_tys))))
 }
 
 fn ty_check_array(

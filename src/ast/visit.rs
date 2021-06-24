@@ -262,6 +262,9 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_unary_op(op);
             visitor.visit_expr(expr)
         }
+        ExprKind::TupleView(elems) => {
+            walk_list!(visitor, visit_expr, elems);
+        }
     }
 }
 

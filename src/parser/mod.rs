@@ -160,6 +160,12 @@ peg::parser! {
             "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
                 Expr::new(ExprKind::Tuple(expressions))
             }
+            "<" _ expression:expression() _ "," _ ">" {
+                Expr::new(ExprKind::TupleView(vec![expression]))
+            }
+            "<" _ expressions:expression() **<2,> (_ "," _) _ ">" {
+                Expr::new(ExprKind::TupleView(expressions))
+            }
             "if" __ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
                 Expr::new(
                     ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse))
@@ -1008,6 +1014,27 @@ mod tests {
         assert_eq!(
             descend::expression_seq("(12, x[3], true)"),
             Ok(Expr::new(ExprKind::Tuple(vec![
+                Expr::with_type(
+                    ExprKind::Lit(Lit::I32(12)),
+                    Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                ),
+                Expr::new(ExprKind::Index(
+                    PlaceExpr::Ident(Ident::new("x")),
+                    Nat::Lit(3)
+                )),
+                Expr::with_type(
+                    ExprKind::Lit(Lit::Bool(true)),
+                    Ty::Data(DataTy::Scalar(ScalarTy::Bool))
+                )
+            ])))
+        );
+    }
+
+    #[test]
+    fn expression_tupel_view() {
+        assert_eq!(
+            descend::expression_seq("<12, x[3], true>"),
+            Ok(Expr::new(ExprKind::TupleView(vec![
                 Expr::with_type(
                     ExprKind::Lit(Lit::I32(12)),
                     Ty::Data(DataTy::Scalar(ScalarTy::I32))
