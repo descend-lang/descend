@@ -123,7 +123,7 @@ fn gen_stmt(
                         expr: Some(cu::Expr::Nat(input[0].clone())),
                     };
                     let (cond, iter) = match r_name.name.as_str() {
-                        "halfed_range" => {
+                        "halved_range" => {
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Ge,
                                 lhs: Box::new(i.clone()),
@@ -828,7 +828,10 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
 // TODO correct?
 fn is_dev_fun(exec: desc::Exec) -> bool {
     match exec {
-        desc::Exec::GpuGrid | desc::Exec::GpuBlock | desc::Exec::GpuThread => true,
+        desc::Exec::GpuGrid
+        | desc::Exec::GpuBlock
+        | desc::Exec::GpuWarp
+        | desc::Exec::GpuThread => true,
         desc::Exec::CpuThread | desc::Exec::View => false,
     }
 }

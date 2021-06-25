@@ -1038,9 +1038,10 @@ fn var_expr_ty_mem_empty_prvs_under_exec_own(
 fn default_mem_by_exec(exec: Exec) -> Result<Memory, String> {
     let mem = match exec {
         Exec::CpuThread => Memory::CpuStack,
-        Exec::GpuThread => Memory::GpuLocal,
-        Exec::GpuBlock => return Err("Trying to access memory from block level.".to_string()),
         Exec::GpuGrid => return Err("Trying to access memory from grid level.".to_string()),
+        Exec::GpuBlock => return Err("Trying to access memory from block level.".to_string()),
+        Exec::GpuWarp => return Err("Trying to access memory from block level.".to_string()),
+        Exec::GpuThread => Memory::GpuLocal,
         Exec::View => panic!("Data type variables cannot be used inside of view functions."),
     };
     Ok(mem)

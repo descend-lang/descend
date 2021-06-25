@@ -886,6 +886,7 @@ pub enum Exec {
     CpuThread,
     GpuGrid,
     GpuBlock,
+    GpuWarp,
     GpuThread,
     View,
 }
@@ -906,6 +907,7 @@ impl fmt::Display for Exec {
             Exec::CpuThread => write!(f, "cpu.thread"),
             Exec::GpuGrid => write!(f, "gpu.grid"),
             Exec::GpuBlock => write!(f, "gpu.block"),
+            Exec::GpuWarp => write!(f, "gpu.warp"),
             Exec::GpuThread => write!(f, "gpu.thread"),
             Exec::View => write!(f, "view"),
         }

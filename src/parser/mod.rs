@@ -314,9 +314,10 @@ peg::parser! {
 
         pub(crate) rule execution_resource() -> Exec
             = "cpu.thread" { Exec::CpuThread }
-            / "gpu.group" { Exec::GpuBlock }
+            / "gpu.grid" { Exec::GpuGrid }
+            / "gpu.block" { Exec::GpuBlock }
+            / "gpu.warp" { Exec::GpuWarp }
             / "gpu.thread" { Exec::GpuThread }
-            / "gpu" { Exec::GpuGrid }
 
         pub(crate) rule kind() -> Kind
             = "nat" { Kind::Nat }
