@@ -160,7 +160,7 @@ peg::parser! {
             "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
                 Expr::new(ExprKind::Tuple(expressions))
             }
-            "<" _ expression:expression() _ "," _ ">" {
+            "<" _ expression:expression() _ ">" {
                 Expr::new(ExprKind::TupleView(vec![expression]))
             }
             "<" _ expressions:expression() **<2,> (_ "," _) _ ">" {
@@ -295,7 +295,8 @@ peg::parser! {
 
         pub(crate) rule vty() -> ViewTy
             = "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { ViewTy::Array(Box::new(t), n) }
-            / "{" _ tys:ty() **<2,> (_ "," _) _ "}" { ViewTy::Tuple(tys) }
+            / "<" _ ty:ty() _ ">" { ViewTy::Tuple(vec![ty]) }
+            / "<" _ tys:ty() **<2,> (_ "," _) _ ">" { ViewTy::Tuple(tys) }
 
         pub(crate) rule ownership() -> Ownership
         = "shrd" { Ownership::Shrd }

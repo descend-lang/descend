@@ -58,10 +58,11 @@ impl std::fmt::Display for Stmt {
         use Stmt::*;
         match self {
             VarDecl { name, ty, expr } => {
-                if let Ty::Const(_) = ty {
-                    write!(f, "const ")?
-                }
-                write!(f, "auto {}", name)?;
+                //  if let Ty::Const(_) = ty {
+                //      write!(f, "const ")?
+                //  }
+                //  write!(f, "auto {}", name)?;
+                write!(f, "{} {}", ty, name)?;
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
                 }
@@ -247,8 +248,9 @@ impl std::fmt::Display for Ty {
                 write!(f, ">")
             }
             Buffer(ty, buff_kind) => match buff_kind {
-                BufferKind::Heap => write!(f, "HeapBuffer<{}>", ty),
-                BufferKind::Gpu => write!(f, "GpuBuffer<{}>", ty),
+                BufferKind::CpuHeap => write!(f, "HeapBuffer<{}>", ty),
+                BufferKind::GpuGlobal => write!(f, "GpuBuffer<{}>", ty),
+                BufferKind::GpuShared => write!(f, "extern __shared__ {}*", ty),
                 BufferKind::Ident(name) => write!(f, "{}", name),
             },
             Scalar(sty) => write!(f, "{}", sty),

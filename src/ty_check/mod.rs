@@ -227,21 +227,22 @@ fn ty_check_par_for(
         }
     }
     fn executable_over_parall_collec_and_input(
-        funs: &Expr,
+        fun: &Expr,
         parall_collec: &Expr,
-        input: &Expr,
+        in_elem_tys: Vec<&Ty>,
     ) -> Result<(), String> {
-        match funs.ty.as_ref().unwrap() {
+        match fun.ty.as_ref().unwrap() {
             Ty::Fn(_, param_tys, fun_exec, ret_ty) => {
-                if param_tys.len() != 2 {
-                    return Err(
-                        "Wrong amount of parameters in provided function. Expected 2,\
-                    one for parallelism expression and one for input."
-                            .to_string(),
-                    );
+                let num_fun_params = in_elem_tys.len() + 1;
+                if param_tys.len() != num_fun_params {
+                    return Err(format!(
+                        "Wrong amount of parameters in provided function. Expected {},\
+                    one for parallelism expression and one for input.",
+                        num_fun_params
+                    ));
                 }
                 let fun_parall_elem_ty = &param_tys[0];
-                let fun_input_elem_ty = &param_tys[1];
+                let fun_input_elem_tys: Vec<_> = param_tys[1..].iter().map(|t| t).collect();
                 let parall_elem_dty = match parall_collec.ty.as_ref().unwrap() {
                     Ty::Data(dty) => match dty {
                         DataTy::Grid(pe_dty, _) => pe_dty.as_ref(),
@@ -256,21 +257,12 @@ fn ty_check_par_for(
                         return Err("Provided expression is not a parallel collection.".to_string())
                     }
                 };
-                let input_elem_ty = match input.ty.as_ref().unwrap() {
-                    // TODO function should probably just take the view type of the View Arrays (i.e., so that
-                    //  for tuples this function can be applied to the combination of all elements).
-                    Ty::View(vty) => match vty {
-                        ViewTy::Array(elem_ty, _) => elem_ty.as_ref(),
-                        _ => panic!("Check earlier or so.")
-                    }
-                    _ => panic!("The input expression must be a view. This should have been checked earlier.")
-                };
                 if fun_parall_elem_ty != &Ty::Data(parall_elem_dty.clone()) {
                     return Err(
                         "Function does not fit the provided parallel collection.".to_string()
                     );
                 }
-                if fun_input_elem_ty != input_elem_ty {
+                if fun_input_elem_tys != in_elem_tys {
                     return Err("Function does not fit the provided input.".to_string());
                 }
                 let exec = match parall_elem_dty {
@@ -290,7 +282,8 @@ fn ty_check_par_for(
             _ => Err("The provided expression is not a function.".to_string()),
         }
     }
-    let parall_collec_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, parall_collec)?;
+    let parall_collec_ty_ctx =
+        ty_check_expr(gl_ctx, kind_ctx, ty_ctx.clone(), exec, parall_collec)?;
     let (allowed_exec, parall_collec_dims) = to_exec_and_size(parall_collec);
     if allowed_exec != exec {
         return Err(format!(
@@ -299,21 +292,21 @@ fn ty_check_par_for(
         ));
     }
     let input_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, parall_collec_ty_ctx, exec, input)?;
-    match input.ty.as_ref().unwrap() {
-        Ty::View(ViewTy::Array(_, n)) => {
-            if n != parall_collec_dims.first().unwrap() {
-                return Err(format!(
-                    "Trying to distribute a collection of size {:?} over {} threads or blocks",
-                    parall_collec_dims, n
-                ));
-            }
-        }
-        Ty::Data(_) => return Err("Provided input expression is not a view.".to_string()),
-        _ => unimplemented!(),
-    }
-    let funs_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, input_ty_ctx, exec, funs)?;
-    executable_over_parall_collec_and_input(funs, parall_collec, input)?;
-    Ok((funs_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
+    let in_param_tys: Vec<_> = match input.ty.as_ref().unwrap() {
+        Ty::View(ViewTy::Tuple(input_tys)) => input_tys
+            .iter()
+            .map(|t| match t {
+                Ty::View(ViewTy::Array(tty, n)) => tty.as_ref(),
+                tty => tty,
+            })
+            .collect(),
+        _ => return Err("Provided input expression is not a tuple view.".to_string()),
+    };
+    // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
+    // that is used for the par_for can safely be reused.
+    let _funs_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, input_ty_ctx, exec, funs)?;
+    executable_over_parall_collec_and_input(funs, parall_collec, in_param_tys)?;
+    Ok((ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
 }
 
 fn ty_check_lambda(
@@ -922,7 +915,19 @@ fn ty_check_borrow(
     let (reffed_ty, rmem) = match &ty {
         Ty::Data(DataTy::Dead(_)) => panic!("Cannot happen because of the alive check."),
         Ty::Data(DataTy::At(inner_ty, m)) => (inner_ty.deref().clone(), m.clone()),
-        Ty::Data(dty) => (dty.clone(), mem),
+        Ty::Data(dty) => (
+            dty.clone(),
+            match mem {
+                Some(m) => m,
+                None => {
+                    return Err(
+                        "Trying to borrow value that does not exist for the current \
+            execution resource."
+                            .to_string(),
+                    )
+                }
+            },
+        ),
         Ty::View(_) => return Err("Trying to borrow a view.".to_string()),
         Ty::Fn(_, _, _, _) => return Err("Trying to borrow a function.".to_string()),
         Ty::Ident(_) => {
@@ -964,7 +969,7 @@ fn place_expr_ty_mem_under_exec_own(
     exec: Exec,
     own: Ownership,
     pl_expr: &PlaceExpr,
-) -> Result<(Ty, Memory), String> {
+) -> Result<(Ty, Option<Memory>), String> {
     let (ty, mem, _) =
         place_expr_ty_mem_passed_prvs_under_exec_own(gl_ctx, kind_ctx, ty_ctx, exec, own, pl_expr)?;
     Ok((ty, mem))
@@ -979,7 +984,7 @@ fn place_expr_ty_mem_passed_prvs_under_exec_own(
     exec: Exec,
     own: Ownership,
     pl_expr: &PlaceExpr,
-) -> Result<(Ty, Memory, Vec<Provenance>), String> {
+) -> Result<(Ty, Option<Memory>, Vec<Provenance>), String> {
     match pl_expr {
         // TC-Var
         PlaceExpr::Ident(ident) => {
@@ -1001,7 +1006,7 @@ fn var_expr_ty_mem_empty_prvs_under_exec_own(
     ty_ctx: &TyCtx,
     exec: Exec,
     ident: &Ident,
-) -> Result<(Ty, Memory, Vec<Provenance>), String> {
+) -> Result<(Ty, Option<Memory>, Vec<Provenance>), String> {
     let ty = if let Ok(tty) = ty_ctx.ident_ty(&ident) {
         tty
     } else {
@@ -1011,22 +1016,25 @@ fn var_expr_ty_mem_empty_prvs_under_exec_own(
     match ty {
         Ty::Data(dty) => {
             if !dty.is_fully_alive() {
-                return Err("The value in this identifier has been moved out.".to_string());
+                return Err(format!(
+                    "The value in this identifier `{}` has been moved out.",
+                    ident
+                ));
             }
-            let mem = default_mem_by_exec(exec)?;
+            let mem = default_mem_by_exec(exec);
             return Ok((ty.clone(), mem, vec![]));
         }
         Ty::View(vty) => {
             if !vty.is_fully_alive() {
                 return Err("The value in this identifier has been moved out.".to_string());
             }
-            return Ok((ty.clone(), Memory::None, vec![]));
+            return Ok((ty.clone(), None, vec![]));
         }
         fty @ Ty::Fn(_, _, _, _) => {
             if !fty.is_fully_alive() {
                 panic!("This should never happen.")
             }
-            return Ok((ty.clone(), Memory::None, vec![]));
+            return Ok((ty.clone(), None, vec![]));
         }
         // TODO this is probably wrong, should probably succeed instead
         //  but not in all cases. as long as these functions return the accessed memory region,
@@ -1035,16 +1043,12 @@ fn var_expr_ty_mem_empty_prvs_under_exec_own(
     }
 }
 
-fn default_mem_by_exec(exec: Exec) -> Result<Memory, String> {
-    let mem = match exec {
-        Exec::CpuThread => Memory::CpuStack,
-        Exec::GpuGrid => return Err("Trying to access memory from grid level.".to_string()),
-        Exec::GpuBlock => return Err("Trying to access memory from block level.".to_string()),
-        Exec::GpuWarp => return Err("Trying to access memory from block level.".to_string()),
-        Exec::GpuThread => Memory::GpuLocal,
-        Exec::View => panic!("Data type variables cannot be used inside of view functions."),
-    };
-    Ok(mem)
+fn default_mem_by_exec(exec: Exec) -> Option<Memory> {
+    match exec {
+        Exec::CpuThread => Some(Memory::CpuStack),
+        Exec::GpuThread => Some(Memory::GpuLocal),
+        Exec::GpuGrid | Exec::GpuBlock | Exec::GpuWarp | Exec::View => None,
+    }
 }
 
 fn proj_expr_ty_mem_passed_prvs_under_exec_own(
@@ -1055,7 +1059,7 @@ fn proj_expr_ty_mem_passed_prvs_under_exec_own(
     own: Ownership,
     tuple_expr: &PlaceExpr,
     n: usize,
-) -> Result<(Ty, Memory, Vec<Provenance>), String> {
+) -> Result<(Ty, Option<Memory>, Vec<Provenance>), String> {
     let (pl_expr_ty, mem, passed_prvs) = place_expr_ty_mem_passed_prvs_under_exec_own(
         gl_ctx, kind_ctx, ty_ctx, exec, own, tuple_expr,
     )?;
@@ -1070,9 +1074,9 @@ fn proj_expr_ty_mem_passed_prvs_under_exec_own(
         Ty::View(ViewTy::Tuple(elem_tys)) => {
             if let Some(ty) = elem_tys.get(n) {
                 let mem = if let Ty::Data(_) = ty {
-                    default_mem_by_exec(exec)?
+                    default_mem_by_exec(exec)
                 } else {
-                    Memory::None
+                    None
                 };
                 Ok((ty.clone(), mem, passed_prvs))
             } else {
@@ -1093,7 +1097,7 @@ fn deref_expr_ty_mem_passed_prvs_under_exec_own(
     exec: Exec,
     own: Ownership,
     borr_expr: &PlaceExpr,
-) -> Result<(Ty, Memory, Vec<Provenance>), String> {
+) -> Result<(Ty, Option<Memory>, Vec<Provenance>), String> {
     let (pl_expr_ty, _, mut passed_prvs) = place_expr_ty_mem_passed_prvs_under_exec_own(
         gl_ctx, kind_ctx, ty_ctx, exec, own, borr_expr,
     )?;
@@ -1105,7 +1109,7 @@ fn deref_expr_ty_mem_passed_prvs_under_exec_own(
         subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
         accessible_memory(exec, &mem)?;
         passed_prvs.push(prv);
-        Ok((Ty::Data(*dty), mem, passed_prvs))
+        Ok((Ty::Data(*dty), Some(mem), passed_prvs))
     } else {
         Err("Trying to dereference non reference type.".to_string())
     }

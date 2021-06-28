@@ -140,6 +140,12 @@ pub(super) enum TemplateArg {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum Exec {
+    Host,
+    Device,
+}
+
+#[derive(Clone, Debug)]
 pub(super) enum Ty {
     Scalar(ScalarTy),
     Tuple(Vec<Ty>),
@@ -167,8 +173,9 @@ pub(super) enum Ty {
 // TODO this is not really a Cuda type and should maybe be represented by a generic type construct
 #[derive(Clone, Debug)]
 pub(super) enum BufferKind {
-    Heap,
-    Gpu,
+    CpuHeap,
+    GpuGlobal,
+    GpuShared,
     Ident(String),
 }
 

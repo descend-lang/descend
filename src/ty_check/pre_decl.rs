@@ -7,6 +7,7 @@ pub static GPU: &str = "gpu";
 pub static GPU_ALLOC: &str = "gpu_alloc";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
+pub static SHARED_ALLOC: &str = "shared_alloc";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -25,6 +26,7 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (GPU_ALLOC, gpu_alloc_ty()),
         (COPY_TO_HOST, copy_to_host_ty()),
         (EXEC, exec_ty()),
+        (SHARED_ALLOC, shared_alloc_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -261,6 +263,25 @@ fn exec_ty() -> Ty {
     )
 }
 
+// shared_alloc:
+//  <t: ty>() -> t @ gpu.shared
+fn shared_alloc_ty() -> Ty {
+    let t = Ident::new("t");
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+    Ty::Fn(
+        vec![t_ty],
+        vec![],
+        Exec::GpuGrid,
+        Box::new(Ty::Data(DataTy::At(
+            Box::new(DataTy::Ident(t)),
+            Memory::GpuShared,
+        ))),
+    )
+}
+
 // TODO FIX Error: t: ty is too general. This means [t; n] could contain a view
 //  (which is not well-kinded).
 // to_view:
@@ -467,7 +488,7 @@ fn zip_ty() -> Ty {
 }
 
 // split:
-//  <s: nat, n: nat, t: ty>([[t; n]]) -> {[[t; s]], [[t; n-s]]}
+//  <s: nat, n: nat, t: ty>([[t; n]]) -> <[[t; s]], [[t; n-s]]>
 fn split_at_ty() -> Ty {
     let s = Ident::new("s");
     let n = Ident::new("n");

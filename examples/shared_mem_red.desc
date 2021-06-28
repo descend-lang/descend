@@ -1,0 +1,60 @@
+fn reduce_shared_mem<n: nat, a: prv, b: prv>(
+    ha_array: &a uniq cpu.heap [i32; n]
+) -[cpu.thread]-> () {
+    letprov <'r, 's, 'c, 'd, 'e, 'f, 'g, 'h> {
+        let gpu: Gpu = gpu(0);
+
+        let mut a_array: [i32; n] @ gpu.global =
+            gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+        let view_a: [[&'r uniq gpu.global i32; n]] =
+            to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
+        let block_group = group::<1024, n, &'r uniq gpu.global i32>(view_a);
+        exec::<64, 1024, 'h, cpu.stack, [[&'r uniq gpu.global i32; 1024]], 64>(
+            &'h uniq gpu,
+            block_group,
+            | grid: Grid<Block<Thread, 1024>, 64>,
+              input: [[[[&'r uniq gpu.global i32; 1024]]; 64]]| -[gpu.grid]-> () {
+                let mut tmp: [i32; 1024] @ gpu.shared = shared_alloc::<[i32; 1024]>();
+                for grid with <input, tmp> do
+                    | block: Block<Thread, 1024>,
+                      ib: [[&'r uniq gpu.global i32; 1024]], tmp: [i32; 1024] @ gpu.shared | -[gpu.block]-> () {
+                         let tmp_view = to_view_mut::<'e, gpu.shared, 1024, i32>(&'e uniq tmp);
+                         for block
+                         with <ib, tmp_view>
+                         do
+                            | thread: Thread,
+                              inp: &'r uniq gpu.global i32 , tmp_in: &'e uniq gpu.shared i32 | -[gpu.thread]-> () {
+                                 *tmp_in = *inp;
+                            };
+                         for_nat k in halved_range(512) {
+                             let tmp_view2 = to_view_mut::<'s, gpu.shared, 1024, i32>(&'s uniq tmp);
+                             let active_non_active = split_at::<2*k, 1024, &'s uniq gpu.shared i32>(tmp_view2);
+                             let active_halves = split_at::<k, 2*k, &'s uniq gpu.shared i32>(active_non_active.0);
+                             let active_non_active_threads = split::<k, 1024>(block);
+                             for (active_non_active_threads.0)
+                             with <active_halves.0, active_halves.1>
+                             do
+                                | thread: Thread,
+                                  a: &'s uniq gpu.shared i32, b: &'s uniq gpu.shared i32 | -[gpu.thread]-> () {
+                                    *a = *a + *b;
+                                };
+                         };
+                         let tmp_view3 = to_view_mut::<'f, gpu.shared, 1024, i32>(&'f uniq tmp);
+                         let first_elem_in_rest = split_at::<1, 1024, &'r uniq gpu.global i32>(ib);
+                         let first_elem_in = first_elem_in_rest.0;
+                         let first_elem_tmp_rest = split_at::<1, 1024, &'f uniq gpu.shared i32>(tmp_view3);
+                         let first_elem_tmp = first_elem_tmp_rest.0;
+                         let first_thread_rest = split::<1, 1024>(block);
+                         for (first_thread_rest.0)
+                         with <first_elem_in, first_elem_tmp>
+                         do
+                            | thread: Thread,
+                              fst_in: &'r uniq gpu.global i32 , fst_tmp: &'f uniq gpu.shared i32 | -[gpu.thread]-> () {
+                                *fst_in = *fst_tmp;
+                            };
+                     };
+            }
+        );
+        copy_to_host::<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
+    }
+}

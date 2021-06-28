@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{BinOpNat, Ident, PlaceExpr};
+use crate::ast::{BinOpNat, Ident, Mutability, PlaceExpr};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -83,17 +83,39 @@ fn gen_stmt(
                     )
                 }
                 gen_stmt(e2, return_value, parall_ctx, view_ctx)
-            } else if let Some(tty) = gen_ty(e1.ty.as_ref().unwrap(), mutbl.clone()) {
+            } else if let Some(tty) = gen_ty(e1.ty.as_ref().unwrap(), *mutbl) {
+                let (assign_expr, cu_ty) = match &tty {
+                    cu::Ty::Buffer(_, cu::BufferKind::GpuShared) => (None, tty),
+                    _ => (
+                        Some(gen_expr(e1, parall_ctx, view_ctx)),
+                        cu::Ty::Scalar(cu::ScalarTy::Auto),
+                    ),
+                };
+                let var = cu::Stmt::VarDecl {
+                    name: ident.name.clone(),
+                    ty: cu_ty,
+                    expr: assign_expr,
+                };
                 cu::Stmt::Seq(
-                    Box::new(cu::Stmt::VarDecl {
-                        name: ident.name.clone(),
-                        ty: tty,
-                        expr: Some(gen_expr(e1, parall_ctx, view_ctx)),
-                    }),
+                    Box::new(var),
                     Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx)),
                 )
             } else {
                 gen_stmt(e2, return_value, parall_ctx, view_ctx)
+            }
+        }
+        LetUninit(ident, ty, e) => {
+            if let Some(tty) = gen_ty(ty.as_ref(), Mutability::Mut) {
+                cu::Stmt::Seq(
+                    Box::new(cu::Stmt::VarDecl {
+                        name: ident.name.clone(),
+                        ty: tty,
+                        expr: None,
+                    }),
+                    Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx)),
+                )
+            } else {
+                gen_stmt(e, return_value, parall_ctx, view_ctx)
             }
         }
         LetProv(prv_idents, expr) => {
@@ -274,12 +296,12 @@ fn gen_exec(
 
 fn gen_par_for(
     parall_collec: &desc::Expr,
-    input_view: &desc::Expr,
+    input_views: &desc::Expr,
     funs: &desc::Expr,
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
 ) -> cu::Stmt {
-    let mut v = ViewExpr::create_from(input_view, view_ctx);
+    let v = ViewExpr::create_from(input_views, view_ctx);
     let (pid, sync_stmt) = match parall_collec.ty.as_ref().unwrap() {
         desc::Ty::Data(desc::DataTy::Grid(_, _)) => (
             desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
@@ -308,20 +330,22 @@ fn gen_par_for(
                     parall_collec.name.clone(),
                     ParallelityCollec::Ident(parall_collec),
                 );
-                let input_ident = &params[1].ident;
+                let input_idents = params[1..].iter().map(|p| &p.ident);
                 let mut scope_view_ctx: HashMap<String, ViewExpr> = HashMap::new();
-                let res = scope_view_ctx.insert(
-                    input_ident.name.clone(),
-                    ViewExpr::Idx {
-                        idx: pid.clone(),
-                        view: Box::new(v),
-                    },
-                );
-                if res.is_some() {
-                    panic!(
-                        "Conflicting names. View variable `{}` used twice.",
-                        input_ident.name
-                    )
+                for (i, id) in input_idents.enumerate() {
+                    let res = scope_view_ctx.insert(
+                        id.name.clone(),
+                        ViewExpr::Idx {
+                            idx: pid.clone(),
+                            view: Box::new(ViewExpr::Proj {
+                                view: Box::new(v.clone()),
+                                i,
+                            }),
+                        },
+                    );
+                    if res.is_some() {
+                        panic!("Conflicting names. View variable `{}` used twice.", id.name)
+                    }
                 }
                 gen_stmt(body, false, &mut scope_parall_ctx, &mut scope_view_ctx)
             } else {
@@ -384,7 +408,12 @@ fn gen_expr(
             array: Box::new(gen_pl_expr(pl_expr, view_ctx)),
             index: i.clone(),
         },
-        Ref(_, _, pl_expr) => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, view_ctx))),
+        Ref(_, _, pl_expr) => match expr.ty.as_ref().unwrap() {
+            desc::Ty::Data(desc::DataTy::Ref(_, _, desc::Memory::GpuShared, _)) => {
+                gen_pl_expr(pl_expr, view_ctx)
+            }
+            _ => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, view_ctx))),
+        },
         BorrowIndex(_, _, pl_expr, n) => cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
             array: Box::new(gen_pl_expr(pl_expr, view_ctx)),
             index: n.clone(),
@@ -456,9 +485,15 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) 
             };
             cu::Expr::Ident(name)
         }
-        desc::PlaceExpr::Proj(pl, n) => cu::Expr::Proj {
-            tuple: Box::new(gen_pl_expr(pl.as_ref(), view_ctx)),
-            n: *n,
+        desc::PlaceExpr::Proj(pl, n) => match pl.to_place() {
+            Some(p) if view_ctx.contains_key(&p.ident.name) => gen_view(
+                view_ctx.get(&p.ident.name).unwrap(),
+                p.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
+            ),
+            _ => cu::Expr::Proj {
+                tuple: Box::new(gen_pl_expr(pl.as_ref(), view_ctx)),
+                n: *n,
+            },
         },
         desc::PlaceExpr::Deref(ple) => {
             // If an identifier that refers to an unwrapped view expression is being dereferenced,
@@ -570,6 +605,13 @@ fn gen_view(view_expr: &ViewExpr, mut path: Vec<desc::Nat>) -> cu::Expr {
                 &path,
             )
         }
+        (ViewExpr::Tuple { views }, [path @ .., prj]) => match prj.eval() {
+            Ok(i) => match &views[i] {
+                ViewOrExpr::V(v) => gen_view(v, path.to_vec()),
+                ViewOrExpr::E(e) => gen_expr(e, &mut HashMap::new(), &mut HashMap::new()),
+            },
+            Err(e) => panic!(e),
+        },
         (ViewExpr::Idx { idx, view }, _) => {
             path.push(idx.clone());
             gen_view(view, path)
@@ -748,7 +790,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
                 .iter()
                 .filter_map(|ty| gen_ty(&Data(ty.clone()), m))
                 .collect();
-            if gened_tys.len() == 0 {
+            if gened_tys.is_empty() {
                 None
             } else {
                 Some(cu::Ty::Tuple(gened_tys))
@@ -760,10 +802,10 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
         )),
         Data(d::At(ty, mem)) => {
             let buff_kind = match mem {
-                desc::Memory::CpuHeap => cu::BufferKind::Heap,
-                desc::Memory::GpuGlobal => cu::BufferKind::Gpu,
+                desc::Memory::CpuHeap => cu::BufferKind::CpuHeap,
+                desc::Memory::GpuGlobal => cu::BufferKind::GpuGlobal,
                 desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
-                desc::Memory::GpuShared => unimplemented!("big TODO!"),
+                desc::Memory::GpuShared => cu::BufferKind::GpuShared,
                 desc::Memory::None => {
                     panic!("No memory is not valid for At types. should never appear here.")
                 }
@@ -928,6 +970,12 @@ fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
     }
 }
 
+#[derive(Debug, Clone)]
+enum ViewOrExpr {
+    V(ViewExpr),
+    E(desc::Expr),
+}
+
 // Views are parsed as normal predeclared functions so that it is possible to infer types.
 // During code generation view function applications are converted to View Variants and used
 // to generate Indices.
@@ -935,6 +983,9 @@ fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
 enum ViewExpr {
     ToView {
         ref_expr: Box<desc::Expr>,
+    },
+    Tuple {
+        views: Vec<ViewOrExpr>,
     },
     Idx {
         idx: desc::Nat,
@@ -982,7 +1033,6 @@ impl ViewExpr {
 
         match &expr.expr {
             // TODO this is assuming that f is an identifier
-            //  We have to redesign Views to not be data types...
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::PlaceExpr(PlaceExpr::Ident(ident)) = &f.expr {
                     if ident.name == crate::ty_check::pre_decl::TO_VIEW
@@ -1007,6 +1057,7 @@ impl ViewExpr {
                 }
             }
             desc::ExprKind::PlaceExpr(pl_expr) => ViewExpr::create_pl_expr_view(pl_expr, view_ctx),
+            desc::ExprKind::TupleView(elems) => ViewExpr::create_tuple_view(elems, view_ctx),
             _ => panic!(
                 "Expected a function application, identifer or projection, but found {:?}",
                 expr.expr
@@ -1040,6 +1091,18 @@ impl ViewExpr {
             desc::PlaceExpr::Deref(_) => {
                 panic!("It is not possible to take references of views. This should never happen.")
             }
+        }
+    }
+
+    fn create_tuple_view(elems: &[desc::Expr], view_ctx: &HashMap<String, ViewExpr>) -> ViewExpr {
+        ViewExpr::Tuple {
+            views: elems
+                .iter()
+                .map(|e| match e.ty.as_ref().unwrap() {
+                    desc::Ty::View(_) => ViewOrExpr::V(ViewExpr::create_from(e, view_ctx)),
+                    _ => ViewOrExpr::E(e.clone()),
+                })
+                .collect(),
         }
     }
 

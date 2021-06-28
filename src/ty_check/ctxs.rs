@@ -55,7 +55,7 @@ impl TyCtx {
         self
     }
 
-    pub fn idents_typed(&self) -> impl Iterator<Item = &'_ IdentTyped> {
+    pub fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
         self.frame_tys.iter().flatten().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
@@ -216,7 +216,11 @@ impl TyCtx {
     }
 
     pub fn ident_ty(&self, ident: &Ident) -> Result<&Ty, String> {
-        match self.idents_typed().find(|id_ty| &id_ty.ident == ident) {
+        match self
+            .idents_typed()
+            .rev()
+            .find(|id_ty| &id_ty.ident == ident)
+        {
             Some(id) => Ok(&id.ty),
             None => Err(format!("Identifier: {} not found in context.", ident)),
         }

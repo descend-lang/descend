@@ -3,59 +3,12 @@
 extern crate descend;
 
 use descend::ty_check;
+
 #[test]
-fn tree_reduce_shared_mem() -> Result<(), String> {
-    let inplace_vector_add_fun = r#"fn reduce_shared_mem<n: nat, a: prv, b: prv>(
-        ha_array: &a uniq cpu.heap [i32; n]
-    ) -[cpu.thread]-> () {
-        letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
-            let gpu: Gpu = gpu(0);
-
-            let mut a_array: [i32; n] @ gpu.global =
-            // TODO cpu.stack for the reborrow seems very wrong...
-                gpu_alloc<'c, 'd, cpu.stack, cpu.stack, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
-            let view_a: [[&'r uniq gpu.global i32; n]] =
-                to_view_mut<'r, gpu.global, n, i32>(&'r uniq a_array);
-            let block_group = group<1024, n, &'r uniq gpu.global i32>(view_a);
-            exec<64, 1024, 'h, cpu.stack, [[&'r uniq gpu.global i32; 1024]], 64>(
-                &'h uniq gpu,
-                block_group,
-                | grid: Grid<Block<Thread, 1024>, 64>,
-                  input: [[[[&'r uniq gpu.global i32; 1024]]; 64]]| -[gpu]-> () {
-                    let tmp: [i32; 1024] @ gpu.shared = shared_alloc<[i32; 1024]>();
-                    for grid with <input, tmp> do 
-                        | block: Block<Thread, 1024>,
-                          ib: [[&'r uniq gpu.global i32; 1024]] | -[gpu.group]-> () {
-                             for block with
-                                 zip<1024, &'r uniq gpu.global i32, &'e uniq gpu.shared i32>(
-                                    ib,
-                                    to_view_mut<'e, gpu.shared, 1024, i32>(&'e uniq tmp)) do
-                                | thread: Thread,
-                                   inp: {&'r uniq gpu.global i32, &'e uniq gpu.shared i32} | -[gpu.thread]-> () {
-                                     *inp.0 = *inp.1;
-                                };
-                             for_nat k in halfed_range(512) {
-                                 let active_non_active = split_at<2*k, 1024, &'r uniq gpu.global i32>(ib);
-                                 let active_halves = split_at<k, 2*k, &'r uniq gpu.global i32>(active_non_active.0);
-                                 let active_non_active_threads = split<k, 1024>(block);
-                                 let active_threads = active_non_active_threads.0;
-                                 for active_threads
-                                 with zip<k, &'r uniq gpu.global i32, &'r uniq gpu.global i32>(
-                                    active_halves.0, active_halves.1)
-                                 do
-                                    | thread: Thread,
-                                      inp: {&'r uniq gpu.global i32, &'r uniq gpu.global i32} | -[gpu.thread]-> () {
-                                        *inp.0 = *inp.0 + *inp.1;
-                                    };
-                             }
-                         };
-                }
-            );
-            copy_to_host<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
-        }
-    }"#;
-
-    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
+fn warp_reduce() -> std::io::Result<()> {
+    let warp_reduce =
+        String::from_utf8_lossy(&std::fs::read("examples/warp_reduce.desc")?).to_string();
+    let res = descend::parser::parse_global_fun_def(&warp_reduce).unwrap();
     let mut compil_unit = vec![res];
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
@@ -67,50 +20,10 @@ fn tree_reduce_shared_mem() -> Result<(), String> {
 }
 
 #[test]
-fn tree_reduce() -> Result<(), String> {
-    let inplace_vector_add_fun = r#"fn reduce<n: nat, a: prv, b: prv>(
-        ha_array: &a uniq cpu.heap [i32; n]
-    ) -[cpu.thread]-> () {
-        letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
-            let gpu: Gpu = gpu(0);
-
-            let mut a_array: [i32; n] @ gpu.global =
-                gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
-            let view_a: [[&'r uniq gpu.global i32; n]] =
-                to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
-            let block_group = group::<1024, n, &'r uniq gpu.global i32>(view_a);
-            // exec: <b: nat, t: nat, r: prv, m: mem, elem_ty: ty, n: nat>(
-            //        &r uniq m Gpu, [[elem_ty; n]], ([[[[Thread; t]]; b]], [[elem_ty; n]]) -[gpu]-> ()) -> ()
-            exec::<64, 1024, 'h, cpu.stack, [[&'r uniq gpu.global i32; 1024]], 64>(
-                &'h uniq gpu,
-                block_group,
-                | grid: Grid<Block<Thread, 1024>, 64>,
-                  input: [[[[&'r uniq gpu.global i32; 1024]]; 64]]| -[gpu]-> () {
-                    for grid with input do 
-                        | block: Block<Thread, 1024>,
-                          ib: [[&'r uniq gpu.global i32; 1024]] | -[gpu.group]-> () {
-                             for_nat k in halfed_range(512) {
-                                 let active_non_active = split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib);
-                                 let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(active_non_active.0);
-                                 let active_non_active_threads = split::<k, 1024>(block);
-                                 let active_threads = active_non_active_threads.0;
-                                 for active_threads
-                                 with zip::<k, &'r uniq gpu.global i32, &'r uniq gpu.global i32>(
-                                    active_halves.0, active_halves.1)
-                                 do
-                                    | thread: Thread,
-                                      inp: {&'r uniq gpu.global i32, &'r uniq gpu.global i32} | -[gpu.thread]-> () {
-                                        *inp.0 = *inp.0 + *inp.1;
-                                    };
-                             }
-                         };
-                }
-            );
-            copy_to_host::<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
-        }
-    }"#;
-
-    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
+fn reduce_shared_mem() -> std::io::Result<()> {
+    let reduce_shared =
+        String::from_utf8_lossy(&std::fs::read("examples/shared_mem_red.desc")?).to_string();
+    let res = descend::parser::parse_global_fun_def(&reduce_shared).unwrap();
     let mut compil_unit = vec![res];
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
@@ -122,49 +35,24 @@ fn tree_reduce() -> Result<(), String> {
 }
 
 #[test]
-fn inplace_vector_add_with_across() -> Result<(), String> {
-    let inplace_vector_add_fun = r#"fn inplace_vector_add<n: nat, a: prv, b: prv>(
-        ha_array: &a uniq cpu.heap [i32; n],
-        hb_array: &b shrd cpu.heap [i32; n]
-    ) -[cpu.thread]-> () {
-        letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
-            let gpu: Gpu = gpu(0);
+fn tree_reduce() -> std::io::Result<()> {
+    let tree_reduce =
+        String::from_utf8_lossy(&std::fs::read("examples/tree_reduce.desc")?).to_string();
+    let res = descend::parser::parse_global_fun_def(&tree_reduce).unwrap();
+    let mut compil_unit = vec![res];
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
 
-            let mut a_array: [i32; n] @ gpu.global =
-                gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
-            let b_array: [i32; n] @ gpu.global =
-                gpu_alloc::<'f, 'i, cpu.stack, cpu.heap, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
-            let view_a: [[&'r uniq gpu.global i32; n]] =
-                to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
-            let view_b: [[&'s shrd gpu.global i32; n]] =
-                to_view::<'s, gpu.global, n, i32>(&'s shrd b_array);
-            let elems: [[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; n]] =
-                zip::<n, &'r uniq gpu.global i32, &'s shrd gpu.global i32>(view_a, view_b);
-            let grouped_elems: [[[[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; 1024]]; n/1024]] =
-                group::<1024, n, {&'r uniq gpu.global i32, &'s shrd gpu.global i32}>(elems);
-            // exec: <b: nat, t: nat, r: prv, m: mem, elem_ty: ty, n: nat>(
-            //        &r uniq m Gpu, [[elem_ty; n]], ([[[[Thread; t]]; b]], [[elem_ty; n]]) -[gpu]-> ()) -> ()
-            exec::<64, 1024, 'h, cpu.stack, [[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; 1024]], 64>(
-                &'h uniq gpu,
-                grouped_elems,
-                | grid: Grid<Block<Thread, 1024>, 64>,
-                  input: [[[[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; 1024]]; 64]]| -[gpu]-> () {
-                    for grid with input do 
-                        | block: Block<Thread, 1024>,
-                          ib: [[{&'r uniq gpu.global i32, &'s shrd gpu.global i32}; 1024]] | -[gpu.group]-> () {
-                             for block with ib do
-                                | thread: Thread,
-                                  inp: {&'r uniq gpu.global i32, &'s shrd gpu.global i32} | -[gpu.thread]-> () {
-                                    *inp.0 = *inp.0 + *inp.1;
-                                };
-                         };
-                }
-            );
-            copy_to_host::<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
-        }
-    }"#;
-
-    let res = descend::parser::parse_global_fun_def(inplace_vector_add_fun).unwrap();
+#[test]
+fn vector_add() -> std::io::Result<()> {
+    let vec_add = String::from_utf8_lossy(&std::fs::read("examples/vec_add.desc")?).to_string();
+    let res = descend::parser::parse_global_fun_def(&vec_add).unwrap();
     let mut compil_unit = vec![res];
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
