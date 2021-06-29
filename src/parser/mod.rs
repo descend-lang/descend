@@ -4,16 +4,9 @@
 
 mod helpers;
 mod source;
+use crate::ast::*;
 use peg::{error::ParseError, str::LineCol};
 pub use source::*;
-
-use crate::ast::{
-    ArgKinded, BinOpNat, DataTy, Exec, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl,
-    Provenance, ScalarTy, Ty, ViewTy,
-};
-use crate::ast::{
-    BinOp, BinOpNat, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp,
-};
 
 pub fn parse_unit(src: &str) -> Result<Vec<FunDef>, ParseError<LineCol>> {
     descend::unit(src)
@@ -224,16 +217,13 @@ peg::parser! {
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
-            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat_lit() _ {n})+ {ns})? {
+            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat_literal() _ {n})+ {ns})? {
                 let ns = ns.unwrap_or(vec![]);
                 let root = PlaceExpr::Ident(ident);
                 // . operator binds stronger
                 let proj = ns.into_iter().fold(root,
-                    |prev, n | PlaceExpr::Proj(Box::new(prev),
-                        match n {
-                            Nat::Lit(n) => n,
-                        _ => panic!("Expected Nat Literal but found different Nat expression.") }
-                ));
+                    |prev, n | PlaceExpr::Proj(Box::new(prev), n)
+                );
                 // * operator binds weaker
                 derefs.iter().fold(proj, |prev,_| PlaceExpr::Deref(Box::new(prev)))
                 // TODO: Allow parentheses for priority override?
@@ -1391,11 +1381,10 @@ mod tests {
             IdentKinded::new(&Ident::new("a"), Kind::Provenance),
             IdentKinded::new(&Ident::new("t"), Kind::Ty),
             IdentKinded::new(&Ident::new("m"), Kind::Memory),
-            IdentKinded::new(&Ident::new("f"), Kind::Frame),
         ];
         let params = vec![ParamDecl {
             ident: Ident::new("ha_array"),
-            dty: DataTy::Ref(
+            ty: Ty::Data(DataTy::Ref(
                 Provenance::Ident(Ident::new("a")),
                 Ownership::Uniq,
                 Memory::CpuHeap,
@@ -1403,11 +1392,11 @@ mod tests {
                     Box::new(DataTy::Scalar(ScalarTy::I32)),
                     Nat::Ident(Ident::new("n")),
                 )),
-            ),
+            )),
             mutbl: Mutability::Const,
         }];
         let ret_dty = DataTy::Scalar(ScalarTy::Unit);
-        let exec = ExecLoc::CpuThread;
+        let exec = Exec::CpuThread;
         let prv_rels = vec![];
 
         let intended = FunDef {
