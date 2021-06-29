@@ -713,9 +713,9 @@ mod tests {
             "does not recognize cpu.stack memory kind"
         );
         assert_eq!(
-            descend::execution_resource("gpu.group"),
+            descend::execution_resource("gpu.block"),
             Ok(Exec::GpuBlock),
-            "does not recognize cpu.heap memory kind"
+            "does not recognize gpu.block memory kind"
         );
         assert_eq!(
             descend::execution_resource("gpu.thread"),
@@ -1365,7 +1365,7 @@ mod tests {
     #[test]
     fn global_fun_def_all_function_kinds() {
         // all currently available kinds are tested
-        let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
+        let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem>(
             ha_array: &a uniq cpu.heap [i32; n]
         ) -[cpu.thread]-> () {
             42
