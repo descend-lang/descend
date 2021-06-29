@@ -1,7 +1,8 @@
 use super::cu_ast::{
     BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::codegen::cu_ast::Lit;
+use crate::codegen::cu_ast::ScalarTy::Gpu;
+use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
 use std::fmt::Formatter;
 use std::fmt::Write;
 
@@ -229,16 +230,28 @@ impl std::fmt::Display for BinOp {
     }
 }
 
+impl std::fmt::Display for GpuAddrSpace {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GpuAddrSpace::Global => write!(f, ""),
+            GpuAddrSpace::Shared => write!(f, "__shared__"),
+            GpuAddrSpace::Constant => write!(f, "__constant__"),
+        }
+    }
+}
+
 impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
             // TODO print __restrict__
-            Ptr(ty) => write!(f, "{} *", ty),
-            PtrConst(ty) => write!(f, "const {} *", ty),
+            Ptr(ty, Some(addr_space)) => write!(f, "{} {} *", addr_space, ty),
+            Ptr(ty, None) => write!(f, "{} *", ty),
+            PtrConst(ty, Some(addr_space)) => write!(f, "{} const {} *", addr_space, ty),
+            PtrConst(ty, None) => write!(f, "const {} *", ty),
             Const(ty) => match ty.as_ref() {
-                Ptr(_) => write!(f, "{} const", ty),
-                PtrConst(_) => write!(f, "{} const", ty),
+                Ptr(_, _) => write!(f, "{} const", ty),
+                PtrConst(_, _) => write!(f, "{} const", ty),
                 _ => write!(f, "const {}", ty),
             },
             Array(ty, size) => write!(f, "descend::array<{}, {}>", ty, size),
@@ -250,7 +263,6 @@ impl std::fmt::Display for Ty {
             Buffer(ty, buff_kind) => match buff_kind {
                 BufferKind::CpuHeap => write!(f, "HeapBuffer<{}>", ty),
                 BufferKind::GpuGlobal => write!(f, "GpuBuffer<{}>", ty),
-                BufferKind::GpuShared => write!(f, "extern __shared__ {}*", ty),
                 BufferKind::Ident(name) => write!(f, "{}", name),
             },
             Scalar(sty) => write!(f, "{}", sty),
@@ -301,11 +313,14 @@ fn test_print_program() -> std::fmt::Result {
             params: vec![
                 ParamDecl {
                     name: "a".to_string(),
-                    ty: Const(Box::new(PtrConst(Box::new(Scalar(ScalarTy::I32))))),
+                    ty: Const(Box::new(PtrConst(
+                        Box::new(Scalar(ScalarTy::I32)),
+                        Some(GpuAddrSpace::Shared),
+                    ))),
                 },
                 ParamDecl {
                     name: "b".to_string(),
-                    ty: Ptr(Box::new(Scalar(ScalarTy::I32))),
+                    ty: Ptr(Box::new(Scalar(ScalarTy::I32)), None),
                 },
             ],
             ret_ty: Scalar(ScalarTy::Void),

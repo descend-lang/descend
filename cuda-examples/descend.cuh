@@ -27,21 +27,9 @@ using tuple = std::tuple<Types...>;
 
 using Gpu = size_t;
 
-Gpu gpu(size_t device_id) {
+Gpu gpu_device(size_t device_id) {
     return device_id;
 };
-
-template<std::size_t num_blocks, std::size_t num_threads>
-struct GridConfig {
-    const Gpu gpu;
-
-    GridConfig(const Gpu * const gpu) : gpu(*gpu) {}
-};
-
-template<std::size_t num_blocks, std::size_t num_threads>
-GridConfig<num_blocks, num_threads> spawn_threads(const Gpu * const gpu) {
-    return GridConfig<num_blocks, num_threads>(gpu);
-}
 
 template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
@@ -202,8 +190,8 @@ __global__ void launch(F f, Args... args)
 }
 
 template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
-auto par_for(const GridConfig<num_blocks, num_threads> * const thread_config, F &&f, Args... args) -> void {
-    CHECK_CUDA_ERR( cudaSetDevice(thread_config->gpu) );
+auto exec(descend::Gpu gpu, F &&f, Args... args) -> void {
+    CHECK_CUDA_ERR( cudaSetDevice(gpu) );
     launch<<<num_blocks, num_threads>>>(f, args...);
     CHECK_CUDA_ERR( cudaPeekAtLastError() );
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );

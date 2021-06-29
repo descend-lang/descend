@@ -3,7 +3,7 @@ use crate::ast::{
     ScalarTy, Ty, ViewTy,
 };
 
-pub static GPU: &str = "gpu";
+pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
@@ -22,7 +22,7 @@ pub static SPLIT: &str = "split";
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
         // Built-in functions
-        (GPU, gpu_ty()),
+        (GPU_DEVICE, gpu_device_ty()),
         (GPU_ALLOC, gpu_alloc_ty()),
         (COPY_TO_HOST, copy_to_host_ty()),
         (EXEC, exec_ty()),
@@ -83,7 +83,7 @@ fn split_ty() -> Ty {
 
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
-fn gpu_ty() -> Ty {
+fn gpu_device_ty() -> Ty {
     Ty::Fn(
         vec![],
         vec![Ty::Data(DataTy::Scalar(ScalarTy::I32))],
@@ -186,18 +186,17 @@ fn copy_to_host_ty() -> Ty {
     )
 }
 
-// exec: <blocks: nat, threads: nat, r: prv, m: mem, elem: ty, n: nat>(
+// exec: <blocks: nat, threads: nat, r: prv, m: mem, t: ty>(
 //        &r uniq m Gpu,
-//        [[elem; n]],
-//        (Grid<Block<Thread, threads>, blocks>, [[elem; n]]) -[gpu]-> ())
+//        input: t,
+//        (Grid<Block<Thread, threads>, blocks>, t) -[gpu.grid]-> ())
 // -> ()
 fn exec_ty() -> Ty {
     let blocks = Ident::new("blocks");
     let threads = Ident::new("threads");
     let r = Ident::new("r");
     let m = Ident::new("m");
-    let elem = Ident::new("elem");
-    let n = Ident::new("n");
+    let t = Ident::new("t");
     let blocks_nat = IdentKinded {
         ident: blocks.clone(),
         kind: Kind::Nat,
@@ -214,16 +213,12 @@ fn exec_ty() -> Ty {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    let elem_ty = IdentKinded {
-        ident: elem.clone(),
+    let t_ty = IdentKinded {
+        ident: t.clone(),
         kind: Kind::Ty,
     };
-    let n_nat = IdentKinded {
-        ident: n.clone(),
-        kind: Kind::Nat,
-    };
     Ty::Fn(
-        vec![blocks_nat, threads_nat, r_prv, m_mem, elem_ty, n_nat],
+        vec![blocks_nat, threads_nat, r_prv, m_mem, t_ty],
         vec![
             Ty::Data(DataTy::Ref(
                 Provenance::Ident(r),
@@ -231,10 +226,7 @@ fn exec_ty() -> Ty {
                 Memory::Ident(m),
                 Box::new(DataTy::Scalar(ScalarTy::Gpu)),
             )),
-            Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(elem.clone())),
-                Nat::Ident(n.clone()),
-            )),
+            Ty::Ident(t.clone()),
             Ty::Fn(
                 vec![],
                 vec![
@@ -252,7 +244,7 @@ fn exec_ty() -> Ty {
                         )),
                         vec![Nat::Ident(blocks), Nat::Lit(1), Nat::Lit(1)],
                     )),
-                    Ty::View(ViewTy::Array(Box::new(Ty::Ident(elem)), Nat::Ident(n))),
+                    Ty::Ident(t),
                 ],
                 Exec::GpuGrid,
                 Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),

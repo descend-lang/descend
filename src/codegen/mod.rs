@@ -84,8 +84,10 @@ fn gen_stmt(
                 }
                 gen_stmt(e2, return_value, parall_ctx, view_ctx)
             } else if let Some(tty) = gen_ty(e1.ty.as_ref().unwrap(), *mutbl) {
-                let (assign_expr, cu_ty) = match &tty {
-                    cu::Ty::Buffer(_, cu::BufferKind::GpuShared) => (None, tty),
+                let (init_expr, cu_ty) = match tty {
+                    // FIXME this ignores every possible assignment to a shared memory pointer
+                    cu::Ty::Ptr(_, Some(cu::GpuAddrSpace::Shared))
+                    | cu::Ty::PtrConst(_, Some(cu::GpuAddrSpace::Shared)) => (None, tty),
                     _ => (
                         Some(gen_expr(e1, parall_ctx, view_ctx)),
                         cu::Ty::Scalar(cu::ScalarTy::Auto),
@@ -94,7 +96,7 @@ fn gen_stmt(
                 let var = cu::Stmt::VarDecl {
                     name: ident.name.clone(),
                     ty: cu_ty,
-                    expr: assign_expr,
+                    expr: init_expr,
                 };
                 cu::Stmt::Seq(
                     Box::new(var),
@@ -216,7 +218,7 @@ fn gen_stmt(
                 gen_exec(
                     &kinded_args[0],
                     &kinded_args[1],
-                    &kinded_args[5],
+                    &kinded_args[4],
                     &args[0],
                     &args[1],
                     &args[2],
@@ -234,7 +236,7 @@ fn gen_stmt(
 fn gen_exec(
     blocks: &desc::ArgKinded,
     threads: &desc::ArgKinded,
-    view_size: &desc::ArgKinded,
+    input_ty: &desc::ArgKinded,
     gpu_expr: &desc::Expr,
     view_expr: &desc::Expr,
     body: &desc::Expr,
@@ -283,8 +285,7 @@ fn gen_exec(
         .iter()
         .map(|(_, pl_expr)| gen_expr(pl_expr, &mut HashMap::new(), &mut HashMap::new()))
         .collect();
-    let template_args =
-        gen_args_kinded(vec![blocks.clone(), threads.clone(), view_size.clone()].as_slice());
+    let template_args = gen_args_kinded(vec![blocks.clone(), threads.clone()].as_slice());
     let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
     args.append(&mut input);
     cu::Stmt::Expr(cu::Expr::FunCall {
@@ -800,12 +801,21 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
             Box::new(gen_ty(&Data(ty.as_ref().clone()), m).unwrap()),
             n.clone(),
         )),
-        Data(d::At(ty, mem)) => {
+        Data(d::At(ty, mem)) => Some(if let desc::Memory::GpuShared = mem {
+            let dty = match ty.as_ref() {
+                d::Array(dty, _) => dty.as_ref().clone(),
+                _ => ty.as_ref().clone(),
+            };
+            cu::Ty::Ptr(
+                Box::new(gen_ty(&desc::Ty::Data(dty), mutbl).unwrap()),
+                Some(cu::GpuAddrSpace::Shared),
+            )
+        } else {
             let buff_kind = match mem {
                 desc::Memory::CpuHeap => cu::BufferKind::CpuHeap,
                 desc::Memory::GpuGlobal => cu::BufferKind::GpuGlobal,
                 desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
-                desc::Memory::GpuShared => cu::BufferKind::GpuShared,
+                desc::Memory::GpuShared => unimplemented!(),
                 desc::Memory::None => {
                     panic!("No memory is not valid for At types. should never appear here.")
                 }
@@ -816,11 +826,11 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
                     panic!("CpuStack is not valid for At types. Should never appear here.")
                 }
             };
-            Some(cu::Ty::Buffer(
+            cu::Ty::Buffer(
                 Box::new(gen_ty(&Data(ty.as_ref().clone()), m).unwrap()),
                 buff_kind,
-            ))
-        }
+            )
+        }),
         Data(d::Dead(_)) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
@@ -837,9 +847,9 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
                 .unwrap(),
             );
             Some(if matches!(own, desc::Ownership::Uniq) {
-                cu::Ty::Ptr(tty)
+                cu::Ty::Ptr(tty, None)
             } else {
-                cu::Ty::PtrConst(tty)
+                cu::Ty::PtrConst(tty, None)
             })
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
@@ -858,12 +868,10 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
 
     if matches!(mutbl, desc::Mutability::Mut) {
         cu_ty
+    } else if let Some(cu_tty) = cu_ty {
+        Some(cu::Ty::Const(Box::new(cu_tty)))
     } else {
-        if let Some(cu_tty) = cu_ty {
-            Some(cu::Ty::Const(Box::new(cu_tty)))
-        } else {
-            None
-        }
+        None
     }
 }
 

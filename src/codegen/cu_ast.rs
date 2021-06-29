@@ -146,6 +146,13 @@ pub(super) enum Exec {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum GpuAddrSpace {
+    Global,
+    Shared,
+    Constant,
+}
+
+#[derive(Clone, Debug)]
 pub(super) enum Ty {
     Scalar(ScalarTy),
     Tuple(Vec<Ty>),
@@ -153,9 +160,9 @@ pub(super) enum Ty {
     Buffer(Box<Ty>, BufferKind),
     // for now assume every pointer to be __restrict__ qualified
     // http://www.open-std.org/JTC1/SC22/WG14/www/docs/n1256.pdf#page=122&zoom=auto,-205,535
-    Ptr(Box<Ty>),
+    Ptr(Box<Ty>, Option<GpuAddrSpace>),
     // The pointer itself is mutable, but the underlying data is not.
-    PtrConst(Box<Ty>),
+    PtrConst(Box<Ty>, Option<GpuAddrSpace>),
     // TODO In C++ const is a type qualifier (as opposed to qualifying an identifier).
     //  However the way we generate code let's us treat const as an identifier qualifier (we would
     //  not return a const value from a function for example, but e.g., a non-const const pointer).
@@ -175,7 +182,6 @@ pub(super) enum Ty {
 pub(super) enum BufferKind {
     CpuHeap,
     GpuGlobal,
-    GpuShared,
     Ident(String),
 }
 

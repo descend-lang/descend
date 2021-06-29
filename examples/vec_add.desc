@@ -3,7 +3,7 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
     hb_array: &b shrd cpu.heap [i32; n]
 ) -[cpu.thread]-> () {
     letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
-        let gpu: Gpu = gpu(0);
+        let gpu: Gpu = gpu_device(0);
 
         let mut a_array: [i32; n] @ gpu.global =
             gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
@@ -19,7 +19,7 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
             group::<1024, n, <&'r uniq gpu.global i32, &'s shrd gpu.global i32>>(elems);
         // exec: <b: nat, t: nat, r: prv, m: mem, elem_ty: ty, n: nat>(
         //        &r uniq m Gpu, [[elem_ty; n]], ([[[[Thread; t]]; b]], [[elem_ty; n]]) -[gpu]-> ()) -> ()
-        exec::<64, 1024, 'h, cpu.stack, [[<&'r uniq gpu.global i32, &'s shrd gpu.global i32>; 1024]], 64>(
+        exec::<64, 1024, 'h, cpu.stack, [[[[<&'r uniq gpu.global i32, &'s shrd gpu.global i32>; 1024]]; 64]]>(
             &'h uniq gpu,
             grouped_elems,
             | grid: Grid<Block<Thread, 1024>, 64>,
