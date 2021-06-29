@@ -1144,8 +1144,7 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let dummy_fun = crate::parser::parse_global_fun_def(dummy_fun_src).unwrap();
-        let mut compil_unit = vec![dummy_fun];
+        let mut compil_unit = crate::parser::parse_unit(dummy_fun_src).unwrap();
         super::ty_check(&mut compil_unit)?;
         print!("{:?}", compil_unit[0]);
         Ok(())

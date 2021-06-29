@@ -781,7 +781,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
         Data(d::Scalar(s)) => Some(match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
-            desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::I32),
+            desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
             desc::ScalarTy::Thread => panic!("This should only exist for type checking."),
@@ -1321,7 +1321,7 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let res = crate::parser::parse_global_fun_def(sclar_mult_fun).unwrap();
-        print!("{}", gen_fun_def(&res));
+        let res = crate::parser::parse_unit(sclar_mult_fun).unwrap();
+        print!("{}", gen_fun_def(&res[0]));
     }
 }

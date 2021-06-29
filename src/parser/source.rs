@@ -4,7 +4,7 @@ use peg::{error::ParseError, str::LineCol};
 
 use crate::ast::FunDef;
 
-use super::parse_global_fun_def;
+use super::parse_unit;
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct SourceFile {
@@ -48,8 +48,8 @@ impl SourceFile {
         Some((line_num, col_num))
     }
 
-    pub fn parse_global_fun_def(&self) -> Result<FunDef, ParseError<LineCol>> {
-        parse_global_fun_def(&self.src)
+    pub fn parse_unit(&self) -> Result<Vec<FunDef>, ParseError<LineCol>> {
+        parse_unit(&self.src)
     }
 }
 

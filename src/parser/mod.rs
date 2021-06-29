@@ -8,12 +8,16 @@ use peg::{error::ParseError, str::LineCol};
 pub use source::*;
 
 use crate::ast::{
-    ArgKinded, DataTy, Exec, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl, Provenance,
-    ScalarTy, Ty, ViewTy,
+    ArgKinded, BinOpNat, DataTy, Exec, FunDef, IdentKinded, Kind, Memory, Nat, ParamDecl,
+    Provenance, ScalarTy, Ty, ViewTy,
 };
 use crate::ast::{
     BinOp, BinOpNat, Expr, ExprKind, Ident, Lit, Mutability, Ownership, PlaceExpr, Span, UnOp,
 };
+
+pub fn parse_unit(src: &str) -> Result<Vec<FunDef>, ParseError<LineCol>> {
+    descend::unit(src)
+}
 
 pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
     descend::global_fun_def(src)
@@ -21,6 +25,11 @@ pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
 
 peg::parser! {
     pub(crate) grammar descend() for str {
+
+        pub(crate) rule unit() -> Vec<FunDef>
+            = _ funcs:(fun:global_fun_def() { fun }) ** _ _ {
+                funcs
+            }
 
         // TODO: PreDeclaredGlobalFun missing Syntax
         pub(crate) rule global_fun_def() -> FunDef
@@ -49,7 +58,7 @@ peg::parser! {
             }
 
         rule fun_parameter() -> ParamDecl
-            = mutbl:mutability()? ident:ident() _ ":" _ ty:ty() {
+            = mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
                 ParamDecl { ident, ty, mutbl }
             }
@@ -205,8 +214,7 @@ peg::parser! {
         //  is nat would be wrong too (i.e., simply checking for nat first and then for generic ident).
         /// Parse a kind argument
         pub(crate) rule kind_argument() -> ArgKinded
-            = //o:ownership() { ArgKinded::Own(o) } / // TODO: ownership removed?
-            !identifier() result:(
+            = !identifier() result:(
                 n:nat() { ArgKinded::Nat(n) }
                 / mem:memory_kind() { ArgKinded::Memory(mem) }
                 / ty:ty() { ArgKinded::Ty(ty) }
@@ -232,30 +240,32 @@ peg::parser! {
             }
 
         /// Parse nat token
-        pub(crate) rule nat() -> Nat = precedence!{
+        pub(crate) rule nat() -> Nat = precedence! {
             start:position!() func:ident() place_end:position!() _
                 "(" _ args:nat() ** (_ "," _) _ ")" end:position!()
             {
                 Nat::App(func, args)
             }
-            x:(@) _ "/" _ y:@ { Nat::BinOp(BinOpNat::Div, Box::new(x), Box::new(y)) }
-            x:(@) _ "*" _ y:@ { Nat::BinOp(BinOpNat::Mul, Box::new(x), Box::new(y)) }
+            x:(@) _ "+" _ y:@ { helpers::make_binary_nat(BinOpNat::Add, x, y) }
+            x:(@) _ "-" _ y:@ { helpers::make_binary_nat(BinOpNat::Sub, x, y) }
             --
-            lit:nat_lit() { lit }
-            ident:ident() {
-                Nat::Ident(ident)
-            }
-
+            x:(@) _ "*" _ y:@ { helpers::make_binary_nat(BinOpNat::Mul, x, y) }
+            x:(@) _ "/" _ y:@ { helpers::make_binary_nat(BinOpNat::Div, x, y) }
+            x:(@) _ "%" _ y:@ { helpers::make_binary_nat(BinOpNat::Mod, x, y) }
+            --
+            literal:nat_literal() { Nat::Lit(literal) }
+            name:ident() { Nat::Ident(name) }
+            "(" _ n:nat() _ ")" { n }
+        }
             // TODO: binary operations are currently disabled
             // TODO: Add 0b, 0o and 0x prefixes for binary, octal and hexadecimal?
-        }
 
-        pub(crate) rule nat_lit() -> Nat
-            = l:$("0" / (['1'..='9']['0'..='9']*)) { ?
+        rule nat_literal() -> usize
+            = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
                 // TODO: Getting the cause of the parse error is unstable for now. Fix this once
                 // int_error_matching becomes stable
-                match l.parse::<usize>() {
-                    Ok(val) => Ok(Nat::Lit(val)),
+                match s.parse::<usize>() {
+                    Ok(val) => Ok(val),
                     Err(_) => { Err("Cannot parse natural number") }
                 }
             }
@@ -427,7 +437,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Unimplemented"]
     fn nat_identifier() {
         assert_eq!(
             descend::nat("N"),
@@ -442,9 +451,72 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Unimplemented"]
     fn nat_binary_operation() {
-        todo!()
+        // Test trivial cases
+        assert_eq!(
+            descend::nat("N+1"),
+            Ok(helpers::make_binary_nat(
+                BinOpNat::Add,
+                Nat::Ident(Ident::new("N")),
+                Nat::Lit(1)
+            )),
+            "cannot parse N+1"
+        );
+        assert_eq!(
+            descend::nat("N-1"),
+            Ok(helpers::make_binary_nat(
+                BinOpNat::Sub,
+                Nat::Ident(Ident::new("N")),
+                Nat::Lit(1)
+            )),
+            "cannot parse N-1"
+        );
+        assert_eq!(
+            descend::nat("N*1"),
+            Ok(helpers::make_binary_nat(
+                BinOpNat::Mul,
+                Nat::Ident(Ident::new("N")),
+                Nat::Lit(1)
+            )),
+            "cannot parse N*1"
+        );
+        assert_eq!(
+            descend::nat("N/1"),
+            Ok(helpers::make_binary_nat(
+                BinOpNat::Div,
+                Nat::Ident(Ident::new("N")),
+                Nat::Lit(1)
+            )),
+            "cannot parse N/1"
+        );
+        assert_eq!(
+            descend::nat("N%1"),
+            Ok(helpers::make_binary_nat(
+                BinOpNat::Mod,
+                Nat::Ident(Ident::new("N")),
+                Nat::Lit(1)
+            )),
+            "cannot parse N%1"
+        );
+        // Test composite case with precedence
+        assert_eq!(
+            descend::nat("N+1*2"),
+            Ok(helpers::make_binary_nat(
+                BinOpNat::Add,
+                Nat::Ident(Ident::new("N")),
+                helpers::make_binary_nat(BinOpNat::Mul, Nat::Lit(1), Nat::Lit(2))
+            )),
+            "cannot parse N+1*2"
+        );
+        assert_eq!(
+            descend::nat("(N+1)*2"),
+            Ok(helpers::make_binary_nat(
+                BinOpNat::Mul,
+                helpers::make_binary_nat(BinOpNat::Add, Nat::Ident(Ident::new("N")), Nat::Lit(1)),
+                Nat::Lit(2)
+            )),
+            "cannot parse (N+1)*2"
+        );
     }
 
     #[test]
@@ -471,11 +543,14 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn ty_gpu() {
-    //     assert_eq!(descend::ty("GPU"), Ok(Ty::GPU),
-    //         "does not recognize GPU type");
-    // }
+    #[test]
+    fn ty_gpu() {
+        assert_eq!(
+            descend::ty("Gpu"),
+            Ok(Ty::Data(DataTy::Scalar(ScalarTy::Gpu))),
+            "does not recognize GPU type"
+        );
+    }
 
     #[test]
     fn dty_tuple() {
@@ -598,13 +673,17 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Mutability does not implement Eq"]
     fn mutability() {
-        // TODO: Missing Eq implementation in AST
-        // assert_eq!(descend::mutability("const"), Ok(Mutability::Const),
-        //     "does not recognize const mutability qualifier");
-        // assert_eq!(descend::mutability("mut"), Ok(Mutability::Mut),
-        //     "does not recognize mut mutability qualifier");
+        assert_eq!(
+            descend::mutability("const"),
+            Ok(Mutability::Const),
+            "does not recognize const mutability qualifier"
+        );
+        assert_eq!(
+            descend::mutability("mut"),
+            Ok(Mutability::Mut),
+            "does not recognize mut mutability qualifier"
+        );
     }
 
     #[test]
@@ -1293,159 +1372,63 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn global_fun_def_vector_add() {
-    //     let src = r#"fn inplace_vector_add<n: nat, a: prv, b: prv>(
-    //     ha_array: &'a uniq cpu.heap [i32; n],
-    //     hb_array: &'b shrd cpu.heap [i32; n]
-    // ) -[cpu.thread]-> () {
-    //     letprov <a, b, c, d, e, f, g, h> {
-    //         let gpu: GPU = gpu(/* GPU info */);
+    #[test]
+    fn global_fun_def_all_function_kinds() {
+        // all currently available kinds are tested
+        let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
+            ha_array: &a uniq cpu.heap [i32; n]
+        ) -[cpu.thread]-> () {
+            42
+        }"#;
+        let body = r#"42"#;
 
-    //         let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
-    //         let b_array: [i32; n] @ gpu.global = copy_to_gpu<[i32; n]>(&d uniq gpu, hb_array);
+        let result = descend::global_fun_def(src).expect("Parsing failed");
 
-    //         let view_a: [[&a uniq gpu.global i32; n]] = to_view<a, uniq, gpu.global, n, i32>(&a uniq a_array);
-    //         let view_b: [[&b shrd gpu.global i32; n]] = to_view<b, shrd, gpu.global, n, i32>(&b shrd b_array);
-    //         let elems_grouped_for_threads: [[(&a uniq gpu.global i32, &b shrd gpu.global i32); n]] =
-    //         zip<n, &a uniq gpu.global i32, &b shrd gpu.global i32>(view_a, view_b);
-    //         // hoisted runtime check: n == 64 * 1024
-    //         sync_threads[gpu; 1024] for elems in elems_grouped_for_threads { // elems: (&a uniq gpu.global i32, &b uniq gpu.global i32)
-    //             *elems.0 = *elems.0 + *elems.1; // elems.0: &a uniq gpu.global i32
-    //         };
-    //         copy_to_host<n, g, 'a, i32>(&g shrd a_array, ha_array);
-    //     }
-    // }"#;
-    // let result = descend::global_fun_def(src);
-    // match &result {
-    //     Err(e) => println!("{}", e),
-    //     _ => {}
-    // };
+        // TODO: Do proper check against expected AST
+        let name = "test_kinds".into();
+        let generic_params = vec![
+            IdentKinded::new(&Ident::new("n"), Kind::Nat),
+            IdentKinded::new(&Ident::new("a"), Kind::Provenance),
+            IdentKinded::new(&Ident::new("t"), Kind::Ty),
+            IdentKinded::new(&Ident::new("m"), Kind::Memory),
+            IdentKinded::new(&Ident::new("f"), Kind::Frame),
+        ];
+        let params = vec![ParamDecl {
+            ident: Ident::new("ha_array"),
+            dty: DataTy::Ref(
+                Provenance::Ident(Ident::new("a")),
+                Ownership::Uniq,
+                Memory::CpuHeap,
+                Box::new(DataTy::Array(
+                    Box::new(DataTy::Scalar(ScalarTy::I32)),
+                    Nat::Ident(Ident::new("n")),
+                )),
+            ),
+            mutbl: Mutability::Const,
+        }];
+        let ret_dty = DataTy::Scalar(ScalarTy::Unit);
+        let exec = ExecLoc::CpuThread;
+        let prv_rels = vec![];
 
-    // let expr_seq = r#"let gpu: GPU = gpu(/* GPU info */);
+        let intended = FunDef {
+            name,
+            params,
+            exec,
+            prv_rels,
+            body_expr: descend::expression_seq(body).unwrap(),
+            generic_params,
+            ret_dty,
+        };
 
-    // let mut a_array: [i32; n] @ gpu.global = copy_to_gpu<c, 'a, [i32; n]>(&c uniq gpu, ha_array);
-    // let b_array: [i32; n] @ gpu.global = copy_to_gpu<[i32; n]>(&d uniq gpu, hb_array);
-
-    // let view_a: [[&a uniq gpu.global i32; n]] = to_view<a, uniq, gpu.global, n, i32>(&a uniq a_array);
-    // let view_b: [[&b shrd gpu.global i32; n]] = to_view<b, shrd, gpu.global, n, i32>(&b shrd b_array);
-    // let elems_grouped_for_threads: [[(&a uniq gpu.global i32, &b shrd gpu.global i32); n]] =
-    // zip<n, &a uniq gpu.global i32, &b shrd gpu.global i32>(view_a, view_b);
-    // // hoisted runtime check: n == 64 * 1024
-    // sync_threads[gpu; 1024] for elems in elems_grouped_for_threads { // elems: (&a uniq gpu.global i32, &b uniq gpu.global i32)
-    //     *elems.0 = *elems.0 + *elems.1; // elems.0: &a uniq gpu.global i32
-    // };
-    // copy_to_host<n, g, 'a, i32>(&g shrd a_array, ha_array);"#;
-
-    // // TODO: Do proper check against expected AST
-    // let name = "inplace_vector_add".into();
-    // let ty_idents = vec!{
-    //     IdentKinded::new(&Ident::new("n"), Kind::Nat),
-    //     IdentKinded::new(&Ident::new("a"), Kind::Provenance),
-    //     IdentKinded::new(&Ident::new("b"), Kind::Provenance),
-    // };
-    // let params = vec!{
-    //     IdentTyped::new(Ident::new("ha_array"), Ty::Ref(
-    //         Provenance::Value("\'a".into()),
-    //         Ownership::Uniq,
-    //         Memory::CpuHeap,
-    //         Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::I32)), Nat::Ident(Ident::new("n"))))
-    //     )),
-    //     IdentTyped::new(Ident::new("hb_array"), Ty::Ref(
-    //         Provenance::Value("\'b".into()),
-    //         Ownership::Shrd,
-    //         Memory::CpuHeap,
-    //         Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::I32)), Nat::Ident(Ident::new("n"))))
-    //     )),
-    // };
-    // let ret_ty = Ty::Scalar(ScalarTy::Unit);
-    // let exec = ExecLoc::CpuThread;
-    // let prv_rels = vec![];
-
-    // let f_ty = fun_ty(
-    //     params
-    //         .iter()
-    //         .map(|ident| -> Ty { ident.ty.clone() })
-    //         .collect(),
-    //     &FrameExpr::FrTy(vec![]),
-    //     exec,
-    //     &ret_ty,
-    // );
-
-    // let intended = FunDef{
-    //     name,
-    //     ty_idents,
-    //     params,
-    //     ret_ty,
-    //     exec,
-    //     prv_rels,
-    //     body_expr: descend::expression_seq(&expr_seq).unwrap(),
-    //     fun_ty: f_ty
-    //   };
-    // assert!(result.is_ok());
-    // assert_eq!(result.unwrap(), intended, "Something was not parsed as intended")
-    // }
-
-    // #[test]
-    // fn global_fun_def_all_function_kinds() {
-    //     // all currently available kinds are tested
-    //     let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem, f: frm>(
-    //         ha_array: &'a uniq cpu.heap [i32; n]
-    //     ) -[cpu.thread]-> () {
-    //         letprov <some, stuff> {
-    //             let answer_to_everything :i32 = 42;
-    //             answer_to_everything
-    //         }
-    //     }"#;
-    //     let body = r#"let answer_to_everything :i32 = 42;
-    //         answer_to_everything"#;
-
-    //     let result = descend::global_fun_def(src);
-
-    //     // TODO: Do proper check against expected AST
-    //     let name = "test_kinds".into();
-    //     let ty_idents = vec!{
-    //         IdentKinded::new(&Ident::new("n"), Kind::Nat),
-    //         IdentKinded::new(&Ident::new("a"), Kind::Provenance),
-    //         IdentKinded::new(&Ident::new("t"), Kind::Ty),
-    //         IdentKinded::new(&Ident::new("m"), Kind::Memory),
-    //         IdentKinded::new(&Ident::new("f"), Kind::Frame),
-    //     };
-    //     let params = vec!{
-    //         IdentTyped::new(Ident::new("ha_array"), Ty::Ref(
-    //             Provenance::Value("\'a".into()),
-    //             Ownership::Uniq,
-    //             Memory::CpuHeap,
-    //             Box::new(Ty::Array(Box::new(Ty::Scalar(ScalarTy::I32)), Nat::Ident(Ident::new("n"))))
-    //         )),
-    //     };
-    //     let ret_ty = Ty::Scalar(ScalarTy::Unit);
-    //     let exec = ExecLoc::CpuThread;
-    //     let prv_rels = vec![];
-
-    //     let f_ty = fun_ty(
-    //         params
-    //             .iter()
-    //             .map(|ident| -> Ty { ident.ty.clone() })
-    //             .collect(),
-    //         &FrameExpr::FrTy(vec![]),
-    //         exec,
-    //         &ret_ty,
-    //     );
-
-    //     let intended = FunDef{
-    //         name,
-    //         ty_idents,
-    //         params,
-    //         ret_ty,
-    //         exec,
-    //         prv_rels,
-    //         body_expr: descend::expression_seq(body).unwrap(),
-    //         fun_ty: f_ty
-    //     };
-
-    //     assert_eq!(result.unwrap(), intended);
-    // }
+        // assert_eq!(result.name, intended.name);
+        // assert_eq!(result.params, intended.params);
+        // assert_eq!(result.exec, intended.exec);
+        // assert_eq!(result.prv_rels, intended.prv_rels);
+        // assert_eq!(result.body_expr, intended.body_expr);
+        // assert_eq!(result.generic_params, intended.generic_params);
+        // assert_eq!(result.ret_dty, intended.ret_dty);
+        assert_eq!(result, intended);
+    }
 
     #[test]
     fn global_fun_def_kind_parameters_optional() {
@@ -1501,58 +1484,100 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // TODO: This test is to be completed when binary operations for Nat Type are implemented
-    /*
+    //span testing
     #[test]
-    fn par_reduce() {
-        let src = r#"fn par_reduce<n: nat, a: prv>(     // update to current syntax: 'a => a for prv
-        ha_array: &'a uniq cpu.heap [i32; n]
-    ) -[cpu.thread]-> i32 {
-        letprov <e, g, r, s, h> {
-            let gpu: GPU = gpu(/* GPU info */);
-            let mut gpu_arr : [i32; n] = copy_to_gpu<g, 'a, [i32; n]>(&g uniq gpu, ha_array);
-                // // Modified: added ` : [i32; n]`, parse broke here otherwise
-            let view_arr: [[&r shrd gpu.global i32; n]] =
-                to_view<r, uniq, gpu.global, n, i32>(&r uniq gpu_arr);
-            let chunks: [[ [[&r uniq gpu.global i32; n/1024]]; 1024]] =
-                group<n/1024, n, &r uniq gpu.global i32>(view_arr);
-            // transpose for coalescing
-            let chunks_for_threads: [[ [[&r uniq gpu.global i32; 1024]]; n/1024]] =
-                transpose<1024, n/1024, &r uniq gpu.global i32>(chunks_for_threads);
-            // hoisted runtime check: n/1024 == 64 * 1024
-            // reduce chunks in parallel
-            sync_threads[gpu, 64 * 1024] for chunck in chunks_for_threads {
-                let mut acc: i32 = 0;
-                for elem in chunck { // elem: &r uniq gpu.global i32
-                    acc = acc + *elem;
-                }
-                // This works because array views themselves are immutable.
-                // Hence, chunk is immutable and we would not be able to write something like
-                // chunk[0] = other_borrow: &r uniq gpu.global i32
-                *(chunck[0]) = acc;
-            }
+    fn span_test_let_expression() {
+        let line_col_source = SourceFile::new("let mut result : i32 = true;\nresult".to_string());
+        ////span from expression after semicolon. Assumed we know the expression in which the error occurs
+        let no_syntax_error_but_semantics_error =
+            descend::expression_seq("let mut result : i32 = true;\nresult");
+        let result = match no_syntax_error_but_semantics_error {
+            Ok(Expr {
+                expr: ExprKind::Let(_, _, _, _, expr2),
+                ..
+            }) => match (*expr2).span {
+                Some(span) => line_col_source.get_line_col(span.start),
+                None => None,
+            },
+            _ => None,
+        };
+        assert_eq!(
+            result,
+            Some((2, 1)),
+            "cannot extract correct line and column from span"
+        );
 
-            // drop uniq borrows of gpu_arr before out is constructed
-            let out_view: [[&s shrd gpu.global i32; n]] =
-                to_view<s, shrd, gpu.global, n, i32>(&s shrd gpu_arr);
-            let part_res_only_gpu: [[&s shrd gpu.global i32; 64*1024]] =
-                take<64*1024, n, &s shrd gpu.global i32>(out_view);
-            let part_res_only_host: [[&h uniq cpu.heap i32; 64*1024]] =
-                take<64*1024>(to_view(&h uniq cpu.heap ha_array));
-            view_copy_to_host<64*1024, h, s, i32>(part_res_only_host, part_res_only_gpu);
+        //span from expression after assertion
+        let no_syntax_error_but_semantics_error =
+            descend::expression_seq("let mut result : i32 = true;\nresult");
+        let result = match no_syntax_error_but_semantics_error {
+            Ok(Expr {
+                expr: ExprKind::Let(_, _, _, expr1, _),
+                ..
+            }) => match (*expr1).span {
+                Some(span) => line_col_source.get_line_col(span.start),
+                None => None,
+            },
+            _ => None,
+        };
+        assert_eq!(
+            result,
+            Some((1, 24)),
+            "cannot extract correct line and column from span"
+        );
 
-            // host-side reduction of the partial results
-            let mut acc: i32 = 0;
-            for elem in part_res_only_host { // elem: &h uniq cpu.heap i32
-                acc = acc + *elem;
-            }
-
-            acc // return result from function
-        }
-    }"#;
-    let result = descend::global_item(src);
-    // TODO: Do proper check against expected AST
-    assert!(result.is_err()); // Currently not parsed properly due to Nat binOp Terms (i.e. 64*1024, n/1024 as Nat values)
+        //span from variable identifier
+        let no_syntax_error_but_semantics_error =
+            descend::expression_seq("let mut result : i32 = true;\nresult");
+        let result = match no_syntax_error_but_semantics_error {
+            Ok(Expr {
+                expr: ExprKind::Let(_, ident, _, _, _),
+                ..
+            }) => match ident.span {
+                Some(span) => line_col_source.get_line_col(span.start),
+                None => None,
+            },
+            _ => None,
+        };
+        assert_eq!(
+            result,
+            Some((1, 9)),
+            "cannot extract correct line and column from span"
+        );
     }
-    */
+
+    #[test]
+    fn unit_test_one() {
+        let src = r#"
+        
+        fn foo() -[cpu.thread]-> () {
+            42
+        }
+        
+        "#;
+        let result = descend::unit(src).expect("Cannot parse unit with one function");
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn unit_test_multiple() {
+        let src = r#"
+        
+        fn foo() -[cpu.thread]-> () {
+            42
+        }
+
+        fn bar() -[cpu.thread]-> () {
+            24
+        }
+
+
+        fn baz() -[cpu.thread]-> () {
+            1337
+        }
+        
+        "#;
+        let result = descend::unit(src).expect("Cannot parse unit with multiple functions");
+        assert_eq!(result.len(), 3);
+    }
 }

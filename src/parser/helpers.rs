@@ -1,6 +1,6 @@
 //! Helper functions for parsing
 
-use crate::ast::{BinOp, DataTy, Expr, ExprKind, Lit, Nat, ScalarTy, UnOp};
+use crate::ast::{BinOp, BinOpNat, DataTy, Expr, ExprKind, Lit, Nat, ScalarTy, UnOp};
 
 pub fn type_from_lit(lit: &Lit) -> DataTy {
     DataTy::Scalar(match lit {
@@ -17,6 +17,10 @@ pub fn make_binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
         ty: None,
         span: None,
     }
+}
+
+pub fn make_binary_nat(op: BinOpNat, lhs: Nat, rhs: Nat) -> Nat {
+    Nat::BinOp(op, Box::new(lhs), Box::new(rhs))
 }
 
 pub fn make_unary(op: UnOp, rhs: Expr) -> Expr {
