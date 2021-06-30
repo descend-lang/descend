@@ -150,6 +150,9 @@ fn ty_check_expr(
         ExprKind::For(ident, set, body) => {
             ty_check_for(gl_ctx, kind_ctx, ty_ctx, exec, ident, set, body)?
         }
+        ExprKind::While(cond, body) => {
+            ty_check_while(gl_ctx, kind_ctx, ty_ctx, exec, cond, body)?
+        }
         ExprKind::Lambda(params, exec, ret_ty, body) => {
             ty_check_lambda(gl_ctx, kind_ctx, ty_ctx, *exec, params, ret_ty, body)?
         }
@@ -195,6 +198,21 @@ fn ty_check_for(
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     unimplemented!()
+}
+
+fn ty_check_while(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    cond: &mut Expr,
+    body: &mut Expr
+) -> Result<(TyCtx, Ty), String> {
+    let mut ty_temp_ctx = ty_ctx;
+    ty_temp_ctx = ty_check_expr(&gl_ctx, &kind_ctx, ty_temp_ctx, exec, cond)?;
+    ty_temp_ctx = ty_check_expr(&gl_ctx, &kind_ctx, ty_temp_ctx, exec, body)?;
+
+    Ok( (ty_temp_ctx, cond.ty.as_ref().unwrap().clone() ) )
 }
 
 fn ty_check_ifelse(

@@ -120,6 +120,8 @@ pub enum ExprKind {
     For(Ident, Box<Expr>, Box<Expr>),
     // for n in range(..) { e }
     ForNat(Ident, Nat, Box<Expr>),
+    // while( e_1 ) { e_2 }
+    While(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
     ParFor(Box<Expr>, Box<Expr>, Box<Expr>),

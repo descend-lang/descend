@@ -253,6 +253,10 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_nat(range);
             visitor.visit_expr(body)
         }
+        ExprKind::While(cond, body) => {
+            visitor.visit_expr(cond);
+            visitor.visit_expr(body);
+        }
         ExprKind::BinOp(op, l, r) => {
             visitor.visit_binary_op(op);
             visitor.visit_expr(l);
