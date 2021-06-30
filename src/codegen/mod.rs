@@ -179,6 +179,15 @@ fn gen_stmt(
                 )))),
             }
         }
+        While(cond, body) => {
+            if return_value {
+                panic!("Cannot return a value from while-loop.");
+            }
+            cu::Stmt::While{
+                cond: gen_expr(cond, parall_ctx, view_ctx),
+                stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx)),
+            }
+        }
         For(ident, coll_expr, body) => {
             if return_value {
                 panic!("Cannot return a value from for-loop.");

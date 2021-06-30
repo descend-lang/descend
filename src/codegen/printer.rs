@@ -91,6 +91,13 @@ impl std::fmt::Display for Stmt {
                 write!(f, "if ({}) ", cond)?;
                 write!(f, "{} else {}", true_body, false_body)
             }
+            While {
+                cond,
+                stmt,
+            } => {
+                writeln!(f, "while ({})", cond)?;
+                write!(f, "{}", stmt)
+            }
             ForLoop {
                 init,
                 cond,

@@ -40,6 +40,10 @@ pub(super) enum Stmt {
         true_body: Box<Stmt>,
         false_body: Box<Stmt>,
     },
+    While {
+        cond: Expr,
+        stmt: Box<Stmt>,
+    },
     ForLoop {
         init: Box<Stmt>,
         cond: Expr,
