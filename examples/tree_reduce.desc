@@ -6,11 +6,9 @@ fn reduce<n: nat, a: prv, b: prv>(
 
     let mut a_array: [i32; n] @ gpu.global =
       gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
-    let view_a: [[&'r uniq gpu.global i32; n]] =
-      to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
-    let block_group = group::<1024, n, &'r uniq gpu.global i32>(view_a);
-    // exec: <b: nat, t: nat, r: prv, m: mem, elem_ty: ty, n: nat>(
-    //        &r uniq m Gpu, [[elem_ty; n]], ([[[[Thread; t]]; b]], [[elem_ty; n]]) -[gpu]-> ()) -> ()
+    let block_group = group::<1024, n, &'r uniq gpu.global i32>(
+      to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array));
+
     exec::<64, 1024, 'h, cpu.stack, [[[[&'r uniq gpu.global i32; 1024]]; 64]]>(
       &'h uniq gpu,
       block_group,
@@ -22,11 +20,9 @@ fn reduce<n: nat, a: prv, b: prv>(
             ib: [[&'r uniq gpu.global i32; 1024]] | -[gpu.block]-> () {
 
             for_nat k in halved_range(512) {
-              let active_non_active = split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib);
-              let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(active_non_active.0);
-              let active_non_active_threads = split::<k, 1024>(block);
-              let active_threads = active_non_active_threads.0;
-              for active_threads
+              let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(
+                split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib).0);
+              for split::<k, 1024>(block).0
               with <active_halves.0, active_halves.1>
               do
                 | thread: Thread,

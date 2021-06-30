@@ -83,6 +83,102 @@ peg::parser! {
             }
             / expr:expression() { expr }
 
+        // To avoid direct left recursion
+        pub(crate) rule expr_helper() -> Expr =
+            // TODO: Integrate this properly into the precedence parser
+            start:position!() func:ident() place_end:position!() _
+                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
+            {
+                Expr::new(
+                    ExprKind::App(
+                        Box::new(Expr::with_span(
+                            ExprKind::PlaceExpr(PlaceExpr::Ident(func)),
+                            Span::new(start, place_end)
+                        )),
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    )
+                )
+            }
+            / l:literal() {
+                Expr::with_type(
+                    ExprKind::Lit(l),
+                    Ty::Data(helpers::type_from_lit(&l))
+                )
+            }
+            / p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? expr:(_ "=" _ e:expression() {e})? {
+                match expr {
+                    None => match idx {
+                        None => Expr::new(ExprKind::PlaceExpr(p)),
+                        Some(idx) => Expr::new(ExprKind::Index(p,idx))
+                    },
+                    Some(expr) => match idx {
+                        None => Expr::new(ExprKind::Assign(p, Box::new(expr))),
+                        Some(_) => unimplemented!() // TODO: Implement array assignment
+                    }
+                }
+            }
+            / "&" _ prov:provenance() __ own:ownership() __ p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? {
+                match idx {
+                    None => Expr::new(ExprKind::Ref(prov, own, p)),
+                    Some(idx) => Expr::new(ExprKind::BorrowIndex(prov, own, p,idx))
+                }
+            }
+            / "[" _ expressions:expression() ** (_ "," _) _ "]" {
+                Expr::new(ExprKind::Array(expressions))
+            }
+            / "(" _ expression:expression() _ "," _ ")" {
+                Expr::new(ExprKind::Tuple(vec![expression]))
+            }
+            / "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
+                Expr::new(ExprKind::Tuple(expressions))
+            }
+            / "<" _ expression:expression() _ ">" {
+                Expr::new(ExprKind::TupleView(vec![expression]))
+            }
+            / "<" _ expressions:expression() **<2,> (_ "," _) _ ">" {
+                Expr::new(ExprKind::TupleView(expressions))
+            }
+            / "if" __ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
+                Expr::new(
+                    ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse))
+                )
+            }
+            / "letprov" _ "<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _
+                "{" _ body:expression_seq() _ "}"
+            {
+                Expr::new(
+                    ExprKind::LetProv(prov_values, Box::new(body))
+                )
+            }
+            / "for_nat" __ ident:ident() __ "in" __ range:nat() _ "{" _ body:expression_seq() _ "}" {
+                Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
+            }
+            / "for" __ parall_collec:expression() __ "with" __ input:expression() __
+                "do" __ funs:expression() {
+                Expr::new(ExprKind::ParFor(Box::new(parall_collec), Box::new(input), Box::new(funs)))
+            }
+            / "for" __ ident:ident() __ "in" __ collection:expression()
+                _ "{" _ body:expression_seq() _ "}"
+            {
+                Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body)))
+            }
+            / "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
+              "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
+              "{" _ body_expr:expression_seq() _"}" {
+                Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
+            }
+            // Parentheses to override precedence
+            / "(" _ expression:expression() _ ")" { expression }
+
+        pub(crate) rule proj_expression() -> Expr =
+            expression:expr_helper() ns:("." _ n:nat_literal() {n})+ {
+                ns.into_iter().fold(expression,
+                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
+                )
+            }
+
         /// Parse an expression
         pub(crate) rule expression() -> Expr = precedence!{
             x:(@) _ "&&" _ y:@ { helpers::make_binary(BinOp::And, x, y) }
@@ -112,93 +208,8 @@ peg::parser! {
                 };
                 expr
             }
-            // TODO: Integrate this properly into the precedence parser
-            start:position!() func:ident() place_end:position!() _
-                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
-                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
-            {
-                Expr::new(
-                    ExprKind::App(
-                        Box::new(Expr::with_span(
-                            ExprKind::PlaceExpr(PlaceExpr::Ident(func)),
-                            Span::new(start, place_end)
-                        )),
-                        kind_args.unwrap_or(vec![]),
-                        args
-                    )
-                )
-            }
-            l:literal() {
-                // Do not use a let statement here. It makes rust-peg angry
-                Expr::with_type(
-                    ExprKind::Lit(l.clone()),
-                    Ty::Data(helpers::type_from_lit(&l))
-                )
-            }
-            p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? expr:(_ "=" _ e:expression() {e})? {
-                match expr {
-                    None => match idx {
-                        None => Expr::new(ExprKind::PlaceExpr(p)),
-                        Some(idx) => Expr::new(ExprKind::Index(p,idx))
-                    },
-                    Some(expr) => match idx {
-                        None => Expr::new(ExprKind::Assign(p, Box::new(expr))),
-                        Some(_) => unimplemented!() // TODO: Implement array assignment
-                    }
-                }
-            }
-            "&" _ prov:provenance() __ own:ownership() __ p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? {
-                match idx {
-                    None => Expr::new(ExprKind::Ref(prov, own, p)),
-                    Some(idx) => Expr::new(ExprKind::BorrowIndex(prov, own, p,idx))
-                }
-            }
-            "[" _ expressions:expression() ** (_ "," _) _ "]" {
-                Expr::new(ExprKind::Array(expressions))
-            }
-            "(" _ expression:expression() _ "," _ ")" {
-                Expr::new(ExprKind::Tuple(vec![expression]))
-            }
-            "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
-                Expr::new(ExprKind::Tuple(expressions))
-            }
-            "<" _ expression:expression() _ ">" {
-                Expr::new(ExprKind::TupleView(vec![expression]))
-            }
-            "<" _ expressions:expression() **<2,> (_ "," _) _ ">" {
-                Expr::new(ExprKind::TupleView(expressions))
-            }
-            "if" __ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
-                Expr::new(
-                    ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse))
-                )
-            }
-            "letprov" _ "<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _
-                "{" _ body:expression_seq() _ "}"
-            {
-                Expr::new(
-                    ExprKind::LetProv(prov_values, Box::new(body))
-                )
-            }
-            "for_nat" __ ident:ident() __ "in" __ range:nat() _ "{" _ body:expression_seq() _ "}" {
-                Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
-            }
-            "for" __ parall_collec:expression() __ "with" __ input:expression() __
-                "do" __ funs:expression() {
-                Expr::new(ExprKind::ParFor(Box::new(parall_collec), Box::new(input), Box::new(funs)))
-            }
-            "for" __ ident:ident() __ "in" __ collection:expression()
-                _ "{" _ body:expression_seq() _ "}"
-            {
-                Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body)))
-            }
-            "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
-            "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
-            "{" _ body_expr:expression_seq() _"}" {
-                Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
-            }
-            // Parentheses to override precedence
-            "(" _ expression:expression() _ ")" { expression }
+            proj: proj_expression() { proj }
+            expression: expr_helper() { expression }
         }
 
         // TODO make nat expressions aside from literals parsable.
@@ -217,7 +228,7 @@ peg::parser! {
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
-            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat_literal() _ {n})+ {ns})? {
+            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat_literal() {n})+ {ns})? {
                 let ns = ns.unwrap_or(vec![]);
                 let root = PlaceExpr::Ident(ident);
                 // . operator binds stronger
@@ -353,7 +364,7 @@ peg::parser! {
 
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
-                / "f32" / "i32" / "bool" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "frm" / "own"
+                / "f32" / "i32" / "bool" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "in" / "across" / "fn" / "Grid"
                 / "Block" / "Thread" / "with" / "do")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
@@ -863,7 +874,7 @@ mod tests {
                 Box::new(PlaceExpr::Ident(Ident::new("x"))),
                 0
             )),
-            "does not recognize place expression *x"
+            "does not recognize place expression projection `x.0`"
         );
         assert_eq!(
             descend::place_expression("*x.0"),
@@ -871,7 +882,79 @@ mod tests {
                 Box::new(PlaceExpr::Ident(Ident::new("x"))),
                 0
             )))),
-            "does not recognize place expression *x.0"
+            "does not recognize place expression `*x.0`"
+        );
+    }
+
+    #[test]
+    fn correctly_recognize_place_expression_vs_proj_expression() {
+        let zero_literal = 0;
+        let one_literal = 1;
+        // Place expressions
+        assert_eq!(
+            descend::expression("x.0"),
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Proj(
+                Box::new(PlaceExpr::Ident(Ident::new("x"))),
+                0
+            )))),
+            "does not recognize place expression projection `x.0`"
+        );
+        assert_eq!(
+            descend::expression("*x.0"),
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
+                PlaceExpr::Proj(Box::new(PlaceExpr::Ident(Ident::new("x"))), 0)
+            ))))),
+            "does not recognize place expression `*x.0`"
+        );
+
+        // No place expressions
+        assert_eq!(
+            descend::expression("f::<x>().0"),
+            Ok(Expr::new(ExprKind::Proj(
+                Box::new(Expr::new(ExprKind::App(
+                    Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
+                        Ident::new("f")
+                    )))),
+                    vec![ArgKinded::Ident(Ident::new("x"))],
+                    vec![]
+                ))),
+                zero_literal
+            ))),
+            "does not recognize projection on function application"
+        );
+        assert_eq!(
+            descend::expression("(x, y, z).1"),
+            Ok(Expr::new(ExprKind::Proj(
+                Box::new(Expr::new(ExprKind::Tuple(vec![
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("x")))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("y")))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("z"))))
+                ]))),
+                one_literal
+            ))),
+            "does not recognize projection on tuple view expression"
+        );
+        assert_eq!(
+            descend::expression("<x>.0"),
+            Ok(Expr::new(ExprKind::Proj(
+                Box::new(Expr::new(ExprKind::TupleView(vec![Expr::new(
+                    ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("x")))
+                )]))),
+                zero_literal
+            ))),
+            "does not recognize projection on tuple view expression with a single element"
+        );
+        assert_eq!(
+            descend::expression("<x, y, z>.1"),
+            Ok(Expr::new(ExprKind::Proj(
+                Box::new(Expr::new(ExprKind::TupleView(vec![
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("x")))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("y")))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("z"))))
+                ]))),
+                one_literal
+            ))),
+            "does not recognize projection on tuple view expression"
         );
     }
 
