@@ -208,11 +208,29 @@ fn ty_check_while(
     cond: &mut Expr,
     body: &mut Expr
 ) -> Result<(TyCtx, Ty), String> {
-    let mut ty_temp_ctx = ty_ctx;
-    ty_temp_ctx = ty_check_expr(&gl_ctx, &kind_ctx, ty_temp_ctx, exec, cond)?;
-    ty_temp_ctx = ty_check_expr(&gl_ctx, &kind_ctx, ty_temp_ctx, exec, body)?;
+    let cond_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, cond)?;
+    let body_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, cond_ty_ctx, exec, body)?;
 
-    Ok( (ty_temp_ctx, cond.ty.as_ref().unwrap().clone() ) )
+    let cond_ty = cond.ty.as_ref().unwrap();
+    let body_ty = cond.ty.as_ref().unwrap();
+    match cond_ty {
+        Ty::Data(DataTy::Scalar(ScalarTy::Bool)) => {
+            match body_ty {
+                Ty::Data(DataTy::Scalar(ScalarTy::Unit)) => {
+                    Ok( (body_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit)) ))
+                }
+                _ => Err(format!(
+                    "Body of while loop is not of unit type, instead got {:?}",
+                    body_ty
+                )),
+            }
+        }
+        _ => Err(format!(
+            "Expected condition in while loop, instead got {:?}",
+            cond
+        )),
+    }
+
 }
 
 fn ty_check_ifelse(
