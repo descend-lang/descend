@@ -211,26 +211,31 @@ fn ty_check_while(
     let cond_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, cond)?;
     let body_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, cond_ty_ctx, exec, body)?;
 
-    let cond_ty = cond.ty.as_ref().unwrap();
-    let body_ty = cond.ty.as_ref().unwrap();
-    match cond_ty {
-        Ty::Data(DataTy::Scalar(ScalarTy::Bool)) => {
-            match body_ty {
-                Ty::Data(DataTy::Scalar(ScalarTy::Unit)) => {
-                    Ok( (body_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit)) ))
-                }
-                _ => Err(format!(
-                    "Body of while loop is not of unit type, instead got {:?}",
-                    body_ty
-                )),
-            }
-        }
-        _ => Err(format!(
-            "Expected condition in while loop, instead got {:?}",
-            cond
-        )),
+    let cond_temp_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, body_ty_ctx.clone(), exec, cond)?;
+    if body_ty_ctx != cond_temp_ty_ctx {
+        return Err("Context should have stayed the same".to_string());
+    }
+    let body_temp_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, body_ty_ctx.clone(), exec, body)?;
+    if body_ty_ctx != body_temp_ty_ctx {
+        return Err("Context should have stayed the same".to_string());
     }
 
+    let cond_ty = cond.ty.as_ref().unwrap();
+    let body_ty = cond.ty.as_ref().unwrap();
+
+    if !matches!(Ty::Data(DataTy::Scalar(ScalarTy::Bool)), cond_ty) {
+        return Err(format!(
+            "Expected condition in while loop, instead got {:?}",
+            cond_ty
+        ));
+    }
+    if !matches!(Ty::Data(DataTy::Scalar(ScalarTy::Bool)), body_ty) {
+        return Err(format!(
+            "Body of while loop is not of unit type, instead got {:?}",
+            body_ty
+        ));
+    }
+    Ok((body_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit)) ))
 }
 
 fn ty_check_ifelse(
