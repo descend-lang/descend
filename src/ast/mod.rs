@@ -342,19 +342,6 @@ pub enum ArgKinded {
     Provenance(Provenance),
 }
 
-impl ArgKinded {
-    fn kind(&self) -> Kind {
-        use ArgKinded::*;
-        match self {
-            Ident(_) => panic!("Identifier's kind depends on the kinding context."),
-            Nat(_) => Kind::Nat,
-            Memory(_) => Kind::Memory,
-            Ty(_) => Kind::Ty,
-            Provenance(_) => Kind::Provenance,
-        }
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExpr {
     Proj(Box<PlaceExpr>, usize),
@@ -649,12 +636,8 @@ pub enum DataTy {
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
-    // TODO remove
-    GridConfig(Nat, Nat),
     Grid(Box<DataTy>, Vec<Nat>),
     Block(Box<DataTy>, Vec<Nat>),
-    // TODO should not be a data type because it contains views?
-    DistribBorrow(ViewTy, ViewTy),
     // Only for type checking purposes.
     Dead(Box<DataTy>),
 }
@@ -669,11 +652,8 @@ impl DataTy {
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
             At(_, _) => true,
-            GridConfig(_, _) => false,
             Grid(_, _) => false,
             Block(_, _) => false,
-            DistribBorrow(parall_exec_loc, input) =>
-                parall_exec_loc.non_copyable() && input.non_copyable(),
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
@@ -692,10 +672,8 @@ impl DataTy {
             | Ref(_, _, _, _)
             | At(_, _)
             | Array(_, _)
-            | GridConfig(_, _)
             | Grid(_, _)
-            | Block(_, _)
-            | DistribBorrow(_, _) => true,
+            | Block(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -706,11 +684,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | GridConfig(_, _) | Grid(_, _) | Block(_, _) | Dead(_) => false,
-            DistribBorrow(parall_exec_loc, data) => {
-                parall_exec_loc.contains_ref_to_prv(prv_val_name)
-                    || data.contains_ref_to_prv(prv_val_name)
-            }
+            Scalar(_) | Ident(_) | Grid(_, _) | Block(_, _) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -756,10 +730,6 @@ impl DataTy {
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
                 mem.subst_ident_kinded(ident_kinded, with),
             ),
-            GridConfig(n1, n2) => GridConfig(
-                n1.subst_ident_kinded(ident_kinded, with),
-                n2.subst_ident_kinded(ident_kinded, with),
-            ),
             Grid(elem, n) => Grid(
                 Box::new(elem.subst_ident_kinded(ident_kinded, with)),
                 n.iter()
@@ -771,10 +741,6 @@ impl DataTy {
                 n.iter()
                     .map(|n| n.subst_ident_kinded(ident_kinded, with))
                     .collect(),
-            ),
-            DistribBorrow(parall_exec_loc, data) => DistribBorrow(
-                parall_exec_loc.subst_ident_kinded(ident_kinded, with),
-                data.subst_ident_kinded(ident_kinded, with),
             ),
             Tuple(elem_tys) => Tuple(
                 elem_tys
@@ -805,6 +771,7 @@ pub enum ScalarTy {
     F32,
     Bool,
     Gpu,
+    Warp,
     Thread,
 }
 

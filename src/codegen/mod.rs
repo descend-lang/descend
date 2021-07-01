@@ -326,6 +326,18 @@ fn gen_par_for(
                 args: vec![],
             }),
         ),
+        desc::Ty::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => (
+            desc::Nat::BinOp(
+                desc::BinOpNat::Div,
+                Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+                Box::new(desc::Nat::Lit(32)),
+            ),
+            cu::Stmt::Expr(cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
+                template_args: vec![],
+                args: vec![],
+            }),
+        ),
         _ => panic!("Not a parallel collection type."),
     };
 
@@ -788,14 +800,15 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
     let cu_ty = match ty {
         Ident(ident) => Some(cu::Ty::Ident(ident.name.clone())),
         Fn(_, _, _, _) => unimplemented!("needed?"),
-        Data(d::Scalar(s)) => Some(match s {
-            desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
-            desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
-            desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
-            desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
-            desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
+        Data(d::Scalar(s)) => match s {
+            desc::ScalarTy::Unit => Some(cu::Ty::Scalar(cu::ScalarTy::Void)),
+            desc::ScalarTy::I32 => Some(cu::Ty::Scalar(cu::ScalarTy::I32)),
+            desc::ScalarTy::F32 => Some(cu::Ty::Scalar(cu::ScalarTy::F32)),
+            desc::ScalarTy::Bool => Some(cu::Ty::Scalar(cu::ScalarTy::Bool)),
+            desc::ScalarTy::Gpu => Some(cu::Ty::Scalar(cu::ScalarTy::Gpu)),
+            desc::ScalarTy::Warp => None,
             desc::ScalarTy::Thread => panic!("This should only exist for type checking."),
-        }),
+        },
         Data(d::Tuple(tys)) => {
             let gened_tys: Vec<_> = tys
                 .iter()
@@ -864,12 +877,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
         Data(d::Ident(ident)) => Some(cu::Ty::Ident(ident.name.clone())),
-        Data(d::GridConfig(num_blocks, num_threads)) => {
-            //cu::Ty::GridConfig(num_blocks.clone(), num_threads.clone())
-            unimplemented!()
-        }
         Data(d::Grid(_, _)) | Data(d::Block(_, _)) => None,
-        Data(d::DistribBorrow(_, _)) => unimplemented!(),
         View(_) => None,
         //     panic!(
         //     "Cannot generate view types. Anything with this type should have been compiled away."
@@ -925,7 +933,7 @@ impl ParallelityCollec {
         match &expr.expr {
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::PlaceExpr(PlaceExpr::Ident(ident)) = &f.expr {
-                    if ident.name == crate::ty_check::pre_decl::SPLIT {
+                    if ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK {
                         if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
                             (&gen_args[0], &gen_args[1], args.first())
                         {
@@ -937,7 +945,18 @@ impl ParallelityCollec {
                                 )),
                             };
                         }
-                        panic!("Cannot create `group` from the provided arguments.");
+                        panic!("Cannot create `split` from the provided arguments.");
+                    } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
+                        if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
+                            return ParallelityCollec::Split {
+                                pos: k.clone(),
+                                coll_size: desc::Nat::Lit(32),
+                                parall_expr: Box::new(ParallelityCollec::create_from(
+                                    p, parall_ctx,
+                                )),
+                            };
+                        }
+                        panic!("Cannot create `split` from the provided arguments.");
                     } else {
                         unimplemented!()
                     }
@@ -982,9 +1001,9 @@ impl ParallelityCollec {
 
 fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
     match ty {
-        desc::Ty::Data(desc::DataTy::Grid(_, _)) | desc::Ty::Data(desc::DataTy::Block(_, _)) => {
-            true
-        }
+        desc::Ty::Data(desc::DataTy::Grid(_, _))
+        | desc::Ty::Data(desc::DataTy::Block(_, _))
+        | desc::Ty::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => true,
         desc::Ty::Data(desc::DataTy::Tuple(vec)) => vec
             .iter()
             .all(|dty| is_parall_collec_ty(&desc::Ty::Data(dty.clone()))),

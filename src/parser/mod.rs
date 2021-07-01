@@ -168,8 +168,8 @@ peg::parser! {
                 Expr::new(ExprKind::While(Box::new(cond), Box::new(body)))
             }
             / "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
-            "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
-            "{" _ body_expr:expression_seq() _"}" {
+              "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
+              "{" _ body_expr:expression_seq() _"}" {
                 Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
             }
             // Parentheses to override precedence
@@ -300,6 +300,7 @@ peg::parser! {
             }
             / "Thread" { DataTy::Scalar(ScalarTy::Thread) }
             // The Grid/Block types should be defined better.
+            / "Warp" { DataTy::Scalar(ScalarTy::Warp) }
             / "Grid" _ "<" _ grid_elems:dty_term() _ "," _ n:nat() ">" {
                 DataTy::Grid(Box::new(grid_elems), vec![n, Nat::Lit(1), Nat::Lit(1)])
               }
@@ -369,7 +370,7 @@ peg::parser! {
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
                 / "f32" / "i32" / "bool" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "while" / "in" / "across" / "fn" / "Grid"
-                / "Block" / "Thread" / "with" / "do")
+                / "Block" / "Warp" / "Thread" / "with" / "do")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.stack" / "cpu.heap" / "gpu.global" / "gpu.shared"

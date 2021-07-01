@@ -118,10 +118,6 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_mem(mem);
             visitor.visit_dty(dty)
         }
-        DataTy::GridConfig(grid_size, block_size) => {
-            visitor.visit_nat(grid_size);
-            visitor.visit_nat(block_size)
-        }
         DataTy::Grid(elems, dims) => {
             visitor.visit_dty(elems);
             walk_list!(visitor, visit_nat, dims);
@@ -129,10 +125,6 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
         DataTy::Block(elems, dims) => {
             visitor.visit_dty(elems);
             walk_list!(visitor, visit_nat, dims);
-        }
-        DataTy::DistribBorrow(parall_exec_loc, data) => {
-            visitor.visit_vty(parall_exec_loc);
-            visitor.visit_vty(data)
         }
         DataTy::Dead(dty) => visitor.visit_dty(dty),
     }

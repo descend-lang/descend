@@ -22,7 +22,7 @@ fn reduce<n: nat, a: prv, b: prv>(
             for_nat k in halved_range(512) {
               let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(
                 split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib).0);
-              for split::<k, 1024>(block).0
+              for split_block::<k, 1024>(block).0
               with <active_halves.0, active_halves.1>
               do
                 | thread: Thread,

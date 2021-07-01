@@ -7,8 +7,7 @@ fn warp_reduce_descend<n: nat, r: prv>(
         let active_elems = split_at::<n, 2*n, &r uniq gpu.shared i32>(active_inactive.0);
 
         // Err split doesn't know how to handle Warp.
-        let active_non_active = split::<n, 32>(warp);
-        for (active_non_active.0)
+        for split_warp::<n>(warp).0
         with <active_elems.0, active_elems.1>
         do |thread: Thread, fst_elem: &r uniq gpu.shared i32, snd_elem: &r uniq gpu.shared i32| -[gpu.thread]-> ()
             {

@@ -7,9 +7,17 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-peg = "0.6.3"
-descend_derive = {path = "./descend_derive"}
 clap = "^3.0.0-beta.2" # Only beta version available for now
+
+[dependencies.peg]
+version = "0.6.3"
+
+[dependencies.annotate-snippets]
+version = "0.9.0"
+features = ["color"]
+
+[dependencies.descend_derive]
+path = "./descend_derive"
 
 [workspace]
 members = ["descend_derive"]

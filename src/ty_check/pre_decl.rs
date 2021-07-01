@@ -18,7 +18,8 @@ pub static JOIN: &str = "join";
 pub static ZIP: &str = "zip";
 pub static TRANSPOSE: &str = "transpose";
 
-pub static SPLIT: &str = "split";
+pub static SPLIT_BLOCK: &str = "split_block";
+pub static SPLIT_WARP: &str = "split_warp";
 
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
@@ -35,16 +36,17 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SPLIT_AT, split_at_ty()),
         (ZIP, zip_ty()),
         (GROUP, group_ty()),
-        (SPLIT, split_ty()),
+        (SPLIT_BLOCK, split_block_ty()),
+        (SPLIT_WARP, split_warp_ty()),
     ];
 
     decls.to_vec()
 }
 
 // split:
-//  <k: nat, n: nat>(Block<Thread, n>) -> (Block<Thread, k>, Block<Thread, n-k>)
+//  <k: nat, n: nat>(Block<Thread, n>) -> <Block<Thread, k>, Block<Thread, n-k>>
 // TODO add t: ty for inner part (i.e., Thread/Warp), or do it even more correctly right away...
-fn split_ty() -> Ty {
+fn split_block_ty() -> Ty {
     let k = Ident::new("k");
     let n = Ident::new("n");
     let k_nat = IdentKinded {
@@ -62,12 +64,12 @@ fn split_ty() -> Ty {
             vec![Nat::Ident(n.clone()), Nat::Lit(1), Nat::Lit(1)],
         ))],
         Exec::View,
-        Box::new(Ty::Data(DataTy::Tuple(vec![
-            DataTy::Block(
+        Box::new(Ty::View(ViewTy::Tuple(vec![
+            Ty::Data(DataTy::Block(
                 Box::new(DataTy::Scalar(ScalarTy::Thread)),
                 vec![Nat::Ident(k.clone()), Nat::Lit(1), Nat::Lit(1)],
-            ),
-            DataTy::Block(
+            )),
+            Ty::Data(DataTy::Block(
                 Box::new(DataTy::Scalar(ScalarTy::Thread)),
                 vec![
                     Nat::BinOp(
@@ -78,11 +80,27 @@ fn split_ty() -> Ty {
                     Nat::Lit(1),
                     Nat::Lit(1),
                 ],
-            ),
+            )),
         ]))),
     )
 }
 
+fn split_warp_ty() -> Ty {
+    let k = Ident::new("k");
+    let k_nat = IdentKinded {
+        ident: k.clone(),
+        kind: Kind::Nat,
+    };
+    Ty::Fn(
+        vec![k_nat],
+        vec![Ty::Data(DataTy::Scalar(ScalarTy::Warp))],
+        Exec::View,
+        Box::new(Ty::View(ViewTy::Tuple(vec![
+            Ty::Data(DataTy::Scalar(ScalarTy::Warp)),
+            Ty::Data(DataTy::Scalar(ScalarTy::Warp)),
+        ]))),
+    )
+}
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
 fn gpu_device_ty() -> Ty {

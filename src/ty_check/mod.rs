@@ -259,10 +259,11 @@ fn ty_check_par_for(
     input: &mut Expr,
     funs: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    fn to_exec_and_size(parall_collec: &Expr) -> (Exec, &[Nat]) {
+    fn to_exec_and_size(parall_collec: &Expr) -> Exec {
         match parall_collec.ty.as_ref().unwrap() {
-            Ty::Data(DataTy::Grid(_, n)) => (Exec::GpuGrid, n.as_slice()),
-            Ty::Data(DataTy::Block(_, n)) => (Exec::GpuBlock, n.as_slice()),
+            Ty::Data(DataTy::Grid(_, _)) => Exec::GpuGrid,
+            Ty::Data(DataTy::Block(_, _)) => Exec::GpuBlock,
+            Ty::Data(DataTy::Scalar(ScalarTy::Warp)) => Exec::GpuWarp,
             _ => panic!("Expected a parallel collection: Grid or Block."),
         }
     }
@@ -285,8 +286,9 @@ fn ty_check_par_for(
                 let fun_input_elem_tys: Vec<_> = param_tys[1..].iter().map(|t| t).collect();
                 let parall_elem_dty = match parall_collec.ty.as_ref().unwrap() {
                     Ty::Data(dty) => match dty {
-                        DataTy::Grid(pe_dty, _) => pe_dty.as_ref(),
-                        DataTy::Block(pe_dty, _) => pe_dty.as_ref(),
+                        DataTy::Grid(pe_dty, _) => pe_dty.as_ref().clone(),
+                        DataTy::Block(pe_dty, _) => pe_dty.as_ref().clone(),
+                        DataTy::Scalar(ScalarTy::Warp) => DataTy::Scalar(ScalarTy::Thread),
                         _ => {
                             return Err(
                                 "Provided expression is not a parallel collection.".to_string()
@@ -324,7 +326,7 @@ fn ty_check_par_for(
     }
     let parall_collec_ty_ctx =
         ty_check_expr(gl_ctx, kind_ctx, ty_ctx.clone(), exec, parall_collec)?;
-    let (allowed_exec, parall_collec_dims) = to_exec_and_size(parall_collec);
+    let allowed_exec = to_exec_and_size(parall_collec);
     if allowed_exec != exec {
         return Err(format!(
             "Trying to run a parallel for-loop over {:?} inside of {:?}",
