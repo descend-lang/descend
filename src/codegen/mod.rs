@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{BinOpNat, Ident, Mutability, PlaceExpr};
+use crate::ast::{Ident, Mutability, PlaceExpr};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -274,7 +274,7 @@ fn gen_exec(
         let in_name = params[1].ident.name.clone();
         let mut scope_view_ctx: HashMap<String, ViewExpr> = HashMap::new();
         scope_view_ctx.insert(in_name, v);
-        let dev_fun = cu::Expr::Lambda {
+        cu::Expr::Lambda {
             params: param_decls,
             body: Box::new(gen_stmt(
                 b,
@@ -284,8 +284,7 @@ fn gen_exec(
             )),
             ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
             is_dev_fun: true,
-        };
-        dev_fun
+        }
     } else {
         panic!("Currently only lambdas can be passed.")
     };
@@ -329,7 +328,7 @@ fn gen_par_for(
     };
 
     // FIXME this assumes that the only functions given are syntactically lambdas
-    let fun_bodies = match funs.ty.as_ref().unwrap() {
+    let fun_body = match funs.ty.as_ref().unwrap() {
         desc::Ty::View(desc::ViewTy::Tuple(_)) => unimplemented!(),
         desc::Ty::Data(_) => panic!("Cannot generate function body from expression of data type."),
         desc::Ty::Fn(_, _, _, _) => {
@@ -369,10 +368,10 @@ fn gen_par_for(
     let body = if let Some((Some(parall_cond), _)) = gen_parall_cond(&pid, &p) {
         cu::Stmt::If {
             cond: parall_cond,
-            body: Box::new(cu::Stmt::Block(Box::new(fun_bodies))),
+            body: Box::new(cu::Stmt::Block(Box::new(fun_body))),
         }
     } else {
-        fun_bodies
+        fun_body
     };
 
     cu::Stmt::Seq(Box::new(body), Box::new(sync_stmt))
@@ -950,6 +949,10 @@ impl ParallelityCollec {
             desc::ExprKind::PlaceExpr(pl_expr) => {
                 ParallelityCollec::create_parall_pl_expr(pl_expr, parall_ctx)
             }
+            desc::ExprKind::Proj(expr, i) => ParallelityCollec::Proj {
+                parall_expr: Box::new(ParallelityCollec::create_from(expr, parall_ctx)),
+                i: *i,
+            },
             _ => panic!(
                 "Expected a function application, identifer or projection, but found {:?}",
                 expr.expr
@@ -1075,6 +1078,10 @@ impl ViewExpr {
             }
             desc::ExprKind::PlaceExpr(pl_expr) => ViewExpr::create_pl_expr_view(pl_expr, view_ctx),
             desc::ExprKind::TupleView(elems) => ViewExpr::create_tuple_view(elems, view_ctx),
+            desc::ExprKind::Proj(expr, i) => ViewExpr::Proj {
+                view: Box::new(ViewExpr::create_from(expr, view_ctx)),
+                i: *i,
+            },
             _ => panic!(
                 "Expected a function application, identifer or projection, but found {:?}",
                 expr.expr

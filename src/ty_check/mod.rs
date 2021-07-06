@@ -121,6 +121,7 @@ fn ty_check_expr(
         ExprKind::Array(elems) => ty_check_array(gl_ctx, kind_ctx, ty_ctx, exec, elems)?,
         ExprKind::Tuple(elems) => ty_check_tuple(gl_ctx, kind_ctx, ty_ctx, exec, elems)?,
         ExprKind::TupleView(elems) => ty_check_tuple_view(gl_ctx, kind_ctx, ty_ctx, exec, elems)?,
+        ExprKind::Proj(e, i) => ty_check_proj(gl_ctx, kind_ctx, ty_ctx, exec, e, *i)?,
         ExprKind::App(ef, k_args, args) => {
             ty_check_app(gl_ctx, kind_ctx, ty_ctx, exec, ef, k_args, args)?
         }
@@ -722,6 +723,46 @@ fn ty_check_tuple(
         })
         .collect();
     Ok((tmp_ty_ctx, Ty::Data(DataTy::Tuple(elem_tys?))))
+}
+
+fn ty_check_proj(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    e: &mut Expr,
+    i: usize,
+) -> Result<(TyCtx, Ty), String> {
+    if let ExprKind::PlaceExpr(_) = e.expr {
+        panic!("Place expression should have been typechecked by a different rule.")
+    }
+
+    let tuple_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
+    let elem_ty = match e.ty.as_ref().unwrap() {
+        Ty::Data(DataTy::Tuple(dtys)) => match dtys.get(i) {
+            Some(dty) => Ty::Data(dty.clone()),
+            None => {
+                return Err(format!(
+                    "Cannot project element `{}` from tuple with {} elements.",
+                    i,
+                    dtys.len()
+                ))
+            }
+        },
+        Ty::View(ViewTy::Tuple(tys)) => match tys.get(i) {
+            Some(ty) => ty.clone(),
+            None => {
+                return Err(format!(
+                    "Cannot project element `{}` from tuple with {} elements.",
+                    i,
+                    tys.len()
+                ))
+            }
+        },
+        _ => return Err("Cannot project from non tuple type.".to_string()),
+    };
+
+    Ok((tuple_ty_ctx, elem_ty))
 }
 
 fn ty_check_tuple_view(

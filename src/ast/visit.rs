@@ -238,6 +238,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Tuple(elems) => {
             walk_list!(visitor, visit_expr, elems);
         }
+        ExprKind::Proj(e, _) => visitor.visit_expr(e),
         ExprKind::For(ident, coll, body) => {
             visitor.visit_ident(ident);
             visitor.visit_expr(coll);
