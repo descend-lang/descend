@@ -63,6 +63,20 @@ fn vector_add() -> std::io::Result<()> {
     }
 }
 
+#[test]
+fn bfs() -> std::io::Result<()> {
+    let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs.desc")?).to_string();
+    let res = descend::parser::parse_global_fun_def(&bfs).unwrap();
+    let mut compil_unit = vec![res];
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+
 /*
 #[test]
 #[rustfmt::skip]
