@@ -151,9 +151,7 @@ fn ty_check_expr(
         ExprKind::For(ident, set, body) => {
             ty_check_for(gl_ctx, kind_ctx, ty_ctx, exec, ident, set, body)?
         }
-        ExprKind::While(cond, body) => {
-            ty_check_while(gl_ctx, kind_ctx, ty_ctx, exec, cond, body)?
-        }
+        ExprKind::While(cond, body) => ty_check_while(gl_ctx, kind_ctx, ty_ctx, exec, cond, body)?,
         ExprKind::Lambda(params, exec, ret_ty, body) => {
             ty_check_lambda(gl_ctx, kind_ctx, ty_ctx, *exec, params, ret_ty, body)?
         }
@@ -207,7 +205,7 @@ fn ty_check_while(
     ty_ctx: TyCtx,
     exec: Exec,
     cond: &mut Expr,
-    body: &mut Expr
+    body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let cond_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, cond)?;
     let body_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, cond_ty_ctx, exec, body)?;
@@ -222,7 +220,7 @@ fn ty_check_while(
     }
 
     let cond_ty = cond.ty.as_ref().unwrap();
-    let body_ty = cond.ty.as_ref().unwrap();
+    let body_ty = body.ty.as_ref().unwrap();
 
     if !matches!(Ty::Data(DataTy::Scalar(ScalarTy::Bool)), cond_ty) {
         return Err(format!(
@@ -236,7 +234,7 @@ fn ty_check_while(
             body_ty
         ));
     }
-    Ok((body_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit)) ))
+    Ok((body_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
 }
 
 fn ty_check_ifelse(
@@ -1226,7 +1224,7 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let mut compil_unit = crate::parser::parse_unit(dummy_fun_src).unwrap();
+        let mut compil_unit = crate::parser::parse_compil_unit(dummy_fun_src).unwrap();
         super::ty_check(&mut compil_unit)?;
         print!("{:?}", compil_unit[0]);
         Ok(())

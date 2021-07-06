@@ -8,8 +8,8 @@ use crate::ast::*;
 use peg::{error::ParseError, str::LineCol};
 pub use source::*;
 
-pub fn parse_unit(src: &str) -> Result<Vec<FunDef>, ParseError<LineCol>> {
-    descend::unit(src)
+pub fn parse_compil_unit(src: &str) -> Result<Vec<FunDef>, ParseError<LineCol>> {
+    descend::compil_unit(src)
 }
 
 pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
@@ -19,7 +19,7 @@ pub fn parse_global_fun_def(src: &str) -> Result<FunDef, ParseError<LineCol>> {
 peg::parser! {
     pub(crate) grammar descend() for str {
 
-        pub(crate) rule unit() -> Vec<FunDef>
+        pub(crate) rule compil_unit() -> Vec<FunDef>
             = _ funcs:(fun:global_fun_def() { fun }) ** _ _ {
                 funcs
             }
@@ -164,9 +164,12 @@ peg::parser! {
             {
                 Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body)))
             }
+            / "while" __ cond:expression() __ "{" _ body:expression_seq() _ "}" {
+                Expr::new(ExprKind::While(Box::new(cond), Box::new(body)))
+            }
             / "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
-              "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
-              "{" _ body_expr:expression_seq() _"}" {
+            "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
+            "{" _ body_expr:expression_seq() _"}" {
                 Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
             }
             // Parentheses to override precedence
@@ -365,7 +368,7 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
                 / "f32" / "i32" / "bool" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "in" / "across" / "fn" / "Grid"
+                / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "while" / "in" / "across" / "fn" / "Grid"
                 / "Block" / "Thread" / "with" / "do")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
@@ -374,7 +377,7 @@ peg::parser! {
 
         // Literal may be one of Unit, bool, i32, f32
         pub(crate) rule literal() -> Lit
-            = &"()" {
+            = "()" {
                 Lit::Unit
             }
             / l:$("true" / "false") { ?
@@ -737,6 +740,7 @@ mod tests {
 
     #[test]
     fn literal() {
+        assert_eq!(descend::literal("()"), Ok(Lit::Unit));
         assert_eq!(
             descend::literal("true"),
             Ok(Lit::Bool(true)),
@@ -1619,7 +1623,48 @@ mod tests {
     }
 
     #[test]
-    fn unit_test_one() {
+    fn while_loop() {
+        let src = r#"while 1 <= 2 { let x = 5; () }"#;
+        let result = descend::expression(src);
+        print!("{:?}", result.as_ref().unwrap());
+
+        println!();
+        assert_eq!(
+            result,
+            Ok(Expr::new(ExprKind::While(
+                Box::new(Expr::new(ExprKind::BinOp(
+                    BinOp::Le,
+                    Box::new(Expr::with_type(
+                        ExprKind::Lit(Lit::I32(1)),
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                    )),
+                    Box::new(Expr::with_type(
+                        ExprKind::Lit(Lit::I32(2)),
+                        Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                    ))
+                ))),
+                Box::new(Expr::with_type(
+                    ExprKind::Let(
+                        Mutability::Const,
+                        Ident::new("x"),
+                        Box::new(None),
+                        Box::new(Expr::with_type(
+                            ExprKind::Lit(Lit::I32(5)),
+                            Ty::Data(DataTy::Scalar(ScalarTy::I32))
+                        )),
+                        Box::new(Expr::with_type(
+                            ExprKind::Lit(Lit::Unit),
+                            Ty::Data(DataTy::Scalar(ScalarTy::Unit))
+                        ))
+                    ),
+                    Ty::Data(DataTy::Scalar(ScalarTy::Unit))
+                ))
+            )))
+        )
+    }
+
+    #[test]
+    fn compil_unit_test_one() {
         let src = r#"
         
         fn foo() -[cpu.thread]-> () {
@@ -1627,12 +1672,13 @@ mod tests {
         }
         
         "#;
-        let result = descend::unit(src).expect("Cannot parse unit with one function");
+        let result =
+            descend::compil_unit(src).expect("Cannot parse compilation unit with one function");
         assert_eq!(result.len(), 1);
     }
 
     #[test]
-    fn unit_test_multiple() {
+    fn compil_unit_test_multiple() {
         let src = r#"
         
         fn foo() -[cpu.thread]-> () {
@@ -1649,7 +1695,8 @@ mod tests {
         }
         
         "#;
-        let result = descend::unit(src).expect("Cannot parse unit with multiple functions");
+        let result = descend::compil_unit(src)
+            .expect("Cannot parse compilation unit with multiple functions");
         assert_eq!(result.len(), 3);
     }
 }

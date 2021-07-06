@@ -183,9 +183,11 @@ fn gen_stmt(
             if return_value {
                 panic!("Cannot return a value from while-loop.");
             }
-            cu::Stmt::While{
+            cu::Stmt::While {
                 cond: gen_expr(cond, parall_ctx, view_ctx),
-                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(body, false, parall_ctx, view_ctx)))),
+                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
+                    body, false, parall_ctx, view_ctx,
+                )))),
             }
         }
         For(ident, coll_expr, body) => {
@@ -1337,7 +1339,7 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let res = crate::parser::parse_unit(sclar_mult_fun).unwrap();
+        let res = crate::parser::parse_compil_unit(sclar_mult_fun).unwrap();
         print!("{}", gen_fun_def(&res[0]));
     }
 }
