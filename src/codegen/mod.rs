@@ -185,7 +185,7 @@ fn gen_stmt(
             }
             cu::Stmt::While{
                 cond: gen_expr(cond, parall_ctx, view_ctx),
-                stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx)),
+                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(body, false, parall_ctx, view_ctx)))),
             }
         }
         For(ident, coll_expr, body) => {
