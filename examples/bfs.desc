@@ -46,16 +46,15 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
         // let mut h_stop: bool @ cpu.heap = true;
         let mut d_stop: bool @ gpu.global =
             gpu_alloc::<'o, 'p, cpu.stack, cpu.heap, bool>(&'o uniq gpu, &'p shrd *h_stop);
-        // copy_to_host::<'u, l, bool>(&'u shrd d_stop, h_stop);
+        copy_to_host::<'u, l, bool>(&'u shrd d_stop, h_stop);
 
-        while *h_stop {
+        while h_stop {
 
             *h_stop = false;
-            // copy_to_gpu::<r: prv, r2: prv, r3: prv, t: ty>(&r uniq cpu.stack Gpu, & r2 uniq gpu.global t, & r3 shrd cpu.heap t): 
-            copy_to_gpu::<'prov, 't, 'q, bool>(gpu, &'t uniq h_stop, d_stop); //c_to_gpu does not exist yet
+            copy_to_gpu::<'t, 'q, bool>(&'t uniq h_stop, &'q shrd d_stop); // missing prov
 
             //kernel 1
-            exec::< 64 , 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]] >(
+            exec::< 64 , 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
                 &'h uniq gpu,
                 grouped_nodes_changes,
                 | grid: Grid<Block<Thread, 1024>, 64>,
