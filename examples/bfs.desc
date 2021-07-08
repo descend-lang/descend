@@ -114,11 +114,28 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             let grouped_nodes_changes: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
                 group::<1024, n, <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
             //kernel 2 
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+            // &'o uniq cpu.stack 
+            // &'o uniq 
+>>>>>>> further bugfixes
+            exec::<64, 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
+                &'h uniq gpu,
+                grouped_nodes_changes,
+                | grid: Grid<Block<Thread, 1024>, 64>,
+<<<<<<< HEAD
+                  input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
+=======
+                    input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
+=======
             exec::<64, 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
                 &'h uniq gpu,
                 grouped_nodes_changes,
                 | grid: Grid<Block<Thread, 1024>, 64>,
                   input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
+>>>>>>> c0ab5a1 (further bugfixes)
+>>>>>>> further bugfixes
                 | -[gpu.grid]-> () {
 
                         for grid with input do
