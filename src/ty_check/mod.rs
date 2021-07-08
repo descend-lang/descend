@@ -977,7 +977,10 @@ fn ty_check_borrow(
     let prv_val_name = match prv {
         Provenance::Value(prv_val_name) => prv_val_name,
         Provenance::Ident(_) => {
-            return Err("Cannot borrow using a provenance variable.".to_string())
+            // return Err("Cannot borrow using a provenance variable.".to_string())
+            return Err(
+                format!("Cannot borrow using a provenance variable {:?}.", prv)
+            )
         }
     };
 
