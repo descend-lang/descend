@@ -8,6 +8,7 @@ pub static GPU_ALLOC: &str = "gpu_alloc";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
 pub static SHARED_ALLOC: &str = "shared_alloc";
+pub static COPY_TO_GPU: &str = "copy_to_gpu";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -27,6 +28,7 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (COPY_TO_HOST, copy_to_host_ty()),
         (EXEC, exec_ty()),
         (SHARED_ALLOC, shared_alloc_ty()),
+        (COPY_TO_GPU, copy_to_gpu_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -177,6 +179,57 @@ fn copy_to_host_ty() -> Ty {
             Ty::Data(DataTy::Ref(
                 Provenance::Ident(r2),
                 Ownership::Uniq,
+                Memory::CpuHeap,
+                Box::new(DataTy::Ident(t)),
+            )),
+        ],
+        Exec::CpuThread,
+        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
+    )
+}
+
+// copy_to_gpu:
+//  <r1: prv, r2: prv, r3: prv, t: ty>(&r1 uniq cpu.stack Gpu, & r2 uniq gpu.global t,
+//      & r3 shrd cpu.heap t) -[cpu.thread]-> ()
+fn copy_to_gpu_ty() -> Ty {
+    let r1 = Ident::new("r1");
+    let r2 = Ident::new("r2");
+    let r3 = Ident::new("r3");
+    let t = Ident::new("t");
+    let r1_prv = IdentKinded {
+        ident: r1.clone(),
+        kind: Kind::Provenance,
+    };
+    let r2_prv = IdentKinded {
+        ident: r2.clone(),
+        kind: Kind::Provenance,
+    };
+    let r3_prv = IdentKinded {
+        ident: r3.clone(),
+        kind: Kind::Provenance,
+    };
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+    Ty::Fn(
+        vec![r1_prv, r2_prv, r3_prv, t_ty],
+        vec![
+            Ty::Data(DataTy::Ref(
+                Provenance::Ident(r1),
+                Ownership::Uniq,
+                Memory::CpuStack,
+                Box::new(DataTy::Scalar(ScalarTy::Gpu)),
+            )),
+            Ty::Data(DataTy::Ref(
+                Provenance::Ident(r2),
+                Ownership::Uniq,
+                Memory::GpuGlobal,
+                Box::new(DataTy::Ident(t.clone())),
+            )),
+            Ty::Data(DataTy::Ref(
+                Provenance::Ident(r3),
+                Ownership::Shrd,
                 Memory::CpuHeap,
                 Box::new(DataTy::Ident(t)),
             )),
