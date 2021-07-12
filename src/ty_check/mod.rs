@@ -1316,7 +1316,6 @@ impl<'a> TyChecker<'a> {
         }
     }
 
-<<<<<<< HEAD
     fn ty_check_pl_expr_without_deref(
         &self,
         kind_ctx: &KindCtx,
@@ -1327,27 +1326,6 @@ impl<'a> TyChecker<'a> {
         // If place is an identifier referring to a globally declared function
         let (res_ty_ctx, pl_ty) = if let Ok(fun_ty) = self.gl_ctx.fun_ty_by_ident(&place.ident) {
             (ty_ctx, fun_ty.clone())
-=======
-fn ty_check_pl_expr_without_deref(
-    gl_ctx: &GlobalCtx,
-    kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
-    pl_expr: &PlaceExpr,
-) -> Result<(TyCtx, Ty), String> {
-    let place = pl_expr.to_place().unwrap();
-    // If place is an identifier referring to a globally declared function
-    let (res_ty_ctx, pl_ty) = if let Ok(fun_ty) = gl_ctx.fun_ty_by_name(&place.ident.name) {
-        (ty_ctx, fun_ty.clone())
-    } else {
-        // If place is NOT referring to a globally declared function
-        let pl_ty = ty_ctx.place_ty(&place)?;
-        if !pl_ty.is_fully_alive() {
-            return Err(format!("!Part of Place {:?} was moved before.", pl_expr));
-        }
-        let res_ty_ctx = if pl_ty.copyable() {
-            borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
-            ty_ctx
->>>>>>> 471c3ce (debugging test)
         } else {
             // If place is NOT referring to a globally declared function
             let pl_ty = ty_ctx
