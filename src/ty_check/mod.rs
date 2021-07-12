@@ -208,6 +208,7 @@ fn ty_check_while(
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
     let cond_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, cond)?;
+    // TODO cond has to be bool (check)
     let body_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, cond_ty_ctx, exec, body)?;
 
     let cond_temp_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, body_ty_ctx.clone(), exec, cond)?;
@@ -950,7 +951,7 @@ fn ty_check_pl_expr_without_deref(
         // If place is NOT referring to a globally declared function
         let pl_ty = ty_ctx.place_ty(&place)?;
         if !pl_ty.is_fully_alive() {
-            return Err(format!("Part of Place {:?} was moved before.", pl_expr));
+            return Err(format!("!Part of Place {:?} was moved before.", pl_expr));
         }
         let res_ty_ctx = if pl_ty.copyable() {
             borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
