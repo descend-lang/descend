@@ -26,6 +26,7 @@ pub(super) enum Stmt {
     VarDecl {
         name: String,
         ty: Ty,
+        addr_space: Option<GpuAddrSpace>,
         expr: Option<Expr>,
     },
     Block(Box<Stmt>),
@@ -90,6 +91,9 @@ pub(super) enum Expr {
     Proj {
         tuple: Box<Expr>,
         n: usize,
+    },
+    InitializerList {
+        elems: Vec<Expr>,
     },
     Ref(Box<Expr>),
     Deref(Box<Expr>),
@@ -161,6 +165,7 @@ pub(super) enum Ty {
     Scalar(ScalarTy),
     Tuple(Vec<Ty>),
     Array(Box<Ty>, Nat),
+    CArray(Box<Ty>, Nat),
     Buffer(Box<Ty>, BufferKind),
     // for now assume every pointer to be __restrict__ qualified
     // http://www.open-std.org/JTC1/SC22/WG14/www/docs/n1256.pdf#page=122&zoom=auto,-205,535
@@ -177,8 +182,6 @@ pub(super) enum Ty {
     Const(Box<Ty>),
     // Template parameter identifer
     Ident(String),
-    // TODO generalise to TemplateInstance
-    GridConfig(Nat, Nat),
 }
 
 // TODO this is not really a Cuda type and should maybe be represented by a generic type construct

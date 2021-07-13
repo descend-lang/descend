@@ -167,11 +167,12 @@ fn gpu_alloc_ty() -> Ty {
 }
 
 // copy_to_host:
-//   <r1: prv, r2: prv, t: ty>(&r1 shrd gpu.global ty, &r2 uniq cpu.heap ty)
+//   <r1: prv, r2: prv, m: mem, t: ty>(&r1 shrd gpu.global ty, &r2 uniq m ty)
 //      -[cpu.thread]-> ()
 fn copy_to_host_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
+    let m = Ident::new("m");
     let t = Ident::new("t");
     let r1_prv = IdentKinded {
         ident: r1.clone(),
@@ -181,12 +182,16 @@ fn copy_to_host_ty() -> Ty {
         ident: r2.clone(),
         kind: Kind::Provenance,
     };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
     let t_ty = IdentKinded {
         ident: t.clone(),
         kind: Kind::Ty,
     };
     Ty::Fn(
-        vec![r1_prv, r2_prv, t_ty],
+        vec![r1_prv, r2_prv, m_mem, t_ty],
         vec![
             Ty::Data(DataTy::Ref(
                 Provenance::Ident(r1),
@@ -197,7 +202,7 @@ fn copy_to_host_ty() -> Ty {
             Ty::Data(DataTy::Ref(
                 Provenance::Ident(r2),
                 Ownership::Uniq,
-                Memory::CpuHeap,
+                Memory::Ident(m),
                 Box::new(DataTy::Ident(t)),
             )),
         ],

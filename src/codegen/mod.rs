@@ -3,6 +3,7 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::{Ident, Mutability, PlaceExpr};
+use crate::codegen::ViewExpr::ToView;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -83,20 +84,42 @@ fn gen_stmt(
                     )
                 }
                 gen_stmt(e2, return_value, parall_ctx, view_ctx)
+            } else if let desc::Ty::Data(desc::DataTy::At(dty, desc::Memory::GpuShared)) =
+                e1.ty.as_ref().unwrap()
+            {
+                let cu_ty = if let desc::DataTy::Array(elem_dty, n) = dty.as_ref() {
+                    cu::Ty::CArray(
+                        Box::new(
+                            gen_ty(&desc::Ty::Data(elem_dty.as_ref().clone()), *mutbl).unwrap(),
+                        ),
+                        n.clone(),
+                    )
+                } else {
+                    gen_ty(&desc::Ty::Data(dty.as_ref().clone()), *mutbl).unwrap()
+                };
+                let var = cu::Stmt::VarDecl {
+                    name: ident.name.clone(),
+                    ty: cu_ty,
+                    addr_space: Some(cu::GpuAddrSpace::Shared),
+                    expr: None,
+                };
+                cu::Stmt::Seq(
+                    Box::new(var),
+                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx)),
+                )
             } else if let Some(tty) = gen_ty(e1.ty.as_ref().unwrap(), *mutbl) {
                 let (init_expr, cu_ty) = match tty {
-                    // FIXME this ignores every possible assignment to a shared memory pointer
-                    cu::Ty::Ptr(_, Some(cu::GpuAddrSpace::Shared))
-                    | cu::Ty::PtrConst(_, Some(cu::GpuAddrSpace::Shared)) => (None, tty),
+                    cu::Ty::Array(_, _) => (gen_expr(e1, parall_ctx, view_ctx), tty),
                     _ => (
-                        Some(gen_expr(e1, parall_ctx, view_ctx)),
+                        gen_expr(e1, parall_ctx, view_ctx),
                         cu::Ty::Scalar(cu::ScalarTy::Auto),
                     ),
                 };
                 let var = cu::Stmt::VarDecl {
                     name: ident.name.clone(),
                     ty: cu_ty,
-                    expr: init_expr,
+                    addr_space: None,
+                    expr: Some(init_expr),
                 };
                 cu::Stmt::Seq(
                     Box::new(var),
@@ -112,6 +135,7 @@ fn gen_stmt(
                     Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
                         ty: tty,
+                        addr_space: None,
                         expr: None,
                     }),
                     Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx)),
@@ -144,6 +168,7 @@ fn gen_stmt(
                     let init_decl = cu::Stmt::VarDecl {
                         name: ident.name.clone(),
                         ty: cu::Ty::Scalar(cu::ScalarTy::I32),
+                        addr_space: None,
                         expr: Some(cu::Expr::Nat(input[0].clone())),
                     };
                     let (cond, iter) = match r_name.name.as_str() {
@@ -198,6 +223,7 @@ fn gen_stmt(
             let i_decl = cu::Stmt::VarDecl {
                 name: i_name.clone(),
                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+                addr_space: None,
                 expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
             };
             let i = cu::Expr::Ident(i_name);
@@ -328,7 +354,7 @@ fn gen_par_for(
         ),
         desc::Ty::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => (
             desc::Nat::BinOp(
-                desc::BinOpNat::Div,
+                desc::BinOpNat::Mod,
                 Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
                 Box::new(desc::Nat::Lit(32)),
             ),
@@ -465,14 +491,20 @@ fn gen_expr(
                 .collect::<Vec<_>>(),
         },
         IfElse(cond, e_tt, e_ff) => unimplemented!(),
-        Array(elems) => cu::Expr::FunCall {
-            fun: Box::new(cu::Expr::Ident("descend::create_array".to_string())),
-            template_args: vec![],
-            args: elems
+        Array(elems) => cu::Expr::InitializerList {
+            elems: elems
                 .iter()
                 .map(|e| gen_expr(e, parall_ctx, view_ctx))
-                .collect::<Vec<_>>(),
+                .collect(),
         },
+        // cu::Expr::FunCall {
+        //     fun: Box::new(cu::Expr::Ident("descend::create_array".to_string())),
+        //     template_args: vec![],
+        //     args: elems
+        //         .iter()
+        //         .map(|e| gen_expr(e, parall_ctx, view_ctx))
+        //         .collect::<Vec<_>>(),
+        // },
         Tuple(elems) => cu::Expr::Tuple(
             elems
                 .iter()
@@ -629,10 +661,7 @@ fn gen_view(view_expr: &ViewExpr, mut path: Vec<desc::Nat>) -> cu::Expr {
             )
         }
         (ViewExpr::Tuple { views }, [path @ .., prj]) => match prj.eval() {
-            Ok(i) => match &views[i] {
-                ViewOrExpr::V(v) => gen_view(v, path.to_vec()),
-                ViewOrExpr::E(e) => gen_expr(e, &mut HashMap::new(), &mut HashMap::new()),
-            },
+            Ok(i) => gen_view(&views[i], path.to_vec()),
             Err(e) => panic!(e),
         },
         (ViewExpr::Idx { idx, view }, _) => {
@@ -1011,12 +1040,6 @@ fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
-enum ViewOrExpr {
-    V(ViewExpr),
-    E(desc::Expr),
-}
-
 // Views are parsed as normal predeclared functions so that it is possible to infer types.
 // During code generation view function applications are converted to View Variants and used
 // to generate Indices.
@@ -1026,7 +1049,7 @@ enum ViewExpr {
         ref_expr: Box<desc::Expr>,
     },
     Tuple {
-        views: Vec<ViewOrExpr>,
+        views: Vec<ViewExpr>,
     },
     Idx {
         idx: desc::Nat,
@@ -1144,8 +1167,10 @@ impl ViewExpr {
             views: elems
                 .iter()
                 .map(|e| match e.ty.as_ref().unwrap() {
-                    desc::Ty::View(_) => ViewOrExpr::V(ViewExpr::create_from(e, view_ctx)),
-                    _ => ViewOrExpr::E(e.clone()),
+                    desc::Ty::View(_) => ViewExpr::create_from(e, view_ctx),
+                    _ => ViewExpr::ToView {
+                        ref_expr: Box::new(e.clone()),
+                    },
                 })
                 .collect(),
         }
@@ -1255,7 +1280,7 @@ impl ViewExpr {
                     pl_expr.expr = desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(
                         desc::Ident::new(&new_name),
                     ));
-                    *count = *count + 1;
+                    *count += 1;
                     vec
                 }
                 ViewExpr::Group { view, .. } => collect_and_rename_pl_exprs_rec(view, count, vec),
@@ -1264,6 +1289,13 @@ impl ViewExpr {
                     collect_and_rename_pl_exprs_rec(view, count, vec)
                 }
                 ViewExpr::Zip { views, .. } => {
+                    let mut renamed = vec;
+                    for v in views {
+                        renamed = collect_and_rename_pl_exprs_rec(v, count, renamed);
+                    }
+                    renamed
+                }
+                ViewExpr::Tuple { views: views } => {
                     let mut renamed = vec;
                     for v in views {
                         renamed = collect_and_rename_pl_exprs_rec(v, count, renamed);
@@ -1287,15 +1319,6 @@ fn replace_arg_kinded_idents(fun_def: &desc::FunDef) -> desc::FunDef {
         kinds: HashMap<String, Kind>,
     };
     impl Visitor for ReplaceArgKindedIdents {
-        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
-            self.kinds = fun_def
-                .generic_params
-                .iter()
-                .map(|desc::IdentKinded { ident, kind }| (ident.name.clone(), kind.clone()))
-                .collect();
-            visit::walk_fun_def(self, fun_def)
-        }
-
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
                 ExprKind::LetProv(prvs, body) => {
@@ -1335,6 +1358,15 @@ fn replace_arg_kinded_idents(fun_def: &desc::FunDef) -> desc::FunDef {
                 }
                 _ => visit::walk_expr(self, expr),
             }
+        }
+
+        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
+            self.kinds = fun_def
+                .generic_params
+                .iter()
+                .map(|desc::IdentKinded { ident, kind }| (ident.name.clone(), kind.clone()))
+                .collect();
+            visit::walk_fun_def(self, fun_def)
         }
     }
     let mut replace = ReplaceArgKindedIdents {

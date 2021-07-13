@@ -8,8 +8,7 @@ use descend::ty_check;
 fn warp_reduce() -> std::io::Result<()> {
     let warp_reduce =
         String::from_utf8_lossy(&std::fs::read("examples/warp_reduce.desc")?).to_string();
-    let res = descend::parser::parse_global_fun_def(&warp_reduce).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_compil_unit(&warp_reduce).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -23,8 +22,7 @@ fn warp_reduce() -> std::io::Result<()> {
 fn reduce_shared_mem() -> std::io::Result<()> {
     let reduce_shared =
         String::from_utf8_lossy(&std::fs::read("examples/shared_mem_red.desc")?).to_string();
-    let res = descend::parser::parse_global_fun_def(&reduce_shared).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_compil_unit(&reduce_shared).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -38,8 +36,7 @@ fn reduce_shared_mem() -> std::io::Result<()> {
 fn tree_reduce() -> std::io::Result<()> {
     let tree_reduce =
         String::from_utf8_lossy(&std::fs::read("examples/tree_reduce.desc")?).to_string();
-    let res = descend::parser::parse_global_fun_def(&tree_reduce).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_compil_unit(&tree_reduce).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -52,8 +49,7 @@ fn tree_reduce() -> std::io::Result<()> {
 #[test]
 fn vector_add() -> std::io::Result<()> {
     let vec_add = String::from_utf8_lossy(&std::fs::read("examples/vec_add.desc")?).to_string();
-    let res = descend::parser::parse_global_fun_def(&vec_add).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_compil_unit(&vec_add).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
@@ -66,8 +62,7 @@ fn vector_add() -> std::io::Result<()> {
 #[test]
 fn bfs() -> std::io::Result<()> {
     let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs.desc")?).to_string();
-    let res = descend::parser::parse_global_fun_def(&bfs).unwrap();
-    let mut compil_unit = vec![res];
+    let mut compil_unit = descend::parser::parse_compil_unit(&bfs).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {

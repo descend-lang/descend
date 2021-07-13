@@ -58,12 +58,23 @@ impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Stmt::*;
         match self {
-            VarDecl { name, ty, expr } => {
+            VarDecl {
+                name,
+                ty,
+                addr_space,
+                expr,
+            } => {
                 //  if let Ty::Const(_) = ty {
                 //      write!(f, "const ")?
                 //  }
                 //  write!(f, "auto {}", name)?;
+                if let Some(addrs) = addr_space {
+                    write!(f, "{} ", addrs)?;
+                }
                 write!(f, "{} {}", ty, name)?;
+                if let Ty::CArray(_, n) = ty {
+                    write!(f, "[{}]", n)?;
+                }
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
                 }
@@ -91,10 +102,7 @@ impl std::fmt::Display for Stmt {
                 write!(f, "if ({}) ", cond)?;
                 write!(f, "{} else {}", true_body, false_body)
             }
-            While {
-                cond,
-                stmt,
-            } => {
+            While { cond, stmt } => {
                 writeln!(f, "while ({})", cond)?;
                 write!(f, "{}", stmt)
             }
@@ -158,6 +166,11 @@ impl std::fmt::Display for Expr {
             BinOp { op, lhs, rhs } => write!(f, "{} {} {}", lhs, op, rhs),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
             Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
+            InitializerList { elems } => {
+                write!(f, "{{")?;
+                fmt_vec(f, elems, ", ")?;
+                write!(f, "}}")
+            }
             Ref(expr) => write!(f, "&{}", expr),
             Deref(expr) => write!(f, "*{}", expr),
             Tuple(elems) => {
@@ -262,6 +275,9 @@ impl std::fmt::Display for Ty {
                 _ => write!(f, "const {}", ty),
             },
             Array(ty, size) => write!(f, "descend::array<{}, {}>", ty, size),
+            // Does not print the entire type because that would be impossible since C arrays
+            //  are declared by appending the size to a variable.
+            CArray(ty, _) => write!(f, "{}", ty),
             Tuple(tys) => {
                 write!(f, "descend::tuple<")?;
                 fmt_vec(f, tys, ", ")?;
@@ -274,7 +290,6 @@ impl std::fmt::Display for Ty {
             },
             Scalar(sty) => write!(f, "{}", sty),
             Ident(name) => write!(f, "{}", name),
-            GridConfig(nb, nt) => write!(f, "GridConfig<{}, {}>", nb, nt),
         }
     }
 }
@@ -334,6 +349,7 @@ fn test_print_program() -> std::fmt::Result {
             body: Stmt::VarDecl {
                 name: "a_f".to_string(),
                 ty: Ty::Scalar(ScalarTy::Auto),
+                addr_space: None,
                 expr: Some(Expr::Ident("a".to_string())),
             },
             is_dev_fun: true,

@@ -1,6 +1,7 @@
 fn reduce<n: nat, a: prv, b: prv>(
   ha_array: &a uniq cpu.heap [i32; n]
 ) -[cpu.thread]-> () {
+  let arr: [i32; 4] = [1, 2, 3, 4];
   letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
     let gpu: Gpu = gpu_device(0);
 
@@ -35,6 +36,6 @@ fn reduce<n: nat, a: prv, b: prv>(
       }
     );
 
-    copy_to_host::<'g, a, [i32; n]>(&'g shrd a_array, ha_array);
+    copy_to_host::<'g, a, cpu.heap, [i32; n]>(&'g shrd a_array, ha_array);
   }
 }
