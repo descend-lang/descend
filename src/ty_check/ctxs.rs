@@ -169,6 +169,7 @@ impl TyCtx {
             match &ty.ty {
                 TyKind::Ident(_)
                 | TyKind::Fn(_, _, _, _)
+                | TyKind::Data(d::Atomic(_))
                 | TyKind::Data(d::Scalar(_))
                 | TyKind::Data(d::Array(_, _))
                 | TyKind::Data(d::At(_, _))

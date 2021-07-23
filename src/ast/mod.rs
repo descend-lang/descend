@@ -906,7 +906,7 @@ impl DataTy {
     pub fn is_fully_alive(&self) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | Ref(_, _, _, _) | At(_, _) | Array(_, _) => true,
+            Scalar(_) | Atomic(_) | Ident(_) | Ref(_, _, _, _) | At(_, _) | Array(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -917,7 +917,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | Dead(_) => false,
+            Scalar(_) | Atomic(_) | Ident(_) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
