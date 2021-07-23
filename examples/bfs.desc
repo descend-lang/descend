@@ -32,8 +32,21 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
         while *h_stop {
 
             *h_stop = false;
+
             // copy_to_gpu::<r: prv, r2: prv, r3: prv, t: ty>(&r uniq cpu.stack Gpu, & r2 uniq gpu.global t, & r3 shrd cpu.heap t): 
             copy_to_gpu::<'m, 't, 'q, bool>(&'m uniq gpu, &'t uniq d_stop, &'q shrd *h_stop); 
+
+            let nodes_view: [[ &'r shrd gpu.global (i32, i32); n]] =
+                to_view::<'r, gpu.global, n, (i32, i32)>(&'r shrd nodes);
+
+            let view_changes: [[ &'i uniq gpu.global (bool, bool, bool, i32); n]] =
+                to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
+
+            let zipped_nodes_changes: [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
+                zip::<n, &'r shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view, view_changes);
+        
+            let grouped_nodes_changes: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
+                group::<1024, n, <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
 
             //kernel 1
             exec::< 64 , 1024, 'j, cpu.stack,  [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]] >(
