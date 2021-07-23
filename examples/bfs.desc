@@ -14,34 +14,8 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
         let edges: [i32; m] @ gpu.global =
             gpu_alloc::<'e, 'f, cpu.stack, cpu.heap, [i32; m]>(&'e uniq gpu, &'f shrd *h_edges);
 
-        let nodes_view: [[ &'r shrd gpu.global (i32, i32); n]] =
-            to_view::<'r, gpu.global, n, (i32, i32)>(&'r shrd nodes);
-
-        // let edges_view: [[ &'s shrd gpu.global i32; m ]] =
-        //     to_view::<'s, gpu.global, m, i32>(&'s shrd edges);
-
-        // TODO this array is now handed to the function...
-        // (mask, updating mask, visited, cost)
-        // let mut h_changes: [(bool, bool, bool, i32); n] @ cpu.heap = [(false, false, false, -1)]; 
-        // node 0 is root
-        // h_changes[0].0 = true;
-        // h_changes[0].2 = true;
-        // h_changes[0].3 = 0;
-
         let mut d_changes: [(bool, bool, bool, i32); n] @ gpu.global = 
             gpu_alloc::<'g, 'h, cpu.stack, cpu.heap, [(bool, bool, bool, i32); n]>(&'g uniq gpu, &'h shrd *h_changes);
-
-        let view_changes: [[ &'i uniq gpu.global (bool, bool, bool, i32); n]] =
-            to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
-        
-        let zipped_nodes_changes: [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
-            zip::<n, &'r shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view, view_changes);
-
-
-        
-        let grouped_nodes_changes: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
-            group::<1024, n, <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
-
 
         // let mut h_stop: bool @ cpu.heap = true;
         let mut d_stop: bool @ gpu.global =
@@ -51,8 +25,21 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
         while *h_stop {
 
             *h_stop = false;
+
             // copy_to_gpu::<r: prv, r2: prv, r3: prv, t: ty>(&r uniq cpu.stack Gpu, & r2 uniq gpu.global t, & r3 shrd cpu.heap t): 
             copy_to_gpu::<'m, 't, 'q, bool>(&'m uniq gpu, &'t uniq d_stop, &'q shrd *h_stop); 
+
+            let nodes_view: [[ &'r shrd gpu.global (i32, i32); n]] =
+                to_view::<'r, gpu.global, n, (i32, i32)>(&'r shrd nodes);
+
+            let view_changes: [[ &'i uniq gpu.global (bool, bool, bool, i32); n]] =
+                to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
+
+            let zipped_nodes_changes: [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
+                zip::<n, &'r shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view, view_changes);
+        
+            let grouped_nodes_changes: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
+                group::<1024, n, <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
 
             //kernel 1
             // &'n uniq cpu.stack
@@ -108,53 +95,67 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                 }
             );
 
-        //kernel 2 
-        // &'o uniq cpu.stack 
-        // &'o uniq 
-        exec::<64, 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
-            &'j uniq gpu,
-            grouped_nodes_changes,
-            | grid: Grid<Block<Thread, 1024>, 64>,
-                input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
-            | -[gpu.grid]-> () {
 
-                    for grid with input do
-                    | block: Block<Thread, 1024>,
-                        ib: [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]] 
-                    | -[gpu.block]-> () {
+            let nodes_view: [[ &'r shrd gpu.global (i32, i32); n]] =
+                to_view::<'r, gpu.global, n, (i32, i32)>(&'r shrd nodes);
 
-                        for block with ib do 
-                            | thread: Thread,
-                                inp: <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) > 
-                            | -[gpu.thread]-> () {
-                                // smth for testing
-                                let other_temp = *inp.0;
-                                let y = other_temp.0;
-                                ()
+            let view_changes: [[ &'i uniq gpu.global (bool, bool, bool, i32); n]] =
+                to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
 
-                                // can I access d_stop?
-
-                                //updating mask
-                                // if *inp.1.1 {
-                                //     *inp.1.0 = true; // mask
-                                //     *inp.1.2 = true; // visited
-                                //     d_stop = true; //  does not work probably // TODO atomic set 
-                                //     // new type Atomic<bool>
-                                //     *inp.1.1 = false; //updating mask
-                                // } else {
-                                //     ()
-                                // }
+            let zipped_nodes_changes: [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
+                zip::<n, &'r shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view, view_changes);
+        
+            let grouped_nodes_changes: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
+                group::<1024, n, <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
 
 
-                                };
+            //kernel 2 
+            // &'o uniq cpu.stack 
+            // &'o uniq 
+            exec::<64, 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
+                &'j uniq gpu,
+                grouped_nodes_changes,
+                | grid: Grid<Block<Thread, 1024>, 64>,
+                    input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
+                | -[gpu.grid]-> () {
 
-                        };
+                        for grid with input do
+                        | block: Block<Thread, 1024>,
+                            ib: [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]] 
+                        | -[gpu.block]-> () {
 
-                }
-            );
+                            for block with ib do 
+                                | thread: Thread,
+                                    inp: <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) > 
+                                | -[gpu.thread]-> () {
+                                    // smth for testing
+                                    let other_temp = *inp.0;
+                                    let y = other_temp.0;
+                                    ()
 
-            
-        copy_to_host::<'u, l, bool>(&'u shrd d_stop, h_stop);
+                                    // can I access d_stop?
+
+                                    //updating mask
+                                    // if *inp.1.1 {
+                                    //     *inp.1.0 = true; // mask
+                                    //     *inp.1.2 = true; // visited
+                                    //     d_stop = true; //  does not work probably // TODO atomic set 
+                                    //     // new type Atomic<bool>
+                                    //     *inp.1.1 = false; //updating mask
+                                    // } else {
+                                    //     ()
+                                    // }
+
+
+                                    };
+
+                            };
+
+                    }
+                );
+
+                
+            copy_to_host::<'u, l, bool>(&'u shrd d_stop, h_stop);
 
         }
 
