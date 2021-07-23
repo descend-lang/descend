@@ -167,17 +167,18 @@ impl TyCtx {
             use DataTy as d;
             use ViewTy as v;
 
-            match &ty.ty {
-                TyKind::Ident(_)
-                | TyKind::Fn(_, _, _, _)
-                | TyKind::Data(d::Scalar(_))
-                | TyKind::Data(d::Array(_, _))
-                | TyKind::Data(d::At(_, _))
-                | TyKind::Data(d::Ref(_, _, _, _))
-                | TyKind::Data(d::Ident(_))
-                | TyKind::Data(d::Grid(_, _))
-                | TyKind::Data(d::Block(_, _))
-                | TyKind::Data(d::Dead(_))
+            match &ty {
+                Ty::Ident(_)
+                | Ty::Fn(_, _, _, _)
+                | Ty::Data(d::Atomic(_))
+                | Ty::Data(d::Scalar(_))
+                | Ty::Data(d::Array(_, _))
+                | Ty::Data(d::At(_, _))
+                | Ty::Data(d::Ref(_, _, _, _))
+                | Ty::Data(d::Ident(_))
+                | Ty::Data(d::Grid(_, _))
+                | Ty::Data(d::Block(_, _))
+                | Ty::Data(d::Dead(_))
 //                | Ty::View(v::Ident(_))
                 | TyKind::View(v::Array(_, _))
                 | TyKind::View(v::Dead(_)) => vec![(pl, ty.clone())],
