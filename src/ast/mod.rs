@@ -1,4 +1,4 @@
-pub mod internal;
+4pub mod internal;
 
 mod span;
 #[macro_use]
@@ -873,6 +873,7 @@ impl fmt::Display for ViewTy {
 pub enum DataTy {
     Ident(Ident),
     Scalar(ScalarTy),
+    Atomic(ScalarTy),
     Array(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
@@ -887,6 +888,7 @@ impl DataTy {
 
         match self {
             Scalar(_) => false,
+            Atomic(_) => false,
             Ident(_) => true,
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
@@ -937,6 +939,7 @@ impl DataTy {
         use DataTy::*;
         match self {
             Scalar(_) => self.clone(),
+            Atomic(_) => self.clone(),
             Ident(id) => {
                 if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
                     match with {
