@@ -796,6 +796,7 @@ impl fmt::Display for ViewTy {
 pub enum DataTy {
     Ident(Ident),
     Scalar(ScalarTy),
+    Atomic(ScalarTy),
     Array(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
@@ -812,6 +813,7 @@ impl DataTy {
 
         match self {
             Scalar(_) => false,
+            Atomic(_) => false,
             Ident(_) => true,
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
@@ -832,6 +834,7 @@ impl DataTy {
         use DataTy::*;
         match self {
             Scalar(_)
+            | Atomic(_)
             | Ident(_)
             | Ref(_, _, _, _)
             | At(_, _)
@@ -848,7 +851,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | Grid(_, _) | Block(_, _) | Dead(_) => false,
+            Scalar(_) | Atomic(_) | Ident(_) | Grid(_, _) | Block(_, _) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -870,6 +873,7 @@ impl DataTy {
         use DataTy::*;
         match self {
             Scalar(_) => self.clone(),
+            Atomic(_) => self.clone(),
             Ident(id) => {
                 if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
                     match with {

@@ -178,6 +178,7 @@ impl TyCtx {
             match &ty {
                 Ty::Ident(_)
                 | Ty::Fn(_, _, _, _)
+                | Ty::Data(d::Atomic(_))
                 | Ty::Data(d::Scalar(_))
                 | Ty::Data(d::Array(_, _))
                 | Ty::Data(d::At(_, _))
