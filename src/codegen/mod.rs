@@ -788,7 +788,8 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
     let cu_ty = match ty {
         Ident(ident) => Some(cu::Ty::Ident(ident.name.clone())),
         Fn(_, _, _, _) => unimplemented!("needed?"),
-        Data(d::Scalar(s)) => Some(match s {
+        Data(d::Scalar(s)) 
+        | Data(d::Atomic(s)) => Some(match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
