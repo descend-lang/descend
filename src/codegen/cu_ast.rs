@@ -159,6 +159,7 @@ pub(super) enum GpuAddrSpace {
 #[derive(Clone, Debug)]
 pub(super) enum Ty {
     Scalar(ScalarTy),
+    Atomic(ScalarTy),
     Tuple(Vec<Ty>),
     Array(Box<Ty>, Nat),
     Buffer(Box<Ty>, BufferKind),

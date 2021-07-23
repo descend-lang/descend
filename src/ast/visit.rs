@@ -103,6 +103,7 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
     match dty {
         DataTy::Ident(ident) => visitor.visit_ident(ident),
         DataTy::Scalar(sty) => visitor.visit_scalar_ty(sty),
+        DataTy::Atomic(aty) => visitor.visit_scalar_ty(aty),
         DataTy::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTy::Array(dty, n) => {
             visitor.visit_dty(dty);
