@@ -8,7 +8,6 @@ use crate::ast::internal::{IdentTyped, Loan, PrvMapping};
 use crate::ast::DataTy::Scalar;
 use crate::ast::*;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
-use std::collections::HashMap;
 use std::ops::Deref;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -52,7 +51,7 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> Result<(), St
     // Build frame typing for this function
     let glf_frame = internal::append_idents_typed(
         &vec![],
-        gf.params
+        gf.param_decls
             .iter()
             .map(|ParamDecl { ident, ty, .. }| IdentTyped {
                 ident: ident.clone(),
@@ -160,6 +159,11 @@ fn ty_check_expr(
         }
         ExprKind::UnOp(un_op, e) => ty_check_unary_op(gl_ctx, kind_ctx, ty_ctx, exec, un_op, e)?,
         ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
+        ExprKind::Idx(e, i) => unimplemented!(),
+        ExprKind::Deref(_) => panic!(
+            "Dereferencing a non place expression is not a valid Descend \
+        program and only exists for codegen."
+        ),
     };
 
     // TODO type well formed under output contexts
@@ -300,12 +304,19 @@ fn ty_check_par_for(
                     }
                 };
                 if fun_parall_elem_ty != &Ty::Data(parall_elem_dty.clone()) {
-                    return Err(
-                        "Function does not fit the provided parallel collection.".to_string()
-                    );
+                    return Err(format!(
+                        "Function does not fit the provided parallel collection. \
+                        Expected: {:?}, but found: {:?}",
+                        &Ty::Data(parall_elem_dty.clone()),
+                        fun_parall_elem_ty
+                    ));
                 }
                 if fun_input_elem_tys != in_elem_tys {
-                    return Err("Function does not fit the provided input.".to_string());
+                    return Err(format!(
+                        "Function does not fit the provided input. \
+                        Expected: {:?}, but found: {:?}",
+                        in_elem_tys, fun_input_elem_tys
+                    ));
                 }
                 let exec = match parall_elem_dty {
                     DataTy::Block(_, _) => Exec::GpuBlock,
@@ -980,9 +991,10 @@ fn ty_check_borrow(
         Provenance::Value(prv_val_name) => prv_val_name,
         Provenance::Ident(_) => {
             // return Err("Cannot borrow using a provenance variable.".to_string())
-            return Err(
-                format!("Cannot borrow using a provenance variable {:?}.", prv)
-            )
+            return Err(format!(
+                "Cannot borrow using a provenance variable {:?}.",
+                prv
+            ));
         }
     };
 

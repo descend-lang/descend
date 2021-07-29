@@ -1,12 +1,12 @@
 fn reduce_shared_mem<n: nat, a: prv, b: prv>(
-    ha_array: &a uniq cpu.heap [i32; n],
+    ha_array: &a shrd cpu.heap [i32; n],
     h_output: &b uniq cpu.heap [i32; 64]
 ) -[cpu.thread]-> () {
     letprov <'r, 's, 'c, 'd, 'e, 'f, 'g, 'h, 'm> {
         let gpu: Gpu = gpu_device(0);
 
         let a_array: [i32; n] @ gpu.global =
-            gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+            gpu_alloc::<'c, a, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, ha_array);
         let mut out_array: [i32; 64] @ gpu.global =
             gpu_alloc::<'c, 'm, cpu.stack, cpu.heap, [i32; 64]>(&'c uniq gpu, &'m shrd *h_output);
         let view_a: [[&'r shrd gpu.global i32; n]] =
@@ -64,6 +64,9 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
                      };
             }
         );
-        copy_to_host::<'g, a, cpu.heap, [i32; n]>(&'g shrd a_array, ha_array);
+        // Todo
+        //  There is no check for n == 64 (which is NOT the case). Therefore it is wrong to specify
+        //  [i32; n] as the array type. However, this still type checks.
+        copy_to_host::<'g, b, cpu.heap, [i32; 64]>(&'g shrd out_array, h_output);
     }
 }

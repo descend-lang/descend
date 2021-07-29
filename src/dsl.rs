@@ -57,7 +57,7 @@ pub fn fdef(
     FunDef {
         name: String::from(name),
         generic_params: generic_idents,
-        params: param_list(params),
+        param_decls: param_list(params),
         ret_dty: ret_ty.clone(),
         exec,
         prv_rels,

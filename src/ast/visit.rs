@@ -262,6 +262,11 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::TupleView(elems) => {
             walk_list!(visitor, visit_expr, elems);
         }
+        ExprKind::Idx(e, i) => {
+            visitor.visit_expr(e);
+            visitor.visit_nat(i);
+        }
+        ExprKind::Deref(expr) => visitor.visit_expr(expr),
     }
 }
 
@@ -276,7 +281,7 @@ pub fn walk_fun_def<V: Visitor>(visitor: &mut V, fun_def: &mut FunDef) {
     let FunDef {
         name: _,
         generic_params,
-        params,
+        param_decls: params,
         ret_dty,
         exec,
         prv_rels,

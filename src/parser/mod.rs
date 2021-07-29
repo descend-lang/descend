@@ -27,7 +27,7 @@ peg::parser! {
         // TODO: PreDeclaredGlobalFun missing Syntax
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
-            "(" _ params:(fun_parameter() ** (_ "," _)) _ ")" _
+            "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
             "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
             "{" _ body_expr:expression_seq() _"}" {
                 let generic_params = match generic_params {
@@ -37,7 +37,7 @@ peg::parser! {
                 FunDef {
                   name,
                   generic_params,
-                  params,
+                  param_decls,
                   ret_dty,
                   exec,
                   prv_rels: vec![], // TODO: What even is this?
@@ -1489,7 +1489,7 @@ mod tests {
 
         let intended = FunDef {
             name,
-            params,
+            param_decls: params,
             exec,
             prv_rels,
             body_expr: descend::expression_seq(body).unwrap(),

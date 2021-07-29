@@ -8,7 +8,7 @@ pub use span::*;
 use std::fmt;
 
 use descend_derive::span_derive;
-use internal::FrameExpr;
+use std::collections::HashMap;
 use std::fmt::Formatter;
 
 pub type CompilUnit = Vec<FunDef>;
@@ -17,7 +17,7 @@ pub type CompilUnit = Vec<FunDef>;
 pub struct FunDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
-    pub params: Vec<ParamDecl>,
+    pub param_decls: Vec<ParamDecl>,
     pub ret_dty: DataTy,
     pub exec: Exec,
     pub prv_rels: Vec<PrvRel>,
@@ -26,7 +26,11 @@ pub struct FunDef {
 
 impl FunDef {
     pub fn ty(&self) -> Ty {
-        let param_tys: Vec<_> = self.params.iter().map(|p_decl| p_decl.ty.clone()).collect();
+        let param_tys: Vec<_> = self
+            .param_decls
+            .iter()
+            .map(|p_decl| p_decl.ty.clone())
+            .collect();
         Ty::Fn(
             self.generic_params.clone(),
             param_tys,
@@ -75,6 +79,160 @@ impl Expr {
             ty: Some(ty),
             span: None,
         }
+    }
+
+    pub fn subst_idents(&mut self, subst_map: &HashMap<&str, &Expr>) {
+        fn pl_expr_contains_name_in<'a, I>(pl_expr: &PlaceExpr, mut idents: I) -> bool
+        where
+            I: Iterator<Item = &'a &'a str>,
+        {
+            match pl_expr {
+                PlaceExpr::Ident(ident) => idents.any(|name| ident.name == *name),
+                PlaceExpr::Proj(tuple, i) => pl_expr_contains_name_in(tuple, idents),
+                PlaceExpr::Deref(deref) => pl_expr_contains_name_in(deref, idents),
+            }
+        }
+
+        use visit::Visitor;
+        struct SubstIdents<'a> {
+            subst_map: &'a HashMap<&'a str, &'a Expr>,
+        }
+        impl Visitor for SubstIdents<'_> {
+            fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
+                if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
+                    match pl_expr {
+                        PlaceExpr::Ident(ident) => {
+                            let subst_expr =
+                                self.subst_map.get::<&str>(&ident.name.as_str()).unwrap();
+                            if let ExprKind::PlaceExpr(pl_e) = &subst_expr.expr {
+                                *pl_expr = pl_e.clone();
+                            } else {
+                                // TODO can this happen?
+                                panic!("How did this happen?")
+                            }
+                        }
+                        _ => visit::walk_pl_expr(self, pl_expr),
+                    }
+                }
+            }
+
+            fn visit_expr(&mut self, expr: &mut Expr) {
+                match &expr.expr {
+                    ExprKind::PlaceExpr(pl_expr) => {
+                        if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
+                            match pl_expr {
+                                PlaceExpr::Ident(ident) => {
+                                    if let Some(&subst_expr) =
+                                        self.subst_map.get::<&str>(&ident.name.as_str())
+                                    {
+                                        *expr = subst_expr.clone();
+                                    }
+                                }
+                                PlaceExpr::Proj(tuple, i) => {
+                                    let mut tuple_expr =
+                                        Expr::new(ExprKind::PlaceExpr(tuple.as_ref().clone()));
+                                    self.visit_expr(&mut tuple_expr);
+                                    *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), *i));
+                                }
+                                PlaceExpr::Deref(deref_expr) => {
+                                    let mut ref_expr =
+                                        Expr::new(ExprKind::PlaceExpr(deref_expr.as_ref().clone()));
+                                    self.visit_expr(&mut ref_expr);
+                                    *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
+                                }
+                            }
+                        }
+                    }
+                    _ => visit::walk_expr(self, expr),
+                }
+            }
+        }
+        let mut subst_idents = SubstIdents { subst_map };
+        subst_idents.visit_expr(self);
+    }
+
+    pub fn subst_ident(&mut self, ident: &str, subst_expr: &Expr) {
+        let mut subst_map = HashMap::with_capacity(1);
+        subst_map.insert(ident, subst_expr);
+        self.subst_idents(&subst_map);
+    }
+
+    pub fn subst_kinded_idents(&mut self, subst_map: HashMap<&str, &ArgKinded>) {
+        use visit::Visitor;
+        struct SubstKindedIdents<'a> {
+            subst_map: HashMap<&'a str, &'a ArgKinded>,
+        }
+        // FIXME currently not able to deal with identifiers for which the kind is not known,
+        //  i.e., pre codegneration, there still exist ArgKinded::Ident(_)
+        impl Visitor for SubstKindedIdents<'_> {
+            fn visit_nat(&mut self, nat: &mut Nat) {
+                match nat {
+                    Nat::Ident(ident) => {
+                        if let Some(ArgKinded::Nat(nat_arg)) =
+                            self.subst_map.get::<&str>(&ident.name.as_str())
+                        {
+                            *nat = nat_arg.clone()
+                        }
+                    }
+                    _ => visit::walk_nat(self, nat),
+                }
+            }
+
+            fn visit_mem(&mut self, mem: &mut Memory) {
+                match mem {
+                    Memory::Ident(ident) => {
+                        if let Some(ArgKinded::Memory(mem_arg)) =
+                            self.subst_map.get::<&str>(&ident.name.as_str())
+                        {
+                            *mem = mem_arg.clone()
+                        }
+                    }
+                    _ => visit::walk_mem(self, mem),
+                }
+            }
+
+            fn visit_prv(&mut self, prv: &mut Provenance) {
+                match prv {
+                    Provenance::Ident(ident) => {
+                        if let Some(ArgKinded::Provenance(prv_arg)) =
+                            self.subst_map.get::<&str>(&ident.name.as_str())
+                        {
+                            *prv = prv_arg.clone()
+                        }
+                    }
+                    _ => visit::walk_prv(self, prv),
+                }
+            }
+
+            fn visit_dty(&mut self, dty: &mut DataTy) {
+                match dty {
+                    DataTy::Ident(ident) => {
+                        if let Some(ArgKinded::Ty(Ty::Data(dty_arg))) =
+                            self.subst_map.get::<&str>(&ident.name.as_str())
+                        {
+                            *dty = dty_arg.clone()
+                        }
+                    }
+                    _ => visit::walk_dty(self, dty),
+                }
+            }
+
+            fn visit_ty(&mut self, ty: &mut Ty) {
+                match ty {
+                    Ty::Ident(ident) => {
+                        if let Some(ArgKinded::Ty(ty_arg)) =
+                            self.subst_map.get::<&str>(&ident.name.as_str())
+                        {
+                            *ty = ty_arg.clone();
+                        }
+                    }
+                    _ => visit::walk_ty(self, ty),
+                }
+            }
+        }
+
+        let mut subst_kinded_idents = SubstKindedIdents { subst_map };
+        subst_kinded_idents.visit_expr(self)
     }
 }
 
@@ -128,6 +286,10 @@ pub enum ExprKind {
     UnOp(UnOp, Box<Expr>),
     ParFor(Box<Expr>, Box<Expr>, Box<Expr>),
     TupleView(Vec<Expr>),
+    // Deref a non place expression; ONLY for codegen
+    Deref(Box<Expr>),
+    // Index into an array; ONLY for codegen
+    Idx(Box<Expr>, Nat),
 }
 
 impl fmt::Display for ExprKind {

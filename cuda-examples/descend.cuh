@@ -89,6 +89,10 @@ class Buffer<Memory::CpuHeap, descend::array<DescendType, n>> {
 public:
     static constexpr std::size_t size = size_in_bytes<descend::array<DescendType, n>>();
 
+    Buffer(const DescendType default_value): ptr_{new descend::array<DescendType, n>} {
+        std::fill(ptr_->begin(), ptr_->end(), default_value);
+    }
+
     Buffer(const descend::array<DescendType, n> init) : ptr_{new descend::array<DescendType, n>} {
         std::copy(init.begin(), init.end(), ptr_->data());
     }
@@ -148,6 +152,12 @@ class Buffer<Memory::GpuGlobal, descend::array<DescendType, n>> {
 public:
     static constexpr std::size_t size = size_in_bytes<array<DescendType, n>>();
 
+    Buffer(const Gpu * const __restrict__ gpu, const DescendType default_value): gpu_{*gpu} {
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+        CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
+        CHECK_CUDA_ERR( cudaMemset(&dev_ptr_, default_value, size));
+    }
+
     Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{*gpu} {
         CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
         CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
@@ -190,8 +200,8 @@ __global__ void launch(F f, Args... args)
 }
 
 template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
-auto exec(descend::Gpu gpu, F &&f, Args... args) -> void {
-    CHECK_CUDA_ERR( cudaSetDevice(gpu) );
+auto exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
+    CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
     launch<<<num_blocks, num_threads>>>(f, args...);
     CHECK_CUDA_ERR( cudaPeekAtLastError() );
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
