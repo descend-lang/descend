@@ -39,7 +39,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef]) -> cu::Item {
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
         ret_ty: gen_ty(&desc::Ty::Data(ret_ty.clone()), desc::Mutability::Mut).unwrap(),
-        body: gen_seq(
+        body: gen_stmt(
             body_expr,
             !matches!(ret_ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
             &mut HashMap::new(),
@@ -51,7 +51,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef]) -> cu::Item {
 }
 
 // Generate CUDA code for Descend syntax that allows sequencing.
-fn gen_seq(
+fn gen_stmt(
     expr: &desc::Expr,
     return_value: bool,
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
@@ -73,7 +73,7 @@ fn gen_seq(
                         new = ViewExpr::create_from(e1, view_ctx)
                     )
                 }
-                gen_seq(e2, return_value, parall_ctx, view_ctx, comp_unit)
+                gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
             // Let Expression
             } else if is_parall_collec_ty(e1.ty.as_ref().unwrap()) {
                 if let Some(old) = parall_ctx.insert(
@@ -87,7 +87,7 @@ fn gen_seq(
                         new = ParallelityCollec::create_from(e1, parall_ctx)
                     )
                 }
-                gen_seq(e2, return_value, parall_ctx, view_ctx, comp_unit)
+                gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
             } else if let desc::Ty::Data(desc::DataTy::At(dty, desc::Memory::GpuShared)) =
                 e1.ty.as_ref().unwrap()
             {
@@ -109,13 +109,13 @@ fn gen_seq(
                 };
                 cu::Stmt::Seq(
                     Box::new(var),
-                    Box::new(gen_seq(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
                 )
             } else if let Some(tty) = gen_ty(e1.ty.as_ref().unwrap(), *mutbl) {
                 let (init_expr, cu_ty) = match tty {
-                    cu::Ty::Array(_, _) => (gen_non_seq(e1, parall_ctx, view_ctx, comp_unit), tty),
+                    cu::Ty::Array(_, _) => (gen_expr(e1, parall_ctx, view_ctx, comp_unit), tty),
                     _ => (
-                        gen_non_seq(e1, parall_ctx, view_ctx, comp_unit),
+                        gen_expr(e1, parall_ctx, view_ctx, comp_unit),
                         if *mutbl == Mutability::Mut {
                             cu::Ty::Scalar(cu::ScalarTy::Auto)
                         } else {
@@ -127,14 +127,14 @@ fn gen_seq(
                     name: ident.name.clone(),
                     ty: cu_ty,
                     addr_space: None,
-                    expr: Some(init_expr.expr()),
+                    expr: Some(init_expr),
                 };
                 cu::Stmt::Seq(
                     Box::new(var),
-                    Box::new(gen_seq(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
                 )
             } else {
-                gen_seq(e2, return_value, parall_ctx, view_ctx, comp_unit)
+                gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
             }
         }
         LetUninit(ident, ty, e) => {
@@ -146,28 +146,110 @@ fn gen_seq(
                         addr_space: None,
                         expr: None,
                     }),
-                    Box::new(gen_seq(e, return_value, parall_ctx, view_ctx, comp_unit)),
+                    Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)),
                 )
             } else {
-                gen_seq(e, return_value, parall_ctx, view_ctx, comp_unit)
+                gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)
             }
         }
-        LetProv(_, expr) => gen_seq(expr, return_value, parall_ctx, view_ctx, comp_unit),
+        LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
         // e1 ; e2
         Seq(e1, e2) => cu::Stmt::Seq(
-            Box::new(gen_seq(e1, false, parall_ctx, view_ctx, comp_unit)),
-            Box::new(gen_seq(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+            Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
+            Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
         ),
+        ForNat(ident, range, body) => {
+            let i = cu::Expr::Ident(ident.name.clone());
+            let (init, cond, iter) = match range {
+                desc::Nat::App(r_name, input) => {
+                    let init_decl = cu::Stmt::VarDecl {
+                        name: ident.name.clone(),
+                        ty: cu::Ty::Scalar(cu::ScalarTy::I32),
+                        addr_space: None,
+                        expr: Some(cu::Expr::Nat(input[0].clone())),
+                    };
+                    let (cond, iter) = match r_name.name.as_str() {
+                        "halved_range" => {
+                            let cond = cu::Expr::BinOp {
+                                op: cu::BinOp::Gt,
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(0))),
+                            };
+                            let iter = cu::Expr::Assign {
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::BinOp {
+                                    op: cu::BinOp::Div,
+                                    lhs: Box::new(i),
+                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(2))),
+                                }),
+                            };
+                            (cond, iter)
+                        }
+                        _ => unimplemented!(),
+                    };
+                    (init_decl, cond, iter)
+                }
+                _ => panic!("Currently ranges are assumed to be predeclared functions."),
+            };
+
+            cu::Stmt::ForLoop {
+                init: Box::new(init),
+                cond,
+                iter,
+                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
+                    body, false, parall_ctx, view_ctx, comp_unit,
+                )))),
+            }
+        }
+        While(cond, body) => cu::Stmt::While {
+            cond: gen_expr(cond, parall_ctx, view_ctx, comp_unit),
+            stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
+                body, false, parall_ctx, view_ctx, comp_unit,
+            )))),
+        },
+        For(_, coll_expr, body) => {
+            let i_name = crate::utils::fresh_name("_i_");
+            let i_decl = cu::Stmt::VarDecl {
+                name: i_name.clone(),
+                ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+                addr_space: None,
+                expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
+            };
+            let i = cu::Expr::Ident(i_name);
+            cu::Stmt::ForLoop {
+                init: Box::new(i_decl),
+                cond: cu::Expr::BinOp {
+                    op: cu::BinOp::Lt,
+                    lhs: Box::new(i.clone()),
+                    rhs: Box::new(cu::Expr::Nat(
+                        extract_size(coll_expr.ty.as_ref().unwrap()).unwrap(),
+                    )),
+                },
+                iter: cu::Expr::Assign {
+                    lhs: Box::new(i.clone()),
+                    rhs: Box::new(cu::Expr::BinOp {
+                        op: cu::BinOp::Add,
+                        lhs: Box::new(i),
+                        rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
+                    }),
+                },
+                stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx, comp_unit)),
+            }
+        }
+        ParFor(parall_collec, input, funs) => {
+            gen_par_for(parall_collec, input, funs, parall_ctx, view_ctx, comp_unit)
+        }
+        // FIXME this assumes that IfElse is not an Expression.
+        IfElse(cond, e_tt, e_ff) => cu::Stmt::IfElse {
+            cond: gen_expr(cond, parall_ctx, view_ctx, comp_unit),
+            true_body: Box::new(gen_stmt(e_tt, false, parall_ctx, view_ctx, comp_unit)),
+            false_body: Box::new(gen_stmt(e_ff, false, parall_ctx, view_ctx, comp_unit)),
+        },
         _ => {
             if return_value {
-                cu::Stmt::Return(Some(
-                    gen_non_seq(&expr, parall_ctx, view_ctx, comp_unit).expr(),
-                ))
+                cu::Stmt::Return(Some(gen_expr(&expr, parall_ctx, view_ctx, comp_unit)))
             } else {
-                match gen_non_seq(&expr, parall_ctx, view_ctx, comp_unit) {
-                    StmtOrExpr::Expr(e) => cu::Stmt::Expr(e),
-                    StmtOrExpr::Stmt(s) => s,
-                }
+                cu::Stmt::Expr(gen_expr(&expr, parall_ctx, view_ctx, comp_unit))
             }
         }
     }
@@ -195,13 +277,12 @@ fn gen_exec(
         .collect();
 
     // GPU argument
-    let gpu = gen_non_seq(
+    let gpu = gen_expr(
         gpu_expr,
         &mut HashMap::new(),
         &mut HashMap::new(),
         comp_unit,
-    )
-    .expr();
+    );
 
     // FIXME only allows Lambdas
     let dev_fun = if let desc::ExprKind::Lambda(params, _, _, body) = &fun.expr {
@@ -218,7 +299,7 @@ fn gen_exec(
 
         cu::Expr::Lambda {
             params: param_decls,
-            body: Box::new(gen_seq(
+            body: Box::new(gen_stmt(
                 &body,
                 false,
                 &mut scope_parall_ctx,
@@ -234,9 +315,7 @@ fn gen_exec(
 
     let mut input: Vec<_> = name_to_exprs
         .iter()
-        .map(|(_, pl_expr)| {
-            gen_non_seq(pl_expr, &mut HashMap::new(), &mut HashMap::new(), comp_unit).expr()
-        })
+        .map(|(_, pl_expr)| gen_expr(pl_expr, &mut HashMap::new(), &mut HashMap::new(), comp_unit))
         .collect();
     let template_args = gen_args_kinded(vec![blocks.clone(), threads.clone()].as_slice());
     let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
@@ -300,7 +379,7 @@ fn gen_par_for(
             }
         }
 
-        gen_seq(&new_body, false, &mut scope_parall_ctx, view_ctx, comp_unit)
+        gen_stmt(&new_body, false, &mut scope_parall_ctx, view_ctx, comp_unit)
     }
 
     let (pid, sync_stmt) = match parall_collec.ty.as_ref().unwrap() {
@@ -357,41 +436,28 @@ fn gen_par_for(
     cu::Stmt::Seq(Box::new(body), Box::new(sync_stmt))
 }
 
-enum StmtOrExpr {
-    Expr(cu::Expr),
-    Stmt(cu::Stmt),
-}
-
-impl StmtOrExpr {
-    fn expr(self) -> cu::Expr {
-        match self {
-            StmtOrExpr::Expr(e) => e,
-            _ => panic!("Not an expression."),
-        }
-    }
-}
-
-fn gen_non_seq(
+fn gen_expr(
     expr: &desc::Expr,
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
-) -> StmtOrExpr {
+) -> cu::Expr {
     use desc::ExprKind::*;
-    use StmtOrExpr::{Expr, Stmt};
 
     match &expr.expr {
-        Lit(l) => Expr(gen_lit(*l)),
-        PlaceExpr(pl_expr) => Expr(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-        Proj(tuple, idx) => Expr(if let desc::Ty::View(_) = expr.ty.as_ref().unwrap() {
-            gen_view(&ViewExpr::create_from(expr, view_ctx), vec![], comp_unit)
-        } else {
-            cu::Expr::Proj {
-                tuple: Box::new(gen_non_seq(tuple, parall_ctx, view_ctx, comp_unit).expr()),
-                n: *idx,
+        Lit(l) => gen_lit(*l),
+        PlaceExpr(pl_expr) => gen_pl_expr(pl_expr, view_ctx, comp_unit),
+        Proj(tuple, idx) => {
+            if let desc::Ty::View(_) = expr.ty.as_ref().unwrap() {
+                gen_view(&ViewExpr::create_from(expr, view_ctx), vec![], comp_unit)
+            } else {
+                cu::Expr::Proj {
+                    tuple: Box::new(gen_expr(tuple, parall_ctx, view_ctx, comp_unit)),
+                    n: *idx,
+                }
             }
-        }),
-        BinOp(op, lhs, rhs) => Expr(cu::Expr::BinOp {
+        }
+        BinOp(op, lhs, rhs) => cu::Expr::BinOp {
             op: match op {
                 desc::BinOp::Add => cu::BinOp::Add,
                 desc::BinOp::Sub => cu::BinOp::Sub,
@@ -407,38 +473,38 @@ fn gen_non_seq(
                 desc::BinOp::Ge => cu::BinOp::Ge,
                 desc::BinOp::Neq => cu::BinOp::Neq,
             },
-            lhs: Box::new(gen_non_seq(lhs, parall_ctx, view_ctx, comp_unit).expr()),
-            rhs: Box::new(gen_non_seq(rhs, parall_ctx, view_ctx, comp_unit).expr()),
-        }),
-        UnOp(op, arg) => Expr(cu::Expr::UnOp {
+            lhs: Box::new(gen_expr(lhs, parall_ctx, view_ctx, comp_unit)),
+            rhs: Box::new(gen_expr(rhs, parall_ctx, view_ctx, comp_unit)),
+        },
+        UnOp(op, arg) => cu::Expr::UnOp {
             op: match op {
                 desc::UnOp::Deref => cu::UnOp::Deref,
                 desc::UnOp::Not => cu::UnOp::Not,
                 desc::UnOp::Neg => cu::UnOp::Neg,
             },
-            arg: Box::new(gen_non_seq(arg, parall_ctx, view_ctx, comp_unit).expr()),
-        }),
-        Index(pl_expr, i) => Expr(cu::Expr::ArraySubscript {
+            arg: Box::new(gen_expr(arg, parall_ctx, view_ctx, comp_unit)),
+        },
+        Index(pl_expr, i) => cu::Expr::ArraySubscript {
             array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
             index: i.clone(),
-        }),
-        Ref(_, _, pl_expr) => Expr(match expr.ty.as_ref().unwrap() {
+        },
+        Ref(_, _, pl_expr) => match expr.ty.as_ref().unwrap() {
             desc::Ty::Data(desc::DataTy::Ref(_, _, desc::Memory::GpuShared, _)) => {
                 gen_pl_expr(pl_expr, view_ctx, comp_unit)
             }
             _ => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit))),
-        }),
-        BorrowIndex(_, _, pl_expr, n) => Expr(cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
+        },
+        BorrowIndex(_, _, pl_expr, n) => cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
             array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
             index: n.clone(),
-        }))),
-        Assign(pl_expr, expr) => Expr(cu::Expr::Assign {
+        })),
+        Assign(pl_expr, expr) => cu::Expr::Assign {
             lhs: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-            rhs: Box::new(gen_non_seq(expr, parall_ctx, view_ctx, comp_unit).expr()),
-        }),
-        Lambda(params, exec, ty, expr) => Expr(cu::Expr::Lambda {
+            rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
+        },
+        Lambda(params, exec, ty, expr) => cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
-            body: Box::new(gen_seq(
+            body: Box::new(gen_stmt(
                 expr,
                 !matches!(ty.as_ref(), desc::DataTy::Scalar(desc::ScalarTy::Unit)),
                 parall_ctx,
@@ -447,10 +513,10 @@ fn gen_non_seq(
             )),
             ret_ty: gen_ty(&desc::Ty::Data(ty.as_ref().clone()), desc::Mutability::Mut).unwrap(),
             is_dev_fun: is_dev_fun(*exec),
-        }),
+        },
         App(fun, kinded_args, args) => match &fun.expr {
             desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(name)) if name.name == "exec" => {
-                Expr(gen_exec(
+                gen_exec(
                     &kinded_args[0],
                     &kinded_args[1],
                     &args[0],
@@ -458,7 +524,7 @@ fn gen_non_seq(
                     &args[2],
                     view_ctx,
                     comp_unit,
-                ))
+                )
             }
             desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident))
                 if crate::ty_check::pre_decl::fun_decls()
@@ -466,25 +532,22 @@ fn gen_non_seq(
                     .any(|(n, _)| &ident.name == n) =>
             {
                 let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
-                Expr(cu::Expr::FunCall {
-                    fun: Box::new(
-                        gen_non_seq(
-                            &desc::Expr::with_type(
-                                desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(pre_decl_ident)),
-                                fun.ty.as_ref().unwrap().clone(),
-                            ),
-                            parall_ctx,
-                            view_ctx,
-                            comp_unit,
-                        )
-                        .expr(),
-                    ),
+                cu::Expr::FunCall {
+                    fun: Box::new(gen_expr(
+                        &desc::Expr::with_type(
+                            desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(pre_decl_ident)),
+                            fun.ty.as_ref().unwrap().clone(),
+                        ),
+                        parall_ctx,
+                        view_ctx,
+                        comp_unit,
+                    )),
                     template_args: gen_args_kinded(kinded_args),
                     args: args
                         .iter()
-                        .map(|e| gen_non_seq(e, parall_ctx, view_ctx, comp_unit).expr())
+                        .map(|e| gen_expr(e, parall_ctx, view_ctx, comp_unit))
                         .collect::<Vec<_>>(),
-                })
+                }
             }
             _ => {
                 let (reduced_fun, data_args) = create_lambda_no_view_args(
@@ -495,30 +558,22 @@ fn gen_non_seq(
                     view_ctx,
                     comp_unit,
                 );
-                Expr(cu::Expr::FunCall {
-                    fun: Box::new(
-                        gen_non_seq(&reduced_fun, parall_ctx, view_ctx, comp_unit).expr(),
-                    ),
+                cu::Expr::FunCall {
+                    fun: Box::new(gen_expr(&reduced_fun, parall_ctx, view_ctx, comp_unit)),
                     template_args: gen_args_kinded(kinded_args),
                     args: data_args
                         .iter()
-                        .map(|e| gen_non_seq(e, parall_ctx, view_ctx, comp_unit).expr())
+                        .map(|e| gen_expr(e, parall_ctx, view_ctx, comp_unit))
                         .collect::<Vec<_>>(),
-                })
+                }
             }
         },
-        // FIXME this assumes that IfElse is not an Expression.
-        IfElse(cond, e_tt, e_ff) => Stmt(cu::Stmt::IfElse {
-            cond: gen_non_seq(cond, parall_ctx, view_ctx, comp_unit).expr(),
-            true_body: Box::new(gen_seq(e_tt, false, parall_ctx, view_ctx, comp_unit)),
-            false_body: Box::new(gen_seq(e_ff, false, parall_ctx, view_ctx, comp_unit)),
-        }),
-        Array(elems) => Expr(cu::Expr::InitializerList {
+        Array(elems) => cu::Expr::InitializerList {
             elems: elems
                 .iter()
-                .map(|e| gen_non_seq(e, parall_ctx, view_ctx, comp_unit).expr())
+                .map(|e| gen_expr(e, parall_ctx, view_ctx, comp_unit))
                 .collect(),
-        }),
+        },
         // cu::Expr::FunCall {
         //     fun: Box::new(cu::Expr::Ident("descend::create_array".to_string())),
         //     template_args: vec![],
@@ -527,107 +582,27 @@ fn gen_non_seq(
         //         .map(|e| gen_expr(e, parall_ctx, view_ctx))
         //         .collect::<Vec<_>>(),
         // },
-        Tuple(elems) => Expr(cu::Expr::Tuple(
+        Tuple(elems) => cu::Expr::Tuple(
             elems
                 .iter()
-                .map(|el| gen_non_seq(el, parall_ctx, view_ctx, comp_unit).expr())
+                .map(|el| gen_expr(el, parall_ctx, view_ctx, comp_unit))
                 .collect::<Vec<_>>(),
-        )),
-        ForNat(ident, range, body) => {
-            let i = cu::Expr::Ident(ident.name.clone());
-            let (init, cond, iter) = match range {
-                desc::Nat::App(r_name, input) => {
-                    let init_decl = cu::Stmt::VarDecl {
-                        name: ident.name.clone(),
-                        ty: cu::Ty::Scalar(cu::ScalarTy::I32),
-                        addr_space: None,
-                        expr: Some(cu::Expr::Nat(input[0].clone())),
-                    };
-                    let (cond, iter) = match r_name.name.as_str() {
-                        "halved_range" => {
-                            let cond = cu::Expr::BinOp {
-                                op: cu::BinOp::Gt,
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(0))),
-                            };
-                            let iter = cu::Expr::Assign {
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::BinOp {
-                                    op: cu::BinOp::Div,
-                                    lhs: Box::new(i),
-                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(2))),
-                                }),
-                            };
-                            (cond, iter)
-                        }
-                        _ => unimplemented!(),
-                    };
-                    (init_decl, cond, iter)
-                }
-                _ => panic!("Currently ranges are assumed to be predeclared functions."),
-            };
-
-            Stmt(cu::Stmt::ForLoop {
-                init: Box::new(init),
-                cond,
-                iter,
-                stmt: Box::new(cu::Stmt::Block(Box::new(gen_seq(
-                    body, false, parall_ctx, view_ctx, comp_unit,
-                )))),
-            })
-        }
-        While(cond, body) => Stmt(cu::Stmt::While {
-            cond: gen_non_seq(cond, parall_ctx, view_ctx, comp_unit).expr(),
-            stmt: Box::new(cu::Stmt::Block(Box::new(gen_seq(
-                body, false, parall_ctx, view_ctx, comp_unit,
-            )))),
-        }),
-        For(_, coll_expr, body) => {
-            let i_name = crate::utils::fresh_name("_i_");
-            let i_decl = cu::Stmt::VarDecl {
-                name: i_name.clone(),
-                ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                addr_space: None,
-                expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
-            };
-            let i = cu::Expr::Ident(i_name);
-            Stmt(cu::Stmt::ForLoop {
-                init: Box::new(i_decl),
-                cond: cu::Expr::BinOp {
-                    op: cu::BinOp::Lt,
-                    lhs: Box::new(i.clone()),
-                    rhs: Box::new(cu::Expr::Nat(
-                        extract_size(coll_expr.ty.as_ref().unwrap()).unwrap(),
-                    )),
-                },
-                iter: cu::Expr::Assign {
-                    lhs: Box::new(i.clone()),
-                    rhs: Box::new(cu::Expr::BinOp {
-                        op: cu::BinOp::Add,
-                        lhs: Box::new(i),
-                        rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
-                    }),
-                },
-                stmt: Box::new(gen_seq(body, false, parall_ctx, view_ctx, comp_unit)),
-            })
-        }
-        ParFor(parall_collec, input, funs) => Stmt(gen_par_for(
-            parall_collec,
-            input,
-            funs,
-            parall_ctx,
-            view_ctx,
-            comp_unit,
-        )),
-        Deref(e) => Expr(cu::Expr::Deref(Box::new(
-            gen_non_seq(e, parall_ctx, view_ctx, comp_unit).expr(),
-        ))),
-        Idx(e, i) => Expr(cu::Expr::ArraySubscript {
-            array: Box::new(gen_non_seq(e, parall_ctx, view_ctx, comp_unit).expr()),
+        ),
+        Deref(e) => cu::Expr::Deref(Box::new(gen_expr(e, parall_ctx, view_ctx, comp_unit))),
+        Idx(e, i) => cu::Expr::ArraySubscript {
+            array: Box::new(gen_expr(e, parall_ctx, view_ctx, comp_unit)),
             index: i.clone(),
-        }),
-        Let(_, _, _, _, _) | LetUninit(_, _, _) | LetProv(_, _) | Seq(_, _) => panic!(
-            "Trying to generate a sequence where a non-sequence is expected:\n{:?}",
+        },
+        Let(_, _, _, _, _)
+        | LetUninit(_, _, _)
+        | LetProv(_, _)
+        | IfElse(_, _, _)
+        | Seq(_, _)
+        | While(_, _)
+        | For(_, _, _)
+        | ForNat(_, _, _)
+        | ParFor(_, _, _) => panic!(
+            "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),
         TupleView(_) => {
@@ -949,13 +924,12 @@ fn gen_view(
         (ViewExpr::ToView { ref_expr, .. }, _) => {
             path.reverse();
             gen_indexing(
-                gen_non_seq(
+                gen_expr(
                     ref_expr,
                     &mut HashMap::new(),
                     &mut HashMap::new(),
                     comp_unit,
-                )
-                .expr(),
+                ),
                 &path,
             )
         }
@@ -963,7 +937,7 @@ fn gen_view(
             Ok(i) => match &views[i] {
                 ViewOrExpr::V(view_expr) => gen_view(view_expr, path.to_vec(), comp_unit),
                 ViewOrExpr::E(expr) => {
-                    gen_non_seq(expr, &mut HashMap::new(), &mut HashMap::new(), comp_unit).expr()
+                    gen_expr(expr, &mut HashMap::new(), &mut HashMap::new(), comp_unit)
                 }
             },
             Err(e) => panic!(e),

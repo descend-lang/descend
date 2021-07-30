@@ -145,7 +145,7 @@ fn ty_check_expr(
             ty_check_for_nat(gl_ctx, kind_ctx, ty_ctx, exec, var, range, body)?
         }
         ExprKind::IfElse(cond, case_true, case_false) => {
-            ty_check_ifelse(gl_ctx, kind_ctx, ty_ctx, exec, cond, case_true, case_false)?
+            ty_check_if_else(gl_ctx, kind_ctx, ty_ctx, exec, cond, case_true, case_false)?
         }
         ExprKind::For(ident, set, body) => {
             ty_check_for(gl_ctx, kind_ctx, ty_ctx, exec, ident, set, body)?
@@ -241,7 +241,7 @@ fn ty_check_while(
     Ok((body_ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
 }
 
-fn ty_check_ifelse(
+fn ty_check_if_else(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
@@ -274,11 +274,35 @@ fn ty_check_par_for(
     fn executable_over_parall_collec_and_input(
         fun: &Expr,
         parall_collec: &Expr,
-        in_elem_tys: Vec<&Ty>,
+        input: &Expr,
     ) -> Result<(), String> {
+        let in_param_tys: Vec<_> = match input.ty.as_ref().unwrap() {
+            Ty::View(ViewTy::Tuple(input_tys)) => input_tys
+                .iter()
+                .map(|t| match t {
+                    Ty::View(ViewTy::Array(tty, n)) => tty.as_ref(),
+                    tty => tty,
+                })
+                .collect(),
+            _ => return Err("Provided input expression is not a tuple view.".to_string()),
+        };
+
         match fun.ty.as_ref().unwrap() {
+            // FIXME unimplemented
+            Ty::View(ViewTy::Tuple(funs)) => {
+                if let Ty::View(ViewTy::Tuple(pcs)) = parall_collec.ty.as_ref().unwrap() {
+                    if pcs.len() != funs.len() {
+                        return Err("Branching in parallel collections is of different amount than provided functions.".to_string());
+                    }
+                    for (f, p) in funs.iter().zip(pcs) {
+                        //executable_over_parall_collec_and_input(f, p, input)?
+                        unimplemented!()
+                    }
+                }
+                Ok(())
+            }
             Ty::Fn(_, param_tys, fun_exec, ret_ty) => {
-                let num_fun_params = in_elem_tys.len() + 1;
+                let num_fun_params = in_param_tys.len() + 1;
                 if param_tys.len() != num_fun_params {
                     return Err(format!(
                         "Wrong amount of parameters in provided function. Expected {},\
@@ -307,15 +331,15 @@ fn ty_check_par_for(
                     return Err(format!(
                         "Function does not fit the provided parallel collection. \
                         Expected: {:?}, but found: {:?}",
-                        &Ty::Data(parall_elem_dty.clone()),
+                        &Ty::Data(parall_elem_dty),
                         fun_parall_elem_ty
                     ));
                 }
-                if fun_input_elem_tys != in_elem_tys {
+                if fun_input_elem_tys != in_param_tys {
                     return Err(format!(
                         "Function does not fit the provided input. \
                         Expected: {:?}, but found: {:?}",
-                        in_elem_tys, fun_input_elem_tys
+                        in_param_tys, fun_input_elem_tys
                     ));
                 }
                 let exec = match parall_elem_dty {
@@ -332,7 +356,9 @@ fn ty_check_par_for(
 
                 Ok(())
             }
-            _ => Err("The provided expression is not a function.".to_string()),
+            _ => Err(
+                "The provided expression is not a function or tuple view of functions.".to_string(),
+            ),
         }
     }
     let parall_collec_ty_ctx =
@@ -345,20 +371,10 @@ fn ty_check_par_for(
         ));
     }
     let input_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, parall_collec_ty_ctx, exec, input)?;
-    let in_param_tys: Vec<_> = match input.ty.as_ref().unwrap() {
-        Ty::View(ViewTy::Tuple(input_tys)) => input_tys
-            .iter()
-            .map(|t| match t {
-                Ty::View(ViewTy::Array(tty, n)) => tty.as_ref(),
-                tty => tty,
-            })
-            .collect(),
-        _ => return Err("Provided input expression is not a tuple view.".to_string()),
-    };
     // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
     // that is used for the par_for can safely be reused.
     let _funs_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, input_ty_ctx, exec, funs)?;
-    executable_over_parall_collec_and_input(funs, parall_collec, in_param_tys)?;
+    executable_over_parall_collec_and_input(funs, parall_collec, input)?;
     Ok((ty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
 }
 
@@ -371,8 +387,6 @@ fn ty_check_lambda(
     ret_dty: &DataTy,
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    // TODO WARNING: Currently allows capturing freely. There are not checks assoicated with this.
-    //  This is clearly not correct.
     // Build frame typing for this function
     let fun_frame = internal::append_idents_typed(
         &vec![],
@@ -384,7 +398,12 @@ fn ty_check_lambda(
             })
             .collect(),
     );
-    let fun_ty_ctx = ty_ctx.clone().append_frm_ty(fun_frame);
+    // Copy porvenance mappings into scope and append scope frame.
+    let mut fun_ty_ctx = TyCtx::new();
+    for prv_mapping in ty_ctx.prv_mappings() {
+        fun_ty_ctx = fun_ty_ctx.append_prv_mapping(prv_mapping.clone());
+    }
+    fun_ty_ctx = fun_ty_ctx.append_frm_ty(fun_frame);
 
     ty_check_expr(gl_ctx, &kind_ctx, fun_ty_ctx, exec, body)?;
 
