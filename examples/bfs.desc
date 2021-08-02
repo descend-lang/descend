@@ -13,6 +13,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             gpu_alloc::<'e, 'f, cpu.stack, cpu.heap, [i32; m]>(&'e uniq gpu, &'f shrd *h_edges);
         let mut d_changes: [(bool, bool, bool, i32); n] @ gpu.global = 
             gpu_alloc::<'g, 'h, cpu.stack, cpu.heap, [(bool, bool, bool, i32); n]>(&'g uniq gpu, &'h shrd *h_changes);
+<<<<<<< HEAD
         let mut d_stop: bool @ gpu.global =
             gpu_alloc::<'o, 'p, cpu.stack, cpu.heap, bool>(&'o uniq gpu, &'p shrd *h_stop);
         while *h_stop {
@@ -25,10 +26,10 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             copy_to_gpu::<'m, 't, 'q, bool>(&'m uniq gpu, &'t uniq d_stop, &'q shrd *h_stop); 
 
         // let mut h_stop: bool @ cpu.heap = true;
+=======
+>>>>>>> bfs_copy does compile
         let mut d_stop: bool @ gpu.global =
             gpu_alloc::<'o, 'p, cpu.stack, cpu.heap, bool>(&'o uniq gpu, &'p shrd *h_stop);
-        // copy_to_host::<'u, l, bool>(&'u shrd d_stop, h_stop);
-
         while *h_stop {
 
             *h_stop = false;
