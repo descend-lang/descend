@@ -65,7 +65,7 @@ fn vector_add() -> std::io::Result<()> {
 
 #[test]
 fn bfs() -> std::io::Result<()> {
-    let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs.desc")?).to_string();
+    let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs")?).to_string();
     let res = descend::parser::parse_global_fun_def(&bfs).unwrap();
     let mut compil_unit = vec![res];
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
