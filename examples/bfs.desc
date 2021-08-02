@@ -115,34 +115,11 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             let grouped_nodes_changes: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
                 group::<1024, n, <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
             //kernel 2 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
-            // &'o uniq cpu.stack 
-            // &'o uniq 
->>>>>>> further bugfixes
-            exec::<64, 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
-                &'h uniq gpu,
-                grouped_nodes_changes,
-                | grid: Grid<Block<Thread, 1024>, 64>,
-<<<<<<< HEAD
-                  input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
-=======
-                    input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
-=======
-=======
->>>>>>> debugging test
             exec::<64, 1024, 'j, cpu.stack, [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
                 &'h uniq gpu,
                 grouped_nodes_changes,
                 | grid: Grid<Block<Thread, 1024>, 64>,
                   input: [[ [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
-<<<<<<< HEAD
->>>>>>> c0ab5a1 (further bugfixes)
->>>>>>> further bugfixes
-=======
->>>>>>> debugging test
                 | -[gpu.grid]-> () {
 
                         for grid with input do
@@ -157,7 +134,6 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                                     // smth for testing
                                     let other_temp = *inp.0;
                                     let y = other_temp.0;
-<<<<<<< HEAD
                                     let z = y;
                                     ()   
                                     // if *inp.1.1 { //updating mask
@@ -169,34 +145,10 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                                     // } else {
                                     //     ()
                                     // }
-=======
-                                    ()
-
-                                    // can I access d_stop?
-
-                                    //updating mask
-                                    if *inp.1.1 {
-                                        *inp.1.0 = true; // mask
-                                        *inp.1.2 = true; // visited
-                                        d_stop = true; //  does not work probably // TODO atomic set 
-                                        // new type Atomic<bool>
-                                        *inp.1.1 = false; //updating mask
-                                    } else {
-                                        ()
-                                    }
-
-
->>>>>>> debugging test
                                     };
                             };
                     }
                 );
-<<<<<<< HEAD
-                
-=======
-
-            
->>>>>>> debugging test
             copy_to_host::<'u, l, bool>(&'u shrd d_stop, h_stop);
         }
     }
