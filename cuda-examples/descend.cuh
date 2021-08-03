@@ -357,7 +357,16 @@ auto gpu_alloc(const Gpu * const __restrict__ gpu, const PtrType * const __restr
 }
 
 template<typename DescendType, typename PtrTypeDev, typename PtrTypeHost>
+<<<<<<< HEAD
 auto copy_to_host(const PtrTypeDev * const __restrict__ device_ptr, PtrTypeHost * const __restrict__ host_ptr) -> void {
+=======
+auto copy_to_gpu(const Gpu * const __restrict__ gpu, const PtrTypeDev * __restrict__ device_ptr, PtrTypeHost * const __restrict__ host_ptr) ->void {
+    CHECK_CUDA_ERR( cudaMemcpy(device_ptr, host_ptr, size_in_bytes<DescendType>(), cudaMemcpyHostToDevice) );
+}
+
+template<typename DescendType, typename PtrTypeDev, typename PtrTypeHost>
+auto copy_to_host(const PtrTypeDev * __restrict__ device_ptr, PtrTypeHost * const __restrict__ host_ptr) -> void {
+>>>>>>> eebd27a (added descend::copy_to_gpu())
     CHECK_CUDA_ERR( cudaMemcpy(host_ptr, device_ptr, size_in_bytes<DescendType>(), cudaMemcpyDeviceToHost) );
 }
 
