@@ -70,6 +70,9 @@ auto scan(
     descend::copy_to_host<descend::array<descend::i32, n>>(&out_array, &*h_output);
 }
 
+//
+// Manually added, not generated
+//
 auto main() -> int {
     #define N 256*32*2
     const auto ha_array = descend::HeapBuffer<descend::array<descend::i32, N>>(3);
