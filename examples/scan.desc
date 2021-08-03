@@ -1,5 +1,5 @@
 fn scan_inplace<a: prv, m: nat>(data: &a uniq cpu.heap [i32; m]) -[cpu.thread]-> () {
-    let accum = 0;
+    let mut accum = 0;
     for d in data {
         let next = *d + accum;
         *d = accum;
@@ -20,10 +20,10 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
 
         let a_array: [i32; n] @ gpu.global =
             gpu_alloc::<'c, a, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, ha_array);
-        let view_a: [[&'r uniq gpu.global i32; n]] =
-            to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
+        let view_a: [[&'r shrd gpu.global i32; n]] =
+            to_view::<'r, gpu.global, n, i32>(&'r shrd a_array);
         // blockDim.x * 2 == 64
-        let block_group = group::<64, n, &'r uniq gpu.global i32>(view_a);
+        let block_group = group::<64, n, &'r shrd gpu.global i32>(view_a);
 
         let mut out_array: [i32; n] @ gpu.global =
             gpu_alloc::<'c, 'm, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'m shrd *h_output);
@@ -31,7 +31,7 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
             group::<64, n, &'m uniq gpu.global i32>(
                 to_view_mut::<'m, gpu.global, n, i32>(&'m uniq out_array));
 
-        let block_sums: [i32; n/64] @ gpu.global =
+        let mut block_sums: [i32; n/64] @ gpu.global =
             gpu_alloc::<'c, 'k, cpu.stack, cpu.heap, [i32; n/64]>(
                 &'c uniq gpu, &'k shrd *h_block_sums);
         let block_sums_grp: [[[[&'k uniq gpu.global i32; 1]]; n/64]] =
@@ -40,13 +40,13 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
                 to_view_mut::<'k, gpu.global, 256, i32>(&'k uniq block_sums));
 
         exec::<256, 32, 'h, cpu.stack,
-                <[[[[&'r uniq gpu.global i32; 64]]; n/64]],
+                <[[[[&'r shrd gpu.global i32; 64]]; n/64]],
                  [[[[&'m uniq gpu.global i32; 64]]; n/64]],
                  [[[[&'k uniq gpu.global i32; 1]]; n/64]]>>(
             &'h uniq gpu,
             <block_group, out_grp, block_sums_grp>,
             | grid: Grid<Block<Thread, 32>, 256>,
-              views: <[[[[&'r uniq gpu.global i32; 64]]; n/64]],
+              views: <[[[[&'r shrd gpu.global i32; 64]]; n/64]],
                       [[[[&'m uniq gpu.global i32; 64]]; n/64]],
                       [[[[&'k uniq gpu.global i32; 1]]; n/64]]>
             | -[gpu.grid]-> () {
@@ -59,7 +59,7 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
 
                 for grid with <block_input_d, output_d, block_sums_d, tmp> do
                     | block: Block<Thread, 32>,
-                      ib: [[&'r uniq gpu.global i32; 64]],
+                      ib: [[&'r shrd gpu.global i32; 64]],
                       block_out: [[&'m uniq gpu.global i32; 64]],
                       bsum: [[&'k uniq gpu.global i32; 1]],
                       tmpb: [i32; 64] @ gpu.shared
@@ -67,15 +67,15 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
                          let tmp_view: [[&'e uniq gpu.shared i32; 64]] =
                             to_view_mut::<'e, gpu.shared, 64, i32>(&'e uniq tmpb);
                          let tmp_halves = split_at::<32, 64, &'e uniq gpu.shared i32>(tmp_view);
-                         let input_halves = split_at::<32, 64, &'r uniq gpu.global i32>(ib);
+                         let input_halves = split_at::<32, 64, &'r shrd gpu.global i32>(ib);
 
                          // Copy to temporary shared memory storage
                          for block
                          with <input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1>
                          do
                             | thread: Thread,
-                              inp_0: &'r uniq gpu.global i32,
-                              inp_1: &'r uniq gpu.global i32,
+                              inp_0: &'r shrd gpu.global i32,
+                              inp_1: &'r shrd gpu.global i32,
                               tmp_0: &'e uniq gpu.shared i32,
                               tmp_1: &'e uniq gpu.shared i32
                             | -[gpu.thread]-> () {
@@ -97,7 +97,7 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
                                | thread: Thread,
                                  a: [[&'f uniq gpu.shared i32; 64/d]]
                                | -[gpu.thread]-> () {
-                                    a[64/d-1] = a[32/d-1];
+                                    a[64/d-1] = a[64/d-1] + a[32/d-1];
                                };
                          };
 
@@ -139,13 +139,13 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
                          };
 
                         // Copy results to global memory
-                        //let output_halves = split_at::<32, 64, &'m uniq gpu.global i32>(block_out);
+                        let output_halves = split_at::<32, 64, &'m uniq gpu.global i32>(block_out);
                         for block
-                        with <input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1>
+                        with <output_halves.0, output_halves.1, tmp_halves.0, tmp_halves.1>
                         do
                             | thread: Thread,
-                              res_0: &'r uniq gpu.global i32,
-                              res_1: &'r uniq gpu.global i32,
+                              res_0: &'m uniq gpu.global i32,
+                              res_1: &'m uniq gpu.global i32,
                               out_0: &'e uniq gpu.shared i32,
                               out_1: &'e uniq gpu.shared i32
                             | -[gpu.thread]-> () {
@@ -155,12 +155,11 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
                      };
             }
         );
-        // Todo
-        //  There is no check for n == 64 (which is NOT the case). Therefore it is wrong to specify
-        //  [i32; n] as the array type. However, this still type checks.
-        copy_to_host::<'g, 'x, cpu.heap, [i32; n/64]>(&'g shrd block_sums, &'x uniq *h_block_sums);
 
-        scan_inplace::<c, 256>(h_block_sums);
+        copy_to_host::<'g, 'x, cpu.heap, [i32; n/64]>(&'g shrd block_sums, &'x uniq *h_block_sums);
+        scan_inplace::<'x, 256>(&'x uniq *h_block_sums);
+        copy_to_gpu::<'g, 'x, [i32; n/64]>(&'g uniq block_sums, &'x shrd *h_block_sums);
+
 
         let out_grp2: [[[[&'m uniq gpu.global i32; 64]]; n/64]] =
             group::<64, n, &'m uniq gpu.global i32>(
@@ -196,6 +195,6 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
             }
         );
 
-        copy_to_host::<'g, 'x, cpu.heap, [i32; n/64]>(&'g shrd out_array, &'x uniq *h_output);
+        copy_to_host::<'g, 'x, cpu.heap, [i32; n]>(&'g shrd out_array, &'x uniq *h_output);
     }
 }

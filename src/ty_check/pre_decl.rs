@@ -212,12 +212,11 @@ fn copy_to_host_ty() -> Ty {
 }
 
 // copy_to_gpu:
-//  <r1: prv, r2: prv, r3: prv, t: ty>(&r1 uniq cpu.stack Gpu, & r2 uniq gpu.global t,
-//      & r3 shrd cpu.heap t) -[cpu.thread]-> ()
+//  <r1: prv, r2: prv, t: ty>(& r1 uniq gpu.global t,
+//      & r2 shrd cpu.heap t) -[cpu.thread]-> ()
 fn copy_to_gpu_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
-    let r3 = Ident::new("r3");
     let t = Ident::new("t");
     let r1_prv = IdentKinded {
         ident: r1.clone(),
@@ -227,31 +226,21 @@ fn copy_to_gpu_ty() -> Ty {
         ident: r2.clone(),
         kind: Kind::Provenance,
     };
-    let r3_prv = IdentKinded {
-        ident: r3.clone(),
-        kind: Kind::Provenance,
-    };
     let t_ty = IdentKinded {
         ident: t.clone(),
         kind: Kind::Ty,
     };
     Ty::Fn(
-        vec![r1_prv, r2_prv, r3_prv, t_ty],
+        vec![r1_prv, r2_prv, t_ty],
         vec![
             Ty::Data(DataTy::Ref(
                 Provenance::Ident(r1),
-                Ownership::Uniq,
-                Memory::CpuStack,
-                Box::new(DataTy::Scalar(ScalarTy::Gpu)),
-            )),
-            Ty::Data(DataTy::Ref(
-                Provenance::Ident(r2),
                 Ownership::Uniq,
                 Memory::GpuGlobal,
                 Box::new(DataTy::Ident(t.clone())),
             )),
             Ty::Data(DataTy::Ref(
-                Provenance::Ident(r3),
+                Provenance::Ident(r2),
                 Ownership::Shrd,
                 Memory::CpuHeap,
                 Box::new(DataTy::Ident(t)),

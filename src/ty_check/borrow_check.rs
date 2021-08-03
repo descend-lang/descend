@@ -42,7 +42,8 @@ pub(super) fn ownership_safe(
                 &most_spec_pl,
                 ref_own,
             ),
-            _ => panic!("This must never happen."),
+            // TODO improve error message
+            ty => panic!("Is the type dead?: {}", ty),
         }
     }
 }
