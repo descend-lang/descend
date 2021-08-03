@@ -7,6 +7,9 @@ use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
 
+// FIXME Indexing and genreation of view expressions is bugged. Mainly because it is hard to
+//  recognize which part of a place expression is a view expression.
+
 // Precondition. all function defitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(comp_unit: &[desc::FunDef]) -> String {
@@ -233,34 +236,7 @@ fn gen_stmt(
             )))),
         },
         For(ident, coll_expr, body) => {
-            let i_decl = cu::Stmt::VarDecl {
-                name: ident.name.clone(),
-                ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                addr_space: None,
-                expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
-            };
-            let i = cu::Expr::Ident(ident.name.clone());
-            cu::Stmt::ForLoop {
-                init: Box::new(i_decl),
-                cond: cu::Expr::BinOp {
-                    op: cu::BinOp::Lt,
-                    lhs: Box::new(i.clone()),
-                    rhs: Box::new(cu::Expr::Nat(
-                        extract_size(coll_expr.ty.as_ref().unwrap()).unwrap(),
-                    )),
-                },
-                iter: cu::Expr::Assign {
-                    lhs: Box::new(i.clone()),
-                    rhs: Box::new(cu::Expr::BinOp {
-                        op: cu::BinOp::Add,
-                        lhs: Box::new(i),
-                        rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
-                    }),
-                },
-                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
-                    body, false, parall_ctx, view_ctx, comp_unit,
-                )))),
-            }
+            gen_for_each(ident, coll_expr, body, parall_ctx, view_ctx, comp_unit)
         }
         ParFor(parall_collec, input, funs) => {
             gen_par_for(parall_collec, input, funs, parall_ctx, view_ctx, comp_unit)
@@ -278,6 +254,59 @@ fn gen_stmt(
                 cu::Stmt::Expr(gen_expr(&expr, parall_ctx, view_ctx, comp_unit))
             }
         }
+    }
+}
+
+fn gen_for_each(
+    ident: &Ident,
+    coll_expr: &desc::Expr,
+    body: &desc::Expr,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+    comp_unit: &[desc::FunDef],
+) -> cu::Stmt {
+    let i_name = crate::utils::fresh_name("_i_");
+    let i_decl = cu::Stmt::VarDecl {
+        name: i_name.clone(),
+        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+        addr_space: None,
+        expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
+    };
+    let i = cu::Expr::Ident(i_name.to_string());
+    let mut scoped_view_ctx = view_ctx.clone();
+    scoped_view_ctx.insert(
+        ident.name.clone(),
+        ViewExpr::Idx {
+            idx: desc::Nat::Ident(Ident::new(&i_name)),
+            view: Box::new(ViewExpr::ToView {
+                ref_expr: Box::new(coll_expr.clone()),
+            }),
+        },
+    );
+    cu::Stmt::ForLoop {
+        init: Box::new(i_decl),
+        cond: cu::Expr::BinOp {
+            op: cu::BinOp::Lt,
+            lhs: Box::new(i.clone()),
+            rhs: Box::new(cu::Expr::Nat(
+                extract_size(coll_expr.ty.as_ref().unwrap()).unwrap(),
+            )),
+        },
+        iter: cu::Expr::Assign {
+            lhs: Box::new(i.clone()),
+            rhs: Box::new(cu::Expr::BinOp {
+                op: cu::BinOp::Add,
+                lhs: Box::new(i),
+                rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
+            }),
+        },
+        stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
+            body,
+            false,
+            parall_ctx,
+            &mut scoped_view_ctx,
+            comp_unit,
+        )))),
     }
 }
 
@@ -376,9 +405,8 @@ fn gen_par_for(
             ParallelityCollec::Ident(parall_collec),
         );
 
-        let mut new_body = body.clone();
+        //        let mut new_body = body.clone();
         for (i, id) in params[1..].iter().map(|p| p.ident.name.clone()).enumerate() {
-            // TODO do not create a view if the argument is not of view type
             let input_arg_view = ViewExpr::create_from(
                 &desc::Expr::new(desc::ExprKind::Proj(Box::new(input_expr.clone()), i)),
                 view_ctx,
@@ -393,19 +421,17 @@ fn gen_par_for(
                             view: Box::new(input_arg_view),
                         },
                     );
-                } else if let ViewExpr::Proj { view, i } = input_arg_view {
-                    if let ViewExpr::Tuple { views } = view.as_ref() {
-                        new_body.subst_ident(&id, &views[i].expr());
-                    } else {
-                        panic!("Non-view types can only be passed through a tuple view.")
-                    }
+                } else {
+                    // FIXME Leads to stackoverflow if the same names are used
+                    //  as input elemenent (input_arg_view) and identifier (id)
+                    view_ctx.insert(id, input_arg_view);
                 }
             } else {
                 panic!("Inputs to par_for are always tuple views.")
             }
         }
 
-        gen_stmt(&new_body, false, &mut scope_parall_ctx, view_ctx, comp_unit)
+        gen_stmt(body, false, &mut scope_parall_ctx, view_ctx, comp_unit)
     }
 
     let (pid, sync_stmt) = match parall_collec.ty.as_ref().unwrap() {
@@ -515,29 +541,45 @@ fn gen_expr(
             },
             arg: Box::new(gen_expr(arg, parall_ctx, view_ctx, comp_unit)),
         },
-        Index(pl_expr, i) => cu::Expr::ArraySubscript {
-            array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-            index: i.clone(),
-        },
         Ref(_, _, pl_expr) => match expr.ty.as_ref().unwrap() {
             desc::Ty::Data(desc::DataTy::Ref(_, _, desc::Memory::GpuShared, _)) => {
                 gen_pl_expr(pl_expr, view_ctx, comp_unit)
             }
             _ => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit))),
         },
-        BorrowIndex(_, _, pl_expr, n) => cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
-            array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-            index: n.clone(),
-        })),
-        Assign(pl_expr, expr) => cu::Expr::Assign {
-            lhs: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+        BorrowIndex(_, _, pl_expr, n) => {
+            if contains_view_expr(pl_expr, view_ctx) {
+                panic!("It should not be allowed to borrow from a view expression.")
+            } else {
+                cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
+                    array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+                    index: n.clone(),
+                }))
+            }
+        }
+        Index(pl_expr, idx) => {
+            if contains_view_expr(pl_expr, view_ctx) {
+                gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit)
+            } else {
+                cu::Expr::ArraySubscript {
+                    array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+                    index: idx.clone(),
+                }
+            }
+        }
+        IdxAssign(pl_expr, idx, expr) => cu::Expr::Assign {
+            lhs: Box::new(if contains_view_expr(pl_expr, view_ctx) {
+                gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit)
+            } else {
+                cu::Expr::ArraySubscript {
+                    array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+                    index: idx.clone(),
+                }
+            }),
             rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
         },
-        IdxAssign(pl_expr, idx, expr) => cu::Expr::Assign {
-            lhs: Box::new(cu::Expr::ArraySubscript {
-                array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-                index: idx.clone(),
-            }),
+        Assign(pl_expr, expr) => cu::Expr::Assign {
+            lhs: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
             rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
         },
         Lambda(params, exec, ty, expr) => cu::Expr::Lambda {
@@ -567,7 +609,7 @@ fn gen_expr(
             desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident))
                 if crate::ty_check::pre_decl::fun_decls()
                     .iter()
-                    .any(|(n, _)| &ident.name == n) =>
+                    .any(|(name, _)| &ident.name == name) =>
             {
                 let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
                 cu::Expr::FunCall {
@@ -588,17 +630,20 @@ fn gen_expr(
                 }
             }
             _ => {
-                let (reduced_fun, data_args) = create_lambda_no_view_args(
+                let (reduced_fun, data_args, red_kinded_args) = match create_lambda_no_view_args(
                     fun.as_ref(),
                     kinded_args.as_slice(),
                     args.as_slice(),
                     parall_ctx,
                     view_ctx,
                     comp_unit,
-                );
+                ) {
+                    Some((reduced_fun, data_args)) => (reduced_fun, data_args, vec![]),
+                    None => (*fun.clone(), args.clone(), kinded_args.clone()),
+                };
                 cu::Expr::FunCall {
                     fun: Box::new(gen_expr(&reduced_fun, parall_ctx, view_ctx, comp_unit)),
-                    template_args: gen_args_kinded(kinded_args),
+                    template_args: gen_args_kinded(&red_kinded_args),
                     args: data_args
                         .iter()
                         .map(|e| gen_expr(e, parall_ctx, view_ctx, comp_unit))
@@ -649,14 +694,41 @@ fn gen_expr(
     }
 }
 
+fn contains_view_expr(pl_expr: &PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) -> bool {
+    let (_, pl) = pl_expr.to_pl_ctx_and_most_specif_pl();
+    view_ctx.contains_key(&pl.ident.name)
+}
+
+fn gen_idx_into_view(
+    pl_expr: &PlaceExpr,
+    idx: &desc::Nat,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+    comp_unit: &[desc::FunDef],
+) -> cu::Expr {
+    let collec_view = ViewExpr::create_from(
+        &desc::Expr::new(desc::ExprKind::PlaceExpr(pl_expr.clone())),
+        view_ctx,
+    );
+    gen_view(
+        &ViewExpr::Idx {
+            idx: idx.clone(),
+            view: Box::new(collec_view),
+        },
+        vec![],
+        view_ctx,
+        comp_unit,
+    )
+}
+
 fn create_lambda_no_view_args(
     fun: &desc::Expr,
     generic_args: &[desc::ArgKinded],
     args: &[desc::Expr],
+    // TODO remove parallel collections as well as views
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
-) -> (desc::Expr, Vec<desc::Expr>) {
+) -> Option<(desc::Expr, Vec<desc::Expr>)> {
     // FIXME doesn't work for predeclared functions which expect a view type argument
     match &fun.expr {
         desc::ExprKind::Lambda(param_decls, exec, ret_dty, body) => {
@@ -692,7 +764,7 @@ fn create_lambda_no_view_args(
                 desc::ExprKind::Lambda(data_param_decls, *exec, ret_dty.clone(), body.clone()),
                 reduced_fun_ty,
             );
-            (reduced_fun, data_args)
+            Some((reduced_fun, data_args))
         }
         desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(f)) => {
             if let Some(desc::FunDef {
@@ -704,6 +776,10 @@ fn create_lambda_no_view_args(
                 ..
             }) = comp_unit.iter().find(|fun_def| fun_def.name == f.name)
             {
+                if !contains_view_params(param_decls) {
+                    return None;
+                }
+
                 let subst_map_kinded_idents: HashMap<&str, &desc::ArgKinded> = generic_params
                     .iter()
                     .map(|id_kinded| id_kinded.ident.name.as_str())
@@ -748,50 +824,22 @@ fn create_lambda_no_view_args(
                     ),
                     reduced_fun_ty,
                 );
-                (reduced_fun, data_args)
+                Some((reduced_fun, data_args))
             } else {
                 panic!("Cannot find function definition.")
             }
-
-            //     let (subst_map_view_params, data_param_decls_to_data_args) =
-            //         ReduceViews::map_view_params_to_args(&params, args);
-            //     new_body.subst_idents(&subst_map_view_params);
-            //     let new_body =
-            //         reduce_view_expr(self.comp_unit, body.as_ref().clone(), subst_map_view_params);
-            //     let no_view_param_decls: Vec<desc::ParamDecl> = data_param_decls_to_data_args
-            //         .iter()
-            //         .map(|(param_decl, _)| *param_decl)
-            //         .cloned()
-            //         .collect();
-            //     let no_view_args: Vec<desc::Expr> = data_param_decls_to_data_args
-            //         .iter()
-            //         .map(|(_, arg)| *arg)
-            //         .cloned()
-            //         .collect();
-            //     let reduced_fun = desc::ExprKind::Lambda(
-            //         no_view_param_decls,
-            //         *exec,
-            //         Box::new(ret_dty.clone()),
-            //         Box::new(new_body),
-            //     );
-            //
-            //     // Rebuild the function application
-            //     // FIXME we are losing type information here
-            //     //  This seems very dangerous!!!
-            //     let new_app_expr_kind = desc::ExprKind::App(
-            //         Box::new(desc::Expr::new(reduced_fun)),
-            //         vec![],
-            //         no_view_args,
-            //     );
-            //     let new_app_expr = desc::Expr::new(new_app_expr_kind);
-            //     *expr = new_app_expr;
-            // }
         }
         _ => panic!(
             "Functions cannot be created dynamically, so they have to either be\
                         global function definitions or lambdas. This should never happen."
         ),
     }
+}
+
+fn contains_view_params(param_decls: &[desc::ParamDecl]) -> bool {
+    param_decls
+        .iter()
+        .any(|p| matches!(p.ty, desc::Ty::View(_)))
 }
 
 fn map_view_params_to_args<'a>(
@@ -961,10 +1009,25 @@ fn gen_view(
     comp_unit: &[desc::FunDef],
 ) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[desc::Nat]) -> cu::Expr {
-        path.iter().fold(expr, |e, idx| cu::Expr::ArraySubscript {
-            array: Box::new(e),
-            index: idx.clone(),
-        })
+        let index = if path.is_empty() {
+            panic!("Unexpected.")
+        } else if path.len() == 1 {
+            path[0].clone()
+        } else {
+            let fst = path[0].clone();
+            let snd = path[1].clone();
+            let mut idx_nat = desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(fst), Box::new(snd));
+            for i in &path[2..] {
+                idx_nat =
+                    desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(idx_nat), Box::new(i.clone()));
+            }
+            idx_nat
+        };
+
+        cu::Expr::ArraySubscript {
+            array: Box::new(expr),
+            index: index,
+        }
     }
 
     match (view_expr, path.as_slice()) {
@@ -1015,7 +1078,6 @@ fn gen_view(
                 _ => panic!("Cannot create SplitAt view. Index or projection missing."),
             }
         }
-        (ViewExpr::Join { m, n, view }, _) => unimplemented!(),
         (ViewExpr::Group { size, n, view }, _) => {
             let i = path.pop();
             let j = path.pop();
@@ -1058,6 +1120,7 @@ fn gen_view(
                 _ => panic!("Cannot generate Zip View. Index or projection missing."),
             }
         }
+        (ViewExpr::Join { m, n, view }, _) => unimplemented!(),
         (ViewExpr::Transpose { m, n, view }, _) => unimplemented!(),
         ve => panic!("unexpected, found: {:?}", ve),
     }

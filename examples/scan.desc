@@ -1,7 +1,15 @@
+fn scan_inplace<a: prv, m: nat>(data: &a uniq cpu.heap [i32; m]) -[cpu.thread]-> () {
+    let accum = 0;
+    for d in data {
+        let next = *d + accum;
+        *d = accum;
+        accum = next;
+    }
+}
+
 // blockDim.x == 32
 // n == 256 * blockDim.x * 2
 // gridDim.x == n / (blockDim.x * 2) == 256
-
 fn scan<n: nat, a: prv, b: prv, c: prv>(
     ha_array: &a shrd cpu.heap [i32; n],
     h_output: &b uniq cpu.heap [i32; n],
@@ -131,6 +139,7 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
                          };
 
                         // Copy results to global memory
+                        //let output_halves = split_at::<32, 64, &'m uniq gpu.global i32>(block_out);
                         for block
                         with <input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1>
                         do
@@ -171,29 +180,22 @@ fn scan<n: nat, a: prv, b: prv, c: prv>(
                 with input_views
                 do
                     | block: Block<Thread, 64>,
-                      scans: [[&'m uniq gpu.global i32; 64]],
+                      scanned_vals: [[&'m uniq gpu.global i32; 64]],
                       block_sum: &'k shrd gpu.global i32
                     | -[gpu.block]-> () {
                         for block
-                        with <scans, block_sum>
+                        with <scanned_vals, block_sum>
                         do
                             | thread: Thread,
-                              scan: &'m uniq gpu.global i32,
-                              block_sum: &'k shrd gpu.global i32
+                              scanned_val: &'m uniq gpu.global i32,
+                              sum: &'k shrd gpu.global i32
                             | -[gpu.thread]-> () {
-                                *scan = *scan + *block_sum;
+                                *scanned_val = *scanned_val + *sum;
                             };
                     };
             }
-        )
-    }
-}
+        );
 
-fn scan_inplace<a: prv, m: nat>(data: &a uniq cpu.heap [i32; m]) -[cpu.thread]-> () {
-    let accum = 0;
-    for s in data {
-        let next = *s + accum;
-        *s = accum;
-        accum = next;
+        copy_to_host::<'g, 'x, cpu.heap, [i32; n/64]>(&'g shrd out_array, &'x uniq *h_output);
     }
 }
