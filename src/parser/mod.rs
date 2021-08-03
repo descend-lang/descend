@@ -115,7 +115,7 @@ peg::parser! {
                     },
                     Some(expr) => match idx {
                         None => Expr::new(ExprKind::Assign(p, Box::new(expr))),
-                        Some(_) => unimplemented!() // TODO: Implement array assignment
+                        Some(idx) => Expr::new(ExprKind::IdxAssign(p, idx, Box::new(expr))),
                     }
                 }
             }

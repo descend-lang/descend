@@ -19,6 +19,34 @@ fn warp_reduce() -> std::io::Result<()> {
 }
 
 #[test]
+fn scan() -> std::io::Result<()> {
+    let scan = String::from_utf8_lossy(&std::fs::read("examples/scan.desc")?).to_string();
+    let mut compil_unit = descend::parser::parse_compil_unit(&scan).unwrap();
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+
+#[test]
+fn reduce_shared_mem2() -> std::io::Result<()> {
+    panic!("Generates the wrong code.");
+    let reduce_shared =
+        String::from_utf8_lossy(&std::fs::read("examples/shared_mem_red2.desc")?).to_string();
+    let mut compil_unit = descend::parser::parse_compil_unit(&reduce_shared).unwrap();
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+
+#[test]
 fn reduce_shared_mem() -> std::io::Result<()> {
     let reduce_shared =
         String::from_utf8_lossy(&std::fs::read("examples/shared_mem_red.desc")?).to_string();

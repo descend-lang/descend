@@ -16,9 +16,12 @@ pub fn gen(comp_unit: &[desc::FunDef]) -> String {
         .map(replace_arg_kinded_idents)
         .map(|f| inline_par_for_funs(f, comp_unit))
         .collect::<Vec<desc::FunDef>>();
-    let cu_program = preproc_comp_unit
-        .iter()
-        .map(|fun_def| gen_fun_def(fun_def, comp_unit))
+    let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
+        .chain(
+            preproc_comp_unit
+                .iter()
+                .map(|fun_def| gen_fun_def(fun_def, comp_unit)),
+        )
         .collect::<cu::CuProgram>();
     printer::print(&cu_program)
 }
@@ -162,14 +165,14 @@ fn gen_stmt(
             let i = cu::Expr::Ident(ident.name.clone());
             let (init, cond, iter) = match range {
                 desc::Nat::App(r_name, input) => {
-                    let init_decl = cu::Stmt::VarDecl {
-                        name: ident.name.clone(),
-                        ty: cu::Ty::Scalar(cu::ScalarTy::I32),
-                        addr_space: None,
-                        expr: Some(cu::Expr::Nat(input[0].clone())),
-                    };
-                    let (cond, iter) = match r_name.name.as_str() {
+                    let (init_decl, cond, iter) = match r_name.name.as_str() {
                         "halved_range" => {
+                            let init_decl = cu::Stmt::VarDecl {
+                                name: ident.name.clone(),
+                                ty: cu::Ty::Scalar(cu::ScalarTy::I32),
+                                addr_space: None,
+                                expr: Some(cu::Expr::Nat(input[0].clone())),
+                            };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Gt,
                                 lhs: Box::new(i.clone()),
@@ -183,7 +186,29 @@ fn gen_stmt(
                                     rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(2))),
                                 }),
                             };
-                            (cond, iter)
+                            (init_decl, cond, iter)
+                        }
+                        "doubled_range" => {
+                            let init_decl = cu::Stmt::VarDecl {
+                                name: ident.name.clone(),
+                                ty: cu::Ty::Scalar(cu::ScalarTy::I32),
+                                addr_space: None,
+                                expr: Some(cu::Expr::Lit(cu::Lit::I32(1))),
+                            };
+                            let cond = cu::Expr::BinOp {
+                                op: cu::BinOp::Le,
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::Nat(input[0].clone())),
+                            };
+                            let iter = cu::Expr::Assign {
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::BinOp {
+                                    op: cu::BinOp::Mul,
+                                    lhs: Box::new(i),
+                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(2))),
+                                }),
+                            };
+                            (init_decl, cond, iter)
                         }
                         _ => unimplemented!(),
                     };
@@ -207,15 +232,14 @@ fn gen_stmt(
                 body, false, parall_ctx, view_ctx, comp_unit,
             )))),
         },
-        For(_, coll_expr, body) => {
-            let i_name = crate::utils::fresh_name("_i_");
+        For(ident, coll_expr, body) => {
             let i_decl = cu::Stmt::VarDecl {
-                name: i_name.clone(),
+                name: ident.name.clone(),
                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
                 addr_space: None,
                 expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
             };
-            let i = cu::Expr::Ident(i_name);
+            let i = cu::Expr::Ident(ident.name.clone());
             cu::Stmt::ForLoop {
                 init: Box::new(i_decl),
                 cond: cu::Expr::BinOp {
@@ -233,7 +257,9 @@ fn gen_stmt(
                         rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
                     }),
                 },
-                stmt: Box::new(gen_stmt(body, false, parall_ctx, view_ctx, comp_unit)),
+                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
+                    body, false, parall_ctx, view_ctx, comp_unit,
+                )))),
             }
         }
         ParFor(parall_collec, input, funs) => {
@@ -449,7 +475,12 @@ fn gen_expr(
         PlaceExpr(pl_expr) => gen_pl_expr(pl_expr, view_ctx, comp_unit),
         Proj(tuple, idx) => {
             if let desc::Ty::View(_) = expr.ty.as_ref().unwrap() {
-                gen_view(&ViewExpr::create_from(expr, view_ctx), vec![], comp_unit)
+                gen_view(
+                    &ViewExpr::create_from(expr, view_ctx),
+                    vec![],
+                    view_ctx,
+                    comp_unit,
+                )
             } else {
                 cu::Expr::Proj {
                     tuple: Box::new(gen_expr(tuple, parall_ctx, view_ctx, comp_unit)),
@@ -500,6 +531,13 @@ fn gen_expr(
         })),
         Assign(pl_expr, expr) => cu::Expr::Assign {
             lhs: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+            rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
+        },
+        IdxAssign(pl_expr, idx, expr) => cu::Expr::Assign {
+            lhs: Box::new(cu::Expr::ArraySubscript {
+                array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+                index: idx.clone(),
+            }),
             rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
         },
         Lambda(params, exec, ty, expr) => cu::Expr::Lambda {
@@ -789,7 +827,12 @@ fn gen_pl_expr(
     match &pl_expr {
         desc::PlaceExpr::Ident(ident) => {
             if view_ctx.contains_key(&ident.name) {
-                gen_view(view_ctx.get(&ident.name).unwrap(), vec![], comp_unit)
+                gen_view(
+                    &view_ctx.get(&ident.name).unwrap().clone(),
+                    vec![],
+                    view_ctx,
+                    comp_unit,
+                )
             } else {
                 let is_pre_decl_fun = crate::ty_check::pre_decl::fun_decls()
                     .iter()
@@ -802,10 +845,12 @@ fn gen_pl_expr(
                 cu::Expr::Ident(name)
             }
         }
-        desc::PlaceExpr::Proj(pl, n) => match pl.to_place() {
+        desc::PlaceExpr::Proj(pl, n) => match pl_expr.to_place() {
+            // FIXME this does not work when there are tuples inside of view tuples
             Some(p) if view_ctx.contains_key(&p.ident.name) => gen_view(
-                view_ctx.get(&p.ident.name).unwrap(),
+                &view_ctx.get(&p.ident.name).unwrap().clone(),
                 p.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
+                view_ctx,
                 comp_unit,
             ),
             _ => cu::Expr::Proj {
@@ -819,8 +864,9 @@ fn gen_pl_expr(
             // The dereferencing will happen through indexing.
             match ple.to_place() {
                 Some(pl) if view_ctx.contains_key(&pl.ident.name) => gen_view(
-                    view_ctx.get(&pl.ident.name).unwrap(),
+                    &view_ctx.get(&pl.ident.name).unwrap().clone(),
                     pl.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
+                    view_ctx,
                     comp_unit,
                 ),
                 _ => cu::Expr::Deref(Box::new(gen_pl_expr(ple.as_ref(), view_ctx, comp_unit))),
@@ -911,6 +957,7 @@ fn gen_parall_cond(
 fn gen_view(
     view_expr: &ViewExpr,
     mut path: Vec<desc::Nat>,
+    view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
 ) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[desc::Nat]) -> cu::Expr {
@@ -924,31 +971,24 @@ fn gen_view(
         (ViewExpr::ToView { ref_expr, .. }, _) => {
             path.reverse();
             gen_indexing(
-                gen_expr(
-                    ref_expr,
-                    &mut HashMap::new(),
-                    &mut HashMap::new(),
-                    comp_unit,
-                ),
+                gen_expr(ref_expr, &mut HashMap::new(), view_ctx, comp_unit),
                 &path,
             )
         }
         (ViewExpr::Tuple { views }, [path @ .., prj]) => match prj.eval() {
             Ok(i) => match &views[i] {
-                ViewOrExpr::V(view_expr) => gen_view(view_expr, path.to_vec(), comp_unit),
-                ViewOrExpr::E(expr) => {
-                    gen_expr(expr, &mut HashMap::new(), &mut HashMap::new(), comp_unit)
-                }
+                ViewOrExpr::V(view_expr) => gen_view(view_expr, path.to_vec(), view_ctx, comp_unit),
+                ViewOrExpr::E(expr) => gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
             },
             Err(e) => panic!(e),
         },
         (ViewExpr::Idx { idx, view }, _) => {
             path.push(idx.clone());
-            gen_view(view, path, comp_unit)
+            gen_view(view, path, view_ctx, comp_unit)
         }
         (ViewExpr::Proj { view, i }, _) => {
             path.push(desc::Nat::Lit(*i));
-            gen_view(view, path, comp_unit)
+            gen_view(view, path, view_ctx, comp_unit)
         }
         (ViewExpr::SplitAt { pos, view }, _) => {
             let proj = path.pop();
@@ -958,14 +998,14 @@ fn gen_view(
                     Ok(v) => {
                         if v == 0 {
                             path.push(i);
-                            gen_view(view, path, comp_unit)
+                            gen_view(view, path, view_ctx, comp_unit)
                         } else if v == 1 {
                             path.push(desc::Nat::BinOp(
                                 desc::BinOpNat::Add,
                                 Box::new(i),
                                 Box::new(pos.clone()),
                             ));
-                            gen_view(view, path, comp_unit)
+                            gen_view(view, path, view_ctx, comp_unit)
                         } else {
                             panic!("split_at can only generate a 2-tuple view.")
                         }
@@ -990,7 +1030,15 @@ fn gen_view(
                         )),
                         Box::new(j),
                     ));
-                    gen_view(view, path, comp_unit)
+                    gen_view(view, path, view_ctx, comp_unit)
+                }
+                (Some(i), None) => {
+                    path.push(desc::Nat::BinOp(
+                        desc::BinOpNat::Mul,
+                        Box::new(i),
+                        Box::new(size.clone()),
+                    ));
+                    gen_view(view, path, view_ctx, comp_unit)
                 }
                 _ => panic!("Cannot generate Group view. One or more indices missing."),
             }
@@ -1003,7 +1051,7 @@ fn gen_view(
                     Ok(v) => {
                         let inner_view = &views[v];
                         path.push(i);
-                        gen_view(inner_view, path, comp_unit)
+                        gen_view(inner_view, path, view_ctx, comp_unit)
                     }
                     Err(m) => panic!(m),
                 },
@@ -1205,6 +1253,10 @@ fn is_dev_fun(exec: desc::Exec) -> bool {
 fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
     match ty {
         desc::Ty::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
+        desc::Ty::Data(desc::DataTy::Ref(_, _, _, arr)) => match arr.as_ref() {
+            desc::DataTy::Array(_, n) => Some(n.clone()),
+            _ => None,
+        },
         _ => None,
     }
 }

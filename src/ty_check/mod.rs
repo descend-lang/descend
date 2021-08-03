@@ -128,8 +128,7 @@ fn ty_check_expr(
             ty_check_borrow(gl_ctx, kind_ctx, ty_ctx, exec, prv, *own, pl_expr)?
         }
         ExprKind::Index(pl_expr, index) => {
-            //ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
-            unimplemented!()
+            ty_check_index_copy(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, index)?
         }
         ExprKind::Assign(pl_expr, e) => {
             if pl_expr.is_place() {
@@ -137,6 +136,9 @@ fn ty_check_expr(
             } else {
                 ty_check_assign_deref(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, e)?
             }
+        }
+        ExprKind::IdxAssign(pl_expr, idx, e) => {
+            ty_check_idx_assign(gl_ctx, kind_ctx, ty_ctx, exec, pl_expr, idx, e)?
         }
         ExprKind::ParFor(parall_collec, input, funs) => {
             ty_check_par_for(gl_ctx, kind_ctx, ty_ctx, exec, parall_collec, input, funs)?
@@ -147,8 +149,8 @@ fn ty_check_expr(
         ExprKind::IfElse(cond, case_true, case_false) => {
             ty_check_if_else(gl_ctx, kind_ctx, ty_ctx, exec, cond, case_true, case_false)?
         }
-        ExprKind::For(ident, set, body) => {
-            ty_check_for(gl_ctx, kind_ctx, ty_ctx, exec, ident, set, body)?
+        ExprKind::For(ident, collec, body) => {
+            ty_check_for(gl_ctx, kind_ctx, ty_ctx, exec, ident, collec, body)?
         }
         ExprKind::While(cond, body) => ty_check_while(gl_ctx, kind_ctx, ty_ctx, exec, cond, body)?,
         ExprKind::Lambda(params, exec, ret_ty, body) => {
@@ -170,6 +172,7 @@ fn ty_check_expr(
     expr.ty = Some(ty);
     Ok(res_ty_ctx)
 }
+
 fn ty_check_for_nat(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
@@ -197,10 +200,43 @@ fn ty_check_for(
     ty_ctx: TyCtx,
     exec: Exec,
     ident: &Ident,
-    set: &mut Expr,
+    collec: &mut Expr,
     body: &mut Expr,
 ) -> Result<(TyCtx, Ty), String> {
-    unimplemented!()
+    let collec_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, collec)?;
+    let ident_dty = match collec.ty.as_ref().unwrap() {
+        Ty::Data(DataTy::Array(elem_dty, n)) => unimplemented!(),
+        Ty::Data(DataTy::Ref(prv, own, mem, arr_dty)) => {
+            if let DataTy::Array(elem_dty, _) = arr_dty.as_ref() {
+                DataTy::Ref(prv.clone(), own.clone(), mem.clone(), elem_dty.clone())
+            } else {
+                return Err(format!(
+                    "Expected reference to array data type, but found {:?}",
+                    *arr_dty
+                ));
+            }
+        }
+        _ => {
+            return Err(format!(
+                "Expected array data type or reference to array data type, but found {:?}",
+                collec.ty.as_ref().unwrap()
+            ))
+        }
+    };
+    let collec_ty_ctx_with_ident = collec_ty_ctx
+        .clone()
+        .append_ident_typed(IdentTyped::new(ident.clone(), Ty::Data(ident_dty)));
+    let final_ctx = ty_check_expr(gl_ctx, kind_ctx, collec_ty_ctx_with_ident, exec, body)?;
+    if !matches!(
+        body.ty.as_ref().unwrap(),
+        Ty::Data(DataTy::Scalar(ScalarTy::Unit))
+    ) {
+        return Err("A loop body cannot have a return type.".to_string());
+    }
+    match final_ctx.drop_ident(ident) {
+        Some(ctx) if ctx == collec_ty_ctx => Ok((ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit)))),
+        _ => Err("Trying to use illegal element in for-loop.".to_string()),
+    }
 }
 
 fn ty_check_while(
@@ -520,8 +556,7 @@ fn ty_check_assign_deref(
         exec,
         Ownership::Uniq,
         deref_expr,
-    )?
-    .clone();
+    )?;
 
     if !deref_ty.is_fully_alive() {
         return Err(
@@ -553,32 +588,132 @@ fn ty_check_assign_deref(
     }
 }
 
+fn ty_check_idx_assign(
+    gl_ctx: &GlobalCtx,
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    exec: Exec,
+    pl_expr: &mut PlaceExpr,
+    idx: &Nat,
+    e: &mut Expr,
+) -> Result<(TyCtx, Ty), String> {
+    if exec != Exec::CpuThread && exec != Exec::GpuThread {
+        return Err(format!("Trying to assign to memory from {}.", exec));
+    }
+
+    let assigned_val_ty_ctx = ty_check_expr(gl_ctx, kind_ctx, ty_ctx, exec, e)?;
+    let pl_expr_ty = place_expr_ty_under_exec_own(
+        gl_ctx,
+        kind_ctx,
+        &assigned_val_ty_ctx,
+        exec,
+        Ownership::Uniq,
+        pl_expr,
+    )?;
+    let (n, dty, own, mem) = match pl_expr_ty {
+        Ty::Data(DataTy::Array(elem_ty, n)) => unimplemented!(), //(Ty::Data(*elem_ty), n),
+        Ty::Data(DataTy::At(arr_ty, mem)) => {
+            if let DataTy::Array(elem_ty, n) = *arr_ty {
+                unimplemented!() //(Ty::Data(*elem_ty), n)
+            } else {
+                return Err("Trying to index into non array type.".to_string());
+            }
+        }
+        Ty::View(ViewTy::Array(elem_ty, n)) => {
+            if let Ty::Data(DataTy::Ref(_, own, mem, dty)) = *elem_ty {
+                (n, dty, own, mem)
+            } else {
+                return Err("Expected a reference as element type of array view.".to_string());
+            }
+        }
+        _ => return Err("Trying to index into non array type.".to_string()),
+    };
+
+    if !dty.is_fully_alive() {
+        return Err(
+            "Trying to assign through reference, to a type which is not fully alive.".to_string(),
+        );
+    }
+    accessible_memory(exec, &mem)?;
+
+    if own != Ownership::Uniq {
+        return Err("Cannot assigned through shared references.".to_string());
+    }
+
+    match n.partial_cmp(idx) {
+        Some(std::cmp::Ordering::Less) => (),
+        Some(std::cmp::Ordering::Equal) | Some(std::cmp::Ordering::Greater) => {
+            return Err("Trying to access array out-of-bounds.".to_string())
+        }
+        None => println!(
+            "WARNING: Cannot check out-of-bounds indexing for index `{}` in array with size `{}`",
+            idx, n
+        ),
+    };
+    // TODO Only relevant for non array view indexing? (because array views cannot be borrowed?)
+    // borrow_check::ownership_safe(
+    //     kind_ctx,
+    //     &assigned_val_ty_ctx,
+    //     &[],
+    //     Ownership::Uniq,
+    //     deref_expr,
+    // )?;
+
+    let after_subty_ctx = subty::check(
+        kind_ctx,
+        assigned_val_ty_ctx,
+        e.ty.as_ref().unwrap().dty(),
+        &dty,
+    )?;
+
+    Ok((after_subty_ctx, Ty::Data(DataTy::Scalar(ScalarTy::Unit))))
+}
+
 fn ty_check_index_copy(
     gl_ctx: &GlobalCtx,
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     exec: Exec,
     pl_expr: &mut PlaceExpr,
-    index: &mut Nat,
+    idx: &mut Nat,
 ) -> Result<(TyCtx, Ty), String> {
     borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)?;
     let pl_expr_ty =
         place_expr_ty_under_exec_own(gl_ctx, kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
-    let elem_ty = match pl_expr_ty {
-        Ty::Data(DataTy::Array(elem_ty, n)) => *elem_ty,
+    let (elem_dty, n) = match pl_expr_ty {
+        Ty::Data(DataTy::Array(elem_ty, n)) => (*elem_ty, n),
         Ty::Data(DataTy::At(arr_ty, _)) => {
             if let DataTy::Array(elem_ty, n) = *arr_ty {
-                *elem_ty
+                (*elem_ty, n)
             } else {
                 return Err("Trying to index into non array type.".to_string());
             }
         }
-        Ty::View(_) => unimplemented!(),
+        Ty::View(ViewTy::Array(ref_dty, n)) => {
+            if let Ty::Data(DataTy::Ref(_, own, mem, dty)) = *ref_dty {
+                accessible_memory(exec, &mem)?;
+                // TODO is ownership checking necessary here?
+                (*dty, n)
+            } else {
+                return Err("Expected a reference as element type of array view.".to_string());
+            }
+        }
         _ => return Err("Trying to index into non array type.".to_string()),
     };
-    // TODO check that index is smaller than n here!?
-    if elem_ty.copyable() {
-        Ok((ty_ctx, Ty::Data(elem_ty)))
+
+    match n.partial_cmp(idx) {
+        Some(std::cmp::Ordering::Less) => (),
+        Some(std::cmp::Ordering::Equal) | Some(std::cmp::Ordering::Greater) => {
+            return Err("Trying to access array out-of-bounds.".to_string())
+        }
+        None => println!(
+            "WARNING: Cannot check out-of-bounds indexing for index `{}` in array with size `{}`",
+            idx, n
+        ),
+    };
+
+    if elem_dty.copyable() {
+        Ok((ty_ctx, Ty::Data(elem_dty)))
     } else {
         Err("Cannot move out of array type.".to_string())
     }
@@ -1018,9 +1153,10 @@ fn ty_check_borrow(
     };
 
     if !ty_ctx.loans_for_prv(prv_val_name)?.is_empty() {
-        return Err(
-            "Trying to borrow with a provenance that is used in a different borrow.".to_string(),
-        );
+        return Err(format!(
+            "Trying to borrow with a provenance that is used in a different borrow: {}",
+            prv_val_name
+        ));
     }
     let loans = borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)?;
     let (ty, mem) =

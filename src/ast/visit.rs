@@ -204,6 +204,11 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_pl_expr(pl_expr);
             visitor.visit_expr(expr)
         }
+        ExprKind::IdxAssign(pl_expr, idx, expr) => {
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_nat(idx);
+            visitor.visit_expr(expr);
+        }
         ExprKind::Seq(e1, e2) => {
             visitor.visit_expr(e1);
             visitor.visit_expr(e2)

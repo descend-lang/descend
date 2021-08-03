@@ -266,6 +266,8 @@ pub enum ExprKind {
     Let(Mutability, Ident, Box<Option<Ty>>, Box<Expr>, Box<Expr>),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
+    // e1[i] = e2
+    IdxAssign(PlaceExpr, Nat, Box<Expr>),
     // e1 ; e2
     Seq(Box<Expr>, Box<Expr>),
     // Anonymous function which can capture its surrounding context
@@ -1134,6 +1136,28 @@ impl PartialEq for Nat {
                     );
                     true
                 }
+            },
+        }
+    }
+}
+
+use std::cmp::Ordering;
+impl PartialOrd for Nat {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Nat::Lit(l), Nat::Lit(o)) if l < o => Some(Ordering::Less),
+            (Nat::Lit(l), Nat::Lit(o)) if l == o => Some(Ordering::Equal),
+            (Nat::Lit(l), Nat::Lit(o)) if l > o => Some(Ordering::Greater),
+            (Nat::BinOp(op, lhs, rhs), Nat::BinOp(oop, olhs, orhs))
+                if op == oop && lhs == olhs && rhs == orhs =>
+            {
+                Some(Ordering::Equal)
+            }
+            _ => match (self.eval(), other.eval()) {
+                (Ok(n), Ok(o)) if n < o => Some(Ordering::Less),
+                (Ok(n), Ok(o)) if n == o => Some(Ordering::Equal),
+                (Ok(n), Ok(o)) if n > o => Some(Ordering::Greater),
+                _ => None,
             },
         }
     }

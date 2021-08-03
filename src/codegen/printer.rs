@@ -1,7 +1,6 @@
 use super::cu_ast::{
     BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::codegen::cu_ast::ScalarTy::Gpu;
 use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
 use std::fmt::Formatter;
 use std::fmt::Write;
@@ -83,13 +82,19 @@ impl std::fmt::Display for Stmt {
             Block(stmt) => {
                 writeln!(f, "{{")?;
                 writeln!(f, "{}", stmt)?;
-                writeln!(f, "}}")
+                write!(f, "}}")
             }
             Seq(stmt1, stmt2) => {
                 writeln!(f, "{}", stmt1)?;
                 write!(f, "{}", stmt2)
             }
-            Expr(expr) => write!(f, "{};", expr),
+            Expr(expr) => {
+                if let super::cu_ast::Expr::Empty = expr {
+                    Ok(())
+                } else {
+                    write!(f, "{};", expr)
+                }
+            }
             If { cond, body } => {
                 writeln!(f, "if ({})", cond)?;
                 write!(f, "{}", body)
