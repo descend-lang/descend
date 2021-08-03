@@ -4,11 +4,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
     h_changes: &k uniq cpu.heap [(bool, bool, bool, i32); n],
     h_stop: &l uniq cpu.heap bool
 ) -[cpu.thread]-> () {
-<<<<<<< HEAD
     letprov<'c, 'd, 'e, 'f, 'r1, 'r2, 's, 'g, 'h, 'i, 'o, 'p, 't, 'q, 'j, 'k, 'u, 'v, 'm, 'n, 'o, 'x>{
-=======
-    letprov<'c, 'd, 'e, 'f, 'r1, 'r2, 's, 'g, 'h, 'i, 'o, 'p, 't, 'q, 'j, 'u, 'v, 'm, 'n, 'o, 'x>{
->>>>>>> bfs_copy does compile
 
         let gpu: Gpu = gpu_device(0);
         let nodes: [(i32, i32); n] @ gpu.global = 
@@ -22,11 +18,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
         while *h_stop {
 
             *h_stop = false;
-<<<<<<< HEAD
             copy_to_gpu::<'t, 'q, bool>(&'t uniq d_stop, &'q shrd *h_stop); 
-=======
-            copy_to_gpu::<'m, 't, 'q, bool>(&'m uniq gpu, &'t uniq d_stop, &'q shrd *h_stop); 
->>>>>>> bfs_copy does compile
 
             let nodes_view: [[ &'r1 shrd gpu.global (i32, i32); n]] =
                 to_view::<'r1, gpu.global, n, (i32, i32)>(&'r1 shrd nodes);
@@ -37,7 +29,6 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             let zipped_nodes_changes: [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
                 zip::<n, &'r1 shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view, view_changes);
         
-<<<<<<< HEAD
             let grouped_nodes_changes: [[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; n/16]] =
                 group::<16, n, <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
             //kernel 1
@@ -74,24 +65,6 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                                     let anything = inp.1;
                                     let temp_car = e; // e[2]; // try to index into non array type
                                     let something_else = ch;
-=======
-            let grouped_nodes_changes: [[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
-                group::<1024, n, <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
-            exec::< 64 , 1024, 'j, cpu.stack,  [[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]] >(
-                &'j uniq gpu,
-                grouped_nodes_changes,
-                | grid: Grid<Block<Thread, 1024>, 64>,
-                  input: [[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
-                | -[gpu.grid]-> () {
-                      for grid with <input> do
-                        | block: Block<Thread, 1024>,
-                          ib: [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]] 
-                        | -[gpu.block]-> () {
-                            for block with <ib> do 
-                                | thread: Thread,
-                                  inp: <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> 
-                                | -[gpu.thread]-> () {
->>>>>>> bfs_copy does compile
                                     () 
                                 };
                         };
@@ -106,7 +79,6 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             let zipped_nodes_changes2: [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
                 zip::<n, &'r2 shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view2, view_changes2);
         
-<<<<<<< HEAD
             let grouped_nodes_changes2: [[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; n/16]] =
                 group::<16, n, <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes2);
             // kernel 2 
@@ -143,50 +115,11 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                                     let x = 3;
                                     ()
                                 };
-=======
-            let grouped_nodes_changes2: [[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; n/1024]] =
-                group::<1024, n, <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes2);
-            // kernel 2 
-            exec::<64, 1024, 'j, cpu.stack, [[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]>(
-                &'j uniq gpu,
-                grouped_nodes_changes2,
-                | grid: Grid<Block<Thread, 1024>, 64>,
-                    input2: [[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]; 64]]
-                | -[gpu.grid]-> () {
-
-                        for grid with <input2> do
-                        | block: Block<Thread, 1024>,
-                            ib2: [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 1024 ]]
-                        | -[gpu.block]-> () {
-
-                            for block with <ib2> do
-                                | thread: Thread,
-                                    inp: <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) > 
-                                | -[gpu.thread]-> () {
-                                    let other_temp = *inp.0;
-                                    let y = other_temp.0;
-                                    let z = y;
-                                    ()  
-                                    //
-                                    //
-                                    //
-                                    //
-                                    //
-                                    //
-                                    //
-                                    //
-                                    //
-                                    };
->>>>>>> bfs_copy does compile
                             };
                     }
                 );
                 
-<<<<<<< HEAD
             copy_to_host::<'u, 'x, cpu.heap, bool>(&'u shrd d_stop,&'x uniq *h_stop);
-=======
-            copy_to_host::<'u, 'x, bool>(&'u shrd d_stop,&'x uniq *h_stop);
->>>>>>> bfs_copy does compile
         }
     }
 }
