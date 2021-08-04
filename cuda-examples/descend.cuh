@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <array>
+#include <thrust/tuple.h>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -189,7 +190,7 @@ template<typename T, std::size_t n>
 using array = std::array<T, n>;
 
 template<typename ... Types>
-using tuple = std::tuple<Types...>;
+using tuple = tuple::tuple<Types...>;
 
 using Gpu = size_t;
 
