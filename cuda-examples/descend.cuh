@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <array>
+#include <thrust/tuple.h>
 #include <iostream>
 
 #define CHECK_CUDA_ERR(err) { check_cuda_err((err), __FILE__, __LINE__); }
@@ -23,7 +24,7 @@ template<typename T, std::size_t n>
 using array = std::array<T, n>;
 
 template<typename ... Types>
-using tuple = std::tuple<Types...>;
+using tuple = tuple::tuple<Types...>;
 
 using Gpu = size_t;
 
