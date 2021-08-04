@@ -140,7 +140,8 @@ class Timing {
 
     std::string csv_line(int input_size) const {
         std::stringstream ss;
-        ss << "cuda," << input_size << "," << this->block_scans_time << "," << this->total_time << std::endl;
+        ss << "cuda," << input_size << "," << this->block_scans_time << "," << this->add_time << ","
+            << this->total_time << std::endl;
         return ss.str();
     }
 

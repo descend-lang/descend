@@ -4,6 +4,8 @@
 
 #include <array>
 #include <iostream>
+#include <sstream>
+#include <vector>
 
 #define CHECK_CUDA_ERR(err) { check_cuda_err((err), __FILE__, __LINE__); }
 inline void check_cuda_err(const cudaError_t err, const char * const file, const int line) {
@@ -13,7 +15,171 @@ inline void check_cuda_err(const cudaError_t err, const char * const file, const
     }
 }
 
+//
+// Define BENCH in order to enable benchmarking (of kernels).
+// If BENCH is defined, the file that is including this header must define the variable `benchmark`.
+// A `Benchmark` is created by supplying a configuration `BenchConfig`, that includes the names of all the kernels
+//  that are executed in a single run. The names of the kernels have to be specified in the order of the kernel calls.
+// `benchmark` will hold all measurements.
+//
+#ifdef BENCH
 namespace descend {
+    class Benchmark;
+};
+extern descend::Benchmark benchmark;
+#endif
+
+namespace descend {
+#ifdef BENCH
+class Timing {
+private:
+    cudaEvent_t begin_, end_;
+
+public:
+    Timing() {
+        CHECK_CUDA_ERR( cudaEventCreate(&begin_) );
+        CHECK_CUDA_ERR( cudaEventCreate(&end_) );
+    }
+
+    auto time_in_ms() const -> float {
+        float time;
+        CHECK_CUDA_ERR( cudaEventElapsedTime(&time, begin_, end_) );
+        return time;
+    }
+
+    auto record_begin() -> void { CHECK_CUDA_ERR( cudaEventRecord(begin_) )}
+    auto record_end() -> void { CHECK_CUDA_ERR( cudaEventRecord(end_) )}
+
+    auto begin() const -> cudaEvent_t { return begin_; }
+    auto end() const -> cudaEvent_t { return end_; }
+};
+
+class BenchRun {
+private:
+    size_t num_kernels_;
+    std::vector<Timing> timings_;
+
+public:
+    BenchRun(size_t num_kernels): num_kernels_{num_kernels} {}
+
+    auto insert_timing(Timing t) -> void {
+        if (timings_.size() < num_kernels_)
+            timings_.push_back(t);
+        else
+            throw std::logic_error("Trying to add timing for non-specified kernel.");
+    }
+
+    auto full_runtime_in_ms() const -> float {
+        float time = 0;
+        for (const auto& t : timings_) {
+            time += t.time_in_ms();
+        }
+        return time;
+    }
+
+    auto is_finished() const -> bool {
+        return timings_.size() == num_kernels_;
+    }
+
+    auto kernel_runtimes_in_ms() const -> std::vector<float> {
+        std::vector<float> ts;
+        for (const auto& t : timings_) {
+            ts.push_back(t.time_in_ms());
+        }
+        return ts;
+    }
+
+    auto csv_line() const -> std::string {
+        std::stringstream sstr;
+        for (const auto t : kernel_runtimes_in_ms()) {
+             sstr << t << ", ";
+        }
+        sstr << full_runtime_in_ms() << std::endl;
+        return sstr.str();
+    }
+};
+
+class BenchConfig {
+private:
+    std::vector<std::string> kernel_idents_;
+
+public:
+    BenchConfig(std::initializer_list<std::string> kernel_idents): kernel_idents_(kernel_idents) {}
+
+    auto num_kernels() const -> size_t {
+        return kernel_idents_.size();
+    }
+
+    auto get_kernel_idents() const -> std::vector<std::string> {
+        return kernel_idents_;
+    }
+};
+
+class Benchmark {
+private:
+    BenchConfig cfg_;
+    std::vector<BenchRun> runs_;
+
+    auto csv_header() const -> std::string {
+        std::stringstream sstr;
+        for (const auto& ident : cfg_.get_kernel_idents()) {
+            sstr << "kernel:" << ident << ", ";
+        }
+        sstr << "Total kernel runtime" << std::endl;
+        return sstr.str();
+    }
+
+public:
+    Benchmark(BenchConfig cfg): cfg_{cfg} {
+        runs_.push_back(BenchRun{cfg_.num_kernels()});
+    }
+
+    auto current_run() -> BenchRun& {
+        BenchRun& current = runs_.back();
+        if (current.is_finished()) {
+            runs_.push_back(BenchRun{cfg_.num_kernels()});
+        }
+        return runs_.back();
+    }
+
+    auto to_csv() const -> std::string {
+        std::stringstream sstr;
+        sstr << csv_header();
+        for (const auto& r : runs_) {
+            sstr << r.csv_line();
+        }
+        return sstr.str();
+    }
+
+    // The last value in the result vector is the average total time
+    auto avg_kernel_timings() const -> std::vector<float> {
+        std::vector<float> avg_timings(cfg_.num_kernels() + 1);
+        for (const auto& r : runs_) {
+            auto iter = avg_timings.begin();
+            for (const auto& t : r.kernel_runtimes_in_ms()) {
+                *iter += t;
+                iter++;
+            }
+            avg_timings.back() += r.full_runtime_in_ms();
+        }
+        for (auto& avg_t: avg_timings) {
+            avg_t = avg_t / runs_.size();
+        }
+
+        return avg_timings;
+    }
+
+    auto avg_to_csv() const -> std::string {
+        std::stringstream sstr;
+        sstr << csv_header();
+        for (const auto& avg : avg_kernel_timings()) {
+            sstr << avg << ", ";
+        }
+        sstr << std::endl;
+        return sstr.str();
+    }
+};
+#endif
 
 using i32 = std::int32_t;
 // FIXME there is no way to guarantee that float holds 32 bits
@@ -207,7 +373,15 @@ __global__ void launch(F f, Args... args)
 template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
 auto exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
     CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
+#ifdef BENCH
+    Timing timing{};
+    timing.record_begin();
+#endif
     launch<<<num_blocks, num_threads>>>(f, args...);
+#ifdef BENCH
+    timing.record_end();
+    benchmark.current_run().insert_timing(timing);
+#endif
     CHECK_CUDA_ERR( cudaPeekAtLastError() );
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
 }
@@ -228,6 +402,7 @@ constexpr descend::array<T, N> create_array(const T& value)
 {
     return detail::create_array(value, std::make_index_sequence<N>());
 }
-
 };
+
+
 #endif //DESCEND_DESCEND_CUH
