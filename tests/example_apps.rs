@@ -89,14 +89,8 @@ fn vector_add() -> std::io::Result<()> {
 
 #[test]
 fn bfs() -> std::io::Result<()> {
-<<<<<<< HEAD
     let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs.desc")?).to_string();
     let mut compil_unit = descend::parser::parse_compil_unit(&bfs).unwrap();
-=======
-    let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs_copy.desc")?).to_string();
-    let res = descend::parser::parse_global_fun_def(&bfs).unwrap();
-    let mut compil_unit = vec![res];
->>>>>>> eebd27a (added descend::copy_to_gpu())
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {
