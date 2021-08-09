@@ -1,4 +1,4 @@
-4pub mod internal;
+mod internal;
 
 mod span;
 #[macro_use]
