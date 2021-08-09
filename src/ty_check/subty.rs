@@ -5,8 +5,11 @@ use crate::ast::internal::Loan;
 // Subtyping and Provenance Subtyping from Oxide
 //
 
+use super::error::{CtxError, SubTyError};
 use crate::ast::*;
 use std::collections::HashSet;
+
+type SubTyResult<T> = Result<T, SubTyError>;
 
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
@@ -15,7 +18,7 @@ pub(super) fn check(
     ty_ctx: TyCtx,
     sub_ty: &DataTy,
     super_ty: &DataTy,
-) -> Result<TyCtx, String> {
+) -> SubTyResult<TyCtx> {
     use super::Ownership::*;
     use DataTy::*;
 
@@ -36,7 +39,7 @@ pub(super) fn check(
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
             let res_forw = check(kind_ctx, res_outl_ty_ctx.clone(), &sub_ty, &sup_ty)?;
             let res_back = check(kind_ctx, res_outl_ty_ctx, &sup_ty, &sub_ty)?;
-            // TODO find out why this is important (techniqually),
+            // TODO find out why this is important (technically),
             //  and return a proper error if suitable
             assert_eq!(res_forw, res_back);
             Ok(res_back)
@@ -67,7 +70,7 @@ fn outlives(
     ty_ctx: TyCtx,
     longer_prv: &Provenance,
     shorter_prv: &Provenance,
-) -> Result<TyCtx, String> {
+) -> SubTyResult<TyCtx> {
     use Provenance::*;
 
     match (longer_prv, shorter_prv) {
@@ -83,7 +86,9 @@ fn outlives(
             // TODO think about this: Oxide also checks that l and s are declared idents in the
             //  kinding context. However, that should always be the case for a well-formed kinding
             //  context. See ty_check_global_fun_def.
-            kind_ctx.outlives(longer, shorter)?;
+            kind_ctx
+                .outlives(longer, shorter)
+                .map_err(|err| SubTyError::CtxError(err))?;
             Ok(ty_ctx.clone())
         }
         // OL-LocalProvenances
@@ -101,7 +106,7 @@ fn outlives(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> Result<TyCtx, String> {
+fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> SubTyResult<TyCtx> {
     // CHECK:
     //    NOT CLEAR WHY a. IS NECESSARY
     // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan
@@ -109,12 +114,15 @@ fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> Result<TyC
 
     if exists_deref_loan_with_prv(&ty_ctx, longer) {
         // TODO better error msg
-        return Err(String::from("first condition violated"));
+        return Err(SubTyError::Dummy);
     }
 
     // b. r1 occurs before r2 in Gamma (left to right)
     if !longer_occurs_before_shorter(&ty_ctx, longer, shorter) {
-        return Err(format!("{} lives longer than {}.", shorter, longer));
+        return Err(SubTyError::NotOutliving(
+            longer.to_string(),
+            shorter.to_string(),
+        ));
     }
 
     // Create output Ctx
@@ -149,7 +157,10 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         .all_places()
         .into_iter()
         .filter(|(_, ty)| match ty {
-            Ty::Data(DataTy::Ref(Provenance::Value(prv_name), _, _, _)) if prv_name == prv => true,
+            Ty {
+                ty: TyKind::Data(DataTy::Ref(Provenance::Value(prv_name), _, _, _)),
+                ..
+            } if prv_name == prv => true,
             _ => false,
         })
         .any(|(place, _)| {
@@ -173,11 +184,11 @@ fn outl_check_val_ident_prv(
     ty_ctx: TyCtx,
     longer_val: &str,
     shorter_ident: &Ident,
-) -> Result<TyCtx, String> {
+) -> SubTyResult<TyCtx> {
     // TODO how could the set ever be empty?
     let loan_set = ty_ctx.loans_for_prv(longer_val)?;
     if loan_set.is_empty() {
-        return Err(format!("No loans bound to provenance."));
+        return Err(SubTyError::PrvNotUsedInBorrow(longer_val.to_string()));
     }
 
     borrowed_pl_expr_no_ref_to_existing_pl(&ty_ctx, loan_set);
@@ -202,17 +213,18 @@ fn outl_check_ident_val_prv(
     ty_ctx: TyCtx,
     longer_ident: &Ident,
     shorter_val: &str,
-) -> Result<TyCtx, String> {
-    if kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance)
-        && ty_ctx.prv_val_exists(shorter_val)
-    {
-        Ok(ty_ctx)
-    } else {
-        Err(format!(
-            "{} or {} not found in contexts.",
-            longer_ident, shorter_val
-        ))
+) -> SubTyResult<TyCtx> {
+    if !kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance) {
+        return Err(SubTyError::CtxError(CtxError::PrvIdentNotFound(
+            longer_ident.clone(),
+        )));
     }
+    if !ty_ctx.prv_val_exists(shorter_val) {
+        return Err(SubTyError::CtxError(CtxError::PrvValueNotFound(
+            shorter_val.to_string(),
+        )));
+    }
+    Ok(ty_ctx)
 }
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
@@ -220,7 +232,7 @@ pub(super) fn multiple_outlives<'a, I>(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
     prv_rels: I,
-) -> Result<TyCtx, String>
+) -> SubTyResult<TyCtx>
 where
     I: IntoIterator<Item = (&'a Provenance, &'a Provenance)>,
 {

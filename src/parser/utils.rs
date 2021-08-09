@@ -30,25 +30,3 @@ pub fn make_unary(op: UnOp, rhs: Expr) -> Expr {
         span: None,
     }
 }
-
-// pub fn make_function_application(func: Expr, kind_args: Option<Vec<ArgKinded>>, args: Vec<Expr>, span: Span) -> Expr {
-//     match kind_args {
-//         Some(mut kind_args) if !kind_args.is_empty() => {
-//             let first_arg = kind_args.remove(0);
-//             Expr {
-//                 expr: ExprKind::DepApp(Box::new(
-//                     make_function_application(func, Some(kind_args), args, span)),
-//                     first_arg),
-//                 ty: None,
-//                 span: Some(span)
-//             }
-//         }
-//         _ => {
-//             Expr {
-//                 expr: ExprKind::App(Box::new(func), args),
-//                 ty: None,
-//                 span: Some(span)
-//             }
-//         }
-//     }
-// }

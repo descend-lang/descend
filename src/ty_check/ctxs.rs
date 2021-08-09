@@ -1,9 +1,10 @@
 use crate::ast::internal::{FrameEntry, FrameTyping, IdentTyped, Loan, PrvMapping};
-use crate::ast::Ty::Data;
 use crate::ast::*;
+use crate::ty_check::error::CtxError;
+use crate::ty_check::TyResult;
 use std::collections::{HashMap, HashSet};
 
-pub(super) type TypedPlace = (Place, Ty);
+pub(super) type TypedPlace = (internal::Place, Ty);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct TyCtx {
@@ -99,7 +100,7 @@ impl TyCtx {
         mut self,
         prv_val_name: &str,
         loan_set: HashSet<Loan>,
-    ) -> Result<Self, String> {
+    ) -> CtxResult<Self> {
         for fe in self.frame_tys.iter_mut().flatten() {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 if prv_mapping.prv == prv_val_name {
@@ -108,13 +109,10 @@ impl TyCtx {
                 }
             }
         }
-        Err(format!(
-            "Typing Context is missing the provenance value {}",
-            prv_val_name
-        ))
+        Err(CtxError::PrvValueNotFound(prv_val_name.to_string()))
     }
 
-    pub fn extend_loans_for_prv<I>(mut self, base: &str, extension: I) -> Result<TyCtx, String>
+    pub fn extend_loans_for_prv<I>(mut self, base: &str, extension: I) -> CtxResult<TyCtx>
     where
         I: IntoIterator<Item = Loan>,
     {
@@ -123,29 +121,23 @@ impl TyCtx {
         Ok(self)
     }
 
-    pub fn loans_for_prv(&self, prv_val_name: &str) -> Result<&HashSet<Loan>, String> {
+    pub fn loans_for_prv(&self, prv_val_name: &str) -> CtxResult<&HashSet<Loan>> {
         match self
             .prv_mappings()
             .find(|prv_mapping| prv_val_name == prv_mapping.prv)
         {
             Some(set) => Ok(&set.loans),
-            None => Err(format!(
-                "Provenance with name '{}', not found in context.",
-                prv_val_name
-            )),
+            None => Err(CtxError::PrvValueNotFound(prv_val_name.to_string())),
         }
     }
 
-    pub fn loans_for_prv_mut(&mut self, prv_val_name: &str) -> Result<&mut HashSet<Loan>, String> {
+    pub fn loans_for_prv_mut(&mut self, prv_val_name: &str) -> CtxResult<&mut HashSet<Loan>> {
         match self
             .prv_mappings_mut()
             .find(|prv_mapping| prv_val_name == prv_mapping.prv)
         {
             Some(set) => Ok(&mut set.loans),
-            None => Err(format!(
-                "Provenance with name '{}', not found in context.",
-                prv_val_name
-            )),
+            None => Err(CtxError::PrvValueNotFound(prv_val_name.to_string())),
         }
     }
 
@@ -166,39 +158,39 @@ impl TyCtx {
     }
 
     fn explode_places(ident: &Ident, ty: &Ty) -> Vec<TypedPlace> {
-        fn proj(mut pl: Place, idx: usize) -> Place {
+        fn proj(mut pl: internal::Place, idx: usize) -> internal::Place {
             pl.path.push(idx);
             pl
         }
 
-        fn explode(pl: Place, ty: Ty) -> Vec<TypedPlace> {
+        fn explode(pl: internal::Place, ty: Ty) -> Vec<TypedPlace> {
             use DataTy as d;
             use ViewTy as v;
 
-            match &ty {
-                Ty::Ident(_)
-                | Ty::Fn(_, _, _, _)
-                | Ty::Data(d::Scalar(_))
-                | Ty::Data(d::Array(_, _))
-                | Ty::Data(d::At(_, _))
-                | Ty::Data(d::Ref(_, _, _, _))
-                | Ty::Data(d::Ident(_))
-                | Ty::Data(d::Grid(_, _))
-                | Ty::Data(d::Block(_, _))
-                | Ty::Data(d::Dead(_))
+            match &ty.ty {
+                TyKind::Ident(_)
+                | TyKind::Fn(_, _, _, _)
+                | TyKind::Data(d::Scalar(_))
+                | TyKind::Data(d::Array(_, _))
+                | TyKind::Data(d::At(_, _))
+                | TyKind::Data(d::Ref(_, _, _, _))
+                | TyKind::Data(d::Ident(_))
+                | TyKind::Data(d::Grid(_, _))
+                | TyKind::Data(d::Block(_, _))
+                | TyKind::Data(d::Dead(_))
 //                | Ty::View(v::Ident(_))
-                | Ty::View(v::Array(_, _))
-                | Ty::View(v::Dead(_)) => vec![(pl, ty.clone())],
-                Ty::Data(d::Tuple(tys)) => {
+                | TyKind::View(v::Array(_, _))
+                | TyKind::View(v::Dead(_)) => vec![(pl, ty.clone())],
+                TyKind::Data(d::Tuple(tys)) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index =
-                            explode(proj(pl.clone(), index), Ty::Data(proj_ty.clone()));
+                            explode(proj(pl.clone(), index), Ty::new(TyKind::Data(proj_ty.clone())));
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
                 }
-                Ty::View(v::Tuple(tys)) => {
+                TyKind::View(v::Tuple(tys)) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index =
@@ -210,29 +202,29 @@ impl TyCtx {
             }
         }
 
-        explode(Place::new(ident.clone(), vec![]), ty.clone())
+        explode(internal::Place::new(ident.clone(), vec![]), ty.clone())
     }
 
-    pub fn ident_ty(&self, ident: &Ident) -> Result<&Ty, String> {
+    pub fn ident_ty(&self, ident: &Ident) -> CtxResult<&Ty> {
         match self
             .idents_typed()
             .rev()
             .find(|id_ty| &id_ty.ident == ident)
         {
             Some(id) => Ok(&id.ty),
-            None => Err(format!("Identifier: {} not found in context.", ident)),
+            None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
 
-    pub fn place_ty(&self, place: &Place) -> Result<Ty, String> {
-        fn proj_ty(ty: Ty, path: &[usize]) -> Result<Ty, String> {
+    pub fn place_ty(&self, place: &internal::Place) -> CtxResult<Ty> {
+        fn proj_ty(ty: Ty, path: &[usize]) -> CtxResult<Ty> {
             let mut res_ty = ty;
             for n in path {
-                match &res_ty {
-                    Ty::Data(DataTy::Tuple(elem_tys)) => {
-                        res_ty = Ty::Data(elem_tys[*n].clone());
+                match &res_ty.ty {
+                    TyKind::Data(DataTy::Tuple(elem_tys)) => {
+                        res_ty = Ty::new(TyKind::Data(elem_tys[*n].clone()));
                     }
-                    Ty::View(ViewTy::Tuple(elem_tys)) => {
+                    TyKind::View(ViewTy::Tuple(elem_tys)) => {
                         res_ty = elem_tys[*n].clone();
                     }
                     t => panic!(
@@ -247,28 +239,32 @@ impl TyCtx {
         proj_ty(ident_ty.clone(), &place.path)
     }
 
-    pub fn set_place_ty(mut self, pl: &Place, pl_ty: Ty) -> Self {
+    pub fn set_place_ty(mut self, pl: &internal::Place, pl_ty: Ty) -> Self {
         fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[usize], part_ty: Ty) -> Ty {
             if path.is_empty() {
                 return part_ty;
             }
 
             let idx = path.first().unwrap();
-            match orig_ty {
-                Ty::Data(DataTy::Tuple(mut elem_tys)) => {
-                    elem_tys[*idx] = if let Ty::Data(dty) =
-                        set_ty_for_path_in_ty(Ty::Data(elem_tys[*idx].clone()), &path[1..], part_ty)
+            match orig_ty.ty {
+                TyKind::Data(DataTy::Tuple(mut elem_tys)) => {
+                    elem_tys[*idx] = if let TyKind::Data(dty) = set_ty_for_path_in_ty(
+                        Ty::new(TyKind::Data(elem_tys[*idx].clone())),
+                        &path[1..],
+                        part_ty,
+                    )
+                    .ty
                     {
                         dty
                     } else {
                         panic!("Trying create non-data type as part of data type.")
                     };
-                    Ty::Data(DataTy::Tuple(elem_tys))
+                    Ty::new(TyKind::Data(DataTy::Tuple(elem_tys)))
                 }
-                Ty::View(ViewTy::Tuple(mut elem_tys)) => {
+                TyKind::View(ViewTy::Tuple(mut elem_tys)) => {
                     elem_tys[*idx] =
                         set_ty_for_path_in_ty(elem_tys[*idx].clone(), &path[1..], part_ty);
-                    Ty::View(ViewTy::Tuple(elem_tys))
+                    Ty::new(TyKind::View(ViewTy::Tuple(elem_tys)))
                 }
                 _ => panic!("Path not compatible with type."),
             }
@@ -283,15 +279,15 @@ impl TyCtx {
         self
     }
 
-    pub fn kill_place(self, pl: &Place) -> Self {
+    pub fn kill_place(self, pl: &internal::Place) -> Self {
         if let Ok(pl_ty) = self.place_ty(pl) {
             self.set_place_ty(
                 pl,
-                match pl_ty {
-                    Ty::Ident(ident) => unimplemented!(),
-                    Ty::Fn(_, _, _, _) => unimplemented!(),
-                    Ty::Data(dty) => Ty::Data(DataTy::Dead(Box::new(dty))),
-                    Ty::View(vty) => Ty::View(ViewTy::Dead(Box::new(vty))),
+                match pl_ty.ty {
+                    TyKind::Ident(ident) => unimplemented!(),
+                    TyKind::Fn(_, _, _, _) => unimplemented!(),
+                    TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty)))),
+                    TyKind::View(vty) => Ty::new(TyKind::View(ViewTy::Dead(Box::new(vty)))),
                 },
             )
         } else {
@@ -365,6 +361,8 @@ enum KindingCtxEntry {
     PrvRel(PrvRel),
 }
 
+pub(super) type CtxResult<T> = Result<T, CtxError>;
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct KindCtx {
     vec: Vec<KindingCtxEntry>,
@@ -375,7 +373,7 @@ impl KindCtx {
         KindCtx { vec: Vec::new() }
     }
 
-    pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> Result<Self, String> {
+    pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> CtxResult<Self> {
         let kind_ctx: Self = Self::new().append_idents(idents);
         kind_ctx.well_kinded_prv_rels(&prv_rels)?;
         Ok(kind_ctx.append_prv_rels(prv_rels))
@@ -408,7 +406,7 @@ impl KindCtx {
         })
     }
 
-    pub fn get_kind(&self, ident: &Ident) -> Result<&Kind, String> {
+    pub fn get_kind(&self, ident: &Ident) -> CtxResult<&Kind> {
         let res = self.vec.iter().find_map(|entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident: id, kind }) = entry {
                 if id == ident {
@@ -423,10 +421,7 @@ impl KindCtx {
         if let Some(kind) = res {
             Ok(kind)
         } else {
-            Err(format!(
-                "Cannot find identifier {} in kinding context",
-                ident
-            ))
+            Err(CtxError::KindedIdentNotFound(ident.clone()))
         }
     }
 
@@ -434,27 +429,27 @@ impl KindCtx {
         self.get_idents(kind).any(|id| ident == id)
     }
 
-    pub fn well_kinded_prv_rels(&self, prv_rels: &[PrvRel]) -> Result<(), String> {
+    pub fn well_kinded_prv_rels(&self, prv_rels: &[PrvRel]) -> CtxResult<()> {
         let mut prv_idents = self.get_idents(Kind::Provenance);
         for prv_rel in prv_rels {
             if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
-                return Err(format!("{} is not declared", prv_rel.longer));
+                return Err(CtxError::PrvIdentNotFound(prv_rel.longer.clone()));
             }
             if !prv_idents.any(|prv_ident| &prv_rel.shorter == prv_ident) {
-                return Err(format!("{} is not declared", prv_rel.shorter));
+                return Err(CtxError::PrvIdentNotFound(prv_rel.shorter.clone()));
             }
         }
         Ok(())
     }
 
-    pub fn outlives(&self, l: &Ident, s: &Ident) -> Result<(), String> {
+    pub fn outlives(&self, l: &Ident, s: &Ident) -> CtxResult<()> {
         if self.vec.iter().any(|entry| match entry {
             KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
         }) {
             Ok(())
         } else {
-            Err(format!("{} is not defined as outliving {}.", l, s))
+            Err(CtxError::OutlRelNotDefined(l.clone(), s.clone()))
         }
     }
 }
@@ -489,13 +484,10 @@ impl GlobalCtx {
         self
     }
 
-    pub fn fun_ty_by_name(&self, name: &str) -> Result<&Ty, String> {
-        match self.items.get(name) {
+    pub fn fun_ty_by_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
+        match self.items.get(&ident.name) {
             Some(ty) => Ok(ty),
-            None => Err(format!(
-                "Function `{}` does not exist in global environment.",
-                name
-            )),
+            None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
 }
@@ -503,12 +495,15 @@ impl GlobalCtx {
 #[test]
 fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
-    let x = IdentTyped::new(Ident::new("x"), Ty::Data(DataTy::Scalar(ScalarTy::I32)));
-    let place = Place::new(x.ident.clone(), vec![]);
+    let x = IdentTyped::new(
+        Ident::new("x"),
+        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+    );
+    let place = internal::Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);
     ty_ctx = ty_ctx.kill_place(&place);
     assert!(
-        if let Ty::Data(DataTy::Dead(_)) = ty_ctx.idents_typed().next().unwrap().ty {
+        if let TyKind::Data(DataTy::Dead(_)) = ty_ctx.idents_typed().next().unwrap().ty.ty {
             true
         } else {
             false

@@ -131,16 +131,16 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
 }
 
 pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
-    match ty {
-        Ty::Data(dty) => visitor.visit_dty(dty),
-        Ty::View(vty) => visitor.visit_vty(vty),
-        Ty::Fn(gen_params, params, exec, ret_ty) => {
+    match &mut ty.ty {
+        TyKind::Data(dty) => visitor.visit_dty(dty),
+        TyKind::View(vty) => visitor.visit_vty(vty),
+        TyKind::Fn(gen_params, params, exec, ret_ty) => {
             walk_list!(visitor, visit_ident_kinded, gen_params);
             walk_list!(visitor, visit_ty, params);
             visitor.visit_exec(exec);
             visitor.visit_ty(ret_ty)
         }
-        Ty::Ident(ident) => visitor.visit_ident(ident),
+        TyKind::Ident(ident) => visitor.visit_ident(ident),
     }
 }
 
