@@ -11,7 +11,17 @@ use descend_derive::span_derive;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 
-pub type CompilUnit = Vec<FunDef>;
+#[derive(Clone, Debug)]
+pub struct CompilUnit<'a> {
+    pub fun_defs: Vec<FunDef>,
+    pub source: &'a SourceCode<'a>,
+}
+
+impl<'a> CompilUnit<'a> {
+    pub fn new(fun_defs: Vec<FunDef>, source: &'a SourceCode<'a>) -> Self {
+        CompilUnit { fun_defs, source }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunDef {
@@ -31,12 +41,12 @@ impl FunDef {
             .iter()
             .map(|p_decl| p_decl.ty.clone())
             .collect();
-        Ty::Fn(
+        Ty::new(TyKind::Fn(
             self.generic_params.clone(),
             param_tys,
             self.exec,
-            Box::new(Ty::Data(self.ret_dty.clone())),
-        )
+            Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
+        ))
     }
 }
 
@@ -207,8 +217,10 @@ impl Expr {
             fn visit_dty(&mut self, dty: &mut DataTy) {
                 match dty {
                     DataTy::Ident(ident) => {
-                        if let Some(ArgKinded::Ty(Ty::Data(dty_arg))) =
-                            self.subst_map.get::<&str>(&ident.name.as_str())
+                        if let Some(ArgKinded::Ty(Ty {
+                            ty: TyKind::Data(dty_arg),
+                            ..
+                        })) = self.subst_map.get::<&str>(&ident.name.as_str())
                         {
                             *dty = dty_arg.clone()
                         }
@@ -218,8 +230,8 @@ impl Expr {
             }
 
             fn visit_ty(&mut self, ty: &mut Ty) {
-                match ty {
-                    Ty::Ident(ident) => {
+                match &ty.ty {
+                    TyKind::Ident(ident) => {
                         if let Some(ArgKinded::Ty(ty_arg)) =
                             self.subst_map.get::<&str>(&ident.name.as_str())
                         {
@@ -326,7 +338,7 @@ impl fmt::Display for ExprKind {
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Ident {
     pub name: String,
     #[span_derive_ignore]
@@ -538,7 +550,7 @@ impl PlaceExpr {
     }
 
     // TODO refactor. Places are only needed during typechecking and codegen
-    pub fn to_place(&self) -> Option<Place> {
+    pub fn to_place(&self) -> Option<internal::Place> {
         if self.is_place() {
             Some(self.to_pl_ctx_and_most_specif_pl().1)
         } else {
@@ -547,7 +559,7 @@ impl PlaceExpr {
     }
 
     // TODO refactor see to_place
-    pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, Place) {
+    pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, internal::Place) {
         match self {
             PlaceExpr::Deref(inner_ple) => {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
@@ -558,18 +570,19 @@ impl PlaceExpr {
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
                         pl.path.push(*n);
-                        (pl_ctx, Place::new(pl.ident, pl.path))
+                        (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
                     _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
                 }
             }
-            PlaceExpr::Ident(ident) => {
-                (internal::PlaceCtx::Hole, Place::new(ident.clone(), vec![]))
-            }
+            PlaceExpr::Ident(ident) => (
+                internal::PlaceCtx::Hole,
+                internal::Place::new(ident.clone(), vec![]),
+            ),
         }
     }
 
-    pub fn equiv(&'_ self, place: &'_ Place) -> bool {
+    pub fn equiv(&'_ self, place: &'_ internal::Place) -> bool {
         if let (internal::PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
             &pl == place
         } else {
@@ -588,42 +601,16 @@ impl fmt::Display for PlaceExpr {
     }
 }
 
-// TODO refactor find proper location for this
-pub type Path = Vec<usize>;
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Place {
-    pub ident: Ident,
-    pub path: Path,
-}
-impl Place {
-    pub fn new(ident: Ident, path: Path) -> Self {
-        Place { ident, path }
-    }
-
-    pub fn to_place_expr(&self) -> PlaceExpr {
-        self.path.iter().fold(
-            PlaceExpr::Ident(self.ident.clone()),
-            |pl_expr, path_entry| PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone()),
-        )
-    }
-}
-
-#[test]
-fn test_path_eq() {
-    let path1 = vec![Nat::Lit(0)];
-    let path2 = vec![Nat::Lit(0)];
-    assert!(path1 == path2)
-}
-
-#[test]
-fn test_place_eq() {
-    let pl1 = Place::new(Ident::new("inp"), vec![0]);
-    let pl2 = Place::new(Ident::new("inp"), vec![0]);
-    assert!(pl1 == pl2)
+#[span_derive(PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub struct Ty {
+    pub ty: TyKind,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Ty {
+pub enum TyKind {
     Data(DataTy),
     View(ViewTy),
     Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
@@ -631,19 +618,23 @@ pub enum Ty {
 }
 
 impl Ty {
+    pub fn new(ty: TyKind) -> Self {
+        Ty { ty, span: None }
+    }
+
     pub fn dty(&self) -> &DataTy {
-        match self {
-            Ty::Data(dty) => dty,
+        match &self.ty {
+            TyKind::Data(dty) => dty,
             _ => panic!("Expected data type but found {:?}", self),
         }
     }
 
     pub fn non_copyable(&self) -> bool {
-        match self {
-            Ty::Data(dty) => dty.non_copyable(),
-            Ty::View(vty) => vty.non_copyable(),
-            Ty::Fn(_, _, _, _) => false,
-            Ty::Ident(_) => true,
+        match &self.ty {
+            TyKind::Data(dty) => dty.non_copyable(),
+            TyKind::View(vty) => vty.non_copyable(),
+            TyKind::Fn(_, _, _, _) => false,
+            TyKind::Ident(_) => true,
         }
     }
 
@@ -652,32 +643,32 @@ impl Ty {
     }
 
     pub fn is_fully_alive(&self) -> bool {
-        match self {
-            Ty::Data(dty) => dty.is_fully_alive(),
-            Ty::View(vty) => vty.is_fully_alive(),
-            Ty::Ident(_) | Ty::Fn(_, _, _, _) => true,
+        match &self.ty {
+            TyKind::Data(dty) => dty.is_fully_alive(),
+            TyKind::View(vty) => vty.is_fully_alive(),
+            TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
         }
     }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
-        match self {
-            Ty::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
-            Ty::View(vty) => vty.contains_ref_to_prv(prv_val_name),
-            Ty::Fn(_, param_tys, _, ret_ty) => {
+        match &self.ty {
+            TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
+            TyKind::View(vty) => vty.contains_ref_to_prv(prv_val_name),
+            TyKind::Fn(_, param_tys, _, ret_ty) => {
                 param_tys
                     .iter()
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
                     || ret_ty.contains_ref_to_prv(prv_val_name)
             }
-            Ty::Ident(_) => false,
+            TyKind::Ident(_) => false,
         }
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
-        match self {
-            Ty::Data(dty) => Ty::Data(dty.subst_ident_kinded(ident_kinded, with)),
-            Ty::View(vty) => Ty::View(vty.subst_ident_kinded(ident_kinded, with)),
-            Ty::Fn(gen_params, params, exec, ret) => Ty::Fn(
+        match &self.ty {
+            TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
+            TyKind::View(vty) => Ty::new(TyKind::View(vty.subst_ident_kinded(ident_kinded, with))),
+            TyKind::Fn(gen_params, params, exec, ret) => Ty::new(TyKind::Fn(
                 gen_params.clone(),
                 params
                     .iter()
@@ -685,11 +676,11 @@ impl Ty {
                     .collect(),
                 exec.clone(),
                 Box::new(ret.subst_ident_kinded(ident_kinded, with)),
-            ),
-            Ty::Ident(ident) => {
+            )),
+            TyKind::Ident(ident) => {
                 if &ident_kinded.ident == ident && ident_kinded.kind == Kind::Ty {
                     match with {
-                        ArgKinded::Ident(idk) => Ty::Ident(idk.clone()),
+                        ArgKinded::Ident(idk) => Ty::new(TyKind::Ident(idk.clone())),
                         ArgKinded::Ty(ty) => ty.clone(),
                         _ => panic!("Trying to substitute type identifier with non-type value."),
                     }
@@ -703,11 +694,11 @@ impl Ty {
 
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Ty::Data(dty) => write!(f, "{}", dty),
-            Ty::View(vty) => write!(f, "{}", vty),
-            Ty::Ident(ident) => write!(f, "{}", ident),
-            Ty::Fn(_, _, _, _) => unimplemented!(),
+        match &self.ty {
+            TyKind::Data(dty) => write!(f, "{}", dty),
+            TyKind::View(vty) => write!(f, "{}", vty),
+            TyKind::Ident(ident) => write!(f, "{}", ident),
+            TyKind::Fn(_, _, _, _) => unimplemented!(),
         }
     }
 }
@@ -880,7 +871,10 @@ impl DataTy {
                 if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
                     match with {
                         ArgKinded::Ident(idk) => Ident(idk.clone()),
-                        ArgKinded::Ty(Ty::Data(dty)) => dty.clone(),
+                        ArgKinded::Ty(Ty {
+                            ty: TyKind::Data(dty),
+                            ..
+                        }) => dty.clone(),
                         _ => {
                             panic!("Trying to substitute data type identifier with non-type value.")
                         }
@@ -948,6 +942,7 @@ pub enum ScalarTy {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Provenance {
+    // TODO Value should be Ident too
     Value(String),
     Ident(Ident),
 }
@@ -1148,7 +1143,9 @@ impl PartialEq for Nat {
     }
 }
 
+use crate::parser::SourceCode;
 use std::cmp::Ordering;
+
 impl PartialOrd for Nat {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {

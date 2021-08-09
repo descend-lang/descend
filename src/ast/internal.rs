@@ -55,6 +55,26 @@ pub struct Loan {
     pub own: Ownership,
 }
 
+// TODO refactor find proper location for this
+pub type Path = Vec<usize>;
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Place {
+    pub ident: Ident,
+    pub path: Path,
+}
+impl Place {
+    pub fn new(ident: Ident, path: Path) -> Self {
+        Place { ident, path }
+    }
+
+    pub fn to_place_expr(&self) -> PlaceExpr {
+        self.path.iter().fold(
+            PlaceExpr::Ident(self.ident.clone()),
+            |pl_expr, path_entry| PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone()),
+        )
+    }
+}
+
 pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, usize),
     Deref(Box<PlaceCtx>),

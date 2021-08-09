@@ -1,6 +1,6 @@
 use crate::ast::{
     internal, BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance,
-    ScalarTy, Ty, ViewTy,
+    ScalarTy, Ty, TyKind, ViewTy,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -57,19 +57,19 @@ fn split_block_ty() -> Ty {
         ident: n.clone(),
         kind: Kind::Nat,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![k_nat, n_nat],
-        vec![Ty::Data(DataTy::Block(
+        vec![Ty::new(TyKind::Data(DataTy::Block(
             Box::new(DataTy::Scalar(ScalarTy::Thread)),
             vec![Nat::Ident(n.clone()), Nat::Lit(1), Nat::Lit(1)],
-        ))],
+        )))],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Tuple(vec![
-            Ty::Data(DataTy::Block(
+        Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+            Ty::new(TyKind::Data(DataTy::Block(
                 Box::new(DataTy::Scalar(ScalarTy::Thread)),
                 vec![Nat::Ident(k.clone()), Nat::Lit(1), Nat::Lit(1)],
-            )),
-            Ty::Data(DataTy::Block(
+            ))),
+            Ty::new(TyKind::Data(DataTy::Block(
                 Box::new(DataTy::Scalar(ScalarTy::Thread)),
                 vec![
                     Nat::BinOp(
@@ -80,9 +80,9 @@ fn split_block_ty() -> Ty {
                     Nat::Lit(1),
                     Nat::Lit(1),
                 ],
-            )),
-        ]))),
-    )
+            ))),
+        ])))),
+    ))
 }
 
 fn split_warp_ty() -> Ty {
@@ -91,25 +91,25 @@ fn split_warp_ty() -> Ty {
         ident: k.clone(),
         kind: Kind::Nat,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![k_nat],
-        vec![Ty::Data(DataTy::Scalar(ScalarTy::Warp))],
+        vec![Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Warp)))],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Tuple(vec![
-            Ty::Data(DataTy::Scalar(ScalarTy::Warp)),
-            Ty::Data(DataTy::Scalar(ScalarTy::Warp)),
-        ]))),
-    )
+        Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Warp))),
+            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Warp))),
+        ])))),
+    ))
 }
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
 fn gpu_device_ty() -> Ty {
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![],
-        vec![Ty::Data(DataTy::Scalar(ScalarTy::I32))],
+        vec![Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))],
         Exec::CpuThread,
-        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Gpu))),
-    )
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Gpu)))),
+    ))
 }
 
 // gpu_alloc:
@@ -142,28 +142,28 @@ fn gpu_alloc_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, m1_mem, m2_mem, t_ty],
         vec![
-            Ty::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r1),
                 Ownership::Uniq,
                 Memory::Ident(m1),
                 Box::new(DataTy::Scalar(ScalarTy::Gpu)),
-            )),
-            Ty::Data(DataTy::Ref(
+            ))),
+            Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r2),
                 Ownership::Shrd,
                 Memory::Ident(m2),
                 Box::new(DataTy::Ident(t.clone())),
-            )),
+            ))),
         ],
         Exec::CpuThread,
-        Box::new(Ty::Data(DataTy::At(
+        Box::new(Ty::new(TyKind::Data(DataTy::At(
             Box::new(DataTy::Ident(t)),
             Memory::GpuGlobal,
-        ))),
-    )
+        )))),
+    ))
 }
 
 // copy_to_host:
@@ -190,25 +190,25 @@ fn copy_to_host_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, m_mem, t_ty],
         vec![
-            Ty::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r1),
                 Ownership::Shrd,
                 Memory::GpuGlobal,
                 Box::new(DataTy::Ident(t.clone())),
-            )),
-            Ty::Data(DataTy::Ref(
+            ))),
+            Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r2),
                 Ownership::Uniq,
                 Memory::Ident(m),
                 Box::new(DataTy::Ident(t)),
-            )),
+            ))),
         ],
         Exec::CpuThread,
-        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-    )
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+    ))
 }
 
 // copy_to_gpu:
@@ -230,25 +230,25 @@ fn copy_to_gpu_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, t_ty],
         vec![
-            Ty::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r1),
                 Ownership::Uniq,
                 Memory::GpuGlobal,
                 Box::new(DataTy::Ident(t.clone())),
-            )),
-            Ty::Data(DataTy::Ref(
+            ))),
+            Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r2),
                 Ownership::Shrd,
                 Memory::CpuHeap,
                 Box::new(DataTy::Ident(t)),
-            )),
+            ))),
         ],
         Exec::CpuThread,
-        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-    )
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+    ))
 }
 
 // exec: <blocks: nat, threads: nat, r: prv, m: mem, t: ty>(
@@ -282,17 +282,17 @@ fn exec_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![blocks_nat, threads_nat, r_prv, m_mem, t_ty],
         vec![
-            Ty::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r),
                 Ownership::Uniq,
                 Memory::Ident(m),
                 Box::new(DataTy::Scalar(ScalarTy::Gpu)),
-            )),
-            Ty::Ident(t.clone()),
-            Ty::Fn(
+            ))),
+            Ty::new(TyKind::Ident(t.clone())),
+            Ty::new(TyKind::Fn(
                 vec![],
                 vec![
                     // Ty::View(ViewTy::Array(
@@ -302,22 +302,22 @@ fn exec_ty() -> Ty {
                     //     ))),
                     //     Nat::Ident(blocks),
                     // )),
-                    Ty::Data(DataTy::Grid(
+                    Ty::new(TyKind::Data(DataTy::Grid(
                         Box::new(DataTy::Block(
                             Box::new(DataTy::Scalar(ScalarTy::Thread)),
                             vec![Nat::Ident(threads), Nat::Lit(1), Nat::Lit(1)],
                         )),
                         vec![Nat::Ident(blocks), Nat::Lit(1), Nat::Lit(1)],
-                    )),
-                    Ty::Ident(t),
+                    ))),
+                    Ty::new(TyKind::Ident(t)),
                 ],
                 Exec::GpuGrid,
-                Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-            ),
+                Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+            )),
         ],
         Exec::CpuThread,
-        Box::new(Ty::Data(DataTy::Scalar(ScalarTy::Unit))),
-    )
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+    ))
 }
 
 // shared_alloc:
@@ -328,15 +328,15 @@ fn shared_alloc_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![t_ty],
         vec![],
         Exec::GpuGrid,
-        Box::new(Ty::Data(DataTy::At(
+        Box::new(Ty::new(TyKind::Data(DataTy::At(
             Box::new(DataTy::Ident(t)),
             Memory::GpuShared,
-        ))),
-    )
+        )))),
+    ))
 }
 
 // TODO FIX Error: t: ty is too general. This means [t; n] could contain a view
@@ -366,9 +366,9 @@ fn to_view_ty(own: Ownership) -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![r_prv, m_mem, n_nat, t_ty],
-        vec![Ty::Data(DataTy::Ref(
+        vec![Ty::new(TyKind::Data(DataTy::Ref(
             Provenance::Ident(r.clone()),
             own,
             Memory::Ident(m.clone()),
@@ -376,18 +376,18 @@ fn to_view_ty(own: Ownership) -> Ty {
                 Box::new(DataTy::Ident(t.clone())),
                 Nat::Ident(n.clone()),
             )),
-        ))],
+        )))],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Array(
-            Box::new(Ty::Data(DataTy::Ref(
+        Box::new(Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r),
                 own,
                 Memory::Ident(m),
                 Box::new(DataTy::Ident(t)),
-            ))),
+            )))),
             Nat::Ident(n),
-        ))),
-    )
+        )))),
+    ))
 }
 
 // group:
@@ -408,25 +408,25 @@ fn group_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![s_nat, n_nat, t_ty],
-        vec![Ty::View(ViewTy::Array(
-            Box::new(Ty::Ident(t.clone())),
+        vec![Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::Ident(t.clone()))),
             Nat::Ident(n.clone()),
-        ))],
+        )))],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Array(
-            Box::new(Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t.clone())),
+        Box::new(Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t.clone()))),
                 Nat::Ident(s.clone()),
-            ))),
+            )))),
             Nat::BinOp(
                 BinOpNat::Div,
                 Box::new(Nat::Ident(n)),
                 Box::new(Nat::Ident(s)),
             ),
-        ))),
-    )
+        )))),
+    ))
 }
 
 // join:
@@ -447,25 +447,25 @@ fn join_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![m_nat, n_nat, t_ty],
-        vec![Ty::View(ViewTy::Array(
-            Box::new(Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t.clone())),
+        vec![Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t.clone()))),
                 Nat::Ident(n.clone()),
-            ))),
+            )))),
             Nat::Ident(m.clone()),
-        ))],
+        )))],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Array(
-            Box::new(Ty::Ident(t)),
+        Box::new(Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::Ident(t))),
             Nat::BinOp(
                 BinOpNat::Mul,
                 Box::new(Nat::Ident(m)),
                 Box::new(Nat::Ident(n)),
             ),
-        ))),
-    )
+        )))),
+    ))
 }
 
 // transpose:
@@ -486,24 +486,24 @@ fn transpose_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![m_nat, n_nat, t_ty],
-        vec![Ty::View(ViewTy::Array(
-            Box::new(Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t.clone())),
+        vec![Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t.clone()))),
                 Nat::Ident(n.clone()),
-            ))),
+            )))),
             Nat::Ident(m.clone()),
-        ))],
+        )))],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Array(
-            Box::new(Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t)),
+        Box::new(Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t))),
                 Nat::Ident(m),
-            ))),
+            )))),
             Nat::Ident(n),
-        ))),
-    )
+        )))),
+    ))
 }
 
 // zip:
@@ -524,24 +524,27 @@ fn zip_ty() -> Ty {
         ident: t2.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![n_nat, t1_ty, t2_ty],
         vec![
-            Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t1.clone())),
+            Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t1.clone()))),
                 Nat::Ident(n.clone()),
-            )),
-            Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t2.clone())),
+            ))),
+            Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t2.clone()))),
                 Nat::Ident(n.clone()),
-            )),
+            ))),
         ],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Array(
-            Box::new(Ty::View(ViewTy::Tuple(vec![Ty::Ident(t1), Ty::Ident(t2)]))),
+        Box::new(Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+                Ty::new(TyKind::Ident(t1)),
+                Ty::new(TyKind::Ident(t2)),
+            ])))),
             Nat::Ident(n),
-        ))),
-    )
+        )))),
+    ))
 }
 
 // split:
@@ -562,26 +565,26 @@ fn split_at_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::Fn(
+    Ty::new(TyKind::Fn(
         vec![s_nat, n_nat, t_ty],
-        vec![Ty::View(ViewTy::Array(
-            Box::new(Ty::Ident(t.clone())),
+        vec![Ty::new(TyKind::View(ViewTy::Array(
+            Box::new(Ty::new(TyKind::Ident(t.clone()))),
             Nat::Ident(n.clone()),
-        ))],
+        )))],
         Exec::View,
-        Box::new(Ty::View(ViewTy::Tuple(vec![
-            Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t.clone())),
+        Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+            Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t.clone()))),
                 Nat::Ident(s.clone()),
-            )),
-            Ty::View(ViewTy::Array(
-                Box::new(Ty::Ident(t)),
+            ))),
+            Ty::new(TyKind::View(ViewTy::Array(
+                Box::new(Ty::new(TyKind::Ident(t))),
                 Nat::BinOp(
                     BinOpNat::Sub,
                     Box::new(Nat::Ident(n)),
                     Box::new(Nat::Ident(s)),
                 ),
-            )),
-        ]))),
-    )
+            ))),
+        ])))),
+    ))
 }

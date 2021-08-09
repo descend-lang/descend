@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{Ident, Mutability, PlaceExpr};
+use crate::ast::{CompilUnit, Ident, Mutability, PlaceExpr};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -12,18 +12,19 @@ use std::iter;
 
 // Precondition. all function defitions are successfully typechecked and
 // therefore every subexpression stores a type
-pub fn gen(comp_unit: &[desc::FunDef]) -> String {
-    let preproc_comp_unit = comp_unit
+pub fn gen(compil_unit: &CompilUnit) -> String {
+    let preproc_comp_unit = compil_unit
+        .fun_defs
         .to_vec()
         .into_iter()
         .map(replace_arg_kinded_idents)
-        .map(|f| inline_par_for_funs(f, comp_unit))
+        .map(|f| inline_par_for_funs(f, &compil_unit.fun_defs))
         .collect::<Vec<desc::FunDef>>();
     let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
         .chain(
             preproc_comp_unit
                 .iter()
-                .map(|fun_def| gen_fun_def(fun_def, comp_unit)),
+                .map(|fun_def| gen_fun_def(fun_def, &compil_unit.fun_defs)),
         )
         .collect::<cu::CuProgram>();
     printer::print(&cu_program)
@@ -44,7 +45,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef]) -> cu::Item {
         name: name.clone(),
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
-        ret_ty: gen_ty(&desc::Ty::Data(ret_ty.clone()), desc::Mutability::Mut).unwrap(),
+        ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut).unwrap(),
         body: gen_stmt(
             body_expr,
             !matches!(ret_ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
@@ -68,7 +69,7 @@ fn gen_stmt(
     match &expr.expr {
         Let(mutbl, ident, _, e1, e2) => {
             // Let View
-            if matches!(e1.ty.as_ref().unwrap(), desc::Ty::View(_)) {
+            if matches!(&e1.ty.as_ref().unwrap().ty, desc::TyKind::View(_)) {
                 if let Some(old) =
                     view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e1, view_ctx))
                 {
@@ -94,18 +95,18 @@ fn gen_stmt(
                     )
                 }
                 gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
-            } else if let desc::Ty::Data(desc::DataTy::At(dty, desc::Memory::GpuShared)) =
-                e1.ty.as_ref().unwrap()
+            } else if let desc::TyKind::Data(desc::DataTy::At(dty, desc::Memory::GpuShared)) =
+                &e1.ty.as_ref().unwrap().ty
             {
                 let cu_ty = if let desc::DataTy::Array(elem_dty, n) = dty.as_ref() {
                     cu::Ty::CArray(
                         Box::new(
-                            gen_ty(&desc::Ty::Data(elem_dty.as_ref().clone()), *mutbl).unwrap(),
+                            gen_ty(&desc::TyKind::Data(elem_dty.as_ref().clone()), *mutbl).unwrap(),
                         ),
                         n.clone(),
                     )
                 } else {
-                    gen_ty(&desc::Ty::Data(dty.as_ref().clone()), *mutbl).unwrap()
+                    gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl).unwrap()
                 };
                 let var = cu::Stmt::VarDecl {
                     name: ident.name.clone(),
@@ -117,7 +118,7 @@ fn gen_stmt(
                     Box::new(var),
                     Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
                 )
-            } else if let Some(tty) = gen_ty(e1.ty.as_ref().unwrap(), *mutbl) {
+            } else if let Some(tty) = gen_ty(&e1.ty.as_ref().unwrap().ty, *mutbl) {
                 let (init_expr, cu_ty) = match tty {
                     cu::Ty::Array(_, _) => (gen_expr(e1, parall_ctx, view_ctx, comp_unit), tty),
                     _ => (
@@ -144,7 +145,7 @@ fn gen_stmt(
             }
         }
         LetUninit(ident, ty, e) => {
-            if let Some(tty) = gen_ty(ty.as_ref(), Mutability::Mut) {
+            if let Some(tty) = gen_ty(&ty.as_ref().ty, Mutability::Mut) {
                 cu::Stmt::Seq(
                     Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
@@ -327,7 +328,7 @@ fn gen_exec(
         .map(|(name, expr)| cu::ParamDecl {
             name: name.clone(),
             // TODO why Mutability::Const??!
-            ty: gen_ty(expr.ty.as_ref().unwrap(), desc::Mutability::Const).unwrap(),
+            ty: gen_ty(&expr.ty.as_ref().unwrap().ty, desc::Mutability::Const).unwrap(),
         })
         .collect();
 
@@ -412,8 +413,10 @@ fn gen_par_for(
                 view_ctx,
             );
 
-            if let desc::Ty::View(desc::ViewTy::Tuple(elem_tys)) = input_expr.ty.as_ref().unwrap() {
-                if let desc::Ty::View(_) = elem_tys[i] {
+            if let desc::TyKind::View(desc::ViewTy::Tuple(elem_tys)) =
+                &input_expr.ty.as_ref().unwrap().ty
+            {
+                if let desc::TyKind::View(_) = &elem_tys[i].ty {
                     view_ctx.insert(
                         id.clone(),
                         ViewExpr::Idx {
@@ -434,12 +437,12 @@ fn gen_par_for(
         gen_stmt(body, false, &mut scope_parall_ctx, view_ctx, comp_unit)
     }
 
-    let (pid, sync_stmt) = match parall_collec.ty.as_ref().unwrap() {
-        desc::Ty::Data(desc::DataTy::Grid(_, _)) => (
+    let (pid, sync_stmt) = match &parall_collec.ty.as_ref().unwrap().ty {
+        desc::TyKind::Data(desc::DataTy::Grid(_, _)) => (
             desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
             cu::Stmt::Expr(cu::Expr::Empty),
         ),
-        desc::Ty::Data(desc::DataTy::Block(_, _)) => (
+        desc::TyKind::Data(desc::DataTy::Block(_, _)) => (
             desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
             cu::Stmt::Expr(cu::Expr::FunCall {
                 fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
@@ -447,7 +450,7 @@ fn gen_par_for(
                 args: vec![],
             }),
         ),
-        desc::Ty::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => (
+        desc::TyKind::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => (
             desc::Nat::BinOp(
                 desc::BinOpNat::Mod,
                 Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
@@ -463,15 +466,17 @@ fn gen_par_for(
     };
 
     // FIXME this assumes that the only functions given are syntactically lambdas
-    let par_section = match funs.ty.as_ref().unwrap() {
-        desc::Ty::View(desc::ViewTy::Tuple(_)) => unimplemented!(),
-        desc::Ty::Fn(_, _, _, _) => match &funs.expr {
+    let par_section = match &funs.ty.as_ref().unwrap().ty {
+        desc::TyKind::View(desc::ViewTy::Tuple(_)) => unimplemented!(),
+        desc::TyKind::Fn(_, _, _, _) => match &funs.expr {
             desc::ExprKind::Lambda(params, _, _, body) => {
                 gen_parall_section(params, body, &input, &pid, view_ctx, comp_unit)
             }
             _ => panic!("No function supplied."),
         },
-        desc::Ty::Data(_) => panic!("Cannot generate function body from expression of data type."),
+        desc::TyKind::Data(_) => {
+            panic!("Cannot generate function body from expression of data type.")
+        }
         _ => panic!("Expected Lambda or tuple view of Lambda."),
     };
 
@@ -500,7 +505,7 @@ fn gen_expr(
         Lit(l) => gen_lit(*l),
         PlaceExpr(pl_expr) => gen_pl_expr(pl_expr, view_ctx, comp_unit),
         Proj(tuple, idx) => {
-            if let desc::Ty::View(_) = expr.ty.as_ref().unwrap() {
+            if let desc::TyKind::View(_) = expr.ty.as_ref().unwrap().ty {
                 gen_view(
                     &ViewExpr::create_from(expr, view_ctx),
                     vec![],
@@ -541,8 +546,8 @@ fn gen_expr(
             },
             arg: Box::new(gen_expr(arg, parall_ctx, view_ctx, comp_unit)),
         },
-        Ref(_, _, pl_expr) => match expr.ty.as_ref().unwrap() {
-            desc::Ty::Data(desc::DataTy::Ref(_, _, desc::Memory::GpuShared, _)) => {
+        Ref(_, _, pl_expr) => match &expr.ty.as_ref().unwrap().ty {
+            desc::TyKind::Data(desc::DataTy::Ref(_, _, desc::Memory::GpuShared, _)) => {
                 gen_pl_expr(pl_expr, view_ctx, comp_unit)
             }
             _ => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit))),
@@ -591,7 +596,11 @@ fn gen_expr(
                 view_ctx,
                 comp_unit,
             )),
-            ret_ty: gen_ty(&desc::Ty::Data(ty.as_ref().clone()), desc::Mutability::Mut).unwrap(),
+            ret_ty: gen_ty(
+                &desc::TyKind::Data(ty.as_ref().clone()),
+                desc::Mutability::Mut,
+            )
+            .unwrap(),
             is_dev_fun: is_dev_fun(*exec),
         },
         App(fun, kinded_args, args) => match &fun.expr {
@@ -745,21 +754,21 @@ fn create_lambda_no_view_args(
                 .cloned()
                 .collect();
             let data_param_tys: Vec<desc::Ty> =
-                if let desc::Ty::Fn(_, param_tys, _, _) = fun.ty.as_ref().unwrap() {
+                if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
                     param_tys
                         .iter()
-                        .filter(|p_ty| !matches!(p_ty, desc::Ty::View(_)))
+                        .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
                         .cloned()
                         .collect()
                 } else {
                     panic!("A function must have a function type.")
                 };
-            let reduced_fun_ty = desc::Ty::Fn(
+            let reduced_fun_ty = desc::Ty::new(desc::TyKind::Fn(
                 vec![],
                 data_param_tys,
                 *exec,
-                Box::new(desc::Ty::Data(ret_dty.as_ref().clone())),
-            );
+                Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.as_ref().clone()))),
+            ));
             let reduced_fun = desc::Expr::with_type(
                 desc::ExprKind::Lambda(data_param_decls, *exec, ret_dty.clone(), body.clone()),
                 reduced_fun_ty,
@@ -800,21 +809,21 @@ fn create_lambda_no_view_args(
                     .cloned()
                     .collect();
                 let data_param_tys: Vec<desc::Ty> =
-                    if let desc::Ty::Fn(_, param_tys, _, _) = fun.ty.as_ref().unwrap() {
+                    if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
                         param_tys
                             .iter()
-                            .filter(|p_ty| !matches!(p_ty, desc::Ty::View(_)))
+                            .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
                             .cloned()
                             .collect()
                     } else {
                         panic!("A function must have a function type.")
                     };
-                let reduced_fun_ty = desc::Ty::Fn(
+                let reduced_fun_ty = desc::Ty::new(desc::TyKind::Fn(
                     vec![],
                     data_param_tys,
                     *exec,
-                    Box::new(desc::Ty::Data(ret_dty.clone())),
-                );
+                    Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.clone()))),
+                ));
                 let reduced_fun = desc::Expr::with_type(
                     desc::ExprKind::Lambda(
                         data_param_decls,
@@ -839,7 +848,7 @@ fn create_lambda_no_view_args(
 fn contains_view_params(param_decls: &[desc::ParamDecl]) -> bool {
     param_decls
         .iter()
-        .any(|p| matches!(p.ty, desc::Ty::View(_)))
+        .any(|p| matches!(&p.ty.ty, desc::TyKind::View(_)))
 }
 
 fn map_view_params_to_args<'a>(
@@ -850,7 +859,7 @@ fn map_view_params_to_args<'a>(
     let params_with_args: (Vec<_>, Vec<_>) = param_decls
         .iter()
         .zip(args.iter())
-        .partition(|&(p, _)| matches!(p.ty, desc::Ty::View(_)));
+        .partition(|&(p, _)| matches!(&p.ty.ty, desc::TyKind::View(_)));
     for (p, arg) in params_with_args.0 {
         view_ctx.insert(p.ident.name.clone(), ViewExpr::create_from(arg, view_ctx));
     }
@@ -1162,7 +1171,7 @@ fn gen_param_decls(param_decls: &[desc::ParamDecl]) -> Vec<cu::ParamDecl> {
 
 fn gen_param_decl(param_decl: &desc::ParamDecl) -> Option<cu::ParamDecl> {
     let desc::ParamDecl { ident, ty, mutbl } = param_decl;
-    let ty = gen_ty(ty, *mutbl);
+    let ty = gen_ty(&ty.ty, *mutbl);
     if let Some(tty) = ty {
         Some(cu::ParamDecl {
             name: ident.name.clone(),
@@ -1180,18 +1189,18 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
-        desc::ArgKinded::Ty(ty @ desc::Ty::Data(_)) => {
-            if let Some(tty) = gen_ty(ty, desc::Mutability::Mut) {
+        desc::ArgKinded::Ty(desc::Ty { ty: ty @ desc::TyKind::Data(_), .. }) => {
+            if let Some(tty) = gen_ty(&ty, desc::Mutability::Mut) {
                 Some(cu::TemplateArg::Ty(tty))
             } else {
                 None
             }
         }
-        desc::ArgKinded::Ty(desc::Ty::Ident(_)) => unimplemented!("This will require inlining all view types \
+        desc::ArgKinded::Ty(desc::Ty { ty: desc::TyKind::Ident(_), .. }) => unimplemented!("This will require inlining all view types \
          such that we know that the only identifiers left are data types. This will enable simply passing the \
          identifiers around in C."),
-        desc::ArgKinded::Ty(desc::Ty::View(_)) => None,
-        desc::ArgKinded::Ty(desc::Ty::Fn(_, _, _, _)) => unimplemented!("needed?"),
+        desc::ArgKinded::Ty(desc::Ty { ty: desc::TyKind::View(_), .. }) => None,
+        desc::ArgKinded::Ty(desc::Ty { ty: desc::TyKind::Fn(_, _, _, _), .. }) => unimplemented!("needed?"),
         desc::ArgKinded::Memory(_)
         | desc::ArgKinded::Provenance(_)
         | desc::ArgKinded::Ident(_) => None,
@@ -1202,9 +1211,9 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
 // in cu::Ty::Const. However, the formalism uses this, because it shows the generated code
 // as opposed to a Cuda-AST and there, the order of the const is different
 // when it comes to pointers (C things).
-fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
+fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> Option<cu::Ty> {
     use desc::DataTy as d;
-    use desc::Ty::*;
+    use desc::TyKind::*;
 
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
@@ -1241,7 +1250,7 @@ fn gen_ty(ty: &desc::Ty, mutbl: desc::Mutability) -> Option<cu::Ty> {
                 _ => ty.as_ref().clone(),
             };
             cu::Ty::Ptr(
-                Box::new(gen_ty(&desc::Ty::Data(dty), mutbl).unwrap()),
+                Box::new(gen_ty(&desc::TyKind::Data(dty), mutbl).unwrap()),
                 Some(cu::GpuAddrSpace::Shared),
             )
         } else {
@@ -1316,9 +1325,9 @@ fn is_dev_fun(exec: desc::Exec) -> bool {
 }
 
 fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
-    match ty {
-        desc::Ty::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
-        desc::Ty::Data(desc::DataTy::Ref(_, _, _, arr)) => match arr.as_ref() {
+    match &ty.ty {
+        desc::TyKind::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
+        desc::TyKind::Data(desc::DataTy::Ref(_, _, _, arr)) => match arr.as_ref() {
             desc::DataTy::Array(_, n) => Some(n.clone()),
             _ => None,
         },
@@ -1415,13 +1424,13 @@ impl ParallelityCollec {
 }
 
 fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
-    match ty {
-        desc::Ty::Data(desc::DataTy::Grid(_, _))
-        | desc::Ty::Data(desc::DataTy::Block(_, _))
-        | desc::Ty::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => true,
-        desc::Ty::Data(desc::DataTy::Tuple(vec)) => vec
+    match &ty.ty {
+        desc::TyKind::Data(desc::DataTy::Grid(_, _))
+        | desc::TyKind::Data(desc::DataTy::Block(_, _))
+        | desc::TyKind::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => true,
+        desc::TyKind::Data(desc::DataTy::Tuple(vec)) => vec
             .iter()
-            .all(|dty| is_parall_collec_ty(&desc::Ty::Data(dty.clone()))),
+            .all(|dty| is_parall_collec_ty(&desc::Ty::new(desc::TyKind::Data(dty.clone())))),
         _ => false,
     }
 }
@@ -1560,8 +1569,8 @@ impl ViewExpr {
         ViewExpr::Tuple {
             views: elems
                 .iter()
-                .map(|e| match e.ty.as_ref().unwrap() {
-                    desc::Ty::View(_) => ViewOrExpr::V(ViewExpr::create_from(e, view_ctx)),
+                .map(|e| match &e.ty.as_ref().unwrap().ty {
+                    desc::TyKind::View(_) => ViewOrExpr::V(ViewExpr::create_from(e, view_ctx)),
                     _ => ViewOrExpr::E(e.clone()),
                 })
                 .collect(),
@@ -1753,7 +1762,9 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
                                 Kind::Ty => {
                                     // TODO how to deal with View??!! This is a problem!
                                     //  Ident only for Ty but not for DataTy or ViewTy?
-                                    *gen_arg = ArgKinded::Ty(Ty::Data(DataTy::Ident(to_be_kinded)))
+                                    *gen_arg = ArgKinded::Ty(Ty::new(desc::TyKind::Data(
+                                        DataTy::Ident(to_be_kinded),
+                                    )))
                                 }
                                 _ => panic!("This kind can not be referred to with an identifier."),
                             }
@@ -1848,24 +1859,4 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
     let mut inliner = InlineParForFuns { comp_unit };
     inliner.visit_fun_def(&mut fun_def);
     fun_def
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::ast::FunDef;
-    use crate::codegen::gen_fun_def;
-
-    #[test]
-    fn test_scalar_mult() {
-        let sclar_mult_fun = r#"fn scalar_mult<a: prv>(
-            h_array: &a uniq cpu.heap [i32; 4096]
-        ) -[cpu.thread]-> i32 {
-            let answer_to_everything: i32 = 42;
-            answer_to_everything
-        }"#;
-
-        let res = crate::parser::parse_compil_unit(sclar_mult_fun).unwrap();
-        let empty_comp_unit: Vec<FunDef> = vec![];
-        print!("{}", gen_fun_def(&res[0], &empty_comp_unit));
-    }
 }

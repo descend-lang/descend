@@ -1,5 +1,6 @@
 use clap::Clap;
-use descend::{parser::SourceFile, ty_check};
+use descend::parser::parse;
+use descend::{parser::SourceCode, ty_check};
 use std::{fs, io::Write};
 
 /// Try to parse a source file of Descend code and print the AST
@@ -17,13 +18,14 @@ fn main() {
     // Get commandline arguments
     let opts = Opts::parse();
     // Try to open file
-    let source = fs::read_to_string(opts.source_file).expect("Cannot open source file");
-    let source_file = SourceFile::new(source);
+    let source_code = SourceCode::from_file(&opts.source_file).expect("Cannot open file");
     // Try to parse a global item
-    let mut unit = source_file.parse_unit().expect("Parser error");
+    let mut unit = parse(&source_code).expect("Parser error");
     ty_check::ty_check(&mut unit).expect("Typecheck Error");
     let generated_code = descend::codegen::gen(&unit);
     // Write to output
     let mut output = fs::File::create(opts.output).expect("Cannot create output file");
-    output.write_all(generated_code.as_bytes()).expect("I/O Error while writing output");
+    output
+        .write_all(generated_code.as_bytes())
+        .expect("I/O Error while writing output");
 }
