@@ -622,6 +622,13 @@ impl Ty {
         Ty { ty, span: None }
     }
 
+    pub fn with_span(ty: TyKind, span: Span) -> Ty {
+        Ty {
+            ty,
+            span: Some(span),
+        }
+    }
+
     pub fn dty(&self) -> &DataTy {
         match &self.ty {
             TyKind::Data(dty) => dty,

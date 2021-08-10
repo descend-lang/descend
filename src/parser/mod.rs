@@ -355,8 +355,12 @@ peg::parser! {
 
 
         pub(crate) rule ty() -> Ty
-            = vty:vty() { Ty::new(TyKind::View(vty)) }
-            / dty:dty() { Ty::new(TyKind::Data(dty)) }
+            = start:position!() vty:vty() end:position!() {
+                Ty::with_span(TyKind::View(vty), Span::new(start, end))
+            }
+            / start:position!() dty:dty() end:position!() {
+                Ty::with_span(TyKind::Data(dty), Span::new(start, end))
+            }
 
         /// Parse a type token
         pub(crate) rule dty() -> DataTy
