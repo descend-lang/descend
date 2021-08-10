@@ -153,6 +153,9 @@ impl<'a> TyChecker<'a> {
             ExprKind::App(ef, k_args, args) => {
                 self.ty_check_app(kind_ctx, ty_ctx, exec, ef, k_args, args)?
             }
+            ExprKind::DepApp(ef, k_args) => {
+                self.ty_check_dep_app(kind_ctx, ty_ctx, exec, ef, k_args)?
+            }
             ExprKind::Ref(prv, own, pl_expr) => {
                 self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv, *own, pl_expr)?
             }
@@ -884,6 +887,7 @@ impl<'a> TyChecker<'a> {
         }
     }
 
+    // TODO base implementation on ty_check_dep_app
     fn ty_check_app(
         &self,
         kind_ctx: &KindCtx,
@@ -950,6 +954,58 @@ impl<'a> TyChecker<'a> {
                 subst_ty
             };
             Ok((res_ty_ctx, subst_out_ty))
+        } else {
+            Err(self.ty_error(TyErrorKind::String(format!(
+                "The provided function expression\n {:?}\n does not have a function type.",
+                ef
+            ))))
+        }
+    }
+
+    fn ty_check_dep_app(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        ef: &mut Expr,
+        k_args: &mut [ArgKinded],
+    ) -> TyResult<(TyCtx, Ty)> {
+        let mut res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, ef)?;
+        if let TyKind::Fn(gen_params, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
+            if gen_params.len() != k_args.len() {
+                return Err(self.ty_error(TyErrorKind::String(format!(
+                    "Wrong amount of generic arguments. Expected {}, found {}",
+                    gen_params.len(),
+                    k_args.len()
+                ))));
+            }
+            for (gp, kv) in gen_params.iter().zip(&*k_args) {
+                self.check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
+            }
+            let subst_param_tys: Vec<_> = param_tys
+                .iter()
+                .map(|ty| {
+                    let mut subst_ty = ty.clone();
+                    for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
+                        subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
+                    }
+                    subst_ty
+                })
+                .collect();
+            let subst_out_ty = {
+                let mut subst_ty = out_ty.as_ref().clone();
+                for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
+                    subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
+                }
+                subst_ty
+            };
+            let subst_fun_ty = Ty::new(TyKind::Fn(
+                vec![],
+                subst_param_tys,
+                *exec_f,
+                Box::new(subst_out_ty),
+            ));
+            Ok((res_ty_ctx, subst_fun_ty))
         } else {
             Err(self.ty_error(TyErrorKind::String(format!(
                 "The provided function expression\n {:?}\n does not have a function type.",

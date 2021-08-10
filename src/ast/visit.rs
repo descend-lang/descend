@@ -224,6 +224,10 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             walk_list!(visitor, visit_arg_kinded, gen_args);
             walk_list!(visitor, visit_expr, args);
         }
+        ExprKind::DepApp(f, gen_args) => {
+            visitor.visit_expr(f);
+            walk_list!(visitor, visit_arg_kinded, gen_args);
+        }
         ExprKind::IfElse(cond, tt, ff) => {
             visitor.visit_expr(cond);
             visitor.visit_expr(tt);

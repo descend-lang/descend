@@ -1,7 +1,4 @@
 //! Module for components related to parsing
-// TODO test expression_let for views (tuple and array)
-// TODO test for tuple view in tuple test similar to array and array view
-
 pub mod source;
 mod utils;
 
@@ -111,7 +108,7 @@ peg::parser! {
                   param_decls,
                   ret_dty,
                   exec,
-                  prv_rels: vec![], // TODO: What even is this?
+                  prv_rels: vec![],
                   body_expr
                 }
             }
@@ -180,6 +177,18 @@ peg::parser! {
                         args
                     )
                 )
+            }
+            / start:position!() func:ident() end:position!() _
+                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" { k })
+            {
+                Expr::new(
+                    ExprKind::DepApp(
+                        Box::new(Expr::with_span(
+                            ExprKind::PlaceExpr(PlaceExpr::Ident(func)),
+                            Span::new(start, end)
+                        )),
+                        kind_args
+                ))
             }
             / l:literal() {
                 Expr::with_type(

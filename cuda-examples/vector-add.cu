@@ -13,7 +13,6 @@ auto inplace_vector_add(
             const descend::i32 * const p1) -> void {
         p0[blockIdx.x * 1024 + threadIdx.x] = p0[blockIdx.x * 1024 + threadIdx.x] + p1[blockIdx.x * 1024 + threadIdx.x];
         __syncthreads();
-        ;
     }, &a_array, &b_array);
     descend::copy_to_host<descend::array<descend::i32, n>>(&a_array, ha_array);
 }

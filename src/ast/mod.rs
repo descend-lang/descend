@@ -288,6 +288,7 @@ pub enum ExprKind {
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
+    DepApp(Box<Expr>, Vec<ArgKinded>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // For-each loop.
     // for x in e_1 { e_2 }

@@ -1,3 +1,10 @@
+fn add<r: prv, s: prv>(
+    thread: Thread,
+    inp: <&r uniq gpu.global i32, &s shrd gpu.global i32>
+) -[gpu.thread]-> () {
+    *inp.0 = *inp.0 + *inp.1;
+}
+
 fn inplace_vector_add<n: nat, a: prv, b: prv>(
     ha_array: &a uniq cpu.stack [i32; n],
     hb_array: &b shrd cpu.stack [i32; n]
@@ -30,11 +37,12 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
                       ib: [[<&'r uniq gpu.global i32, &'s shrd gpu.global i32>; 1024]]
                     | -[gpu.block]-> () {
                          for block with <ib> do
-                            | thread: Thread,
-                              inp: <&'r uniq gpu.global i32, &'s shrd gpu.global i32>
-                            | -[gpu.thread]-> () {
-                                *inp.0 = *inp.0 + *inp.1;
-                            };
+                            // | thread: Thread,
+                            //   inp: <&'r uniq gpu.global i32, &'s shrd gpu.global i32>
+                            // | -[gpu.thread]-> () {
+                            //     *inp.0 = *inp.0 + *inp.1;
+                            // };
+                            add::<'r, 's>
                      };
             }
         );

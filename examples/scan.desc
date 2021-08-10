@@ -1,4 +1,6 @@
-fn scan_inplace<a: prv, m: nat>(data: &a uniq cpu.heap [i32; m]) -[cpu.thread]-> () {
+fn scan_inplace<a: prv, m: nat>(
+    data: &a uniq cpu.heap [i32; m]
+) -[cpu.thread]-> () {
     let mut accum = 0;
     for d in data {
         let next = *d + accum;
@@ -6,6 +8,39 @@ fn scan_inplace<a: prv, m: nat>(data: &a uniq cpu.heap [i32; m]) -[cpu.thread]->
         accum = next;
     }
 }
+
+fn copy_pair_to_shared<a: prv, b: prv>(
+    thread: Thread,
+    inp_0: &a shrd gpu.global i32,
+    inp_1: &a shrd gpu.global i32,
+    tmp_0: &b uniq gpu.shared i32,
+    tmp_1: &b uniq gpu.shared i32
+) -[gpu.thread]-> () {
+    *tmp_0 = *inp_0;
+    *tmp_1 = *inp_1;
+}
+
+fn upsweep_inplace_red_add<a: prv, d: nat>(
+    thread: Thread,
+    arr: [[&a uniq gpu.shared i32; 64/d]]
+) -[gpu.thread]-> () {
+    arr[64/d-1] = arr[64/d-1] + arr[32/d-1];
+}
+
+fn upsweep<a: prv>(
+    block: Block<Thread, 32>,
+    arr_ref: &a uniq gpu.shared [i32; 64]
+) -[gpu.block]-> () {
+    for_nat d in halved_range(32) {
+        let tmp_up_view = group::<64/d, 64, &a uniq gpu.shared i32>(
+            to_view_mut::<a, gpu.shared, 64, i32>(arr_ref));
+        for split_block::<d, 32>(block).0
+        with <tmp_up_view>
+        do
+            upsweep_inplace_red_add::<a, d>;
+    }
+}
+
 
 // blockDim.x == 32
 // n == 256 * blockDim.x * 2
@@ -73,33 +108,14 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                          for block
                          with <input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1>
                          do
-                            | thread: Thread,
-                              inp_0: &'r shrd gpu.global i32,
-                              inp_1: &'r shrd gpu.global i32,
-                              tmp_0: &'e uniq gpu.shared i32,
-                              tmp_1: &'e uniq gpu.shared i32
-                            | -[gpu.thread]-> () {
-                                 *tmp_0 = *inp_0;
-                                 *tmp_1 = *inp_1;
-                            };
+                            copy_pair_to_shared::<'r, 'e>;
 
                          //
                          // Upsweep
                          //
                          // d == blockDim.x
                          // offset == 64/d
-                         for_nat d in halved_range(32) {
-                            let tmp_up_view = group::<64/d, 64, &'f uniq gpu.shared i32>(
-                                to_view_mut::<'f, gpu.shared, 64, i32>(&'f uniq tmpb));
-                            for split_block::<d, 32>(block).0
-                            with <tmp_up_view>
-                            do
-                               | thread: Thread,
-                                 a: [[&'f uniq gpu.shared i32; 64/d]]
-                               | -[gpu.thread]-> () {
-                                    a[64/d-1] = a[64/d-1] + a[32/d-1];
-                               };
-                         };
+                         upsweep::<'f>(block, &'f uniq tmpb);
 
                          let tmp_last: [[&'l uniq gpu.shared i32; 1]] =
                             split_at::<63, 64, &'l uniq gpu.shared i32>(

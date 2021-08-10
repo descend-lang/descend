@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{CompilUnit, Ident, Mutability, PlaceExpr};
+use crate::ast::{CompilUnit, Ident};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -18,6 +18,11 @@ pub fn gen(compil_unit: &CompilUnit) -> String {
         .to_vec()
         .into_iter()
         .map(replace_arg_kinded_idents)
+        .filter(|f| {
+            f.param_decls
+                .iter()
+                .all(|p| !matches!(&p.ty.ty, desc::TyKind::View(_)))
+        })
         .map(|f| inline_par_for_funs(f, &compil_unit.fun_defs))
         .collect::<Vec<desc::FunDef>>();
     let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
@@ -123,7 +128,7 @@ fn gen_stmt(
                     cu::Ty::Array(_, _) => (gen_expr(e1, parall_ctx, view_ctx, comp_unit), tty),
                     _ => (
                         gen_expr(e1, parall_ctx, view_ctx, comp_unit),
-                        if *mutbl == Mutability::Mut {
+                        if *mutbl == desc::Mutability::Mut {
                             cu::Ty::Scalar(cu::ScalarTy::Auto)
                         } else {
                             cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
@@ -145,7 +150,7 @@ fn gen_stmt(
             }
         }
         LetUninit(ident, ty, e) => {
-            if let Some(tty) = gen_ty(&ty.as_ref().ty, Mutability::Mut) {
+            if let Some(tty) = gen_ty(&ty.as_ref().ty, desc::Mutability::Mut) {
                 cu::Stmt::Seq(
                     Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
@@ -472,6 +477,20 @@ fn gen_par_for(
             desc::ExprKind::Lambda(params, _, _, body) => {
                 gen_parall_section(params, body, &input, &pid, view_ctx, comp_unit)
             }
+            desc::ExprKind::DepApp(fun, gen_args) => {
+                let ident = extract_ident(fun);
+                let fun_def = comp_unit
+                    .iter()
+                    .find(|fun_def| fun_def.name == ident.name)
+                    .expect("Cannot find function definition.");
+                if let desc::ExprKind::Lambda(params, _, _, body) =
+                    instantiate_gen_fun(fun_def, gen_args).expr
+                {
+                    gen_parall_section(&params, body.as_ref(), &input, &pid, view_ctx, comp_unit)
+                } else {
+                    panic!("instatiate_gen_fun did not return a lambda expression")
+                }
+            }
             _ => panic!("No function supplied."),
         },
         desc::TyKind::Data(_) => {
@@ -660,6 +679,15 @@ fn gen_expr(
                 }
             }
         },
+        DepApp(fun, kinded_args) => {
+            let ident = extract_ident(fun);
+            let fun_def = comp_unit
+                .iter()
+                .find(|fun_def| fun_def.name == ident.name)
+                .expect("Cannot find function definition.");
+            let inst_fun = instantiate_gen_fun(fun_def, &kinded_args);
+            gen_expr(&inst_fun, parall_ctx, view_ctx, comp_unit)
+        }
         Array(elems) => cu::Expr::InitializerList {
             elems: elems
                 .iter()
@@ -703,13 +731,21 @@ fn gen_expr(
     }
 }
 
-fn contains_view_expr(pl_expr: &PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) -> bool {
+fn extract_ident(ident: &desc::Expr) -> Ident {
+    if let desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) = &ident.expr {
+        ident.clone()
+    } else {
+        panic!("Generic functions must be global functions.")
+    }
+}
+
+fn contains_view_expr(pl_expr: &desc::PlaceExpr, view_ctx: &HashMap<String, ViewExpr>) -> bool {
     let (_, pl) = pl_expr.to_pl_ctx_and_most_specif_pl();
     view_ctx.contains_key(&pl.ident.name)
 }
 
 fn gen_idx_into_view(
-    pl_expr: &PlaceExpr,
+    pl_expr: &desc::PlaceExpr,
     idx: &desc::Nat,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
@@ -776,72 +812,94 @@ fn create_lambda_no_view_args(
             Some((reduced_fun, data_args))
         }
         desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(f)) => {
-            if let Some(desc::FunDef {
-                generic_params,
-                param_decls,
-                ret_dty,
-                exec,
-                body_expr,
-                ..
-            }) = comp_unit.iter().find(|fun_def| fun_def.name == f.name)
-            {
-                if !contains_view_params(param_decls) {
-                    return None;
-                }
-
-                let subst_map_kinded_idents: HashMap<&str, &desc::ArgKinded> = generic_params
-                    .iter()
-                    .map(|id_kinded| id_kinded.ident.name.as_str())
-                    .zip(generic_args)
-                    .collect();
-                let mut new_body = body_expr.clone();
-                new_body.subst_kinded_idents(subst_map_kinded_idents);
-                let data_param_decls_to_data_args =
-                    map_view_params_to_args(param_decls, args, view_ctx);
-                let data_param_decls: Vec<desc::ParamDecl> = data_param_decls_to_data_args
-                    .iter()
-                    .map(|(param_decl, _)| *param_decl)
-                    .cloned()
-                    .collect();
-                let data_args: Vec<desc::Expr> = data_param_decls_to_data_args
-                    .iter()
-                    .map(|(_, arg)| *arg)
-                    .cloned()
-                    .collect();
-                let data_param_tys: Vec<desc::Ty> =
-                    if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
-                        param_tys
-                            .iter()
-                            .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
-                            .cloned()
-                            .collect()
-                    } else {
-                        panic!("A function must have a function type.")
-                    };
-                let reduced_fun_ty = desc::Ty::new(desc::TyKind::Fn(
-                    vec![],
-                    data_param_tys,
-                    *exec,
-                    Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.clone()))),
-                ));
-                let reduced_fun = desc::Expr::with_type(
-                    desc::ExprKind::Lambda(
-                        data_param_decls,
-                        *exec,
-                        Box::new(ret_dty.clone()),
-                        Box::new(new_body),
-                    ),
-                    reduced_fun_ty,
-                );
-                Some((reduced_fun, data_args))
-            } else {
-                panic!("Cannot find function definition.")
+            let fun_def = comp_unit
+                .iter()
+                .find(|fun_def| fun_def.name == f.name)
+                .expect("Cannot find function definition.");
+            if !contains_view_params(&fun_def.param_decls) {
+                return None;
             }
+
+            let inst_fun = instantiate_gen_fun(fun_def, generic_args);
+            let (param_decls, new_body) =
+                if let desc::ExprKind::Lambda(param_decls, _, _, body) = &inst_fun.expr {
+                    (param_decls, body.as_ref())
+                } else {
+                    panic!("Expected a lambda.")
+                };
+            let data_param_decls_to_data_args =
+                map_view_params_to_args(&param_decls, args, view_ctx);
+            let data_param_decls: Vec<desc::ParamDecl> = data_param_decls_to_data_args
+                .iter()
+                .map(|(param_decl, _)| *param_decl)
+                .cloned()
+                .collect();
+            let data_args: Vec<desc::Expr> = data_param_decls_to_data_args
+                .iter()
+                .map(|(_, arg)| *arg)
+                .cloned()
+                .collect();
+            let data_param_tys: Vec<desc::Ty> =
+                if let desc::TyKind::Fn(_, param_tys, _, _) = &inst_fun.ty.as_ref().unwrap().ty {
+                    param_tys
+                        .iter()
+                        .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
+                        .cloned()
+                        .collect()
+                } else {
+                    panic!("A function must have a function type.")
+                };
+            let reduced_fun_ty = desc::Ty::new(desc::TyKind::Fn(
+                vec![],
+                data_param_tys,
+                fun_def.exec,
+                Box::new(desc::Ty::new(desc::TyKind::Data(fun_def.ret_dty.clone()))),
+            ));
+            let reduced_fun = desc::Expr::with_type(
+                desc::ExprKind::Lambda(
+                    data_param_decls,
+                    fun_def.exec,
+                    Box::new(fun_def.ret_dty.clone()),
+                    Box::new(new_body.clone()),
+                ),
+                reduced_fun_ty,
+            );
+            Some((reduced_fun, data_args))
         }
         _ => panic!(
             "Functions cannot be created dynamically, so they have to either be\
                         global function definitions or lambdas. This should never happen."
         ),
+    }
+}
+
+fn instantiate_gen_fun(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> desc::Expr {
+    let subst_map_kinded_idents: HashMap<&str, &desc::ArgKinded> = fun
+        .generic_params
+        .iter()
+        .map(|id_kinded| id_kinded.ident.name.as_str())
+        .zip(gen_args)
+        .collect();
+    if let desc::TyKind::Fn(_, param_tys, exec, ret_ty) = &fun.ty().ty {
+        let fun_ty = desc::Ty::new(desc::TyKind::Fn(
+            vec![],
+            param_tys.clone(),
+            *exec,
+            ret_ty.clone(),
+        ));
+        let mut fun = desc::Expr::with_type(
+            desc::ExprKind::Lambda(
+                fun.param_decls.clone(),
+                *exec,
+                Box::new(fun.ret_dty.clone()),
+                Box::new(fun.body_expr.clone()),
+            ),
+            fun_ty,
+        );
+        fun.subst_kinded_idents(subst_map_kinded_idents);
+        fun
+    } else {
+        panic!("A function must have a function type.")
     }
 }
 
@@ -1224,8 +1282,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> Option<cu::Ty> {
             desc::ScalarTy::F32 => Some(cu::Ty::Scalar(cu::ScalarTy::F32)),
             desc::ScalarTy::Bool => Some(cu::Ty::Scalar(cu::ScalarTy::Bool)),
             desc::ScalarTy::Gpu => Some(cu::Ty::Scalar(cu::ScalarTy::Gpu)),
-            desc::ScalarTy::Warp => None,
-            desc::ScalarTy::Thread => panic!("This should only exist for type checking."),
+            desc::ScalarTy::Warp | desc::ScalarTy::Thread => None,
         },
         Data(d::Tuple(tys)) => {
             let gened_tys: Vec<_> = tys
@@ -1354,7 +1411,7 @@ impl ParallelityCollec {
     ) -> ParallelityCollec {
         match &expr.expr {
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::PlaceExpr(PlaceExpr::Ident(ident)) = &f.expr {
+                if let desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) = &f.expr {
                     if ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK {
                         if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
                             (&gen_args[0], &gen_args[1], args.first())
@@ -1499,7 +1556,7 @@ impl ViewExpr {
         match &expr.expr {
             // TODO this is assuming that f is an identifier
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::PlaceExpr(PlaceExpr::Ident(ident)) = &f.expr {
+                if let desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) = &f.expr {
                     if ident.name == crate::ty_check::pre_decl::TO_VIEW
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {
