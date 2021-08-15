@@ -190,7 +190,7 @@ template<typename T, std::size_t n>
 using array = std::array<T, n>;
 
 template<typename ... Types>
-using tuple = tuple::tuple<Types...>;
+using tuple = thrust::tuple<Types...>;
 
 using Gpu = size_t;
 
