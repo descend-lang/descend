@@ -89,7 +89,7 @@ fn vector_add() -> std::io::Result<()> {
 
 #[test]
 fn bfs() -> std::io::Result<()> {
-    let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs.desc")?).to_string();
+    let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs_copy.desc")?).to_string();
     let mut compil_unit = descend::parser::parse_compil_unit(&bfs).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)

@@ -18,7 +18,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
         while *h_stop {
 
             *h_stop = false;
-            copy_to_gpu::<'m, 't, 'q, bool>(&'m uniq gpu, &'t uniq d_stop, &'q shrd *h_stop); 
+            copy_to_gpu::<'t, 'q, bool>(&'t uniq d_stop, &'q shrd *h_stop); 
 
             let nodes_view: [[ &'r1 shrd gpu.global (i32, i32); n]] =
                 to_view::<'r1, gpu.global, n, (i32, i32)>(&'r1 shrd nodes);
@@ -96,7 +96,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                     }
                 );
                 
-            copy_to_host::<'u, 'x, bool>(&'u shrd d_stop,&'x uniq *h_stop);
+            copy_to_host::<'u, 'x, cpu.heap, bool>(&'u shrd d_stop,&'x uniq *h_stop);
         }
     }
 }
