@@ -1,6 +1,6 @@
 use crate::ast::{
     internal, BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance,
-    ScalarTy, Ty, TyKind, ViewTy,
+    ScalarTy, ThreadHierchyTy, Ty, TyKind, ViewTy,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -18,7 +18,7 @@ pub static JOIN: &str = "join";
 pub static ZIP: &str = "zip";
 pub static TRANSPOSE: &str = "transpose";
 
-pub static SPLIT_BLOCK: &str = "split_block";
+pub static SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub static SPLIT_WARP: &str = "split_warp";
 
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
@@ -36,51 +36,63 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SPLIT_AT, split_at_ty()),
         (ZIP, zip_ty()),
         (GROUP, group_ty()),
-        (SPLIT_BLOCK, split_block_ty()),
+        (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
     ];
 
     decls.to_vec()
 }
 
-// split:
-//  <k: nat, n: nat>(Block<Thread, n>) -> <Block<Thread, k>, Block<Thread, n-k>>
-// TODO add t: ty for inner part (i.e., Thread/Warp), or do it even more correctly right away...
-fn split_block_ty() -> Ty {
+// split_block_grp:
+//  <k: nat, n1: nat, n2: nat, n3: nat>(
+//      ThreadGrp<n1, n2, n3>
+// ) -> <ThreadGrp<k, n2, n3>, ThreadGrp<n1-k, n2, n3>>
+fn split_thread_grp_ty() -> Ty {
     let k = Ident::new("k");
-    let n = Ident::new("n");
+    let n1 = Ident::new("n1");
+    let n2 = Ident::new("n2");
+    let n3 = Ident::new("n3");
     let k_nat = IdentKinded {
         ident: k.clone(),
         kind: Kind::Nat,
     };
-    let n_nat = IdentKinded {
-        ident: n.clone(),
+    let n1_nat = IdentKinded {
+        ident: n1.clone(),
+        kind: Kind::Nat,
+    };
+    let n2_nat = IdentKinded {
+        ident: n2.clone(),
+        kind: Kind::Nat,
+    };
+    let n3_nat = IdentKinded {
+        ident: n3.clone(),
         kind: Kind::Nat,
     };
     Ty::new(TyKind::Fn(
-        vec![k_nat, n_nat],
-        vec![Ty::new(TyKind::Data(DataTy::Block(
-            Box::new(DataTy::Scalar(ScalarTy::Thread)),
-            vec![Nat::Ident(n.clone()), Nat::Lit(1), Nat::Lit(1)],
+        vec![k_nat, n1_nat, n2_nat, n3_nat],
+        vec![Ty::new(TyKind::ThreadHierchy(Box::new(
+            ThreadHierchyTy::ThreadGrp(
+                Nat::Ident(n1.clone()),
+                Nat::Ident(n2.clone()),
+                Nat::Ident(n3.clone()),
+            ),
         )))],
         Exec::View,
         Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
-            Ty::new(TyKind::Data(DataTy::Block(
-                Box::new(DataTy::Scalar(ScalarTy::Thread)),
-                vec![Nat::Ident(k.clone()), Nat::Lit(1), Nat::Lit(1)],
-            ))),
-            Ty::new(TyKind::Data(DataTy::Block(
-                Box::new(DataTy::Scalar(ScalarTy::Thread)),
-                vec![
-                    Nat::BinOp(
-                        BinOpNat::Sub,
-                        Box::new(Nat::Ident(n)),
-                        Box::new(Nat::Ident(k)),
-                    ),
-                    Nat::Lit(1),
-                    Nat::Lit(1),
-                ],
-            ))),
+            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
+                Nat::Ident(k.clone()),
+                Nat::Ident(n2.clone()),
+                Nat::Ident(n3.clone()),
+            )))),
+            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
+                Nat::BinOp(
+                    BinOpNat::Sub,
+                    Box::new(Nat::Ident(n1)),
+                    Box::new(Nat::Ident(k)),
+                ),
+                Nat::Ident(n2.clone()),
+                Nat::Ident(n3.clone()),
+            )))),
         ])))),
     ))
 }
@@ -93,14 +105,29 @@ fn split_warp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat],
-        vec![Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Warp)))],
+        vec![Ty::new(TyKind::ThreadHierchy(Box::new(
+            ThreadHierchyTy::Warp,
+        )))],
         Exec::View,
         Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Warp))),
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Warp))),
+            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
+                Nat::Ident(k.clone()),
+                Nat::Lit(1),
+                Nat::Lit(1),
+            )))),
+            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
+                Nat::BinOp(
+                    BinOpNat::Sub,
+                    Box::new(Nat::Lit(32)),
+                    Box::new(Nat::Ident(k)),
+                ),
+                Nat::Lit(1),
+                Nat::Lit(1),
+            )))),
         ])))),
     ))
 }
+
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
 fn gpu_device_ty() -> Ty {
@@ -254,7 +281,7 @@ fn copy_to_gpu_ty() -> Ty {
 // exec: <blocks: nat, threads: nat, r: prv, m: mem, t: ty>(
 //        &r uniq m Gpu,
 //        input: t,
-//        (Grid<Block<Thread, threads>, blocks>, t) -[gpu.grid]-> ())
+//        (BlockGrp<blocks, 1, 1, ThreadGrp<Thread, threads, 1, 1>>, t) -[gpu.grid]-> ())
 // -> ()
 fn exec_ty() -> Ty {
     let blocks = Ident::new("blocks");
@@ -302,13 +329,14 @@ fn exec_ty() -> Ty {
                     //     ))),
                     //     Nat::Ident(blocks),
                     // )),
-                    Ty::new(TyKind::Data(DataTy::Grid(
-                        Box::new(DataTy::Block(
-                            Box::new(DataTy::Scalar(ScalarTy::Thread)),
-                            vec![Nat::Ident(threads), Nat::Lit(1), Nat::Lit(1)],
-                        )),
-                        vec![Nat::Ident(blocks), Nat::Lit(1), Nat::Lit(1)],
-                    ))),
+                    Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::BlockGrp(
+                        Nat::Ident(blocks),
+                        Nat::Lit(1),
+                        Nat::Lit(1),
+                        Nat::Ident(threads),
+                        Nat::Lit(1),
+                        Nat::Lit(1),
+                    )))),
                     Ty::new(TyKind::Ident(t)),
                 ],
                 Exec::GpuGrid,

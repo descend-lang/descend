@@ -367,6 +367,9 @@ peg::parser! {
             = start:position!() vty:vty() end:position!() {
                 Ty::with_span(TyKind::View(vty), Span::new(start, end))
             }
+            / start:position!() th_hy:th_hy() end:position!() {
+                Ty::with_span(TyKind::ThreadHierchy(Box::new(th_hy)), Span::new(start, end))
+            }
             / start:position!() dty:dty() end:position!() {
                 Ty::with_span(TyKind::Data(dty), Span::new(start, end))
             }
@@ -390,19 +393,35 @@ peg::parser! {
             / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ dty:dty() {
                 DataTy::Ref(prov, own, mem, Box::new(dty))
             }
-            / "Thread" { DataTy::Scalar(ScalarTy::Thread) }
-            / "Warp" { DataTy::Scalar(ScalarTy::Warp) }
-            / "Grid" _ "<" _ grid_elems:dty_term() _ "," _ n:nat() ">" {
-                DataTy::Grid(Box::new(grid_elems), vec![n, Nat::Lit(1), Nat::Lit(1)])
-              }
-            / "Block" _ "<" _ block_elems:dty_term() _ "," _ n:nat() ">" {
-                DataTy::Block(Box::new(block_elems), vec![n, Nat::Lit(1), Nat::Lit(1)])
-              }
 
         pub(crate) rule vty() -> ViewTy
             = "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { ViewTy::Array(Box::new(t), n) }
             / "<" _ ty:ty() _ ">" { ViewTy::Tuple(vec![ty]) }
             / "<" _ tys:ty() **<2,> (_ "," _) _ ">" { ViewTy::Tuple(tys) }
+
+        pub(crate) rule th_hy() -> ThreadHierchyTy =
+        "BlockGrp" _ "<" _ n1:nat() _ ns:("," _ n2:nat() _ "," _ n3:nat() _ { (n2, n3) })? "," _
+            "ThreadGrp" _ "<" _ m1:nat() _ ms:("," _ m2:nat() _ "," _ m3:nat() _ { (m2, m3) })?
+                ">" _ ">" {
+            let (n2, n3) = match ns {
+                Some(n2_n3) => n2_n3,
+                None => (Nat::Lit(1), Nat::Lit(1))
+            };
+            let (m2, m3) = match ms {
+                Some(m2_m3) => m2_m3,
+                None => (Nat::Lit(1), Nat::Lit(1))
+            };
+            ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3)
+        }
+        / "ThreadGrp" _ "<" _ n1:nat() _ ns:("," _ n2:nat() _ "," _ n3:nat() _ { (n2, n3) })? ">" {
+            let (n2, n3) = match ns {
+                Some(n2_n3) => n2_n3,
+                None => (Nat::Lit(1), Nat::Lit(1))
+            };
+            ThreadHierchyTy::ThreadGrp(n1, n2, n3)
+        }
+        / "WarpGrp" _ "<" n:nat() _ ">" { ThreadHierchyTy::WarpGrp(n) }
+        / "Warp" { ThreadHierchyTy::Warp }
 
         pub(crate) rule ownership() -> Ownership
         = "shrd" { Ownership::Shrd }

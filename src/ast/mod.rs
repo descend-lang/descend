@@ -612,6 +612,7 @@ pub struct Ty {
 pub enum TyKind {
     Data(DataTy),
     View(ViewTy),
+    ThreadHierchy(Box<ThreadHierchyTy>),
     Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
     Ident(Ident),
 }
@@ -639,6 +640,7 @@ impl Ty {
         match &self.ty {
             TyKind::Data(dty) => dty.non_copyable(),
             TyKind::View(vty) => vty.non_copyable(),
+            TyKind::ThreadHierchy(_) => false,
             TyKind::Fn(_, _, _, _) => false,
             TyKind::Ident(_) => true,
         }
@@ -652,7 +654,7 @@ impl Ty {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
             TyKind::View(vty) => vty.is_fully_alive(),
-            TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
+            TyKind::ThreadHierchy(_) | TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
         }
     }
 
@@ -666,14 +668,18 @@ impl Ty {
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
                     || ret_ty.contains_ref_to_prv(prv_val_name)
             }
-            TyKind::Ident(_) => false,
+            TyKind::ThreadHierchy(_) | TyKind::Ident(_) => false,
         }
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match &self.ty {
+            // FIXME mutate and do not create a new type (also this drops the span).
             TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
             TyKind::View(vty) => Ty::new(TyKind::View(vty.subst_ident_kinded(ident_kinded, with))),
+            TyKind::ThreadHierchy(th_hy) => Ty::new(TyKind::ThreadHierchy(Box::new(
+                th_hy.subst_ident_kinded(ident_kinded, with),
+            ))),
             TyKind::Fn(gen_params, params, exec, ret) => Ty::new(TyKind::Fn(
                 gen_params.clone(),
                 params
@@ -703,8 +709,56 @@ impl fmt::Display for Ty {
         match &self.ty {
             TyKind::Data(dty) => write!(f, "{}", dty),
             TyKind::View(vty) => write!(f, "{}", vty),
+            TyKind::ThreadHierchy(th_hy) => write!(f, "{}", th_hy),
             TyKind::Ident(ident) => write!(f, "{}", ident),
             TyKind::Fn(_, _, _, _) => unimplemented!(),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum ThreadHierchyTy {
+    BlockGrp(Nat, Nat, Nat, Nat, Nat, Nat),
+    ThreadGrp(Nat, Nat, Nat),
+    WarpGrp(Nat),
+    Warp,
+}
+
+impl fmt::Display for ThreadHierchyTy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ThreadHierchyTy::*;
+        match self {
+            BlockGrp(n1, n2, n3, m1, m2, m3) => write!(
+                f,
+                "BlockGrp<{}, {}, {}, ThreadGrp<{}, {}, {}>>",
+                n1, n2, n3, m1, m2, m3
+            ),
+            ThreadGrp(n1, n2, n3) => write!(f, "ThreadGrp<{}, {}, {}>", n1, n2, n3),
+            WarpGrp(n) => write!(f, "WarpGrp<{}>", n),
+            Warp => write!(f, "Warp"),
+        }
+    }
+}
+
+impl ThreadHierchyTy {
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use ThreadHierchyTy::*;
+        match self {
+            BlockGrp(n1, n2, n3, m1, m2, m3) => BlockGrp(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+                n3.subst_ident_kinded(ident_kinded, with),
+                m1.subst_ident_kinded(ident_kinded, with),
+                m2.subst_ident_kinded(ident_kinded, with),
+                m3.subst_ident_kinded(ident_kinded, with),
+            ),
+            ThreadGrp(n1, n2, n3) => ThreadGrp(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+                n3.subst_ident_kinded(ident_kinded, with),
+            ),
+            WarpGrp(n) => WarpGrp(n.subst_ident_kinded(ident_kinded, with)),
+            Warp => Warp,
         }
     }
 }
@@ -799,8 +853,6 @@ pub enum DataTy {
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
-    Grid(Box<DataTy>, Vec<Nat>),
-    Block(Box<DataTy>, Vec<Nat>),
     // Only for type checking purposes.
     Dead(Box<DataTy>),
 }
@@ -815,8 +867,6 @@ impl DataTy {
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
             At(_, _) => true,
-            Grid(_, _) => false,
-            Block(_, _) => false,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => ty.non_copyable(),
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
@@ -830,13 +880,7 @@ impl DataTy {
     pub fn is_fully_alive(&self) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_)
-            | Ident(_)
-            | Ref(_, _, _, _)
-            | At(_, _)
-            | Array(_, _)
-            | Grid(_, _)
-            | Block(_, _) => true,
+            Scalar(_) | Ident(_) | Ref(_, _, _, _) | At(_, _) | Array(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -847,7 +891,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | Grid(_, _) | Block(_, _) | Dead(_) => false,
+            Scalar(_) | Ident(_) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -896,18 +940,6 @@ impl DataTy {
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
                 mem.subst_ident_kinded(ident_kinded, with),
             ),
-            Grid(elem, n) => Grid(
-                Box::new(elem.subst_ident_kinded(ident_kinded, with)),
-                n.iter()
-                    .map(|n| n.subst_ident_kinded(ident_kinded, with))
-                    .collect(),
-            ),
-            Block(elem, n) => Block(
-                Box::new(elem.subst_ident_kinded(ident_kinded, with)),
-                n.iter()
-                    .map(|n| n.subst_ident_kinded(ident_kinded, with))
-                    .collect(),
-            ),
             Tuple(elem_tys) => Tuple(
                 elem_tys
                     .iter()
@@ -937,8 +969,6 @@ pub enum ScalarTy {
     F32,
     Bool,
     Gpu,
-    Warp,
-    Thread,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -1144,6 +1174,7 @@ impl PartialEq for Nat {
     }
 }
 
+use crate::ast::TyKind::ThreadHierchy;
 use crate::parser::SourceCode;
 use std::cmp::Ordering;
 

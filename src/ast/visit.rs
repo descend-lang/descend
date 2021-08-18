@@ -13,6 +13,7 @@ pub trait Visitor: Sized {
     fn visit_prv(&mut self, prv: &mut Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
     fn visit_vty(&mut self, vty: &mut ViewTy) { walk_vty(self, vty) }
+    fn visit_th_hierchy(&mut self, th_hierchy: &mut ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
     fn visit_dty(&mut self, dty: &mut DataTy) { walk_dty(self, dty) }
     fn visit_ty(&mut self, ty: &mut Ty) { walk_ty(self, ty) }
     fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) { walk_pl_expr(self, pl_expr) }
@@ -99,6 +100,26 @@ pub fn walk_vty<V: Visitor>(visitor: &mut V, vty: &mut ViewTy) {
     }
 }
 
+pub fn walk_th_hierchy<V: Visitor>(visitor: &mut V, th_hierchy: &mut ThreadHierchyTy) {
+    match th_hierchy {
+        ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3) => {
+            visitor.visit_nat(n1);
+            visitor.visit_nat(n2);
+            visitor.visit_nat(n3);
+            visitor.visit_nat(m1);
+            visitor.visit_nat(m2);
+            visitor.visit_nat(m3);
+        }
+        ThreadHierchyTy::ThreadGrp(n1, n2, n3) => {
+            visitor.visit_nat(n1);
+            visitor.visit_nat(n2);
+            visitor.visit_nat(n3);
+        }
+        ThreadHierchyTy::WarpGrp(n) => visitor.visit_nat(n),
+        ThreadHierchyTy::Warp => {}
+    }
+}
+
 pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
     match dty {
         DataTy::Ident(ident) => visitor.visit_ident(ident),
@@ -118,14 +139,6 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_mem(mem);
             visitor.visit_dty(dty)
         }
-        DataTy::Grid(elems, dims) => {
-            visitor.visit_dty(elems);
-            walk_list!(visitor, visit_nat, dims);
-        }
-        DataTy::Block(elems, dims) => {
-            visitor.visit_dty(elems);
-            walk_list!(visitor, visit_nat, dims);
-        }
         DataTy::Dead(dty) => visitor.visit_dty(dty),
     }
 }
@@ -134,6 +147,7 @@ pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
     match &mut ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
         TyKind::View(vty) => visitor.visit_vty(vty),
+        TyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         TyKind::Fn(gen_params, params, exec, ret_ty) => {
             walk_list!(visitor, visit_ident_kinded, gen_params);
             walk_list!(visitor, visit_ty, params);

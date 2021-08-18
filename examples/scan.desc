@@ -9,15 +9,15 @@ fn scan_inplace<a: prv, m: nat>(
     }
 }
 
-fn copy_pair_to_shared<a: prv, b: prv>(
+fn copy_two_vals<a: prv, b: prv, m1: mem, m2: mem>(
     thread: Thread,
-    inp_0: &a shrd gpu.global i32,
-    inp_1: &a shrd gpu.global i32,
-    tmp_0: &b uniq gpu.shared i32,
-    tmp_1: &b uniq gpu.shared i32
+    src_0: &a shrd m1 i32,
+    src_1: &a shrd m1 i32,
+    dst_0: &b uniq m2 i32,
+    dst_1: &b uniq m2 i32
 ) -[gpu.thread]-> () {
-    *tmp_0 = *inp_0;
-    *tmp_1 = *inp_1;
+    *dst_0 = *src_0;
+    *dst_1 = *src_1;
 }
 
 fn upsweep_inplace_red_add<a: prv, d: nat>(
@@ -41,6 +41,28 @@ fn upsweep<a: prv>(
     }
 }
 
+fn downsweep_inplace_red_add<a: prv, d: nat>(
+    thread: Thread,
+    arr: [[&a uniq gpu.shared i32; 64/d]]
+) -[gpu.thread]-> () {
+    let t = arr[32/d-1];
+    arr[32/d-1] = arr[64/d-1];
+    arr[64/d-1] = arr[64/d-1] + t;
+}
+
+fn downsweep<a: prv>(
+    block: Block<Thread, 32>,
+    arr_ref: &a uniq gpu.shared [i32; 64]
+) -[gpu.block]-> () {
+    for_nat d in doubled_range(32) {
+        let tmp_down_view = group::<64/d, 64, &a uniq gpu.shared i32>(
+            to_view_mut::<a, gpu.shared, 64, i32>(&a uniq arr_ref));
+        for split_block::<d, 32>(block).0
+        with <tmp_down_view>
+        do
+            downsweep_inplace_red_add::<a, d>;
+    }
+}
 
 // blockDim.x == 32
 // n == 256 * blockDim.x * 2
@@ -107,26 +129,19 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                          // Copy to temporary shared memory storage
                          for block
                          with <input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1>
-                         do
-                            copy_pair_to_shared::<'r, 'e>;
+                         do copy_two_vals::<'r, 'e, gpu.global, gpu.shared>;
 
-                         //
-                         // Upsweep
-                         //
-                         // d == blockDim.x
-                         // offset == 64/d
                          upsweep::<'f>(block, &'f uniq tmpb);
-
-                         let tmp_last: [[&'l uniq gpu.shared i32; 1]] =
-                            split_at::<63, 64, &'l uniq gpu.shared i32>(
-                              to_view_mut::<'l, gpu.shared, 64, i32>(&'l uniq tmpb)).1;
 
                          //
                          // Clear last elemen and record block sum
                          //
-                         for split_block::<1, 32>(block).0
-                         with <bsum, tmp_last>
-                         do
+                        let tmp_last: [[&'l uniq gpu.shared i32; 1]] =
+                            split_at::<63, 64, &'l uniq gpu.shared i32>(
+                                to_view_mut::<'l, gpu.shared, 64, i32>(&'l uniq tmpb)).1;
+                        for split_block::<1, 32>(block).0
+                        with <bsum, tmp_last>
+                        do
                             | thread: Thread,
                               sum: &'k uniq gpu.global i32,
                               last: &'l uniq gpu.shared i32
@@ -135,40 +150,14 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                                 *last = 0;
                             };
 
-                         //
-                         // Downsweep
-                         //
-                         for_nat d in doubled_range(32) {
-                            let tmp_down_view = group::<64/d, 64, &'f uniq gpu.shared i32>(
-                                to_view_mut::<'f, gpu.shared, 64, i32>(&'f uniq tmpb));
-
-                            for split_block::<d, 32>(block).0
-                            with <tmp_down_view>
-                            do
-                                | thread: Thread,
-                                    a: [[&'f uniq gpu.shared i32; 64/d]]
-                                | -[gpu.thread]-> () {
-                                    let t = a[32/d-1];
-                                    a[32/d-1] = a[64/d-1];
-                                    a[64/d-1] = a[64/d-1] + t;
-                                };
-                         };
+                        downsweep::<'f>(block, &'f uniq tmpb);
 
                         // Copy results to global memory
                         let output_halves = split_at::<32, 64, &'m uniq gpu.global i32>(block_out);
                         for block
                         with <output_halves.0, output_halves.1, tmp_halves.0, tmp_halves.1>
-                        do
-                            | thread: Thread,
-                              res_0: &'m uniq gpu.global i32,
-                              res_1: &'m uniq gpu.global i32,
-                              out_0: &'e uniq gpu.shared i32,
-                              out_1: &'e uniq gpu.shared i32
-                            | -[gpu.thread]-> () {
-                                *res_0 = *out_0;
-                                *res_1 = *out_1;
-                            };
-                     };
+                        do copy_two_vals::<'m, 'e, gpu.shared, gpu.global>;
+                    };
             }
         );
 

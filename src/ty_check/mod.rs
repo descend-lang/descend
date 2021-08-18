@@ -6,6 +6,7 @@ mod subty;
 
 use crate::ast::internal::{IdentTyped, Loan, PrvMapping};
 use crate::ast::DataTy::Scalar;
+use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
 use crate::parser::SourceCode;
@@ -354,9 +355,12 @@ impl<'a> TyChecker<'a> {
     ) -> TyResult<(TyCtx, Ty)> {
         fn to_exec_and_size(parall_collec: &Expr) -> Exec {
             match &parall_collec.ty.as_ref().unwrap().ty {
-                TyKind::Data(DataTy::Grid(_, _)) => Exec::GpuGrid,
-                TyKind::Data(DataTy::Block(_, _)) => Exec::GpuBlock,
-                TyKind::Data(DataTy::Scalar(ScalarTy::Warp)) => Exec::GpuWarp,
+                TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
+                    ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => Exec::GpuGrid,
+                    ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
+                    ThreadHierchyTy::WarpGrp(_) => Exec::GpuBlock,
+                    ThreadHierchyTy::Warp => Exec::GpuWarp,
+                },
                 _ => panic!("Expected a parallel collection: Grid or Block."),
             }
         }
@@ -417,26 +421,14 @@ impl<'a> TyChecker<'a> {
                 Ok(())
             }
             TyKind::Fn(_, param_tys, fun_exec, ret_ty) => {
-                let num_fun_params = in_param_tys.len() + 1;
-                if param_tys.len() != num_fun_params {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
-                        "Wrong amount of parameters in provided function. Expected {},\
-                    one for parallelism expression and one for input.",
-                        num_fun_params
-                    ))));
-                }
-                let fun_parall_elem_ty = &param_tys[0];
-                let fun_input_elem_tys: Vec<_> = param_tys[1..].iter().map(|t| t).collect();
-                let parall_elem_dty = match &parall_collec.ty.as_ref().unwrap().ty {
-                    TyKind::Data(dty) => match dty {
-                        DataTy::Grid(pe_dty, _) => pe_dty.as_ref().clone(),
-                        DataTy::Block(pe_dty, _) => pe_dty.as_ref().clone(),
-                        DataTy::Scalar(ScalarTy::Warp) => DataTy::Scalar(ScalarTy::Thread),
-                        _ => {
-                            return Err(self.ty_error(TyErrorKind::String(
-                                "Provided expression is not a parallel collection.".to_string(),
-                            )))
-                        }
+                let parall_elem_ty = match &parall_collec.ty.as_ref().unwrap().ty {
+                    TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
+                        ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => Some(
+                            ThreadHierchyTy::ThreadGrp(m1.clone(), m2.clone(), m3.clone()),
+                        ),
+                        ThreadHierchyTy::ThreadGrp(_, _, _) => None,
+                        ThreadHierchyTy::WarpGrp(_) => Some(ThreadHierchyTy::Warp),
+                        ThreadHierchyTy::Warp => None,
                     },
                     _ => {
                         return Err(self.ty_error(TyErrorKind::String(
@@ -444,27 +436,51 @@ impl<'a> TyChecker<'a> {
                         )))
                     }
                 };
-                if &fun_parall_elem_ty.ty != &TyKind::Data(parall_elem_dty.clone()) {
+                let param_offset = match parall_elem_ty {
+                    Some(_) => 1,
+                    None => 0,
+                };
+                let num_fun_params = in_param_tys.len() + param_offset;
+                if param_tys.len() != num_fun_params {
+                    return Err(self.ty_error(TyErrorKind::String(format!(
+                        "Wrong amount of parameters in provided function. Expected {},\
+                    one for parallelism expression and one for input.",
+                        num_fun_params
+                    ))));
+                }
+                let fun_parall_elem_ty = match &param_tys[0].ty {
+                    TyKind::ThreadHierchy(th_hierchy) => Some(th_hierchy.as_ref().clone()),
+                    _ => None,
+                };
+                let fun_input_elem_tys: Vec<_> =
+                    param_tys[param_offset..].iter().map(|t| t).collect();
+
+                if &fun_parall_elem_ty != &parall_elem_ty {
                     return Err(self.ty_error(TyErrorKind::String(format!(
                         "Function does not fit the provided parallel collection. \
                         Expected: {:?}, but found: {:?}",
-                        TyKind::Data(parall_elem_dty),
-                        fun_parall_elem_ty
+                        parall_elem_ty, fun_parall_elem_ty
                     ))));
                 }
                 if fun_input_elem_tys != in_param_tys {
                     return Err(self.ty_error(TyErrorKind::String(format!(
                         "Function does not fit the provided input. \
-                        Expected: {:?}, but found: {:?}",
+                        Expected: {:?},\n but found: {:?}",
                         in_param_tys, fun_input_elem_tys
                     ))));
                 }
-                let exec = match parall_elem_dty {
-                    DataTy::Block(_, _) => Exec::GpuBlock,
-                    DataTy::Scalar(ScalarTy::Thread) => Exec::GpuThread,
-                    _ => unimplemented!(),
+                let f_exec = match parall_elem_ty {
+                    Some(ThreadHierchyTy::ThreadGrp(_, _, _)) => Exec::GpuBlock,
+                    Some(ThreadHierchyTy::WarpGrp(_)) => Exec::GpuBlock,
+                    Some(ThreadHierchyTy::Warp) => Exec::GpuWarp,
+                    None => Exec::GpuThread,
+                    Some(ThreadHierchyTy::BlockGrp(_, _, _, _, _, _)) => {
+                        return Err(self.ty_error(TyErrorKind::String(
+                            "Cannot parallelize over multiple Grids.".to_string(),
+                        )))
+                    }
                 };
-                if fun_exec != &exec {
+                if fun_exec != &f_exec {
                     return Err(self.ty_error(TyErrorKind::String(
                         "Execution resource does not fit.".to_string(),
                     )));
@@ -1063,6 +1079,9 @@ impl<'a> TyChecker<'a> {
                 TyKind::View(_) => Err(self.ty_error(TyErrorKind::String(
                     "Tuple elements cannot be views.".to_string(),
                 ))),
+                TyKind::ThreadHierchy(_) => Err(self.ty_error(TyErrorKind::String(
+                    "Tuple elements must be data types, but found thread hierarchy.".to_string(),
+                ))),
                 TyKind::Ident(_) => Err(self.ty_error(TyErrorKind::String(
                     "Tuple elements must be data types, but found general type identifier."
                         .to_string(),
@@ -1404,6 +1423,11 @@ impl<'a> TyChecker<'a> {
                     self.ty_error(TyErrorKind::String("Trying to borrow a view.".to_string()))
                 )
             }
+            TyKind::ThreadHierchy(_) => {
+                return Err(self.ty_error(TyErrorKind::String(
+                    "Trying to borrow thread hierarchy.".to_string(),
+                )))
+            }
             TyKind::Fn(_, _, _, _) => {
                 return Err(self.ty_error(TyErrorKind::String(
                     "Trying to borrow a function.".to_string(),
@@ -1516,6 +1540,7 @@ impl<'a> TyChecker<'a> {
                 }
                 Ok((ty.clone(), None, vec![]))
             }
+            TyKind::ThreadHierchy(_) => Ok((ty.clone(), None, vec![])),
             TyKind::Fn(_, _, _, _) => {
                 if !ty.is_fully_alive() {
                     panic!("This should never happen.")

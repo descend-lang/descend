@@ -50,7 +50,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef]) -> cu::Item {
         name: name.clone(),
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
-        ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut).unwrap(),
+        ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut),
         body: gen_stmt(
             body_expr,
             !matches!(ret_ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
@@ -105,13 +105,14 @@ fn gen_stmt(
             {
                 let cu_ty = if let desc::DataTy::Array(elem_dty, n) = dty.as_ref() {
                     cu::Ty::CArray(
-                        Box::new(
-                            gen_ty(&desc::TyKind::Data(elem_dty.as_ref().clone()), *mutbl).unwrap(),
-                        ),
+                        Box::new(gen_ty(
+                            &desc::TyKind::Data(elem_dty.as_ref().clone()),
+                            *mutbl,
+                        )),
                         n.clone(),
                     )
                 } else {
-                    gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl).unwrap()
+                    gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl)
                 };
                 let var = cu::Stmt::VarDecl {
                     name: ident.name.clone(),
@@ -123,9 +124,13 @@ fn gen_stmt(
                     Box::new(var),
                     Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
                 )
-            } else if let Some(tty) = gen_ty(&e1.ty.as_ref().unwrap().ty, *mutbl) {
-                let (init_expr, cu_ty) = match tty {
-                    cu::Ty::Array(_, _) => (gen_expr(e1, parall_ctx, view_ctx, comp_unit), tty),
+            } else {
+                //if has_generatable_ty(e1) {
+                let gened_ty = gen_ty(&e1.ty.as_ref().unwrap().ty, *mutbl);
+                let (init_expr, cu_ty) = match gened_ty {
+                    cu::Ty::Array(_, _) => {
+                        (gen_expr(e1, parall_ctx, view_ctx, comp_unit), gened_ty)
+                    }
                     _ => (
                         gen_expr(e1, parall_ctx, view_ctx, comp_unit),
                         if *mutbl == desc::Mutability::Mut {
@@ -145,25 +150,19 @@ fn gen_stmt(
                     Box::new(var),
                     Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
                 )
-            } else {
-                gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
-            }
+            } // else {
+              //     gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
+              // }
         }
-        LetUninit(ident, ty, e) => {
-            if let Some(tty) = gen_ty(&ty.as_ref().ty, desc::Mutability::Mut) {
-                cu::Stmt::Seq(
-                    Box::new(cu::Stmt::VarDecl {
-                        name: ident.name.clone(),
-                        ty: tty,
-                        addr_space: None,
-                        expr: None,
-                    }),
-                    Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
-            } else {
-                gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)
-            }
-        }
+        LetUninit(ident, ty, e) => cu::Stmt::Seq(
+            Box::new(cu::Stmt::VarDecl {
+                name: ident.name.clone(),
+                ty: gen_ty(&ty.as_ref().ty, desc::Mutability::Mut),
+                addr_space: None,
+                expr: None,
+            }),
+            Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)),
+        ),
         LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
         // e1 ; e2
         Seq(e1, e2) => cu::Stmt::Seq(
@@ -263,6 +262,11 @@ fn gen_stmt(
     }
 }
 
+fn has_generatable_ty(e: &desc::Expr) -> bool {
+    matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Ident(_))
+        || matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Data(_))
+}
+
 fn gen_for_each(
     ident: &Ident,
     coll_expr: &desc::Expr,
@@ -333,7 +337,7 @@ fn gen_exec(
         .map(|(name, expr)| cu::ParamDecl {
             name: name.clone(),
             // TODO why Mutability::Const??!
-            ty: gen_ty(&expr.ty.as_ref().unwrap().ty, desc::Mutability::Const).unwrap(),
+            ty: gen_ty(&expr.ty.as_ref().unwrap().ty, desc::Mutability::Const),
         })
         .collect();
 
@@ -443,30 +447,44 @@ fn gen_par_for(
     }
 
     let (pid, sync_stmt) = match &parall_collec.ty.as_ref().unwrap().ty {
-        desc::TyKind::Data(desc::DataTy::Grid(_, _)) => (
-            desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
-            cu::Stmt::Expr(cu::Expr::Empty),
-        ),
-        desc::TyKind::Data(desc::DataTy::Block(_, _)) => (
-            desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
-            cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                template_args: vec![],
-                args: vec![],
-            }),
-        ),
-        desc::TyKind::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => (
-            desc::Nat::BinOp(
-                desc::BinOpNat::Mod,
-                Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-                Box::new(desc::Nat::Lit(32)),
+        desc::TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
+            desc::ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => (
+                desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
+                cu::Stmt::Expr(cu::Expr::Empty),
             ),
-            cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
-                template_args: vec![],
-                args: vec![],
-            }),
-        ),
+            desc::ThreadHierchyTy::ThreadGrp(_, _, _) => (
+                desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
+                cu::Stmt::Expr(cu::Expr::FunCall {
+                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                    template_args: vec![],
+                    args: vec![],
+                }),
+            ),
+            desc::ThreadHierchyTy::WarpGrp(_) => (
+                desc::Nat::BinOp(
+                    desc::BinOpNat::Div,
+                    Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+                    Box::new(desc::Nat::Lit(32)),
+                ),
+                cu::Stmt::Expr(cu::Expr::FunCall {
+                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                    template_args: vec![],
+                    args: vec![],
+                }),
+            ),
+            desc::ThreadHierchyTy::Warp => (
+                desc::Nat::BinOp(
+                    desc::BinOpNat::Mod,
+                    Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+                    Box::new(desc::Nat::Lit(32)),
+                ),
+                cu::Stmt::Expr(cu::Expr::FunCall {
+                    fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
+                    template_args: vec![],
+                    args: vec![],
+                }),
+            ),
+        },
         _ => panic!("Not a parallel collection type."),
     };
 
@@ -618,8 +636,7 @@ fn gen_expr(
             ret_ty: gen_ty(
                 &desc::TyKind::Data(ty.as_ref().clone()),
                 desc::Mutability::Mut,
-            )
-            .unwrap(),
+            ),
             is_dev_fun: is_dev_fun(*exec),
         },
         App(fun, kinded_args, args) => match &fun.expr {
@@ -1223,19 +1240,14 @@ fn gen_templ_param(ty_ident: &desc::IdentKinded) -> cu::TemplParam {
 }
 
 fn gen_param_decls(param_decls: &[desc::ParamDecl]) -> Vec<cu::ParamDecl> {
-    param_decls.iter().filter_map(gen_param_decl).collect()
+    param_decls.iter().map(gen_param_decl).collect()
 }
 
-fn gen_param_decl(param_decl: &desc::ParamDecl) -> Option<cu::ParamDecl> {
+fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
     let desc::ParamDecl { ident, ty, mutbl } = param_decl;
-    let ty = gen_ty(&ty.ty, *mutbl);
-    if let Some(tty) = ty {
-        Some(cu::ParamDecl {
-            name: ident.name.clone(),
-            ty: tty,
-        })
-    } else {
-        None
+    cu::ParamDecl {
+        name: ident.name.clone(),
+        ty: gen_ty(&ty.ty, *mutbl),
     }
 }
 
@@ -1246,21 +1258,29 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
-        desc::ArgKinded::Ty(desc::Ty { ty: ty @ desc::TyKind::Data(_), .. }) => {
-            if let Some(tty) = gen_ty(&ty, desc::Mutability::Mut) {
-                Some(cu::TemplateArg::Ty(tty))
-            } else {
-                None
-            }
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: ty @ desc::TyKind::Data(_),
+            ..
+        }) => Some(cu::TemplateArg::Ty(gen_ty(&ty, desc::Mutability::Mut))),
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: desc::TyKind::Ident(_),
+            ..
+        }) => unimplemented!(),
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: desc::TyKind::View(_),
+            ..
+        }) => None,
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: desc::TyKind::ThreadHierchy(_),
+            ..
+        }) => None,
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: desc::TyKind::Fn(_, _, _, _),
+            ..
+        }) => unimplemented!("needed?"),
+        desc::ArgKinded::Memory(_) | desc::ArgKinded::Provenance(_) | desc::ArgKinded::Ident(_) => {
+            None
         }
-        desc::ArgKinded::Ty(desc::Ty { ty: desc::TyKind::Ident(_), .. }) => unimplemented!("This will require inlining all view types \
-         such that we know that the only identifiers left are data types. This will enable simply passing the \
-         identifiers around in C."),
-        desc::ArgKinded::Ty(desc::Ty { ty: desc::TyKind::View(_), .. }) => None,
-        desc::ArgKinded::Ty(desc::Ty { ty: desc::TyKind::Fn(_, _, _, _), .. }) => unimplemented!("needed?"),
-        desc::ArgKinded::Memory(_)
-        | desc::ArgKinded::Provenance(_)
-        | desc::ArgKinded::Ident(_) => None,
     }
 }
 
@@ -1268,107 +1288,92 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
 // in cu::Ty::Const. However, the formalism uses this, because it shows the generated code
 // as opposed to a Cuda-AST and there, the order of the const is different
 // when it comes to pointers (C things).
-fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> Option<cu::Ty> {
+fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
     use desc::DataTy as d;
     use desc::TyKind::*;
 
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
-        Ident(ident) => Some(cu::Ty::Ident(ident.name.clone())),
+        Ident(ident) => cu::Ty::Ident(ident.name.clone()),
         Fn(_, _, _, _) => unimplemented!("needed?"),
         Data(d::Scalar(s)) => match s {
-            desc::ScalarTy::Unit => Some(cu::Ty::Scalar(cu::ScalarTy::Void)),
-            desc::ScalarTy::I32 => Some(cu::Ty::Scalar(cu::ScalarTy::I32)),
-            desc::ScalarTy::F32 => Some(cu::Ty::Scalar(cu::ScalarTy::F32)),
-            desc::ScalarTy::Bool => Some(cu::Ty::Scalar(cu::ScalarTy::Bool)),
-            desc::ScalarTy::Gpu => Some(cu::Ty::Scalar(cu::ScalarTy::Gpu)),
-            desc::ScalarTy::Warp | desc::ScalarTy::Thread => None,
+            desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
+            desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
+            desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
+            desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
+            desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
         },
         Data(d::Tuple(tys)) => {
-            let gened_tys: Vec<_> = tys
-                .iter()
-                .filter_map(|ty| gen_ty(&Data(ty.clone()), m))
-                .collect();
-            if gened_tys.is_empty() {
-                None
+            cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect())
+        }
+        Data(d::Array(ty, n)) => {
+            cu::Ty::Array(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), n.clone())
+        }
+        Data(d::At(ty, mem)) => {
+            if let desc::Memory::GpuShared = mem {
+                let dty = match ty.as_ref() {
+                    d::Array(dty, _) => dty.as_ref().clone(),
+                    _ => ty.as_ref().clone(),
+                };
+                cu::Ty::Ptr(
+                    Box::new(gen_ty(&desc::TyKind::Data(dty), mutbl)),
+                    Some(cu::GpuAddrSpace::Shared),
+                )
             } else {
-                Some(cu::Ty::Tuple(gened_tys))
+                let buff_kind = match mem {
+                    desc::Memory::CpuHeap => cu::BufferKind::CpuHeap,
+                    desc::Memory::GpuGlobal => cu::BufferKind::GpuGlobal,
+                    desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
+                    desc::Memory::GpuShared => unimplemented!(),
+                    desc::Memory::None => {
+                        panic!("No memory is not valid for At types. should never appear here.")
+                    }
+                    desc::Memory::GpuLocal => {
+                        panic!("GpuLocal is not valid for At types. Should never appear here.")
+                    }
+                    desc::Memory::CpuStack => {
+                        panic!("CpuStack is not valid for At types. Should never appear here.")
+                    }
+                };
+                cu::Ty::Buffer(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), buff_kind)
             }
         }
-        Data(d::Array(ty, n)) => Some(cu::Ty::Array(
-            Box::new(gen_ty(&Data(ty.as_ref().clone()), m).unwrap()),
-            n.clone(),
-        )),
-        Data(d::At(ty, mem)) => Some(if let desc::Memory::GpuShared = mem {
-            let dty = match ty.as_ref() {
-                d::Array(dty, _) => dty.as_ref().clone(),
-                _ => ty.as_ref().clone(),
-            };
-            cu::Ty::Ptr(
-                Box::new(gen_ty(&desc::TyKind::Data(dty), mutbl).unwrap()),
-                Some(cu::GpuAddrSpace::Shared),
-            )
-        } else {
-            let buff_kind = match mem {
-                desc::Memory::CpuHeap => cu::BufferKind::CpuHeap,
-                desc::Memory::GpuGlobal => cu::BufferKind::GpuGlobal,
-                desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
-                desc::Memory::GpuShared => unimplemented!(),
-                desc::Memory::None => {
-                    panic!("No memory is not valid for At types. should never appear here.")
-                }
-                desc::Memory::GpuLocal => {
-                    panic!("GpuLocal is not valid for At types. Should never appear here.")
-                }
-                desc::Memory::CpuStack => {
-                    panic!("CpuStack is not valid for At types. Should never appear here.")
-                }
-            };
-            cu::Ty::Buffer(
-                Box::new(gen_ty(&Data(ty.as_ref().clone()), m).unwrap()),
-                buff_kind,
-            )
-        }),
-        Data(d::Dead(_)) => {
-            panic!("Dead types are only for type checking and cannot be generated.")
-        }
         Data(d::Ref(_, own, _, ty)) => {
-            let tty = Box::new(
-                gen_ty(
-                    &Data(match ty.as_ref() {
-                        // Pointers to arrays point to the element type.
-                        desc::DataTy::Array(elem_ty, _) => elem_ty.as_ref().clone(),
-                        _ => ty.as_ref().clone(),
-                    }),
-                    m,
-                )
-                .unwrap(),
-            );
-            Some(if matches!(own, desc::Ownership::Uniq) {
+            let tty = Box::new(gen_ty(
+                &Data(match ty.as_ref() {
+                    // Pointers to arrays point to the element type.
+                    desc::DataTy::Array(elem_ty, _) => elem_ty.as_ref().clone(),
+                    _ => ty.as_ref().clone(),
+                }),
+                m,
+            ));
+            if matches!(own, desc::Ownership::Uniq) {
                 cu::Ty::Ptr(tty, None)
             } else {
                 cu::Ty::PtrConst(tty, None)
-            })
+            }
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
-        Data(d::Ident(ident)) => Some(cu::Ty::Ident(ident.name.clone())),
-        Data(d::Grid(_, _)) | Data(d::Block(_, _)) => None,
-        View(_) => None,
-        //     panic!(
-        //     "Cannot generate view types. Anything with this type should have been compiled away."
-        // ),
+        Data(d::Ident(ident)) => cu::Ty::Ident(ident.name.clone()),
+        Data(d::Dead(_)) => {
+            panic!("Dead types are only for type checking and cannot be generated.")
+        }
+        View(_) => panic!(
+            "Cannot generate view types. Anything with this type should have been compiled away."
+        ),
+        ThreadHierchy(_) => panic!(
+            "Cannot generate thread hierarchy types. \
+        Anything with this type should ave been compiled away."
+        ),
     };
 
     if matches!(mutbl, desc::Mutability::Mut) {
         cu_ty
-    } else if let Some(cu_tty) = cu_ty {
-        Some(cu::Ty::Const(Box::new(cu_tty)))
     } else {
-        None
+        cu::Ty::Const(Box::new(cu_ty))
     }
 }
 
-// TODO correct?
 fn is_dev_fun(exec: desc::Exec) -> bool {
     match exec {
         desc::Exec::GpuGrid
@@ -1412,7 +1417,7 @@ impl ParallelityCollec {
         match &expr.expr {
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) = &f.expr {
-                    if ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK {
+                    if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP {
                         if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
                             (&gen_args[0], &gen_args[1], args.first())
                         {
@@ -1479,15 +1484,7 @@ impl ParallelityCollec {
 }
 
 fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
-    match &ty.ty {
-        desc::TyKind::Data(desc::DataTy::Grid(_, _))
-        | desc::TyKind::Data(desc::DataTy::Block(_, _))
-        | desc::TyKind::Data(desc::DataTy::Scalar(desc::ScalarTy::Warp)) => true,
-        desc::TyKind::Data(desc::DataTy::Tuple(vec)) => vec
-            .iter()
-            .all(|dty| is_parall_collec_ty(&desc::Ty::new(desc::TyKind::Data(dty.clone())))),
-        _ => false,
-    }
+    matches!(ty.ty, desc::TyKind::ThreadHierchy(_))
 }
 
 #[derive(Debug, Clone)]

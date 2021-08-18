@@ -1,3 +1,10 @@
+fn red_add<r: prv>(
+  fst_half: &r uniq gpu.global i32,
+  snd_half: &r uniq gpu.global i32
+) -[gpu.thread]-> () {
+  *fst_half = *fst_half + *snd_half;
+}
+
 fn reduce<n: nat, a: prv, b: prv>(
   ha_array: &a uniq cpu.heap [i32; n]
 ) -[cpu.thread]-> () {
@@ -13,25 +20,25 @@ fn reduce<n: nat, a: prv, b: prv>(
     exec::<64, 1024, 'h, cpu.stack, [[[[&'r uniq gpu.global i32; 1024]]; 64]]>(
       &'h uniq gpu,
       block_group,
-      | grid: Grid<Block<Thread, 1024>, 64>,
+      | grid: BlockGrp<64, ThreadGrp<1024>>,
         input: [[[[&'r uniq gpu.global i32; 1024]]; 64]]| -[gpu.grid]-> () {
 
         for grid with <input> do
-          | block: Block<Thread, 1024>,
+          | block: ThreadGrp<1024>,
             ib: [[&'r uniq gpu.global i32; 1024]] | -[gpu.block]-> () {
 
             for_nat k in halved_range(512) {
               let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(
                 split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib).0);
-              for split_block::<k, 1024>(block).0
-              with <active_halves.0, active_halves.1>
+              for split_thread_grp::<k, 1024, 1, 1>(block).0
+              with active_halves
               do
-                | thread: Thread,
-                  fst_half: &'r uniq gpu.global i32,
+                | fst_half: &'r uniq gpu.global i32,
                   snd_half: &'r uniq gpu.global i32 | -[gpu.thread]-> () {
                     *fst_half = *fst_half + *snd_half;
                 };
-            }
+                //red_add::<'r>;
+            };
         };
       }
     );

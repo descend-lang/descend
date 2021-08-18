@@ -1,5 +1,4 @@
 fn add<r: prv, s: prv>(
-    thread: Thread,
     inp: <&r uniq gpu.global i32, &s shrd gpu.global i32>
 ) -[gpu.thread]-> () {
     *inp.0 = *inp.0 + *inp.1;
@@ -29,20 +28,14 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
         exec::<64, 1024, 'h, cpu.stack, [[[[<&'r uniq gpu.global i32, &'s shrd gpu.global i32>; 1024]]; 64]]>(
             &'h uniq gpu,
             grouped_elems,
-            | grid: Grid<Block<Thread, 1024>, 64>,
+            | grid: BlockGrp<64, ThreadGrp<1024>>,
               input: [[[[<&'r uniq gpu.global i32, &'s shrd gpu.global i32>; 1024]]; 64]]
             | -[gpu.grid]-> () {
                 for grid with <input> do
-                    | block: Block<Thread, 1024>,
+                    | block: ThreadGrp<1024>,
                       ib: [[<&'r uniq gpu.global i32, &'s shrd gpu.global i32>; 1024]]
                     | -[gpu.block]-> () {
-                         for block with <ib> do
-                            // | thread: Thread,
-                            //   inp: <&'r uniq gpu.global i32, &'s shrd gpu.global i32>
-                            // | -[gpu.thread]-> () {
-                            //     *inp.0 = *inp.0 + *inp.1;
-                            // };
-                            add::<'r, 's>
+                         for block with <ib> do add::<'r, 's>
                      };
             }
         );

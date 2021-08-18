@@ -17,13 +17,13 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
         exec::<64, 1024, 'h, cpu.stack, <[[[[&'r shrd gpu.global i32; 1024]]; 64]], [[[[&'m uniq gpu.global i32; 1]]; 64]]>>(
             &'h uniq gpu,
             <block_group, view_out>,
-            | grid: Grid<Block<Thread, 1024>, 64>,
+            | grid: BlockGrp<64, ThreadGrp<1024>>,
               views: <[[[[&'r shrd gpu.global i32; 1024]]; 64]], [[[[&'m uniq gpu.global i32; 1]]; 64]]>| -[gpu.grid]-> () {
                 let input = views.0;
                 let output = views.1;
                 let mut tmp: [i32; 1024] @ gpu.shared = shared_alloc::<[i32; 1024]>();
                 for grid with <input, output, tmp> do
-                    | block: Block<Thread, 1024>,
+                    | block: ThreadGrp<1024>,
                       ib: [[&'r shrd gpu.global i32; 1024]],
                       out_elem: [[&'m uniq gpu.global i32; 1]],
                       tmpb: [i32; 1024] @ gpu.shared

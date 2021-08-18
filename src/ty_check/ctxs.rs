@@ -175,12 +175,11 @@ impl TyCtx {
                 | TyKind::Data(d::At(_, _))
                 | TyKind::Data(d::Ref(_, _, _, _))
                 | TyKind::Data(d::Ident(_))
-                | TyKind::Data(d::Grid(_, _))
-                | TyKind::Data(d::Block(_, _))
                 | TyKind::Data(d::Dead(_))
 //                | Ty::View(v::Ident(_))
                 | TyKind::View(v::Array(_, _))
-                | TyKind::View(v::Dead(_)) => vec![(pl, ty.clone())],
+                | TyKind::View(v::Dead(_))
+                | TyKind::ThreadHierchy(_) => vec![(pl, ty.clone())],
                 TyKind::Data(d::Tuple(tys)) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
@@ -288,6 +287,9 @@ impl TyCtx {
                     TyKind::Fn(_, _, _, _) => unimplemented!(),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty)))),
                     TyKind::View(vty) => Ty::new(TyKind::View(ViewTy::Dead(Box::new(vty)))),
+                    TyKind::ThreadHierchy(_) => {
+                        panic!("Thread hierarchy types are always copyable.")
+                    }
                 },
             )
         } else {
