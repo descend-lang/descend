@@ -1024,6 +1024,7 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
     match l {
         desc::Lit::Bool(b) => cu::Expr::Lit(cu::Lit::Bool(b)),
         desc::Lit::I32(i) => cu::Expr::Lit(cu::Lit::I32(i)),
+        desc::Lit::U32(u) => cu::Expr::Lit(cu::Lit::U32(u)),
         desc::Lit::F32(f) => cu::Expr::Lit(cu::Lit::F32(f)),
         desc::Lit::Unit => cu::Expr::Empty,
     }
@@ -1386,6 +1387,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         Data(d::Scalar(s)) |  Data(d::Atomic(s)) => match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
+            desc::ScalarTy::U32 => cu::Ty::Scalar(cu::ScalarTy::U32),
             desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
