@@ -76,7 +76,7 @@ fn tree_reduce() -> std::io::Result<()> {
 
 #[test]
 fn vector_add() -> std::io::Result<()> {
-    let vec_add = String::from_utf8_lossy(&std::fs::read("examples/vec_add.desc")?).to_string();
+    let vec_add = String::from_utf8_lossy(&std::fs::read("examples/vec_add_nat_test.desc")?).to_string();
     let mut compil_unit = descend::parser::parse_compil_unit(&vec_add).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
@@ -91,6 +91,19 @@ fn vector_add() -> std::io::Result<()> {
 fn bfs() -> std::io::Result<()> {
     let bfs = String::from_utf8_lossy(&std::fs::read("examples/bfs_copy.desc")?).to_string();
     let mut compil_unit = descend::parser::parse_compil_unit(&bfs).unwrap();
+    if let Err(err) = ty_check::ty_check(&mut compil_unit) {
+        panic!("{}", err)
+    } else {
+        let res_str = descend::codegen::gen(&compil_unit);
+        print!("{}", res_str);
+        Ok(())
+    }
+}
+
+#[test]
+fn computed_indexing() -> std::io::Result<()> {
+    let c_ind = String::from_utf8_lossy(&std::fs::read("examples/computed_indexing.desc")?).to_string();
+    let mut compil_unit = descend::parser::parse_compil_unit(&c_ind).unwrap();
     if let Err(err) = ty_check::ty_check(&mut compil_unit) {
         panic!("{}", err)
     } else {

@@ -1,0 +1,21 @@
+fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
+    h_indices: &a shrd cpu.heap [u32; n],
+    h_results: &b uniq cpu.heap [i32; n],
+    h_data: &c shrd cpu.heap [i32; m]
+)   -[cpu.thread]-> () {
+    letprov <'c, 'd, 'e, 'f> {
+        let gpu: Gpu = gpu_device(0);
+
+        let indices: [u32; n] @ gpu.global =
+            gpu_alloc::<'c, a, cpu.stack, cpu.heap, [u32; n]>(&'c uniq gpu, h_indices);
+        
+
+        let results: [i32; n] @ gpu.global =
+            gpu_alloc::<'d, 'e, cpu.stack, cpu.heap, [i32; n]>(&'d uniq gpu, &'e shrd *h_results);
+
+        let data: [i32; m] @gpu.global =
+            gpu_alloc::<'f, c, cpu.stack, cpu.heap, [i32; m]>(&'f uniq gpu, h_data);
+
+        ()
+    }
+}

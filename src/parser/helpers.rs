@@ -7,6 +7,7 @@ pub fn type_from_lit(lit: &Lit) -> DataTy {
         Lit::Bool(_) => ScalarTy::Bool,
         Lit::Unit => ScalarTy::Unit,
         Lit::I32(_) => ScalarTy::I32,
+        Lit::U32(_) => ScalarTy::U32,
         Lit::F32(_) => ScalarTy::F32,
     })
 }

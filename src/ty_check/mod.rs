@@ -982,6 +982,7 @@ fn ty_check_literal(ty_ctx: TyCtx, l: &mut Lit) -> (TyCtx, Ty) {
         Lit::Unit => ScalarTy::Unit,
         Lit::Bool(_) => ScalarTy::Bool,
         Lit::I32(_) => ScalarTy::I32,
+        Lit::U32(_) => ScalarTy::U32,
         Lit::F32(_) => ScalarTy::F32,
     };
     (ty_ctx, Ty::Data(DataTy::Scalar(scalar_data)))

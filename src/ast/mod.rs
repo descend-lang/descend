@@ -360,6 +360,7 @@ pub enum Lit {
     Unit,
     Bool(bool),
     I32(i32),
+    U32(u32),
     F32(f32),
 }
 
@@ -384,6 +385,7 @@ impl fmt::Display for Lit {
             Self::Unit => write!(f, "()"),
             Self::Bool(b) => write!(f, "{}", b),
             Self::I32(i) => write!(f, "{}", i),
+            Self::U32(u) => write!(f, "{}", u),
             Self::F32(fl) => write!(f, "{}", fl),
         }
     }
@@ -936,6 +938,7 @@ impl fmt::Display for DataTy {
 pub enum ScalarTy {
     Unit,
     I32,
+    U32,
     F32,
     Bool,
     Gpu,
@@ -1086,6 +1089,7 @@ pub enum Nat {
 
 impl Nat {
     pub fn eval(&self) -> Result<usize, String> {
+        println!("\tuse nat!! {}", self);
         match self {
             Nat::Ident(i) => Err(format!("Cannot evaluate identifier `{}`.", i)),
             Nat::Lit(n) => Ok(*n),
