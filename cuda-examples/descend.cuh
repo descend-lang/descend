@@ -183,6 +183,7 @@ public:
 #endif
 
 using i32 = std::int32_t;
+using u32 = std::uint32_t;
 // FIXME there is no way to guarantee that float holds 32 bits
 using f32 = float;
 

@@ -108,6 +108,7 @@ pub(super) enum Lit {
     Void,
     Bool(bool),
     I32(i32),
+    U32(u32),
     F32(f32),
 }
 
@@ -198,6 +199,7 @@ pub(super) enum ScalarTy {
     Auto,
     Void,
     I32,
+    U32,
     F32,
     Bool,
     SizeT,
