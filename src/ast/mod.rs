@@ -1145,7 +1145,6 @@ pub enum Nat {
 
 impl Nat {
     pub fn eval(&self) -> Result<usize, String> {
-        println!("\tuse nat!! {}", self);
         match self {
             Nat::Ident(i) => Err(format!("Cannot evaluate identifier `{}`.", i)),
             Nat::Lit(n) => Ok(*n),
