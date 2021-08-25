@@ -821,7 +821,7 @@ impl<'a> TyChecker<'a> {
                     )));
                 }
             }
-            TyKind::Data(DataTy::Ref(_,Ownership::Shrd,_, arr_ty)) => {
+            TyKind::Data(DataTy::Ref(_,_,_, arr_ty)) => {
                 match *arr_ty {
                     DataTy::Array(elem_ty, n) => (*elem_ty, n),
                     _ => {
