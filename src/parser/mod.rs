@@ -653,8 +653,8 @@ mod tests {
         );
         assert_eq! (
             descend::ty("u32"),
-            Ok(Ty::Data(DataTy::Scalar(ScalarTy::U32))),
-            "does not nrecognize u32 type"
+            Ok(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::U32)))),
+            "does not recognize u32 type"
         );
         assert_eq!(
             descend::ty("()"),
@@ -721,10 +721,10 @@ mod tests {
         );
         assert_eq!(
             descend::ty("[u32;43]"),
-            Ok(Ty::Data(DataTy::Array(
+            Ok(Ty::new(TyKind::Data(DataTy::Array(
                 Box::new(DataTy::Scalar(ScalarTy::U32)),
                 Nat::Lit(43)
-            ))),
+            )))),
             "does not recognize [u32;43] type"
         );
         // TODO: Implement identifer parsing in nat
