@@ -821,7 +821,7 @@ impl DataTy {
             Grid(_, _) => false,
             Block(_, _) => false,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Array(ty, _) => true,
+            Array(_, _) => true,
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }

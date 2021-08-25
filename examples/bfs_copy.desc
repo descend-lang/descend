@@ -107,12 +107,12 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                                     // let foo = changes.0;
 
                                     // *st = true;
-                                    if true {
-                                        let foo = 4;
-                                    } else {
-                                        let bar = 3;
-                                    }
-                                 
+                                    // if true {
+                                    //     let foo = 4;
+                                    // } else {
+                                    //     let bar = 3;
+                                    // }
+                                    let x = 3;
                                     ()
                                 };
                             };

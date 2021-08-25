@@ -50,5 +50,10 @@ fn vector_add() -> Result<(), descend::error::ErrorReported> {
 
 #[test]
 fn bfs() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!("{}", descend::compile("examples/bfs.desc")?))
+    Ok(println!("{}", descend::compile("examples/bfs_copy.desc")?))
+}
+
+#[test]
+fn computed_indexing() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!("{}", descend::compile("examples/computed_indexing.desc")?))
 }

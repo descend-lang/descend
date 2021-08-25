@@ -55,10 +55,8 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
                               d: &'j shrd gpu.global [i32; m]
                             | -[gpu.thread]-> () {
                                 let i = *ind;
-                                let arr = *d;
-                                *res = arr[i]; 
-                                // *res = d[i]
-
+                                let temp = d[n];
+                                *res = temp;
                                 ()
                             }
 
