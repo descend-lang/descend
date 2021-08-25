@@ -1182,7 +1182,7 @@ fn gen_view(
 ) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[desc::Nat]) -> cu::Expr {
         let index = if path.is_empty() {
-            panic!("Unexpected.")
+            return expr
         } else if path.len() == 1 {
             path[0].clone()
         } else {
@@ -1213,7 +1213,7 @@ fn gen_view(
         (ViewExpr::Tuple { views }, [path @ .., prj]) => match prj.eval() {
             Ok(i) => match &views[i] {
                 ViewOrExpr::V(view_expr) => gen_view(view_expr, path.to_vec(), view_ctx, comp_unit),
-                ViewOrExpr::E(expr) => gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
+                ViewOrExpr::E(expr) => gen_view(&ViewExpr::ToView{ ref_expr: Box::new(expr.clone()) }, path.to_vec(), view_ctx, comp_unit), // gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
             },
             Err(e) => panic!(e),
         },
