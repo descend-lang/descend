@@ -1207,10 +1207,6 @@ impl<'a> TyChecker<'a> {
         };
         (ty_ctx, Ty::new(TyKind::Data(DataTy::Scalar(scalar_data))))
     }
-<<<<<<< HEAD
-=======
-
->>>>>>> fixed rebasing mistakes
 
     fn ty_check_let(
         &self,
