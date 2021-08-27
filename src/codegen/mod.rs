@@ -114,10 +114,12 @@ fn gen_stmt(
                     addr_space: Some(cu::GpuAddrSpace::Shared),
                     expr: None,
                 };
-                cu::Stmt::Seq(
-                    Box::new(var),
-                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
+                cu::Stmt::Seq {
+                    check1: Box::new(cu::Stmt::EmptyCheck),
+                    stmt1: Box::new(var),
+                    check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+                    stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                }
             } else if let Some(tty) = gen_ty(&e1.ty.as_ref().unwrap().ty, *mutbl) {
                 let (init_expr, cu_ty) = match tty {
                     cu::Ty::Array(_, _) => (gen_expr(e1, parall_ctx, view_ctx, comp_unit), tty),
@@ -136,35 +138,41 @@ fn gen_stmt(
                     addr_space: None,
                     expr: Some(init_expr),
                 };
-                cu::Stmt::Seq(
-                    Box::new(var),
-                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
+                cu::Stmt::Seq {
+                    check1: Box::new(cu::Stmt::EmptyCheck),
+                    stmt1: Box::new(var),
+                    check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+                    stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                }
             } else {
                 gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
             }
         }
         LetUninit(ident, ty, e) => {
             if let Some(tty) = gen_ty(&ty.as_ref().ty, Mutability::Mut) {
-                cu::Stmt::Seq(
-                    Box::new(cu::Stmt::VarDecl {
+                cu::Stmt::Seq {
+                    check1: Box::new(cu::Stmt::EmptyCheck),
+                    stmt1: Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
                         ty: tty,
                         addr_space: None,
                         expr: None,
                     }),
-                    Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
+                    check2: Box::new(cu::Stmt::EmptyCheck),
+                    stmt2: Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)),
+                }
             } else {
                 gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)
             }
         }
         LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
         // e1 ; e2
-        Seq(e1, e2) => cu::Stmt::Seq(
-            Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
-            Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-        ),
+        Seq(e1, e2) => cu::Stmt::Seq {
+            check1: Box::new(gen_checked_stmt(&e1, view_ctx, comp_unit)),
+            stmt1: Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
+            check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+            stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+        },
         ForNat(ident, range, body) => {
             let i = cu::Expr::Ident(ident.name.clone());
             let (init, cond, iter) = match range {
@@ -490,7 +498,40 @@ fn gen_par_for(
         par_section
     };
 
-    cu::Stmt::Seq(Box::new(body), Box::new(sync_stmt))
+    cu::Stmt::Seq {
+        check1: Box::new(cu::Stmt::EmptyCheck),
+        stmt1: Box::new(body),
+        check2: Box::new(cu::Stmt::EmptyCheck),
+        stmt2: Box::new(sync_stmt),
+    }
+}
+
+
+fn gen_checked_stmt(
+    expr: &desc::Expr,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+    comp_unit: &[desc::FunDef],
+) -> cu::Stmt {
+    use desc::ExprKind::*;
+
+    match &expr.expr {
+        Let(_, _, _, expr, _) => gen_checked_stmt(expr, view_ctx, comp_unit),
+        Seq(e1, e2) => {
+            gen_checked_stmt(e1, view_ctx, comp_unit);
+            gen_checked_stmt(e2, view_ctx, comp_unit)
+        }
+        Index(pl_expr, i) => {
+            cu::Stmt::IndexCheck{
+                arr: Box::new(gen_pl_expr(pl_expr,view_ctx, comp_unit)),
+                ind: i.clone()
+            }
+        }
+        Assign(_, expr) => gen_checked_stmt(expr, view_ctx, comp_unit),
+        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => {
+            cu::Stmt::EmptyCheck
+        }
+        _ => panic!("Should not happen {:?}", &expr) // TODO not all cases implemented 
+    }
 }
 
 fn gen_expr(
@@ -1020,7 +1061,7 @@ fn gen_view(
 ) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[desc::Nat]) -> cu::Expr {
         let index = if path.is_empty() {
-            return expr
+            return expr;
         } else if path.len() == 1 {
             path[0].clone()
         } else {
@@ -1051,7 +1092,14 @@ fn gen_view(
         (ViewExpr::Tuple { views }, [path @ .., prj]) => match prj.eval() {
             Ok(i) => match &views[i] {
                 ViewOrExpr::V(view_expr) => gen_view(view_expr, path.to_vec(), view_ctx, comp_unit),
-                ViewOrExpr::E(expr) => gen_view(&ViewExpr::ToView{ ref_expr: Box::new(expr.clone()) }, path.to_vec(), view_ctx, comp_unit), // gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
+                ViewOrExpr::E(expr) => gen_view(
+                    &ViewExpr::ToView {
+                        ref_expr: Box::new(expr.clone()),
+                    },
+                    path.to_vec(),
+                    view_ctx,
+                    comp_unit,
+                ), // gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
             },
             Err(e) => panic!(e),
         },

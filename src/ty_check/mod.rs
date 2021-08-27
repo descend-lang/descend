@@ -802,16 +802,14 @@ impl<'a> TyChecker<'a> {
                     )));
                 }
             }
-            TyKind::Data(DataTy::Ref(_,_,_, arr_ty)) => {
-                match *arr_ty {
-                    DataTy::Array(elem_ty, n) => (*elem_ty, n),
-                    _ => {
-                        return Err(self.ty_error(TyErrorKind::String(
-                            "Trying to index into non array type1.".to_string(),
-                        )))
-                    }
+            TyKind::Data(DataTy::Ref(_, _, _, arr_ty)) => match *arr_ty {
+                DataTy::Array(elem_ty, n) => (*elem_ty, n),
+                _ => {
+                    return Err(self.ty_error(TyErrorKind::String(
+                        "Trying to index into non array type1.".to_string(),
+                    )))
                 }
-            }
+            },
             _ => {
                 return Err(self.ty_error(TyErrorKind::String(
                     "Trying to index into non array type1.".to_string(),
@@ -1134,7 +1132,6 @@ impl<'a> TyChecker<'a> {
         };
         (ty_ctx, Ty::new(TyKind::Data(DataTy::Scalar(scalar_data))))
     }
-
 
     fn ty_check_let(
         &self,
