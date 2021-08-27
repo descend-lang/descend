@@ -1,10 +1,10 @@
-use super::{Expr, Ty};
+use super::Ty;
 use crate::ast::{Ident, Ownership, PlaceExpr};
+use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
 use annotate_snippets::display_list::DisplayList;
-use annotate_snippets::snippet::{Annotation, AnnotationType, Slice, Snippet, SourceAnnotation};
-use crate::error;
+use annotate_snippets::snippet::{Annotation, AnnotationType, Slice, Snippet};
 
 #[must_use]
 #[derive(Debug)]

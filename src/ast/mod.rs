@@ -4,6 +4,7 @@ mod span;
 #[macro_use]
 pub mod visit;
 
+use crate::parser::SourceCode;
 pub use span::*;
 use std::fmt;
 
@@ -23,7 +24,7 @@ impl<'a> CompilUnit<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
@@ -57,7 +58,7 @@ pub struct ParamDecl {
     pub mutbl: Mutability,
 }
 
-#[span_derive(PartialEq, Eq)]
+#[span_derive(PartialEq)]
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: ExprKind,
@@ -96,10 +97,10 @@ impl Expr {
         where
             I: Iterator<Item = &'a &'a str>,
         {
-            match pl_expr {
-                PlaceExpr::Ident(ident) => idents.any(|name| ident.name == *name),
-                PlaceExpr::Proj(tuple, i) => pl_expr_contains_name_in(tuple, idents),
-                PlaceExpr::Deref(deref) => pl_expr_contains_name_in(deref, idents),
+            match &pl_expr.kind {
+                PlaceExprKind::Ident(ident) => idents.any(|name| ident.name == *name),
+                PlaceExprKind::Proj(tuple, i) => pl_expr_contains_name_in(tuple, idents),
+                PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
             }
         }
 
@@ -110,8 +111,8 @@ impl Expr {
         impl Visitor for SubstIdents<'_> {
             fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
                 if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
-                    match pl_expr {
-                        PlaceExpr::Ident(ident) => {
+                    match &pl_expr.kind {
+                        PlaceExprKind::Ident(ident) => {
                             let subst_expr =
                                 self.subst_map.get::<&str>(&ident.name.as_str()).unwrap();
                             if let ExprKind::PlaceExpr(pl_e) = &subst_expr.expr {
@@ -130,21 +131,21 @@ impl Expr {
                 match &expr.expr {
                     ExprKind::PlaceExpr(pl_expr) => {
                         if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
-                            match pl_expr {
-                                PlaceExpr::Ident(ident) => {
+                            match &pl_expr.kind {
+                                PlaceExprKind::Ident(ident) => {
                                     if let Some(&subst_expr) =
                                         self.subst_map.get::<&str>(&ident.name.as_str())
                                     {
                                         *expr = subst_expr.clone();
                                     }
                                 }
-                                PlaceExpr::Proj(tuple, i) => {
+                                PlaceExprKind::Proj(tuple, i) => {
                                     let mut tuple_expr =
                                         Expr::new(ExprKind::PlaceExpr(tuple.as_ref().clone()));
                                     self.visit_expr(&mut tuple_expr);
                                     *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), *i));
                                 }
-                                PlaceExpr::Deref(deref_expr) => {
+                                PlaceExprKind::Deref(deref_expr) => {
                                     let mut ref_expr =
                                         Expr::new(ExprKind::PlaceExpr(deref_expr.as_ref().clone()));
                                     self.visit_expr(&mut ref_expr);
@@ -254,7 +255,7 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
@@ -389,8 +390,6 @@ pub enum Lit {
 //     }
 // }
 
-impl Eq for Lit {}
-
 impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -402,7 +401,7 @@ impl fmt::Display for Lit {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Mutability {
     Const,
     Mut,
@@ -434,7 +433,7 @@ impl fmt::Display for Ownership {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Deref,
     Not,
@@ -452,7 +451,7 @@ impl fmt::Display for UnOp {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum BinOp {
     Add,
     Sub,
@@ -519,29 +518,52 @@ pub enum ArgKinded {
     Provenance(Provenance),
 }
 
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
+pub struct PlaceExpr {
+    pub kind: PlaceExprKind,
+    pub ty: Option<Ty>,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum PlaceExpr {
+enum DuplicationTag {
+    Fst,
+    Snd,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum PlaceExprKind {
     Proj(Box<PlaceExpr>, usize),
     Deref(Box<PlaceExpr>),
     Ident(Ident),
 }
 
 impl PlaceExpr {
+    pub fn new(pl_expr: PlaceExprKind) -> Self {
+        PlaceExpr {
+            kind: pl_expr,
+            ty: None,
+            span: None,
+        }
+    }
+
     pub fn is_place(&self) -> bool {
-        match self {
-            PlaceExpr::Proj(ple, _) => ple.is_place(),
-            PlaceExpr::Ident(_) => true,
-            PlaceExpr::Deref(_) => false,
+        match &self.kind {
+            PlaceExprKind::Proj(ple, _) => ple.is_place(),
+            PlaceExprKind::Ident(_) => true,
+            PlaceExprKind::Deref(_) => false,
         }
     }
 
     // The inner constructs are prefixes of the outer constructs.
     pub fn prefix_of(&self, other: &Self) -> bool {
         if self != other {
-            match other {
-                Self::Proj(pl_expr, _) => self.prefix_of(pl_expr),
-                Self::Deref(pl_expr) => self.prefix_of(pl_expr),
-                Self::Ident(_) => false,
+            match &other.kind {
+                PlaceExprKind::Proj(pl_expr, _) => self.prefix_of(pl_expr),
+                PlaceExprKind::Deref(pl_expr) => self.prefix_of(pl_expr),
+                PlaceExprKind::Ident(_) => false,
             }
         } else {
             true
@@ -559,12 +581,12 @@ impl PlaceExpr {
 
     // TODO refactor see to_place
     pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, internal::Place) {
-        match self {
-            PlaceExpr::Deref(inner_ple) => {
+        match &self.kind {
+            PlaceExprKind::Deref(inner_ple) => {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 (internal::PlaceCtx::Deref(Box::new(pl_ctx)), pl)
             }
-            PlaceExpr::Proj(inner_ple, n) => {
+            PlaceExprKind::Proj(inner_ple, n) => {
                 let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
@@ -574,7 +596,7 @@ impl PlaceExpr {
                     _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
                 }
             }
-            PlaceExpr::Ident(ident) => (
+            PlaceExprKind::Ident(ident) => (
                 internal::PlaceCtx::Hole,
                 internal::Place::new(ident.clone(), vec![]),
             ),
@@ -592,15 +614,15 @@ impl PlaceExpr {
 
 impl fmt::Display for PlaceExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
-            Self::Deref(pl_expr) => write!(f, "*{}", pl_expr),
-            Self::Ident(ident) => write!(f, "{}", ident),
+        match &self.kind {
+            PlaceExprKind::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
+            PlaceExprKind::Deref(pl_expr) => write!(f, "*{}", pl_expr),
+            PlaceExprKind::Ident(ident) => write!(f, "{}", ident),
         }
     }
 }
 
-#[span_derive(PartialEq, Eq)]
+#[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct Ty {
     pub ty: TyKind,
@@ -608,7 +630,7 @@ pub struct Ty {
     pub span: Option<Span>,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind {
     Data(DataTy),
     View(ViewTy),
@@ -716,7 +738,7 @@ impl fmt::Display for Ty {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ThreadHierchyTy {
     BlockGrp(Nat, Nat, Nat, Nat, Nat, Nat),
     ThreadGrp(Nat, Nat, Nat),
@@ -763,7 +785,7 @@ impl ThreadHierchyTy {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ViewTy {
     //    Ident(Ident),
     Array(Box<Ty>, Nat),
@@ -845,7 +867,7 @@ impl fmt::Display for ViewTy {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum DataTy {
     Ident(Ident),
     Scalar(ScalarTy),
@@ -962,7 +984,7 @@ impl fmt::Display for DataTy {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ScalarTy {
     Unit,
     I32,
@@ -971,7 +993,7 @@ pub enum ScalarTy {
     Gpu,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Provenance {
     // TODO Value should be Ident too
     Value(String),
@@ -1007,7 +1029,7 @@ impl fmt::Display for Provenance {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Memory {
     CpuHeap,
     CpuStack,
@@ -1049,7 +1071,7 @@ impl fmt::Display for Memory {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum Exec {
     CpuThread,
     GpuGrid,
@@ -1174,10 +1196,7 @@ impl PartialEq for Nat {
     }
 }
 
-use crate::ast::TyKind::ThreadHierchy;
-use crate::parser::SourceCode;
 use std::cmp::Ordering;
-
 impl PartialOrd for Nat {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {

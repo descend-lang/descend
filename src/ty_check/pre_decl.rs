@@ -1,6 +1,6 @@
 use crate::ast::{
-    internal, BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance,
-    ScalarTy, ThreadHierchyTy, Ty, TyKind, ViewTy,
+    BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, ScalarTy,
+    ThreadHierchyTy, Ty, TyKind, ViewTy,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";

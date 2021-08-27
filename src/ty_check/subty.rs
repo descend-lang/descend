@@ -166,11 +166,7 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         .any(|(place, _)| {
             ty_ctx.prv_mappings().into_iter().any(|prv_mapping| {
                 for loan in prv_mapping.loans.iter() {
-                    if let Loan {
-                        place_expr: PlaceExpr::Deref(pl_expr),
-                        ..
-                    } = loan
-                    {
+                    if let PlaceExprKind::Deref(pl_expr) = &loan.place_expr.kind {
                         return pl_expr.equiv(&place);
                     }
                 }

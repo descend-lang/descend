@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{CompilUnit, Ident};
+use crate::ast::{CompilUnit, Ident, PlaceExprKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -640,27 +640,32 @@ fn gen_expr(
             is_dev_fun: is_dev_fun(*exec),
         },
         App(fun, kinded_args, args) => match &fun.expr {
-            desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(name)) if name.name == "exec" => {
-                gen_exec(
-                    &kinded_args[0],
-                    &kinded_args[1],
-                    &args[0],
-                    &args[1],
-                    &args[2],
-                    view_ctx,
-                    comp_unit,
-                )
-            }
-            desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident))
-                if crate::ty_check::pre_decl::fun_decls()
-                    .iter()
-                    .any(|(name, _)| &ident.name == name) =>
+            desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+                kind: PlaceExprKind::Ident(name),
+                ..
+            }) if name.name == "exec" => gen_exec(
+                &kinded_args[0],
+                &kinded_args[1],
+                &args[0],
+                &args[1],
+                &args[2],
+                view_ctx,
+                comp_unit,
+            ),
+            desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+                kind: PlaceExprKind::Ident(ident),
+                ..
+            }) if crate::ty_check::pre_decl::fun_decls()
+                .iter()
+                .any(|(name, _)| &ident.name == name) =>
             {
                 let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
                 cu::Expr::FunCall {
                     fun: Box::new(gen_expr(
                         &desc::Expr::with_type(
-                            desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(pre_decl_ident)),
+                            desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(PlaceExprKind::Ident(
+                                pre_decl_ident,
+                            ))),
                             fun.ty.as_ref().unwrap().clone(),
                         ),
                         parall_ctx,
@@ -749,7 +754,11 @@ fn gen_expr(
 }
 
 fn extract_ident(ident: &desc::Expr) -> Ident {
-    if let desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) = &ident.expr {
+    if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+        kind: PlaceExprKind::Ident(ident),
+        ..
+    }) = &ident.expr
+    {
         ident.clone()
     } else {
         panic!("Generic functions must be global functions.")
@@ -828,7 +837,10 @@ fn create_lambda_no_view_args(
             );
             Some((reduced_fun, data_args))
         }
-        desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(f)) => {
+        desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+            kind: PlaceExprKind::Ident(f),
+            ..
+        }) => {
             let fun_def = comp_unit
                 .iter()
                 .find(|fun_def| fun_def.name == f.name)
@@ -957,7 +969,10 @@ fn gen_pl_expr(
     comp_unit: &[desc::FunDef],
 ) -> cu::Expr {
     match &pl_expr {
-        desc::PlaceExpr::Ident(ident) => {
+        desc::PlaceExpr {
+            kind: PlaceExprKind::Ident(ident),
+            ..
+        } => {
             if view_ctx.contains_key(&ident.name) {
                 gen_view(
                     &view_ctx.get(&ident.name).unwrap().clone(),
@@ -977,7 +992,10 @@ fn gen_pl_expr(
                 cu::Expr::Ident(name)
             }
         }
-        desc::PlaceExpr::Proj(pl, n) => match pl_expr.to_place() {
+        desc::PlaceExpr {
+            kind: PlaceExprKind::Proj(pl, n),
+            ..
+        } => match pl_expr.to_place() {
             // FIXME this does not work when there are tuples inside of view tuples
             Some(p) if view_ctx.contains_key(&p.ident.name) => gen_view(
                 &view_ctx.get(&p.ident.name).unwrap().clone(),
@@ -990,7 +1008,10 @@ fn gen_pl_expr(
                 n: *n,
             },
         },
-        desc::PlaceExpr::Deref(ple) => {
+        desc::PlaceExpr {
+            kind: PlaceExprKind::Deref(ple),
+            ..
+        } => {
             // If an identifier that refers to an unwrapped view expression is being dereferenced,
             // just generate from the view expression and omit generating the dereferencing.
             // The dereferencing will happen through indexing.
@@ -1416,7 +1437,11 @@ impl ParallelityCollec {
     ) -> ParallelityCollec {
         match &expr.expr {
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) = &f.expr {
+                if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+                    kind: PlaceExprKind::Ident(ident),
+                    ..
+                }) = &f.expr
+                {
                     if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP {
                         if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
                             (&gen_args[0], &gen_args[1], args.first())
@@ -1470,12 +1495,21 @@ impl ParallelityCollec {
         parall_ctx: &HashMap<String, ParallelityCollec>,
     ) -> ParallelityCollec {
         match parall_expr {
-            desc::PlaceExpr::Ident(ident) => parall_ctx.get(&ident.name).unwrap().clone(),
-            desc::PlaceExpr::Proj(pp, i) => ParallelityCollec::Proj {
+            desc::PlaceExpr {
+                kind: PlaceExprKind::Ident(ident),
+                ..
+            } => parall_ctx.get(&ident.name).unwrap().clone(),
+            desc::PlaceExpr {
+                kind: PlaceExprKind::Proj(pp, i),
+                ..
+            } => ParallelityCollec::Proj {
                 parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
                 i: *i,
             },
-            desc::PlaceExpr::Deref(_) => panic!(
+            desc::PlaceExpr {
+                kind: PlaceExprKind::Deref(_),
+                ..
+            } => panic!(
                 "It is not possible to take references of Grids or Blocks.\
                 This should never happen."
             ),
@@ -1553,7 +1587,11 @@ impl ViewExpr {
         match &expr.expr {
             // TODO this is assuming that f is an identifier
             desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(ident)) = &f.expr {
+                if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+                    kind: PlaceExprKind::Ident(ident),
+                    ..
+                }) = &f.expr
+                {
                     if ident.name == crate::ty_check::pre_decl::TO_VIEW
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {
@@ -1606,12 +1644,21 @@ impl ViewExpr {
         view_ctx: &HashMap<String, ViewExpr>,
     ) -> ViewExpr {
         match view {
-            desc::PlaceExpr::Ident(ident) => view_ctx.get(&ident.name).unwrap().clone(),
-            desc::PlaceExpr::Proj(vv, i) => ViewExpr::Proj {
+            desc::PlaceExpr {
+                kind: PlaceExprKind::Ident(ident),
+                ..
+            } => view_ctx.get(&ident.name).unwrap().clone(),
+            desc::PlaceExpr {
+                kind: PlaceExprKind::Proj(vv, i),
+                ..
+            } => ViewExpr::Proj {
                 view: Box::new(ViewExpr::create_pl_expr_view(vv, view_ctx)),
                 i: *i,
             },
-            desc::PlaceExpr::Deref(_) => {
+            desc::PlaceExpr {
+                kind: PlaceExprKind::Deref(_),
+                ..
+            } => {
                 panic!("It is not possible to take references of views. This should never happen.")
             }
         }
@@ -1730,8 +1777,8 @@ impl ViewExpr {
                 ViewExpr::ToView { ref_expr } => {
                     let new_name = format!("p{}", *count);
                     vec.push((new_name.clone(), ref_expr.as_ref().clone()));
-                    ref_expr.expr = desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(
-                        desc::Ident::new(&new_name),
+                    ref_expr.expr = desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(
+                        PlaceExprKind::Ident(desc::Ident::new(&new_name)),
                     ));
                     *count += 1;
                     vec
@@ -1763,8 +1810,8 @@ impl ViewExpr {
                             ViewOrExpr::E(expr) => {
                                 let new_name = format!("p{}", *count);
                                 renamed.push((new_name.clone(), expr.clone()));
-                                expr.expr = desc::ExprKind::PlaceExpr(desc::PlaceExpr::Ident(
-                                    desc::Ident::new(&new_name),
+                                expr.expr = desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(
+                                    PlaceExprKind::Ident(desc::Ident::new(&new_name)),
                                 ));
                                 *count += 1;
                             }
@@ -1788,7 +1835,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
     use desc::*;
     struct ReplaceArgKindedIdents {
         kinds: HashMap<String, Kind>,
-    };
+    }
     impl Visitor for ReplaceArgKindedIdents {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
@@ -1857,7 +1904,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
 
     struct InlineParForFuns<'a> {
         comp_unit: &'a [FunDef],
-    };
+    }
     impl InlineParForFuns<'_> {
         fn create_lambda_from_fun_def(&self, fun_def_name: &str) -> ExprKind {
             match self
@@ -1891,16 +1938,18 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
                     ExprKind::TupleView(t) => {
                         for f in t {
                             match &mut f.expr {
-                                ExprKind::PlaceExpr(PlaceExpr::Ident(x)) => {
-                                    f.expr = self.create_lambda_from_fun_def(&x.name)
-                                }
+                                ExprKind::PlaceExpr(PlaceExpr {
+                                    kind: PlaceExprKind::Ident(x),
+                                    ..
+                                }) => f.expr = self.create_lambda_from_fun_def(&x.name),
                                 _ => visit::walk_expr(self, f),
                             }
                         }
                     }
-                    ExprKind::PlaceExpr(PlaceExpr::Ident(x)) => {
-                        efs.expr = self.create_lambda_from_fun_def(&x.name)
-                    }
+                    ExprKind::PlaceExpr(PlaceExpr {
+                        kind: PlaceExprKind::Ident(x),
+                        ..
+                    }) => efs.expr = self.create_lambda_from_fun_def(&x.name),
                     _ => visit::walk_expr(self, efs),
                 },
                 _ => visit::walk_expr(self, expr),

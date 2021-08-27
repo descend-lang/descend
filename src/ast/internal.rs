@@ -3,7 +3,8 @@
 
 // TODO specific access modifiers
 
-use super::{Ident, Nat, Ownership, PlaceExpr, Ty};
+use super::{Ident, Ownership, PlaceExpr, Ty};
+use crate::ast::PlaceExprKind;
 use std::collections::HashSet;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -69,8 +70,10 @@ impl Place {
 
     pub fn to_place_expr(&self) -> PlaceExpr {
         self.path.iter().fold(
-            PlaceExpr::Ident(self.ident.clone()),
-            |pl_expr, path_entry| PlaceExpr::Proj(Box::new(pl_expr), path_entry.clone()),
+            PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
+            |pl_expr, path_entry| {
+                PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), path_entry.clone()))
+            },
         )
     }
 }
@@ -85,10 +88,13 @@ impl PlaceCtx {
     pub fn insert_pl_expr(&self, pl_expr: PlaceExpr) -> PlaceExpr {
         match self {
             Self::Hole => pl_expr,
-            Self::Proj(pl_ctx, n) => {
-                PlaceExpr::Proj(Box::new(pl_ctx.insert_pl_expr(pl_expr)), n.clone())
-            }
-            Self::Deref(pl_ctx) => PlaceExpr::Deref(Box::new(pl_ctx.insert_pl_expr(pl_expr))),
+            Self::Proj(pl_ctx, n) => PlaceExpr::new(PlaceExprKind::Proj(
+                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
+                n.clone(),
+            )),
+            Self::Deref(pl_ctx) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
+                pl_ctx.insert_pl_expr(pl_expr),
+            ))),
         }
     }
 

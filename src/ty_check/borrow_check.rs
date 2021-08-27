@@ -1,5 +1,5 @@
 use super::ctxs::{KindCtx, TyCtx};
-use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
+use crate::ast::internal::{Loan, PlaceCtx};
 use crate::ast::*;
 use crate::parser::SourceCode;
 use crate::ty_check::error::OwnError;
@@ -114,8 +114,9 @@ impl<'a> OwnershipChecker<'a> {
             loans_for_ref_prv,
         )?;
 
-        let currently_checked_pl_expr = pl_ctx_no_deref
-            .insert_pl_expr(PlaceExpr::Deref(Box::new(most_spec_pl.to_place_expr())));
+        let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+            PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
+        ));
         if self.ownership_safe_under_existing_loans(
             ty_ctx,
             reborrows,
@@ -175,8 +176,9 @@ impl<'a> OwnershipChecker<'a> {
         most_spec_pl: &internal::Place,
         ref_own: Ownership,
     ) -> OwnResult<HashSet<Loan>> {
-        let currently_checked_pl_expr = pl_ctx_no_deref
-            .insert_pl_expr(PlaceExpr::Deref(Box::new(most_spec_pl.to_place_expr())));
+        let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+            PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
+        ));
         // TODO why would this check be needed if it is not needed for dereferencing with prv values?
         //let ty = super::place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
         self.check_own_lte_ref(own, ref_own)?;

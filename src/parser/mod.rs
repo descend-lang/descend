@@ -170,7 +170,7 @@ peg::parser! {
                 Expr::new(
                     ExprKind::App(
                         Box::new(Expr::with_span(
-                            ExprKind::PlaceExpr(PlaceExpr::Ident(func)),
+                            ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
                             Span::new(start, place_end)
                         )),
                         kind_args.unwrap_or(vec![]),
@@ -184,7 +184,7 @@ peg::parser! {
                 Expr::new(
                     ExprKind::DepApp(
                         Box::new(Expr::with_span(
-                            ExprKind::PlaceExpr(PlaceExpr::Ident(func)),
+                            ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
                             Span::new(start, end)
                         )),
                         kind_args
@@ -322,13 +322,13 @@ peg::parser! {
         pub(crate) rule place_expression() -> PlaceExpr
             = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat_literal() {n})+ {ns})? {
                 let ns = ns.unwrap_or(vec![]);
-                let root = PlaceExpr::Ident(ident);
+                let root = PlaceExpr::new(PlaceExprKind::Ident(ident));
                 // . operator binds stronger
                 let proj = ns.into_iter().fold(root,
-                    |prev, n | PlaceExpr::Proj(Box::new(prev), n)
+                    |prev, n | PlaceExpr::new(PlaceExprKind::Proj(Box::new(prev), n))
                 );
                 // * operator binds weaker
-                derefs.iter().fold(proj, |prev,_| PlaceExpr::Deref(Box::new(prev)))
+                derefs.iter().fold(proj, |prev,_| PlaceExpr::new(PlaceExprKind::Deref(Box::new(prev))))
                 // TODO: Allow parentheses for priority override?
             }
 
@@ -978,24 +978,26 @@ mod tests {
     fn place_expression() {
         assert_eq!(
             descend::place_expression("*x"),
-            Ok(PlaceExpr::Deref(Box::new(PlaceExpr::Ident(Ident::new(
-                "x"
-            ))))),
+            Ok(PlaceExpr::new(PlaceExprKind::Deref(Box::new(
+                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))
+            )))),
             "does not recognize place expression *x"
         );
         assert_eq!(
             descend::place_expression("x.0"),
-            Ok(PlaceExpr::Proj(
-                Box::new(PlaceExpr::Ident(Ident::new("x"))),
+            Ok(PlaceExpr::new(PlaceExprKind::Proj(
+                Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
                 0
-            )),
+            ))),
             "does not recognize place expression projection `x.0`"
         );
         assert_eq!(
             descend::place_expression("*x.0"),
-            Ok(PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
-                Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                0
+            Ok(PlaceExpr::new(PlaceExprKind::Deref(Box::new(
+                PlaceExpr::new(PlaceExprKind::Proj(
+                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+                    0
+                ))
             )))),
             "does not recognize place expression `*x.0`"
         );
@@ -1008,17 +1010,22 @@ mod tests {
         // Place expressions
         assert_eq!(
             descend::expression("x.0"),
-            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Proj(
-                Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                0
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                PlaceExprKind::Proj(
+                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+                    0
+                )
             )))),
             "does not recognize place expression projection `x.0`"
         );
         assert_eq!(
             descend::expression("*x.0"),
-            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
-                PlaceExpr::Proj(Box::new(PlaceExpr::Ident(Ident::new("x"))), 0)
-            ))))),
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                PlaceExprKind::Deref(Box::new(PlaceExpr::new(PlaceExprKind::Proj(
+                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+                    0
+                ))))
+            )))),
             "does not recognize place expression `*x.0`"
         );
 
@@ -1027,8 +1034,8 @@ mod tests {
             descend::expression("f::<x>().0"),
             Ok(Expr::new(ExprKind::Proj(
                 Box::new(Expr::new(ExprKind::App(
-                    Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
-                        Ident::new("f")
+                    Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                        PlaceExprKind::Ident(Ident::new("f"))
                     )))),
                     vec![ArgKinded::Ident(Ident::new("x"))],
                     vec![]
@@ -1041,9 +1048,15 @@ mod tests {
             descend::expression("(x, y, z).1"),
             Ok(Expr::new(ExprKind::Proj(
                 Box::new(Expr::new(ExprKind::Tuple(vec![
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("x")))),
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("y")))),
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("z"))))
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
+                        Ident::new("x")
+                    )))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
+                        Ident::new("y")
+                    )))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
+                        Ident::new("z")
+                    ))))
                 ]))),
                 one_literal
             ))),
@@ -1053,7 +1066,7 @@ mod tests {
             descend::expression("<x>.0"),
             Ok(Expr::new(ExprKind::Proj(
                 Box::new(Expr::new(ExprKind::TupleView(vec![Expr::new(
-                    ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("x")))
+                    ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))))
                 )]))),
                 zero_literal
             ))),
@@ -1063,9 +1076,15 @@ mod tests {
             descend::expression("<x, y, z>.1"),
             Ok(Expr::new(ExprKind::Proj(
                 Box::new(Expr::new(ExprKind::TupleView(vec![
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("x")))),
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("y")))),
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(Ident::new("z"))))
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
+                        Ident::new("x")
+                    )))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
+                        Ident::new("y")
+                    )))),
+                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
+                        Ident::new("z")
+                    ))))
                 ]))),
                 one_literal
             ))),
@@ -1132,34 +1151,40 @@ mod tests {
     fn expression_place_expr() {
         assert_eq!(
             descend::expression_seq("someIdentifier"),
-            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(
-                Ident::new("someIdentifier")
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                PlaceExprKind::Ident(Ident::new("someIdentifier"))
             ))))
         );
         assert_eq!(
             descend::expression_seq("*x"),
-            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
-                PlaceExpr::Ident(Ident::new("x"))
-            ))),))
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                PlaceExprKind::Deref(Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new(
+                    "x"
+                )))))
+            ))))
         );
         assert_eq!(
             descend::expression_seq("**x.7"),
-            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Deref(Box::new(
-                PlaceExpr::Deref(Box::new(PlaceExpr::Proj(
-                    Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                    7
-                )))
-            ))),))
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                PlaceExprKind::Deref(Box::new(PlaceExpr::new(PlaceExprKind::Deref(Box::new(
+                    PlaceExpr::new(PlaceExprKind::Proj(
+                        Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+                        7
+                    ))
+                )))))
+            ))))
         );
         assert_eq!(
             descend::expression_seq("x.2.3"),
-            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Proj(
-                Box::new(PlaceExpr::Proj(
-                    Box::new(PlaceExpr::Ident(Ident::new("x"))),
-                    2
-                )),
-                3
-            )),))
+            Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                PlaceExprKind::Proj(
+                    Box::new(PlaceExpr::new(PlaceExprKind::Proj(
+                        Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+                        2
+                    ))),
+                    3
+                )
+            ))))
         );
     }
 
@@ -1168,7 +1193,7 @@ mod tests {
         assert_eq!(
             descend::expression_seq("place_expression[12]"),
             Ok(Expr::new(ExprKind::Index(
-                PlaceExpr::Ident(Ident::new("place_expression")),
+                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("place_expression"))),
                 Nat::Lit(12)
             )))
         );
@@ -1179,7 +1204,7 @@ mod tests {
         assert_eq!(
             descend::expression_seq("var_token = 7.3e2"),
             Ok(Expr::new(ExprKind::Assign(
-                PlaceExpr::Ident(Ident::new("var_token")),
+                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var_token"))),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::F32(730.0)),
                     Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32)))
@@ -1189,7 +1214,9 @@ mod tests {
         assert_eq!(
             descend::expression_seq("*var_token = 3 + 4"),
             Ok(Expr::new(ExprKind::Assign(
-                PlaceExpr::Deref(Box::new(PlaceExpr::Ident(Ident::new("var_token")))),
+                PlaceExpr::new(PlaceExprKind::Deref(Box::new(PlaceExpr::new(
+                    PlaceExprKind::Ident(Ident::new("var_token"))
+                )))),
                 Box::new(Expr::new(ExprKind::BinOp(
                     BinOp::Add,
                     Box::new(Expr::with_type(
@@ -1212,23 +1239,23 @@ mod tests {
             Ok(Expr::new(ExprKind::Ref(
                 Provenance::Value(String::from("'prov")),
                 Ownership::Uniq,
-                PlaceExpr::Ident(Ident::new("variable"))
-            ),))
+                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("variable")))
+            )))
         );
         assert_eq!(
             descend::expression_seq("&prov_var shrd variable"),
             Ok(Expr::new(ExprKind::Ref(
                 Provenance::Ident(Ident::new("prov_var")),
                 Ownership::Shrd,
-                PlaceExpr::Ident(Ident::new("variable"))
-            ),))
+                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("variable")))
+            )))
         );
         assert_eq!(
             descend::expression_seq("&'prov uniq var[7]"),
             Ok(Expr::new(ExprKind::BorrowIndex(
                 Provenance::Value(String::from("'prov")),
                 Ownership::Uniq,
-                PlaceExpr::Ident(Ident::new("var")),
+                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var"))),
                 Nat::Lit(7)
             ),))
         );
@@ -1237,7 +1264,7 @@ mod tests {
             Ok(Expr::new(ExprKind::BorrowIndex(
                 Provenance::Value(String::from("'prov")),
                 Ownership::Uniq,
-                PlaceExpr::Ident(Ident::new("var")),
+                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var"))),
                 Nat::Ident(Ident::new("token"))
             ),))
         );
@@ -1255,7 +1282,7 @@ mod tests {
                     Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
                 ),
                 Expr::new(ExprKind::Index(
-                    PlaceExpr::Ident(Ident::new("x")),
+                    PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))),
                     Nat::Lit(3)
                 )),
                 Expr::with_type(
@@ -1288,7 +1315,7 @@ mod tests {
                     Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
                 ),
                 Expr::new(ExprKind::Index(
-                    PlaceExpr::Ident(Ident::new("x")),
+                    PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))),
                     Nat::Lit(3)
                 )),
                 Expr::with_type(
@@ -1309,7 +1336,7 @@ mod tests {
                     Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
                 ),
                 Expr::new(ExprKind::Index(
-                    PlaceExpr::Ident(Ident::new("x")),
+                    PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))),
                     Nat::Lit(3)
                 )),
                 Expr::with_type(
@@ -1369,10 +1396,12 @@ mod tests {
                     )
                 ]))),
                 Box::new(Expr::new(ExprKind::Assign(
-                    PlaceExpr::Ident(x.clone()),
+                    PlaceExpr::new(PlaceExprKind::Ident(x.clone())),
                     Box::new(Expr::new(ExprKind::BinOp(
                         BinOp::Add,
-                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::Ident(x.clone())))),
+                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                            PlaceExprKind::Ident(x.clone())
+                        )))),
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(1)),
                             Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))

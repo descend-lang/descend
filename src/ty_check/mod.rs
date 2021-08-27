@@ -1483,17 +1483,17 @@ impl<'a> TyChecker<'a> {
         own: Ownership,
         pl_expr: &PlaceExpr,
     ) -> TyResult<(Ty, Option<Memory>, Vec<Provenance>)> {
-        match pl_expr {
+        match &pl_expr.kind {
             // TC-Var
-            PlaceExpr::Ident(ident) => {
+            PlaceExprKind::Ident(ident) => {
                 self.var_expr_ty_mem_empty_prvs_under_exec_own(ty_ctx, exec, &ident)
             }
             // TC-Proj
-            PlaceExpr::Proj(tuple_expr, n) => self.proj_expr_ty_mem_passed_prvs_under_exec_own(
+            PlaceExprKind::Proj(tuple_expr, n) => self.proj_expr_ty_mem_passed_prvs_under_exec_own(
                 kind_ctx, ty_ctx, exec, own, tuple_expr, *n,
             ),
             // TC-Deref
-            PlaceExpr::Deref(borr_expr) => self.deref_expr_ty_mem_passed_prvs_under_exec_own(
+            PlaceExprKind::Deref(borr_expr) => self.deref_expr_ty_mem_passed_prvs_under_exec_own(
                 kind_ctx, ty_ctx, exec, own, borr_expr,
             ),
         }

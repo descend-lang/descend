@@ -1,7 +1,6 @@
 use crate::ast::internal::{FrameEntry, FrameTyping, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
-use crate::ty_check::TyResult;
 use std::collections::{HashMap, HashSet};
 
 pub(super) type TypedPlace = (internal::Place, Ty);
@@ -333,8 +332,10 @@ impl TyCtx {
                             let without_reborrow: HashSet<Loan> = loans
                                 .iter()
                                 .filter_map(|loan| {
-                                    if !PlaceExpr::Deref(Box::new(pl_expr.clone()))
-                                        .prefix_of(&loan.place_expr)
+                                    if !PlaceExpr::new(PlaceExprKind::Deref(Box::new(
+                                        pl_expr.clone(),
+                                    )))
+                                    .prefix_of(&loan.place_expr)
                                     {
                                         Some(loan.clone())
                                     } else {

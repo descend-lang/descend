@@ -159,10 +159,10 @@ pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
 }
 
 pub fn walk_pl_expr<V: Visitor>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
-    match pl_expr {
-        PlaceExpr::Ident(ident) => visitor.visit_ident(ident),
-        PlaceExpr::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
-        PlaceExpr::Proj(pl_expr, _) => {
+    match &mut pl_expr.kind {
+        PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
+        PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
+        PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
         }
     }
