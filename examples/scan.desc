@@ -10,7 +10,6 @@ fn scan_inplace<a: prv, m: nat>(
 }
 
 fn copy_two_vals<a: prv, b: prv, m1: mem, m2: mem>(
-    thread: Thread,
     src_0: &a shrd m1 i32,
     src_1: &a shrd m1 i32,
     dst_0: &b uniq m2 i32,
@@ -21,20 +20,19 @@ fn copy_two_vals<a: prv, b: prv, m1: mem, m2: mem>(
 }
 
 fn upsweep_inplace_red_add<a: prv, d: nat>(
-    thread: Thread,
     arr: [[&a uniq gpu.shared i32; 64/d]]
 ) -[gpu.thread]-> () {
     arr[64/d-1] = arr[64/d-1] + arr[32/d-1];
 }
 
 fn upsweep<a: prv>(
-    block: Block<Thread, 32>,
+    block: ThreadGrp<32>,
     arr_ref: &a uniq gpu.shared [i32; 64]
 ) -[gpu.block]-> () {
     for_nat d in halved_range(32) {
         let tmp_up_view = group::<64/d, 64, &a uniq gpu.shared i32>(
             to_view_mut::<a, gpu.shared, 64, i32>(arr_ref));
-        for split_block::<d, 32>(block).0
+        for split_thread_grp::<d, 32, 1, 1>(block).0
         with <tmp_up_view>
         do
             upsweep_inplace_red_add::<a, d>;
@@ -42,7 +40,6 @@ fn upsweep<a: prv>(
 }
 
 fn downsweep_inplace_red_add<a: prv, d: nat>(
-    thread: Thread,
     arr: [[&a uniq gpu.shared i32; 64/d]]
 ) -[gpu.thread]-> () {
     let t = arr[32/d-1];
@@ -51,7 +48,7 @@ fn downsweep_inplace_red_add<a: prv, d: nat>(
 }
 
 fn downsweep<a: prv>(
-    block: Block<Thread, 32>,
+    block: ThreadGrp<32>,
     arr_ref: &a uniq gpu.shared [i32; 64]
 ) -[gpu.block]-> () {
     for_nat d in doubled_range(32) {
@@ -102,7 +99,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                  [[[[&'k uniq gpu.global i32; 1]]; gridDim]]>>(
             &'h uniq gpu,
             <block_group, out_grp, block_sums_grp>,
-            | grid: Grid<Block<Thread, 32>, gridDim>,
+            | grid: BlockGrp<gridDim, ThreadGrp<32>>,
               views: <[[[[&'r shrd gpu.global i32; 64]]; gridDim]],
                       [[[[&'m uniq gpu.global i32; 64]]; gridDim]],
                       [[[[&'k uniq gpu.global i32; 1]]; gridDim]]>
@@ -115,7 +112,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                 let mut tmp: [i32; 64] @ gpu.shared = shared_alloc::<[i32; 64]>();
 
                 for grid with <block_input_d, output_d, block_sums_d, tmp> do
-                    | block: Block<Thread, 32>,
+                    | block: ThreadGrp<32>,
                       ib: [[&'r shrd gpu.global i32; 64]],
                       block_out: [[&'m uniq gpu.global i32; 64]],
                       bsum: [[&'k uniq gpu.global i32; 1]],
@@ -139,10 +136,10 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                         let tmp_last: [[&'l uniq gpu.shared i32; 1]] =
                             split_at::<63, 64, &'l uniq gpu.shared i32>(
                                 to_view_mut::<'l, gpu.shared, 64, i32>(&'l uniq tmpb)).1;
-                        for split_block::<1, 32>(block).0
+                        for split_thread_grp::<1, 32, 1, 1>(block).0
                         with <bsum, tmp_last>
                         do
-                            | thread: Thread,
+                            |
                               sum: &'k uniq gpu.global i32,
                               last: &'l uniq gpu.shared i32
                             | -[gpu.thread]-> () {
@@ -176,21 +173,21 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                  [[&'k shrd gpu.global i32; gridDim]]>>(
             &'h uniq gpu,
             <out_grp2, block_sums_view>,
-            | grid: Grid<Block<Thread, 64>, gridDim>,
+            | grid: BlockGrp<gridDim, ThreadGrp<64>>,
               input_views: <[[[[&'m uniq gpu.global i32; 64]]; gridDim]],
                             [[&'k shrd gpu.global i32; gridDim]]>
             | -[gpu.grid]-> () {
                 for grid
                 with input_views
                 do
-                    | block: Block<Thread, 64>,
+                    | block: ThreadGrp<64>,
                       scanned_vals: [[&'m uniq gpu.global i32; 64]],
                       block_sum: &'k shrd gpu.global i32
                     | -[gpu.block]-> () {
                         for block
                         with <scanned_vals, block_sum>
                         do
-                            | thread: Thread,
+                            |
                               scanned_val: &'m uniq gpu.global i32,
                               sum: &'k shrd gpu.global i32
                             | -[gpu.thread]-> () {

@@ -29,18 +29,14 @@ fn reduce_shared_mem2() -> Result<(), descend::error::ErrorReported> {
 
 #[test]
 fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/shared_mem_red.desc")?
-    ))
+    println!("{}", descend::compile("examples/shared_mem_red.desc")?);
+    panic!("Wrong code")
 }
 
 #[test]
 fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/tree_reduce.desc")?
-    ))
+    println!("{}", descend::compile("examples/tree_reduce.desc")?);
+    panic!("Wrong code")
 }
 
 #[test]

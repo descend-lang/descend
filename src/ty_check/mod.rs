@@ -1298,27 +1298,19 @@ impl<'a> TyChecker<'a> {
         self.own_checker
             .ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)
             .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
-        if let Ok(ty) =
-            self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)
-        {
-            if !ty.is_fully_alive() {
-                return Err(self.ty_error(TyErrorKind::String(format!(
-                    "Part of Place {:?} was moved before.",
-                    pl_expr
-                ))));
-            }
-            if ty.copyable() {
-                // this line is a trick to release a life time that is connected to ty_ctx
-                let ty = ty.clone();
-                Ok((ty_ctx, ty))
-            } else {
-                Err(self.ty_error(TyErrorKind::String(
-                    "Data type is not copyable.".to_string(),
-                )))
-            }
+        let ty =
+            self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
+        if !ty.is_fully_alive() {
+            return Err(self.ty_error(TyErrorKind::String(format!(
+                "Part of Place {:?} was moved before.",
+                pl_expr
+            ))));
+        }
+        if ty.copyable() {
+            Ok((ty_ctx, ty))
         } else {
             Err(self.ty_error(TyErrorKind::String(
-                "Place expression does not have correct type.".to_string(),
+                "Data type is not copyable.".to_string(),
             )))
         }
     }

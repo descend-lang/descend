@@ -8,7 +8,6 @@ fn red_add<r: prv>(
 fn reduce<n: nat, a: prv, b: prv>(
   ha_array: &a uniq cpu.heap [i32; n]
 ) -[cpu.thread]-> () {
-  let arr: [i32; 4] = [1, 2, 3, 4];
   letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
     let gpu: Gpu = gpu_device(0);
 
@@ -31,13 +30,11 @@ fn reduce<n: nat, a: prv, b: prv>(
               let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(
                 split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib).0);
               for split_thread_grp::<k, 1024, 1, 1>(block).0
+              // FIXME passing active halfs like that does not resolve identifiers correctly
+              // with active_halves
               with active_halves
               do
-                | fst_half: &'r uniq gpu.global i32,
-                  snd_half: &'r uniq gpu.global i32 | -[gpu.thread]-> () {
-                    *fst_half = *fst_half + *snd_half;
-                };
-                //red_add::<'r>;
+                red_add::<'r>;
             };
         };
       }
