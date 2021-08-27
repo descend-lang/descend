@@ -127,12 +127,12 @@ fn gen_stmt(
                     addr_space: Some(cu::GpuAddrSpace::Shared),
                     expr: None,
                 };
-                cu::Stmt::Seq(
+                cu::Stmt::Seq{
                     check1: Box::new(cu::Stmt::EmptyCheck),
                     stmt1: Box::new(var),
                     // check2: Box::new(cu::Stmt::EmptyCheck), // Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
                     stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
+                }
             } else {
                 //if has_generatable_ty(e1) {
                 let gened_ty = gen_ty(&e1.ty.as_ref().unwrap().ty, *mutbl);
@@ -155,12 +155,12 @@ fn gen_stmt(
                     addr_space: None,
                     expr: Some(init_expr),
                 };
-                cu::Stmt::Seq(
+                cu::Stmt::Seq{
                     check1: Box::new(cu::Stmt::EmptyCheck),
                     stmt1: Box::new(var),
                     check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
                     stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
+                }
             } // else {
               //     gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
               // }
