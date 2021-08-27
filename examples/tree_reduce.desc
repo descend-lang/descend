@@ -30,11 +30,7 @@ fn reduce<n: nat, a: prv, b: prv>(
               let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(
                 split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib).0);
               for split_thread_grp::<k, 1024, 1, 1>(block).0
-              // FIXME passing active halfs like that does not resolve identifiers correctly
-              // with active_halves
-              with active_halves
-              do
-                red_add::<'r>;
+              with active_halves do red_add::<'r>;
             };
         };
       }

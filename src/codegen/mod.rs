@@ -2,7 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::{CompilUnit, Ident, PlaceExprKind};
+use crate::ast::{CompilUnit, Ident, PlaceExprKind, ThreadHierchyTy};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
@@ -401,6 +401,7 @@ fn gen_par_for(
     comp_unit: &[desc::FunDef],
 ) -> cu::Stmt {
     fn gen_parall_section(
+        has_th_hierchy_elem_ty: bool,
         params: &[desc::ParamDecl],
         body: &desc::Expr,
         input_expr: &desc::Expr,
@@ -408,15 +409,23 @@ fn gen_par_for(
         view_ctx: &mut HashMap<String, ViewExpr>,
         comp_unit: &[desc::FunDef],
     ) -> cu::Stmt {
-        let parall_collec = params[0].ident.clone();
+        let mut offset_begin_input_params = 0;
         let mut scope_parall_ctx: HashMap<String, ParallelityCollec> = HashMap::new();
-        scope_parall_ctx.insert(
-            parall_collec.name.clone(),
-            ParallelityCollec::Ident(parall_collec),
-        );
+        if has_th_hierchy_elem_ty {
+            let parall_collec = params[0].ident.clone();
+            scope_parall_ctx.insert(
+                parall_collec.name.clone(),
+                ParallelityCollec::Ident(parall_collec),
+            );
+            offset_begin_input_params += 1;
+        }
 
         //        let mut new_body = body.clone();
-        for (i, id) in params[1..].iter().map(|p| p.ident.name.clone()).enumerate() {
+        for (i, id) in params[offset_begin_input_params..]
+            .iter()
+            .map(|p| p.ident.name.clone())
+            .enumerate()
+        {
             let input_arg_view = ViewExpr::create_from(
                 &desc::Expr::new(desc::ExprKind::Proj(Box::new(input_expr.clone()), i)),
                 view_ctx,
@@ -446,11 +455,14 @@ fn gen_par_for(
         gen_stmt(body, false, &mut scope_parall_ctx, view_ctx, comp_unit)
     }
 
-    let (pid, sync_stmt) = match &parall_collec.ty.as_ref().unwrap().ty {
+    let (pid, sync_stmt, has_th_hierchy_elem) = match &parall_collec.ty.as_ref().unwrap().ty {
+        // TODO Refactor
+        //  The same things exists in ty_check where only threadHierchyTy for elem types is returned
         desc::TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
-            desc::ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => (
+            desc::ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => (
                 desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
                 cu::Stmt::Expr(cu::Expr::Empty),
+                true,
             ),
             desc::ThreadHierchyTy::ThreadGrp(_, _, _) => (
                 desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
@@ -459,6 +471,7 @@ fn gen_par_for(
                     template_args: vec![],
                     args: vec![],
                 }),
+                false,
             ),
             desc::ThreadHierchyTy::WarpGrp(_) => (
                 desc::Nat::BinOp(
@@ -471,6 +484,7 @@ fn gen_par_for(
                     template_args: vec![],
                     args: vec![],
                 }),
+                true,
             ),
             desc::ThreadHierchyTy::Warp => (
                 desc::Nat::BinOp(
@@ -483,6 +497,7 @@ fn gen_par_for(
                     template_args: vec![],
                     args: vec![],
                 }),
+                false,
             ),
         },
         _ => panic!("Not a parallel collection type."),
@@ -492,9 +507,15 @@ fn gen_par_for(
     let par_section = match &funs.ty.as_ref().unwrap().ty {
         desc::TyKind::View(desc::ViewTy::Tuple(_)) => unimplemented!(),
         desc::TyKind::Fn(_, _, _, _) => match &funs.expr {
-            desc::ExprKind::Lambda(params, _, _, body) => {
-                gen_parall_section(params, body, &input, &pid, view_ctx, comp_unit)
-            }
+            desc::ExprKind::Lambda(params, _, _, body) => gen_parall_section(
+                has_th_hierchy_elem,
+                params,
+                body,
+                input,
+                &pid,
+                view_ctx,
+                comp_unit,
+            ),
             desc::ExprKind::DepApp(fun, gen_args) => {
                 let ident = extract_ident(fun);
                 let fun_def = comp_unit
@@ -504,7 +525,15 @@ fn gen_par_for(
                 if let desc::ExprKind::Lambda(params, _, _, body) =
                     instantiate_gen_fun(fun_def, gen_args).expr
                 {
-                    gen_parall_section(&params, body.as_ref(), &input, &pid, view_ctx, comp_unit)
+                    gen_parall_section(
+                        has_th_hierchy_elem,
+                        &params,
+                        body.as_ref(),
+                        input,
+                        &pid,
+                        view_ctx,
+                        comp_unit,
+                    )
                 } else {
                     panic!("instatiate_gen_fun did not return a lambda expression")
                 }

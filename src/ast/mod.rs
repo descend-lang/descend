@@ -740,7 +740,9 @@ impl fmt::Display for Ty {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ThreadHierchyTy {
+    // BlockGrp(gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z)
     BlockGrp(Nat, Nat, Nat, Nat, Nat, Nat),
+    // ThreadGrp(blockDim.x, blockDim.y, blockDim.z)
     ThreadGrp(Nat, Nat, Nat),
     WarpGrp(Nat),
     Warp,
