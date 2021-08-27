@@ -18,7 +18,26 @@ pub(super) fn print(program: &[Item]) -> String {
             panic!("{:?}", res);
         }
     }
-    code
+    clang_format(&code)
+}
+
+fn clang_format(code: &str) -> String {
+    use std::process::{Command, Stdio};
+    let mut echo_cmd = Command::new("echo")
+        .arg(code)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to execute `echo`");
+    let echo_stdout = echo_cmd.stdout.take().expect("failed to open stdout");
+    let clang_fmt_cmd = Command::new("clang-format")
+        .stdin(echo_stdout)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to execute `clang-format`");
+    let clang_fmt_output = clang_fmt_cmd
+        .wait_with_output()
+        .expect("failed to execute `clang-format`");
+    String::from_utf8(clang_fmt_output.stdout).expect("cannot read clang-format output as String")
 }
 
 impl std::fmt::Display for Item {
