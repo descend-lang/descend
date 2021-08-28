@@ -13,23 +13,30 @@ use std::iter;
 // Precondition. all function defitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &CompilUnit) -> String {
-    let preproc_comp_unit = compil_unit
+    let preproc_fun_defs = compil_unit
         .fun_defs
         .to_vec()
         .into_iter()
         .map(replace_arg_kinded_idents)
-        .filter(|f| {
-            f.param_decls
-                .iter()
-                .all(|p| !matches!(&p.ty.ty, desc::TyKind::View(_)))
-        })
         .map(|f| inline_par_for_funs(f, &compil_unit.fun_defs))
+        // preprocessed fun defs must be collected before filtering, otherwise the lazy evaluation
+        //  will not apply replace_arg_kinded_idents to the filtered out fun defs
+        .collect::<Vec<desc::FunDef>>();
+    let fun_defs_to_be_generated = preproc_fun_defs
+        .iter()
+        .filter(|f| {
+            f.param_decls.iter().all(|p| {
+                !matches!(&p.ty.ty, desc::TyKind::View(_))
+                    && !matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
+            })
+        })
+        .cloned()
         .collect::<Vec<desc::FunDef>>();
     let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
         .chain(
-            preproc_comp_unit
+            fun_defs_to_be_generated
                 .iter()
-                .map(|fun_def| gen_fun_def(fun_def, &compil_unit.fun_defs)),
+                .map(|fun_def| gen_fun_def(fun_def, &preproc_fun_defs)),
         )
         .collect::<cu::CuProgram>();
     printer::print(&cu_program)
@@ -523,7 +530,7 @@ fn gen_par_for(
                     .find(|fun_def| fun_def.name == ident.name)
                     .expect("Cannot find function definition.");
                 if let desc::ExprKind::Lambda(params, _, _, body) =
-                    instantiate_gen_fun(fun_def, gen_args).expr
+                    partial_app_gen_args(fun_def, gen_args).expr
                 {
                     gen_parall_section(
                         has_th_hierchy_elem,
@@ -736,7 +743,7 @@ fn gen_expr(
                 .iter()
                 .find(|fun_def| fun_def.name == ident.name)
                 .expect("Cannot find function definition.");
-            let inst_fun = instantiate_gen_fun(fun_def, &kinded_args);
+            let inst_fun = partial_app_gen_args(fun_def, &kinded_args);
             gen_expr(&inst_fun, parall_ctx, view_ctx, comp_unit)
         }
         Array(elems) => cu::Expr::InitializerList {
@@ -832,39 +839,16 @@ fn create_lambda_no_view_args(
     // FIXME doesn't work for predeclared functions which expect a view type argument
     match &fun.expr {
         desc::ExprKind::Lambda(param_decls, exec, ret_dty, body) => {
-            let data_param_decls_to_data_args =
-                map_view_params_to_args(&param_decls, args, view_ctx);
-            let data_param_decls: Vec<desc::ParamDecl> = data_param_decls_to_data_args
-                .iter()
-                .map(|(param_decl, _)| *param_decl)
-                .cloned()
-                .collect();
-            let data_args: Vec<desc::Expr> = data_param_decls_to_data_args
-                .iter()
-                .map(|(_, arg)| *arg)
-                .cloned()
-                .collect();
-            let data_param_tys: Vec<desc::Ty> =
-                if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
-                    param_tys
-                        .iter()
-                        .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
-                        .cloned()
-                        .collect()
-                } else {
-                    panic!("A function must have a function type.")
-                };
-            let reduced_fun_ty = desc::Ty::new(desc::TyKind::Fn(
-                vec![],
-                data_param_tys,
+            Some(create_lambda_and_args_only_dtys(
+                fun,
+                param_decls,
+                args,
+                body,
                 *exec,
-                Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.as_ref().clone()))),
-            ));
-            let reduced_fun = desc::Expr::with_type(
-                desc::ExprKind::Lambda(data_param_decls, *exec, ret_dty.clone(), body.clone()),
-                reduced_fun_ty,
-            );
-            Some((reduced_fun, data_args))
+                ret_dty,
+                parall_ctx,
+                view_ctx,
+            ))
         }
         desc::ExprKind::PlaceExpr(desc::PlaceExpr {
             kind: PlaceExprKind::Ident(f),
@@ -874,55 +858,26 @@ fn create_lambda_no_view_args(
                 .iter()
                 .find(|fun_def| fun_def.name == f.name)
                 .expect("Cannot find function definition.");
-            if !contains_view_params(&fun_def.param_decls) {
+            if !contains_view_or_th_hierchy_params(&fun_def.param_decls) {
                 return None;
             }
-
-            let inst_fun = instantiate_gen_fun(fun_def, generic_args);
+            let partial_app_fun = partial_app_gen_args(fun_def, generic_args);
             let (param_decls, new_body) =
-                if let desc::ExprKind::Lambda(param_decls, _, _, body) = &inst_fun.expr {
+                if let desc::ExprKind::Lambda(param_decls, _, _, body) = &partial_app_fun.expr {
                     (param_decls, body.as_ref())
                 } else {
                     panic!("Expected a lambda.")
                 };
-            let data_param_decls_to_data_args =
-                map_view_params_to_args(&param_decls, args, view_ctx);
-            let data_param_decls: Vec<desc::ParamDecl> = data_param_decls_to_data_args
-                .iter()
-                .map(|(param_decl, _)| *param_decl)
-                .cloned()
-                .collect();
-            let data_args: Vec<desc::Expr> = data_param_decls_to_data_args
-                .iter()
-                .map(|(_, arg)| *arg)
-                .cloned()
-                .collect();
-            let data_param_tys: Vec<desc::Ty> =
-                if let desc::TyKind::Fn(_, param_tys, _, _) = &inst_fun.ty.as_ref().unwrap().ty {
-                    param_tys
-                        .iter()
-                        .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
-                        .cloned()
-                        .collect()
-                } else {
-                    panic!("A function must have a function type.")
-                };
-            let reduced_fun_ty = desc::Ty::new(desc::TyKind::Fn(
-                vec![],
-                data_param_tys,
+            Some(create_lambda_and_args_only_dtys(
+                fun,
+                param_decls,
+                args,
+                new_body,
                 fun_def.exec,
-                Box::new(desc::Ty::new(desc::TyKind::Data(fun_def.ret_dty.clone()))),
-            ));
-            let reduced_fun = desc::Expr::with_type(
-                desc::ExprKind::Lambda(
-                    data_param_decls,
-                    fun_def.exec,
-                    Box::new(fun_def.ret_dty.clone()),
-                    Box::new(new_body.clone()),
-                ),
-                reduced_fun_ty,
-            );
-            Some((reduced_fun, data_args))
+                &fun_def.ret_dty,
+                parall_ctx,
+                view_ctx,
+            ))
         }
         _ => panic!(
             "Functions cannot be created dynamically, so they have to either be\
@@ -931,7 +886,76 @@ fn create_lambda_no_view_args(
     }
 }
 
-fn instantiate_gen_fun(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> desc::Expr {
+fn create_lambda_and_args_only_dtys(
+    fun: &desc::Expr,
+    param_decls: &[desc::ParamDecl],
+    args: &[desc::Expr],
+    body: &desc::Expr,
+    exec: desc::Exec,
+    ret_dty: &desc::DataTy,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+) -> (desc::Expr, Vec<desc::Expr>) {
+    let (data_param_decls, data_args) = separate_param_decls_from_args(
+        filter_and_map_view_th_hierchy_params(param_decls, args, parall_ctx, view_ctx),
+    );
+    let partial_app_fun_ty =
+        create_fun_ty_of_purely_data_tys(get_data_param_tys(fun), exec, ret_dty);
+    let partial_app_fun = desc::Expr::with_type(
+        desc::ExprKind::Lambda(
+            data_param_decls,
+            exec,
+            Box::new(ret_dty.clone()),
+            Box::new(body.clone()),
+        ),
+        partial_app_fun_ty,
+    );
+    (partial_app_fun, data_args)
+}
+
+fn separate_param_decls_from_args(
+    param_decls_to_args: Vec<(&desc::ParamDecl, &desc::Expr)>,
+) -> (Vec<desc::ParamDecl>, Vec<desc::Expr>) {
+    let data_param_decls: Vec<desc::ParamDecl> = param_decls_to_args
+        .iter()
+        .map(|(param_decl, _)| *param_decl)
+        .cloned()
+        .collect();
+    let data_args: Vec<desc::Expr> = param_decls_to_args
+        .iter()
+        .map(|(_, arg)| *arg)
+        .cloned()
+        .collect();
+
+    (data_param_decls, data_args)
+}
+
+fn get_data_param_tys(fun: &desc::Expr) -> Vec<desc::Ty> {
+    if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
+        param_tys
+            .iter()
+            .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
+            .cloned()
+            .collect()
+    } else {
+        panic!("A function must have a function type.")
+    }
+}
+
+fn create_fun_ty_of_purely_data_tys(
+    data_param_tys: Vec<desc::Ty>,
+    exec: desc::Exec,
+    ret_dty: &desc::DataTy,
+) -> desc::Ty {
+    desc::Ty::new(desc::TyKind::Fn(
+        vec![],
+        data_param_tys,
+        exec,
+        Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.clone()))),
+    ))
+}
+
+fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> desc::Expr {
     let subst_map_kinded_idents: HashMap<&str, &desc::ArgKinded> = fun
         .generic_params
         .iter()
@@ -961,26 +985,39 @@ fn instantiate_gen_fun(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> desc
     }
 }
 
-fn contains_view_params(param_decls: &[desc::ParamDecl]) -> bool {
-    param_decls
-        .iter()
-        .any(|p| matches!(&p.ty.ty, desc::TyKind::View(_)))
+fn contains_view_or_th_hierchy_params(param_decls: &[desc::ParamDecl]) -> bool {
+    param_decls.iter().any(|p| {
+        matches!(&p.ty.ty, desc::TyKind::View(_))
+            || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
+    })
 }
 
-fn map_view_params_to_args<'a>(
+fn filter_and_map_view_th_hierchy_params<'a>(
     param_decls: &'a [desc::ParamDecl],
     args: &'a [desc::Expr],
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
 ) -> Vec<(&'a desc::ParamDecl, &'a desc::Expr)> {
-    let params_with_args: (Vec<_>, Vec<_>) = param_decls
-        .iter()
-        .zip(args.iter())
-        .partition(|&(p, _)| matches!(&p.ty.ty, desc::TyKind::View(_)));
-    for (p, arg) in params_with_args.0 {
+    let (reducable_parms_with_args, data_params_with_args): (Vec<_>, Vec<_>) =
+        param_decls.iter().zip(args.iter()).partition(|&(p, _)| {
+            matches!(&p.ty.ty, desc::TyKind::View(_))
+                || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
+        });
+    let (view_params_with_args, th_hierchy_params_with_args): (Vec<_>, Vec<_>) =
+        reducable_parms_with_args
+            .iter()
+            .partition(|&(p, _)| matches!(&p.ty.ty, desc::TyKind::View(_)));
+    for (p, arg) in view_params_with_args {
         view_ctx.insert(p.ident.name.clone(), ViewExpr::create_from(arg, view_ctx));
     }
+    for (p, arg) in th_hierchy_params_with_args {
+        parall_ctx.insert(
+            p.ident.name.clone(),
+            ParallelityCollec::create_from(arg, parall_ctx),
+        );
+    }
 
-    params_with_args.1
+    data_params_with_args
 }
 
 fn gen_lit(l: desc::Lit) -> cu::Expr {
@@ -1411,7 +1448,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         View(_) => panic!(
             "Cannot generate view types. Anything with this type should have been compiled away."
         ),
-        ThreadHierchy(_) => panic!(
+        ThreadHierchy(t) => panic!(
             "Cannot generate thread hierarchy types. \
         Anything with this type should ave been compiled away."
         ),
@@ -1863,13 +1900,13 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
     use crate::ast::visit::Visitor;
     use desc::*;
     struct ReplaceArgKindedIdents {
-        kinds: HashMap<String, Kind>,
+        ident_names_to_kinds: HashMap<String, Kind>,
     }
     impl Visitor for ReplaceArgKindedIdents {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
                 ExprKind::LetProv(prvs, body) => {
-                    self.kinds
+                    self.ident_names_to_kinds
                         .extend(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
                     self.visit_expr(body)
                 }
@@ -1878,7 +1915,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
                     for gen_arg in gen_args {
                         if let ArgKinded::Ident(ident) = gen_arg {
                             let to_be_kinded = ident.clone();
-                            match self.kinds.get(&ident.name).unwrap() {
+                            match self.ident_names_to_kinds.get(&ident.name).unwrap() {
                                 Kind::Provenance => {
                                     *gen_arg =
                                         ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
@@ -1901,7 +1938,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
                     walk_list!(self, visit_expr, args)
                 }
                 ExprKind::ForNat(ident, _, body) => {
-                    self.kinds
+                    self.ident_names_to_kinds
                         .extend(iter::once((ident.name.clone(), Kind::Nat)));
                     self.visit_expr(body)
                 }
@@ -1910,7 +1947,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
         }
 
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
-            self.kinds = fun_def
+            self.ident_names_to_kinds = fun_def
                 .generic_params
                 .iter()
                 .map(|desc::IdentKinded { ident, kind }| (ident.name.clone(), *kind))
@@ -1919,7 +1956,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
         }
     }
     let mut replace = ReplaceArgKindedIdents {
-        kinds: HashMap::new(),
+        ident_names_to_kinds: HashMap::new(),
     };
     replace.visit_fun_def(&mut fun_def);
     fun_def
