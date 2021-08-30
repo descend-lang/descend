@@ -3,7 +3,6 @@ use super::cu_ast::{
 };
 use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
 use std::fmt::Formatter;
-use std::fmt::Write;
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
@@ -11,6 +10,8 @@ use std::fmt::Write;
 // over the computation
 
 pub(super) fn print(program: &[Item]) -> String {
+    use std::fmt::Write;
+
     let mut code = String::new();
     for i in program {
         let res = writeln!(&mut code, "{}", i);
@@ -22,18 +23,18 @@ pub(super) fn print(program: &[Item]) -> String {
 }
 
 fn clang_format(code: &str) -> String {
+    use std::io::Write;
     use std::process::{Command, Stdio};
-    let mut echo_cmd = Command::new("echo")
-        .arg(code)
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("failed to execute `echo`");
-    let echo_stdout = echo_cmd.stdout.take().expect("failed to open stdout");
-    let clang_fmt_cmd = Command::new("clang-format")
-        .stdin(echo_stdout)
+    let mut clang_fmt_cmd = Command::new("clang-format")
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .expect("failed to execute `clang-format`");
+    if let Some(mut stdin) = clang_fmt_cmd.stdin.take() {
+        stdin
+            .write_all(code.as_bytes())
+            .expect("Could not write to standard input stream.")
+    }
     let clang_fmt_output = clang_fmt_cmd
         .wait_with_output()
         .expect("failed to execute `clang-format`");

@@ -11,15 +11,6 @@ fn scan() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
-fn reduce_shared_mem2() -> Result<(), descend::error::ErrorReported> {
-    // Ok(println!(
-    //     "{}",
-    descend::compile("examples/shared_mem_red2.desc")?;
-    //));
-    panic!("Generates the wrong code.");
-}
-
-#[test]
 fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
