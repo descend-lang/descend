@@ -31,9 +31,7 @@ pub(super) enum Stmt {
     },
     Block(Box<Stmt>),
     Seq {
-        check1: Box<Stmt>,
         stmt1: Box<Stmt>,
-        check2: Box<Stmt>,
         stmt2: Box<Stmt>,
     },
     Expr(Expr),
