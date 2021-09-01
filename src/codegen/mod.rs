@@ -115,9 +115,9 @@ fn gen_stmt(
                     expr: None,
                 };
                 cu::Stmt::Seq {
-                    check1: Box::new(cu::Stmt::EmptyCheck),
+                    // check1: Box::new(cu::Stmt::EmptyCheck),
                     stmt1: Box::new(var),
-                    check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+                    // check2: Box::new(cu::Stmt::EmptyCheck), // Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
                     stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
                 }
             } else if let Some(tty) = gen_ty(&e1.ty.as_ref().unwrap().ty, *mutbl) {
@@ -139,10 +139,20 @@ fn gen_stmt(
                     expr: Some(init_expr),
                 };
                 cu::Stmt::Seq {
-                    check1: Box::new(cu::Stmt::EmptyCheck),
+                    // check1: Box::new(cu::Stmt::EmptyCheck),
                     stmt1: Box::new(var),
-                    check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
-                    stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                    // check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+                    // stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                    stmt2: Box::new(cu::Stmt::Seq {
+                        stmt1: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+                        stmt2: Box::new(gen_stmt(
+                            e2,
+                            return_value,
+                            parall_ctx,
+                            view_ctx,
+                            comp_unit,
+                        )),
+                    }),
                 }
             } else {
                 gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
@@ -151,14 +161,14 @@ fn gen_stmt(
         LetUninit(ident, ty, e) => {
             if let Some(tty) = gen_ty(&ty.as_ref().ty, Mutability::Mut) {
                 cu::Stmt::Seq {
-                    check1: Box::new(cu::Stmt::EmptyCheck),
+                    // check1: Box::new(cu::Stmt::EmptyCheck),
                     stmt1: Box::new(cu::Stmt::VarDecl {
                         name: ident.name.clone(),
                         ty: tty,
                         addr_space: None,
                         expr: None,
                     }),
-                    check2: Box::new(cu::Stmt::EmptyCheck),
+                    // check2: Box::new(cu::Stmt::EmptyCheck),
                     stmt2: Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)),
                 }
             } else {
@@ -168,10 +178,15 @@ fn gen_stmt(
         LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
         // e1 ; e2
         Seq(e1, e2) => cu::Stmt::Seq {
-            check1: Box::new(gen_checked_stmt(&e1, view_ctx, comp_unit)),
-            stmt1: Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
-            check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
-            stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+            // check1: Box::new(gen_checked_stmt(&e1, view_ctx, comp_unit)),
+            // stmt1: Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
+            // check2: Box::new(cu::Stmt::EmptyCheck), // Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+            // stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+            stmt1: Box::new(gen_checked_stmt(&e1, view_ctx, comp_unit)),
+            stmt2: Box::new(cu::Stmt::Seq {
+                stmt1: Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
+                stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+            }),
         },
         ForNat(ident, range, body) => {
             let i = cu::Expr::Ident(ident.name.clone());
@@ -499,13 +514,12 @@ fn gen_par_for(
     };
 
     cu::Stmt::Seq {
-        check1: Box::new(cu::Stmt::EmptyCheck),
+        // check1: Box::new(cu::Stmt::EmptyCheck),
         stmt1: Box::new(body),
-        check2: Box::new(cu::Stmt::EmptyCheck),
+        // check2: Box::new(cu::Stmt::EmptyCheck),
         stmt2: Box::new(sync_stmt),
     }
 }
-
 
 fn gen_checked_stmt(
     expr: &desc::Expr,
@@ -520,17 +534,13 @@ fn gen_checked_stmt(
             gen_checked_stmt(e1, view_ctx, comp_unit);
             gen_checked_stmt(e2, view_ctx, comp_unit)
         }
-        Index(pl_expr, i) => {
-            cu::Stmt::IndexCheck{
-                arr: Box::new(gen_pl_expr(pl_expr,view_ctx, comp_unit)),
-                ind: i.clone()
-            }
-        }
+        Index(pl_expr, i) => cu::Stmt::IndexCheck {
+            arr: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+            ind: i.clone(),
+        },
         Assign(_, expr) => gen_checked_stmt(expr, view_ctx, comp_unit),
-        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => {
-            cu::Stmt::EmptyCheck
-        }
-        _ => panic!("Should not happen {:?}", &expr) // TODO not all cases implemented 
+        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => cu::Stmt::EmptyCheck,
+        _ => panic!("Should not happen {:?}", &expr), // TODO not all cases implemented
     }
 }
 

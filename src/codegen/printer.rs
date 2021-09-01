@@ -84,13 +84,17 @@ impl std::fmt::Display for Stmt {
                 writeln!(f, "{}", stmt)?;
                 write!(f, "}}")
             }
-            Seq { check1, stmt1, check2, stmt2 } => {
-                if !matches!(*check1.as_ref(), EmptyCheck) {
-                    writeln!(f, "{}", check1)?;
-                }
-                writeln!(f, "{}", stmt1)?;
-                if !matches!(*check2.as_ref(), EmptyCheck) {
-                    writeln!(f, "{}", check2)?;
+            Seq { stmt1, stmt2 } => {
+                // if !matches!(*check1.as_ref(), EmptyCheck) {
+                //     writeln!(f, "{}", check1)?;
+                // }
+                // writeln!(f, "{}", stmt1)?;
+                // if !matches!(*check2.as_ref(), EmptyCheck) {
+                //     writeln!(f, "{}", check2)?;
+                // }
+
+                if !matches!(*stmt1.as_ref(), EmptyCheck) {
+                    writeln!(f, "{}", stmt1)?;
                 }
                 write!(f, "{}", stmt2)
             }
