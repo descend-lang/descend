@@ -158,8 +158,18 @@ fn gen_stmt(
                 cu::Stmt::Seq{
                     check1: Box::new(cu::Stmt::EmptyCheck),
                     stmt1: Box::new(var),
-                    check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
-                    stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                    // check2: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+                    // stmt2: Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
+                    stmt2: Box::new(cu::Stmt::Seq {
+                        stmt1: Box::new(gen_checked_stmt(&e2, view_ctx, comp_unit)),
+                        stmt2: Box::new(gen_stmt(
+                            e2,
+                            return_value,
+                            parall_ctx,
+                            view_ctx,
+                            comp_unit,
+                        )),
+                    }),
                 }
             } // else {
               //     gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
