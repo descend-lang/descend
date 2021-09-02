@@ -30,12 +30,7 @@ pub(super) enum Stmt {
         expr: Option<Expr>,
     },
     Block(Box<Stmt>),
-    Seq {
-        check1: Box<Stmt>,
-        stmt1: Box<Stmt>,
-        check2: Box<Stmt>,
-        stmt2: Box<Stmt>,
-    },
+    Seq(Box<Stmt>, Box<Stmt>),
     Expr(Expr),
     If {
         cond: Expr,
@@ -59,7 +54,7 @@ pub(super) enum Stmt {
     Return(Option<Expr>),
     IndexCheck {
         arr: Box<Expr>,
-        ind: Nat
+        ind: Nat,
     },
     EmptyCheck,
 }

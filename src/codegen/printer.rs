@@ -86,6 +86,12 @@ impl std::fmt::Display for Stmt {
                 //      write!(f, "const ")?
                 //  }
                 //  write!(f, "auto {}", name)?;
+
+                // if let Some(ch) = checks {
+                //     for c in ch.iter() {
+                //         writeln!(f, "{}", c);
+                //     }
+                // }
                 if let Some(addrs) = addr_space {
                     write!(f, "{} ", addrs)?;
                 }
@@ -103,14 +109,8 @@ impl std::fmt::Display for Stmt {
                 writeln!(f, "{}", stmt)?;
                 write!(f, "}}")
             }
-            Seq { check1, stmt1, check2, stmt2 } => {
-                if !matches!(*check1.as_ref(), EmptyCheck) {
-                    writeln!(f, "{}", check1)?;
-                }
+            Seq(stmt1, stmt2) => {
                 writeln!(f, "{}", stmt1)?;
-                if !matches!(*check2.as_ref(), EmptyCheck) {
-                    writeln!(f, "{}", check2)?;
-                }
                 write!(f, "{}", stmt2)
             }
             Expr(expr) => {
@@ -142,12 +142,10 @@ impl std::fmt::Display for Stmt {
                 iter,
                 stmt,
             } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
-            EmptyCheck => {
-                Ok(())
-            }
+            EmptyCheck => Ok(()),
             IndexCheck { arr, ind } => {
-                writeln!(f,"if ({} < 0 && {}.size() > {}) {{", ind, arr, ind)?;
-                writeln!(f,"\x2F\x2F out of bounds case")?;
+                writeln!(f, "if ({} < 0 && {}.size() > {}) {{", ind, arr, ind)?;
+                writeln!(f, "\x2F\x2F out of bounds case")?;
                 write!(f, "}}")
             }
             Return(expr) => {
