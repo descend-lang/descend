@@ -595,13 +595,31 @@ fn gen_checked_stmt(
             gen_checked_stmt(e1, view_ctx, comp_unit);
             gen_checked_stmt(e2, view_ctx, comp_unit)
         }
-        Index(pl_expr, i) => cu::Stmt::IndexCheck {
-            arr: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-            ind: i.clone(),
-        },
+        Index(pl_expr, i) => { // TODO avoid unnecessary checks like if( 2>0 ... ) ...
+            cu::Stmt::IndexCheck {
+                arr: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+                ind: i.clone(),
+            }
+        }
         Assign(_, expr) => gen_checked_stmt(expr, view_ctx, comp_unit),
-        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => cu::Stmt::EmptyCheck,
-        _ => panic!("Should not happen {:?}", &expr), // TODO not all cases implemented
+        _ => panic!("should not happen"),
+    }
+}
+
+enum CheckedExpr {
+    Expr(cu::Expr),
+    ExprIdxCheck(cu::Stmt, cu::Expr), 
+}
+
+impl CheckedExpr {
+    fn map<F>(&self, f: F) -> Self
+    where
+        F: Fn(cu::Expr) -> cu::Expr,
+    {
+        match self {
+            Self::Expr(e) => Self::Expr(f(e.clone())),
+            Self::ExprIdxCheck(c, e) => Self::ExprIdxCheck(c.clone(), f(e.clone())),
+        }
     }
 }
 
@@ -628,29 +646,11 @@ fn gen_expr(
                 cu::Expr::Proj {
                     tuple: Box::new(gen_expr(tuple, parall_ctx, view_ctx, comp_unit)),
                     n: *idx,
-                }
+                })
             }
         }
-        BinOp(op, lhs, rhs) => cu::Expr::BinOp {
-            op: match op {
-                desc::BinOp::Add => cu::BinOp::Add,
-                desc::BinOp::Sub => cu::BinOp::Sub,
-                desc::BinOp::Mul => cu::BinOp::Mul,
-                desc::BinOp::Div => cu::BinOp::Div,
-                desc::BinOp::Mod => cu::BinOp::Mod,
-                desc::BinOp::And => cu::BinOp::And,
-                desc::BinOp::Or => cu::BinOp::Or,
-                desc::BinOp::Eq => cu::BinOp::Eq,
-                desc::BinOp::Lt => cu::BinOp::Lt,
-                desc::BinOp::Le => cu::BinOp::Le,
-                desc::BinOp::Gt => cu::BinOp::Gt,
-                desc::BinOp::Ge => cu::BinOp::Ge,
-                desc::BinOp::Neq => cu::BinOp::Neq,
-            },
-            lhs: Box::new(gen_expr(lhs, parall_ctx, view_ctx, comp_unit)),
-            rhs: Box::new(gen_expr(rhs, parall_ctx, view_ctx, comp_unit)),
-        },
-        UnOp(op, arg) => cu::Expr::UnOp {
+        BinOp(op, lhs, rhs) => gen_bin_op_expr(op, lhs, rhs, parall_ctx, view_ctx, comp_unit),
+        UnOp(op, arg) => gen_expr(arg, parall_ctx, view_ctx, comp_unit).map(|e| cu::Expr::UnOp {
             op: match op {
                 desc::UnOp::Deref => cu::UnOp::Deref,
                 desc::UnOp::Not => cu::UnOp::Not,
@@ -676,7 +676,11 @@ fn gen_expr(
         }
         Index(pl_expr, idx) => {
             if contains_view_expr(pl_expr, view_ctx) {
-                gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit)
+                println!("\tfound indexing: {:?}, {:?}", pl_expr.clone(), idx.clone());
+                CheckedExpr::ExprIdxCheck(
+                    gen_checked_stmt(&expr, view_ctx, comp_unit),
+                    gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit),
+                )
             } else {
                 cu::Expr::ArraySubscript {
                     array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
@@ -684,22 +688,30 @@ fn gen_expr(
                 }
             }
         }
-        IdxAssign(pl_expr, idx, expr) => cu::Expr::Assign {
-            lhs: Box::new(if contains_view_expr(pl_expr, view_ctx) {
-                gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit)
-            } else {
-                cu::Expr::ArraySubscript {
-                    array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-                    index: idx.clone(),
-                }
-            }),
-            rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
+        IdxAssign(pl_expr, idx, expr) => {
+            gen_expr(expr, parall_ctx, view_ctx, comp_unit).map(|e| {
+              cu::Expr::Assign {
+                lhs: Box::new(if contains_view_expr(pl_expr, view_ctx) {
+                    gen_idx_into_view(pl_expr, idx, &mut view_ctx.clone(), comp_unit)
+                } else {
+                    cu::Expr::ArraySubscript {
+                        array: Box::new(gen_pl_expr(pl_expr, &mut view_ctx.clone(), comp_unit)),
+                        index: idx.clone(),
+                    }
+                }),
+                rhs: Box::new(e),
+              }
+            })
+        }
+        Assign(pl_expr, expr) => {
+          gen_expr(expr, parall_ctx, view_ctx, comp_unit).map(
+            |e| cu::Expr::Assign{
+              lhs: Box::new(gen_pl_expr(pl_expr, &mut view_ctx.clone(), comp_unit)), //? is that okay?
+              rhs: Box::new(e),
+            }
+          )
         },
-        Assign(pl_expr, expr) => cu::Expr::Assign {
-            lhs: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-            rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
-        },
-        Lambda(params, exec, ty, expr) => cu::Expr::Lambda {
+        Lambda(params, exec, ty, expr) => CheckedExpr::Expr(cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
                 expr,
@@ -826,6 +838,64 @@ fn gen_expr(
             panic!("All tuple views should have been deconstructed using projections by now.")
         }
     }
+}
+
+fn gen_bin_op_expr(
+  op: &desc::BinOp,
+  lhs: &desc::Expr,
+  rhs: &desc::Expr,
+  parall_ctx: &mut HashMap<String, ParallelityCollec>,
+  view_ctx: &mut HashMap<String, ViewExpr>,
+  comp_unit: &[desc::FunDef],
+) -> CheckedExpr {
+  {
+    let op = match op {
+        desc::BinOp::Add => cu::BinOp::Add,
+        desc::BinOp::Sub => cu::BinOp::Sub,
+        desc::BinOp::Mul => cu::BinOp::Mul,
+        desc::BinOp::Div => cu::BinOp::Div,
+        desc::BinOp::Mod => cu::BinOp::Mod,
+        desc::BinOp::And => cu::BinOp::And,
+        desc::BinOp::Or => cu::BinOp::Or,
+        desc::BinOp::Eq => cu::BinOp::Eq,
+        desc::BinOp::Lt => cu::BinOp::Lt,
+        desc::BinOp::Le => cu::BinOp::Le,
+        desc::BinOp::Gt => cu::BinOp::Gt,
+        desc::BinOp::Ge => cu::BinOp::Ge,
+        desc::BinOp::Neq => cu::BinOp::Neq,
+    };
+    use CheckedExpr as ce;
+    match (
+        gen_expr(lhs, parall_ctx, view_ctx, comp_unit),
+        gen_expr(rhs, parall_ctx, view_ctx, comp_unit),
+    ) {
+        (ce::ExprIdxCheck(ch1, e1), ce::ExprIdxCheck(ch2, e2)) => {
+            CheckedExpr::ExprIdxCheck(
+                cu::Stmt::Seq(Box::new(ch1), Box::new(ch2)),
+                cu::Expr::BinOp {
+                    op: op,
+                    lhs: Box::new(e1),
+                    rhs: Box::new(e2),
+                },
+            )
+        }
+        (ce::Expr(e1), ce::ExprIdxCheck(ch, e2))
+        | (ce::ExprIdxCheck(ch, e1), ce::Expr(e2)) => CheckedExpr::ExprIdxCheck(
+            ch,
+            cu::Expr::BinOp {
+                op: op,
+                lhs: Box::new(e1),
+                rhs: Box::new(e2),
+            },
+        ),
+        (ce::Expr(e1), ce::Expr(e2)) => CheckedExpr::Expr(cu::Expr::BinOp {
+            op: op,
+            lhs: Box::new(e1),
+            rhs: Box::new(e2),
+        }),
+    }
+}
+
 }
 
 fn extract_ident(ident: &desc::Expr) -> Ident {
