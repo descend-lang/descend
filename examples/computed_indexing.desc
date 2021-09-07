@@ -31,7 +31,7 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
         >(
             &'i uniq gpu,
             <grouped_indices, grouped_results, &'j shrd d_data>,
-            | grid: Grid<Block<Thread, 16>, 4>,
+            | grid: BlockGrp<4, ThreadGrp<16>>,
               inputs: <[[ [[&'g shrd gpu.global u32; 16]]; 4]],
                       [[ [[&'h uniq gpu.global i32; 16]]; 4]],
                       &'j shrd gpu.global [i32; m]>
@@ -42,21 +42,19 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
 
                 for grid with <indices_input, results_input, data> do
 
-                    | block: Block<Thread, 16>,
+                    | block: ThreadGrp<16>,
                       indices_inp: [[&'g shrd gpu.global u32; 16]],
                       results_inp: [[&'h uniq gpu.global i32; 16]],
                       dat: &'j shrd gpu.global [i32; m]
                     | -[gpu.block]-> () {
 
                         for block with <indices_inp, results_inp, dat> do 
-                            | thread: Thread,
-                              ind: &'g shrd gpu.global u32, 
+                            | ind: &'g shrd gpu.global u32, 
                               res: &'h uniq gpu.global i32,
                               d: &'j shrd gpu.global [i32; m]
                             | -[gpu.thread]-> () {
                                 let i = *ind;
-                                let temp = d[i];
-                                *res = temp;
+                                *res = d[i] + d[2];
                                 ()
                             }
 
