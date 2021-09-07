@@ -135,10 +135,17 @@ impl std::fmt::Display for Stmt {
                 iter,
                 stmt,
             } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
+            Label(l) => write!(f, "{}:", l),
+            GlobalCheck => {
+                writeln!(f, "if (*global_failure != -1) {{");
+                writeln!(f, "return;");
+                write!(f, "}}")
+            }
             EmptyCheck => Ok(()),
-            IndexCheck { size, ind } => {
+            IndexCheck { size, ind, label } => {
                 writeln!(f, "if ( {} > {} ) {{", size, ind)?;
                 writeln!(f, "\x2F\x2F out of bounds case")?;
+                writeln!(f, "goto {}", label);
                 write!(f, "}}")
             }
             Return(expr) => {

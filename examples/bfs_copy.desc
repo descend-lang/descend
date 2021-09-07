@@ -38,7 +38,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                                                 >(
                 &'j uniq gpu,
                 <grouped_nodes_changes, &'k shrd edges, &'n uniq d_changes>,
-                | grid: Grid<Block<Thread, 16>, 4>,
+                | grid: BlockGrp<4, ThreadGrp<16>>,  //  Grid<Block<Thread, 16>, 4>,
                   input: <[[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; 4]],
                          &'k shrd gpu.global [i32; m],
                          &'n uniq gpu.global [(bool, bool, bool, i32); n]>
@@ -50,14 +50,14 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
 
                       for grid with <nod_view, edg, all_changes> do
 
-                        | block: Block<Thread, 16>,
+                        | block: ThreadGrp<16>, // Block<Thread, 16>,
                           ib: [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]] ,
                           ed: &'k shrd gpu.global [i32; m],
                           all_ch: &'n uniq gpu.global [(bool, bool, bool, i32); n]
                         | -[gpu.block]-> () {
                             for block with <ib, ed, all_ch> do 
-                                | thread: Thread,
-                                  inp: <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)>,
+                                // | thread: Thread,
+                                |  inp: <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)>,
                                   e: &'k shrd gpu.global [i32; m], 
                                   ch: &'n uniq gpu.global [(bool, bool, bool, i32); n]
                                 | -[gpu.thread]-> () {
@@ -85,7 +85,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             exec::<4, 16, 'j, cpu.stack, <[[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; 4]], &'m uniq gpu.global bool>>(
                 &'j uniq gpu,
                 <grouped_nodes_changes2, &'m uniq d_stop>,
-                | grid: Grid<Block<Thread, 16>, 4>,
+                | grid:  BlockGrp<4, ThreadGrp<16>>,  // Grid<Block<Thread, 16>, 4>,
                     input2: <[[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; 4]], &'m uniq gpu.global bool>
                 | -[gpu.grid]-> () {
 
@@ -93,14 +93,14 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                         let stop_temp = input2.1; // rename stop_temp to stop causes stack overflow
 
                         for grid with <changes2, stop_temp> do
-                        | block: Block<Thread, 16>,
+                        | block: ThreadGrp<16>, // Block<Thread, 16>,
                             ib2: [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]],
                             stop: &'m uniq gpu.global bool
                         | -[gpu.block]-> () {
 
                             for block with <ib2, stop> do
-                                | thread: Thread,
-                                    inp: <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >,
+                                // | thread: Thread,
+                                |    inp: <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >,
                                     st: &'m uniq gpu.global bool
                                 | -[gpu.thread]-> () {
                                     // let changes = *inp.1; // mask, updating mask, visited, cost
@@ -120,6 +120,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
                 );
                 
             copy_to_host::<'u, 'x, cpu.heap, bool>(&'u shrd d_stop,&'x uniq *h_stop);
+            ()
         }
     }
 }

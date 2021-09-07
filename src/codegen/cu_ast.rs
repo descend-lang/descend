@@ -58,8 +58,11 @@ pub(super) enum Stmt {
     IndexCheck {
         size: Nat,
         ind: Nat,
+        label: String,
     },
     EmptyCheck,
+    GlobalCheck,
+    Label(String),
 }
 
 #[derive(Clone, Debug)]
