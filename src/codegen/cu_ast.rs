@@ -56,10 +56,13 @@ pub(super) enum Stmt {
     },
     Return(Option<Expr>),
     IndexCheck {
-        arr: Box<Expr>,
-        ind: Nat
+        size: Nat,
+        ind: Nat,
+        label: String,
     },
     EmptyCheck,
+    GlobalCheck,
+    Label(String),
 }
 
 #[derive(Clone, Debug)]
