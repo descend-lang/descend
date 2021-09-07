@@ -159,7 +159,7 @@ pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
 }
 
 pub fn walk_pl_expr<V: Visitor>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
-    match &mut pl_expr.kind {
+    match &mut pl_expr.pl_expr {
         PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
         PlaceExprKind::Proj(pl_expr, _) => {
@@ -225,7 +225,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::Seq(e1, e2) => {
             visitor.visit_expr(e1);
-            visitor.visit_expr(e2)
+            visitor.visit_expr(e2);
         }
         ExprKind::Lambda(params, exec, dty, expr) => {
             walk_list!(visitor, visit_param_decl, params);
@@ -284,6 +284,12 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::TupleView(elems) => {
             walk_list!(visitor, visit_expr, elems);
+        }
+        ExprKind::Split(n, r1, r2, view) => {
+            visitor.visit_nat(n);
+            visitor.visit_prv(r1);
+            visitor.visit_prv(r2);
+            visitor.visit_expr(view);
         }
         ExprKind::Idx(e, i) => {
             visitor.visit_expr(e);

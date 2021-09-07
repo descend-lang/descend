@@ -1,3 +1,6 @@
+// FIXME This should NOT type check
+//  r exists twice!
+//  Maybe it is ok here, but the arguments passed during application must NOT be equal!
 fn red_add<r: prv>(
   fst_half: &r uniq gpu.global i32,
   snd_half: &r uniq gpu.global i32

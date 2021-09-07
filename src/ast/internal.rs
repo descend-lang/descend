@@ -56,7 +56,6 @@ pub struct Loan {
     pub own: Ownership,
 }
 
-// TODO refactor find proper location for this
 pub type Path = Vec<usize>;
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Place {

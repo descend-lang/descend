@@ -677,7 +677,7 @@ fn gen_expr(
         },
         App(fun, kinded_args, args) => match &fun.expr {
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                kind: PlaceExprKind::Ident(name),
+                pl_expr: PlaceExprKind::Ident(name),
                 ..
             }) if name.name == "exec" => gen_exec(
                 &kinded_args[0],
@@ -689,7 +689,7 @@ fn gen_expr(
                 comp_unit,
             ),
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                kind: PlaceExprKind::Ident(ident),
+                pl_expr: PlaceExprKind::Ident(ident),
                 ..
             }) if crate::ty_check::pre_decl::fun_decls()
                 .iter()
@@ -783,6 +783,9 @@ fn gen_expr(
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),
+        Split(_, _, _, _) => {
+            panic!("The split operator should have been descontructed by now.")
+        }
         TupleView(_) => {
             panic!("All tuple views should have been deconstructed using projections by now.")
         }
@@ -791,7 +794,7 @@ fn gen_expr(
 
 fn extract_ident(ident: &desc::Expr) -> Ident {
     if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-        kind: PlaceExprKind::Ident(ident),
+        pl_expr: PlaceExprKind::Ident(ident),
         ..
     }) = &ident.expr
     {
@@ -851,7 +854,7 @@ fn create_lambda_no_view_args(
             ))
         }
         desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-            kind: PlaceExprKind::Ident(f),
+            pl_expr: PlaceExprKind::Ident(f),
             ..
         }) => {
             let fun_def = comp_unit
@@ -1036,7 +1039,7 @@ fn gen_pl_expr(
 ) -> cu::Expr {
     match &pl_expr {
         desc::PlaceExpr {
-            kind: PlaceExprKind::Ident(ident),
+            pl_expr: PlaceExprKind::Ident(ident),
             ..
         } => {
             if view_ctx.contains_key(&ident.name) {
@@ -1059,7 +1062,7 @@ fn gen_pl_expr(
             }
         }
         desc::PlaceExpr {
-            kind: PlaceExprKind::Proj(pl, n),
+            pl_expr: PlaceExprKind::Proj(pl, n),
             ..
         } => match pl_expr.to_place() {
             // FIXME this does not work when there are tuples inside of view tuples
@@ -1075,7 +1078,7 @@ fn gen_pl_expr(
             },
         },
         desc::PlaceExpr {
-            kind: PlaceExprKind::Deref(ple),
+            pl_expr: PlaceExprKind::Deref(ple),
             ..
         } => {
             // If an identifier that refers to an unwrapped view expression is being dereferenced,
@@ -1504,7 +1507,7 @@ impl ParallelityCollec {
         match &expr.expr {
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                    kind: PlaceExprKind::Ident(ident),
+                    pl_expr: PlaceExprKind::Ident(ident),
                     ..
                 }) = &f.expr
                 {
@@ -1562,18 +1565,18 @@ impl ParallelityCollec {
     ) -> ParallelityCollec {
         match parall_expr {
             desc::PlaceExpr {
-                kind: PlaceExprKind::Ident(ident),
+                pl_expr: PlaceExprKind::Ident(ident),
                 ..
             } => parall_ctx.get(&ident.name).unwrap().clone(),
             desc::PlaceExpr {
-                kind: PlaceExprKind::Proj(pp, i),
+                pl_expr: PlaceExprKind::Proj(pp, i),
                 ..
             } => ParallelityCollec::Proj {
                 parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
                 i: *i,
             },
             desc::PlaceExpr {
-                kind: PlaceExprKind::Deref(_),
+                pl_expr: PlaceExprKind::Deref(_),
                 ..
             } => panic!(
                 "It is not possible to take references of Grids or Blocks.\
@@ -1654,7 +1657,7 @@ impl ViewExpr {
             // TODO this is assuming that f is an identifier
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                    kind: PlaceExprKind::Ident(ident),
+                    pl_expr: PlaceExprKind::Ident(ident),
                     ..
                 }) = &f.expr
                 {
@@ -1711,18 +1714,18 @@ impl ViewExpr {
     ) -> ViewExpr {
         match view {
             desc::PlaceExpr {
-                kind: PlaceExprKind::Ident(ident),
+                pl_expr: PlaceExprKind::Ident(ident),
                 ..
             } => view_ctx.get(&ident.name).unwrap().clone(),
             desc::PlaceExpr {
-                kind: PlaceExprKind::Proj(vv, i),
+                pl_expr: PlaceExprKind::Proj(vv, i),
                 ..
             } => ViewExpr::Proj {
                 view: Box::new(ViewExpr::create_pl_expr_view(vv, view_ctx)),
                 i: *i,
             },
             desc::PlaceExpr {
-                kind: PlaceExprKind::Deref(_),
+                pl_expr: PlaceExprKind::Deref(_),
                 ..
             } => {
                 panic!("It is not possible to take references of views. This should never happen.")
@@ -2005,7 +2008,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
                         for f in t {
                             match &mut f.expr {
                                 ExprKind::PlaceExpr(PlaceExpr {
-                                    kind: PlaceExprKind::Ident(x),
+                                    pl_expr: PlaceExprKind::Ident(x),
                                     ..
                                 }) => f.expr = self.create_lambda_from_fun_def(&x.name),
                                 _ => visit::walk_expr(self, f),
@@ -2013,7 +2016,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
                         }
                     }
                     ExprKind::PlaceExpr(PlaceExpr {
-                        kind: PlaceExprKind::Ident(x),
+                        pl_expr: PlaceExprKind::Ident(x),
                         ..
                     }) => efs.expr = self.create_lambda_from_fun_def(&x.name),
                     _ => visit::walk_expr(self, efs),

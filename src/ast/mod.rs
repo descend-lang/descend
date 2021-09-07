@@ -97,9 +97,9 @@ impl Expr {
         where
             I: Iterator<Item = &'a &'a str>,
         {
-            match &pl_expr.kind {
+            match &pl_expr.pl_expr {
                 PlaceExprKind::Ident(ident) => idents.any(|name| ident.name == *name),
-                PlaceExprKind::Proj(tuple, i) => pl_expr_contains_name_in(tuple, idents),
+                PlaceExprKind::Proj(tuple, _) => pl_expr_contains_name_in(tuple, idents),
                 PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
             }
         }
@@ -111,7 +111,7 @@ impl Expr {
         impl Visitor for SubstIdents<'_> {
             fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
                 if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
-                    match &pl_expr.kind {
+                    match &pl_expr.pl_expr {
                         PlaceExprKind::Ident(ident) => {
                             let subst_expr =
                                 self.subst_map.get::<&str>(&ident.name.as_str()).unwrap();
@@ -131,7 +131,7 @@ impl Expr {
                 match &expr.expr {
                     ExprKind::PlaceExpr(pl_expr) => {
                         if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
-                            match &pl_expr.kind {
+                            match &pl_expr.pl_expr {
                                 PlaceExprKind::Ident(ident) => {
                                     if let Some(&subst_expr) =
                                         self.subst_map.get::<&str>(&ident.name.as_str())
@@ -249,12 +249,6 @@ impl Expr {
     }
 }
 
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.expr)
-    }
-}
-
 #[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
@@ -302,41 +296,11 @@ pub enum ExprKind {
     UnOp(UnOp, Box<Expr>),
     ParFor(Box<Expr>, Box<Expr>, Box<Expr>),
     TupleView(Vec<Expr>),
+    Split(Nat, Provenance, Provenance, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),
     // Index into an array; ONLY for codegen
     Idx(Box<Expr>, Nat),
-}
-
-impl fmt::Display for ExprKind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Lit(l) => write!(f, "{}", l),
-            Self::PlaceExpr(pl_expr) => write!(f, "{}", pl_expr),
-            Self::Index(pl_expr, n) => write!(f, "{}[{}]", pl_expr, n),
-            Self::Ref(prv, own, pl_expr) => write!(f, "&{} {} {}", prv, own, pl_expr),
-            Self::BorrowIndex(prv, own, pl_expr, n) => {
-                write!(f, "&{} {} {}[{}]", prv, own, pl_expr, n)
-            }
-            Self::Assign(pl_expr, e) => write!(f, "{} = {}", pl_expr, e),
-            Self::Let(mutab, ident, ty, e1, e2) => {
-                if let Some(ty) = ty.as_ref() {
-                    write!(f, "let {} {}: {} = {}; {}", mutab, ident, ty, e1, e2)
-                } else {
-                    write!(f, "let {} {} = {}; {}", mutab, ident, e1, e2)
-                }
-            }
-            Self::Seq(e1, e2) => write!(f, "{}; {}", e1, e2),
-            /*            Self::Lambda(params, exec, ty, e) => {
-                write!(f, "|{}| [{}]-> {} {{ {} }}", params, exec, ty, e)
-            }
-            Self::DepLambda(ty_ident, exec, e) => {
-                write!(f, "<{}> [{}]-> {{ {} }}", ty_ident, exec, e)
-            }
-            Self::App(f, arg) => write!(f, "{}({})", f, arg),*/
-            _ => panic!("not yet implemented"),
-        }
-    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -521,14 +485,16 @@ pub enum ArgKinded {
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct PlaceExpr {
-    pub kind: PlaceExprKind,
+    pub pl_expr: PlaceExprKind,
     pub ty: Option<Ty>,
+    // for borrow checking
+    pub split_tag_path: Vec<ViewSplitTag>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-enum DuplicationTag {
+pub enum ViewSplitTag {
     Fst,
     Snd,
 }
@@ -543,14 +509,24 @@ pub enum PlaceExprKind {
 impl PlaceExpr {
     pub fn new(pl_expr: PlaceExprKind) -> Self {
         PlaceExpr {
-            kind: pl_expr,
+            pl_expr,
             ty: None,
+            split_tag_path: vec![],
             span: None,
         }
     }
 
+    pub fn with_span(pl_expr: PlaceExprKind, span: Span) -> Self {
+        PlaceExpr {
+            pl_expr,
+            ty: None,
+            split_tag_path: vec![],
+            span: Some(span),
+        }
+    }
+
     pub fn is_place(&self) -> bool {
-        match &self.kind {
+        match &self.pl_expr {
             PlaceExprKind::Proj(ple, _) => ple.is_place(),
             PlaceExprKind::Ident(_) => true,
             PlaceExprKind::Deref(_) => false,
@@ -560,7 +536,7 @@ impl PlaceExpr {
     // The inner constructs are prefixes of the outer constructs.
     pub fn prefix_of(&self, other: &Self) -> bool {
         if self != other {
-            match &other.kind {
+            match &other.pl_expr {
                 PlaceExprKind::Proj(pl_expr, _) => self.prefix_of(pl_expr),
                 PlaceExprKind::Deref(pl_expr) => self.prefix_of(pl_expr),
                 PlaceExprKind::Ident(_) => false,
@@ -581,7 +557,7 @@ impl PlaceExpr {
 
     // TODO refactor see to_place
     pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, internal::Place) {
-        match &self.kind {
+        match &self.pl_expr {
             PlaceExprKind::Deref(inner_ple) => {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 (internal::PlaceCtx::Deref(Box::new(pl_ctx)), pl)
@@ -614,7 +590,7 @@ impl PlaceExpr {
 
 impl fmt::Display for PlaceExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.kind {
+        match &self.pl_expr {
             PlaceExprKind::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
             PlaceExprKind::Deref(pl_expr) => write!(f, "*{}", pl_expr),
             PlaceExprKind::Ident(ident) => write!(f, "{}", ident),
@@ -722,18 +698,6 @@ impl Ty {
                     self.clone()
                 }
             }
-        }
-    }
-}
-
-impl fmt::Display for Ty {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.ty {
-            TyKind::Data(dty) => write!(f, "{}", dty),
-            TyKind::View(vty) => write!(f, "{}", vty),
-            TyKind::ThreadHierchy(th_hy) => write!(f, "{}", th_hy),
-            TyKind::Ident(ident) => write!(f, "{}", ident),
-            TyKind::Fn(_, _, _, _) => unimplemented!(),
         }
     }
 }
@@ -863,12 +827,6 @@ impl ViewTy {
     }
 }
 
-impl fmt::Display for ViewTy {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        unimplemented!()
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum DataTy {
     Ident(Ident),
@@ -976,13 +934,6 @@ impl DataTy {
             ),
             Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),
         }
-    }
-}
-
-impl fmt::Display for DataTy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        panic!("not yet implemented")
-        //        write!(f, "{}:{}", self.name, self.kind)
     }
 }
 
@@ -1128,7 +1079,7 @@ impl IdentKinded {
     }
 }
 
-// TODO should this really be part of the AST? Nats are also part of the Cuda-AST. Separate module.
+// FIXME Implement Hash
 #[derive(Eq, Hash, Debug, Clone)]
 pub enum Nat {
     Ident(Ident),
@@ -1226,7 +1177,16 @@ impl fmt::Display for Nat {
             Self::Ident(ident) => write!(f, "{}", ident),
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
-            Self::App(func, args) => write!(f, "{}(...)", func),
+            Self::App(func, args) => {
+                write!(f, "{}(", func)?;
+                if let Some((last, leading)) = args.split_last() {
+                    for arg in leading {
+                        write!(f, "{}, ", arg)?;
+                    }
+                    write!(f, "{})", last)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -1250,13 +1210,4 @@ impl fmt::Display for BinOpNat {
             Self::Mod => write!(f, "%"),
         }
     }
-}
-
-#[test]
-fn test_ownership_ordering() {
-    use Ownership::*;
-    assert!(Shrd <= Shrd);
-    assert!(Shrd <= Uniq);
-    assert!(Uniq <= Uniq);
-    assert!(!(Uniq <= Shrd))
 }

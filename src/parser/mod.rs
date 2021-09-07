@@ -126,7 +126,7 @@ peg::parser! {
 
         /// Parse a sequence of expressions (might also just be one)
         pub(crate) rule expression_seq() -> Expr
-            = start:position!() head:expression() _ ";" _ tail:expression_seq()? end:position!() {
+            = begin:position!() head:expression() _ ";" _ tail:expression_seq()? end:position!() {
                 match tail{
                     None => head,
                     Some(tail) => {
@@ -134,28 +134,29 @@ peg::parser! {
                         Expr {
                             expr: ExprKind::Seq(Box::new(head), Box::new(tail)),
                             ty: tail_ty,
-                            span: Some(Span::new(start, end))
+                            span: Some(Span::new(begin, end))
                         }
                     }
                 }
             }
-            / start:position!() "let" __ m:(m:mutability() __ {m})? ident:ident() typ:(_ ":" _ ty:ty() { ty })? _ "=" _ expr:expression() _ ";" _
+            / begin:position!() "let" __ m:(m:mutability() __ {m})? ident:ident()
+                typ:(_ ":" _ ty:ty() { ty })? _ "=" _ expr:expression() _ ";" _
                 tail:expression_seq() end:position!()
             {
                 let tail_ty = tail.ty.clone();
                 Expr {
                     expr:ExprKind::Let(m.unwrap_or(Mutability::Const), ident, Box::new(typ), Box::new(expr), Box::new(tail)),
                     ty: tail_ty,
-                    span: Some(Span::new(start, end))
+                    span: Some(Span::new(begin, end))
                 }
             }
-            / start:position!() "let" __ "mut" __ ident:ident() _ ":" _ ty:ty() _ ";" _ tail:expression_seq() end:position!()
+            / begin:position!() "let" __ "mut" __ ident:ident() _ ":" _ ty:ty() _ ";" _ tail:expression_seq() end:position!()
             {
                 let tail_ty = tail.ty.clone();
                 Expr {
                     expr: ExprKind::LetUninit(ident, Box::new(ty), Box::new(tail)),
                     ty: tail_ty,
-                    span: Some(Span::new(start, end))
+                    span: Some(Span::new(begin, end))
                 }
             }
             / expr:expression() { expr }
@@ -197,9 +198,9 @@ peg::parser! {
             "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
             "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
             --
-            start:position!() expr:@ end:position!() {
+            begin:position!() expr:@ end:position!() {
                 let expr: Expr = Expr {
-                    span: Some(Span::new(start, end)),
+                    span: Some(Span::new(begin, end)),
                     ..expr
                 };
                 expr
@@ -212,7 +213,7 @@ peg::parser! {
                     |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
                 )
             }
-            start:position!() func:ident() place_end:position!() _
+            begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {
@@ -220,21 +221,21 @@ peg::parser! {
                     ExprKind::App(
                         Box::new(Expr::with_span(
                             ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
-                            Span::new(start, place_end)
+                            Span::new(begin, place_end)
                         )),
                         kind_args.unwrap_or(vec![]),
                         args
                     )
                 )
             }
-            start:position!() func:ident() end:position!() _
+            begin:position!() func:ident() end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" { k })
             {
                 Expr::new(
                     ExprKind::DepApp(
                         Box::new(Expr::with_span(
                             ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
-                            Span::new(start, end)
+                            Span::new(begin, end)
                         )),
                         kind_args
                 ))
@@ -321,21 +322,39 @@ peg::parser! {
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
-            = derefs:("*" _)* ident:ident() ns:(_ ns:("." _ n:nat_literal() {n})+ {ns})? {
-                let ns = ns.unwrap_or(vec![]);
-                let root = PlaceExpr::new(PlaceExprKind::Ident(ident));
+            = begin:position!() begin_derefs:(begin_deref:position!() "*" _ { begin_deref })*
+                ident:ident()
+                ns_with_ends:(_ ns_with_ends:(
+                    "." _ n:nat_literal() end_proj:position!() { (n, end_proj) })+ {ns_with_ends}
+                )? end:position!()
+            {
+                let ns_with_ends = ns_with_ends.unwrap_or(vec![]);
+                let ident_span = ident.span.unwrap();
+                let root = PlaceExpr::with_span(PlaceExprKind::Ident(ident), ident_span);
                 // . operator binds stronger
-                let proj = ns.into_iter().fold(root,
-                    |prev, n | PlaceExpr::new(PlaceExprKind::Proj(Box::new(prev), n))
-                );
+                let proj = ns_with_ends.into_iter().fold(root,
+                    |prev, (n, end_proj) | {
+                        let begin = prev.span.unwrap().begin;
+                        PlaceExpr::with_span(
+                            PlaceExprKind::Proj(Box::new(prev), n),
+                            Span::new(begin, end_proj)
+                        )
+                });
                 // * operator binds weaker
-                derefs.iter().fold(proj, |prev,_| PlaceExpr::new(PlaceExprKind::Deref(Box::new(prev))))
+                begin_derefs.iter().fold(proj,
+                    |prev, begin_deref| {
+                    let end = prev.span.unwrap().end;
+                    PlaceExpr::with_span(
+                        PlaceExprKind::Deref(Box::new(prev)),
+                        Span::new(*begin_deref, end)
+                    )
+                })
                 // TODO: Allow parentheses for priority override?
             }
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat = precedence! {
-            start:position!() func:ident() place_end:position!() _
+            func:ident() _
                 "(" _ args:nat() ** (_ "," _) _ ")" end:position!()
             {
                 Nat::App(func, args)
@@ -365,14 +384,14 @@ peg::parser! {
 
 
         pub(crate) rule ty() -> Ty
-            = start:position!() vty:vty() end:position!() {
-                Ty::with_span(TyKind::View(vty), Span::new(start, end))
+            = begin:position!() vty:vty() end:position!() {
+                Ty::with_span(TyKind::View(vty), Span::new(begin, end))
             }
-            / start:position!() th_hy:th_hy() end:position!() {
-                Ty::with_span(TyKind::ThreadHierchy(Box::new(th_hy)), Span::new(start, end))
+            / begin:position!() th_hy:th_hy() end:position!() {
+                Ty::with_span(TyKind::ThreadHierchy(Box::new(th_hy)), Span::new(begin, end))
             }
-            / start:position!() dty:dty() end:position!() {
-                Ty::with_span(TyKind::Data(dty), Span::new(start, end))
+            / begin:position!() dty:dty() end:position!() {
+                Ty::with_span(TyKind::Data(dty), Span::new(begin, end))
             }
 
         /// Parse a type token
@@ -453,8 +472,8 @@ peg::parser! {
             / "prv" { Kind::Provenance }
 
         rule ident() -> Ident
-            = start:position!() ident:$(identifier()) end:position!() {
-                Ident::with_span(ident.into(), Span::new(start, end))
+            = begin:position!() ident:$(identifier()) end:position!() {
+                Ident::with_span(ident.into(), Span::new(begin, end))
             }
 
         rule provenance() -> Provenance
@@ -1364,7 +1383,7 @@ mod tests {
                     )),
                 )))
             };
-        };
+        }
         assert_eq!(
             descend::expression_seq("if 7<8 {7+8} else {7*8}"),
             Ok(Expr::new(ExprKind::IfElse(
@@ -1713,7 +1732,7 @@ mod tests {
                 expr: ExprKind::Let(_, _, _, _, expr2),
                 ..
             }) => match (*expr2).span {
-                Some(span) => Some(line_col_source.get_line_col(span.start)),
+                Some(span) => Some(line_col_source.get_line_col(span.begin)),
                 None => None,
             },
             _ => None,
@@ -1732,7 +1751,7 @@ mod tests {
                 expr: ExprKind::Let(_, _, _, expr1, _),
                 ..
             }) => match (*expr1).span {
-                Some(span) => Some(line_col_source.get_line_col(span.start)),
+                Some(span) => Some(line_col_source.get_line_col(span.begin)),
                 None => None,
             },
             _ => None,
@@ -1751,7 +1770,7 @@ mod tests {
                 expr: ExprKind::Let(_, ident, _, _, _),
                 ..
             }) => match ident.span {
-                Some(span) => Some(line_col_source.get_line_col(span.start)),
+                Some(span) => Some(line_col_source.get_line_col(span.begin)),
                 None => None,
             },
             _ => None,

@@ -3,6 +3,7 @@ use crate::ast::*;
 use crate::ty_check::error::CtxError;
 use std::collections::{HashMap, HashSet};
 
+// TODO introduce proper struct
 pub(super) type TypedPlace = (internal::Place, Ty);
 
 #[derive(PartialEq, Eq, Debug, Clone)]

@@ -10,7 +10,6 @@ use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
 use crate::parser::SourceCode;
-use crate::ty_check::borrow_check::OwnershipChecker;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::ops::Deref;
@@ -31,7 +30,6 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
 
 struct TyChecker<'a> {
     gl_ctx: GlobalCtx,
-    own_checker: OwnershipChecker<'a>,
     source: &'a SourceCode<'a>,
 }
 
@@ -40,13 +38,8 @@ impl<'a> TyChecker<'a> {
         let gl_ctx = GlobalCtx::new()
             .append_from_gl_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
-        let own_checker = OwnershipChecker::new(compil_unit.source);
         let source = compil_unit.source;
-        TyChecker {
-            gl_ctx,
-            source,
-            own_checker,
-        }
+        TyChecker { gl_ctx, source }
     }
 
     fn ty_error(&self, err: TyErrorKind<'a>) -> TyError {
@@ -195,6 +188,9 @@ impl<'a> TyChecker<'a> {
                 self.ty_check_binary_op(kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
             }
             ExprKind::UnOp(un_op, e) => self.ty_check_unary_op(kind_ctx, ty_ctx, exec, un_op, e)?,
+            ExprKind::Split(n, r1, r2, view) => {
+                self.ty_check_split(kind_ctx, ty_ctx, exec, n, r1, r2, view)?
+            }
             ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
             ExprKind::Idx(_, _) => {
                 unimplemented!("This is helper syntax to index into non-place expressions.")
@@ -208,6 +204,19 @@ impl<'a> TyChecker<'a> {
         // TODO type well formed under output contexts
         expr.ty = Some(ty);
         Ok(res_ty_ctx)
+    }
+
+    fn ty_check_split(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        n: &Nat,
+        r1: &Provenance,
+        r2: &Provenance,
+        view: &mut Expr,
+    ) -> TyResult<(TyCtx, Ty)> {
+        unimplemented!()
     }
 
     fn ty_check_for_nat(
@@ -377,10 +386,10 @@ impl<'a> TyChecker<'a> {
         let input_ty_ctx = self.ty_check_expr(kind_ctx, parall_collec_ty_ctx, exec, input)?;
         // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
         // that is used for the par_for can safely be reused.
-        let _funs_ty_ctx = self.ty_check_expr(kind_ctx, input_ty_ctx, exec, funs)?;
+        let _funs_ty_ctx = self.ty_check_expr(kind_ctx, input_ty_ctx.clone(), exec, funs)?;
         self.executable_over_parall_collec_and_input(funs, parall_collec, input)?;
         Ok((
-            ty_ctx,
+            input_ty_ctx,
             Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
         ))
     }
@@ -598,16 +607,19 @@ impl<'a> TyChecker<'a> {
 
         // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
         if !matches!(&place_ty.ty, TyKind::Data(DataTy::Dead(_))) {
-            let pl_uniq_loans = self
-                .own_checker
-                .ownership_safe(
-                    kind_ctx,
-                    &assigned_val_ty_ctx,
-                    &[],
-                    Ownership::Uniq,
-                    pl_expr,
+            let pl_uniq_loans = borrow_check::ownership_safe(
+                kind_ctx,
+                &assigned_val_ty_ctx,
+                &[],
+                Ownership::Uniq,
+                pl_expr,
+            )
+            .map_err(|err| {
+                TyError::new(
+                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err),
+                    self.source,
                 )
-                .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
+            })?;
             // This block of code asserts that nothing unexpected happens.
             // May not necessarily be needed.
             assert_eq!(pl_uniq_loans.len(), 1);
@@ -658,21 +670,29 @@ impl<'a> TyChecker<'a> {
         }
 
         if let TyKind::Data(deref_dty) = &deref_ty.ty {
-            self.own_checker
-                .ownership_safe(
-                    kind_ctx,
-                    &assigned_val_ty_ctx,
-                    &[],
-                    Ownership::Uniq,
-                    deref_expr,
+            borrow_check::ownership_safe(
+                kind_ctx,
+                &assigned_val_ty_ctx,
+                &[],
+                Ownership::Uniq,
+                deref_expr,
+            )
+            .map_err(|err| {
+                TyError::new(
+                    TyErrorKind::ConflictingBorrow(
+                        Box::new(deref_expr.clone()),
+                        Ownership::Uniq,
+                        err,
+                    ),
+                    self.source,
                 )
-                .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
+            })?;
 
             let after_subty_ctx = subty::check(
                 kind_ctx,
                 assigned_val_ty_ctx,
                 e.ty.as_ref().unwrap().dty(),
-                &deref_dty,
+                deref_dty,
             )
             .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?;
             Ok((
@@ -794,9 +814,15 @@ impl<'a> TyChecker<'a> {
         pl_expr: &mut PlaceExpr,
         idx: &mut Nat,
     ) -> TyResult<(TyCtx, Ty)> {
-        self.own_checker
-            .ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)
-            .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
+        // TODO refactor
+        borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr).map_err(
+            |err| {
+                TyError::new(
+                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err),
+                    self.source,
+                )
+            },
+        )?;
         let pl_expr_ty =
             self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
         let (elem_dty, n) = match pl_expr_ty.ty {
@@ -1295,9 +1321,15 @@ impl<'a> TyChecker<'a> {
         exec: Exec,
         pl_expr: &PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
-        self.own_checker
-            .ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)
-            .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
+        // TODO refactor
+        borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr).map_err(
+            |err| {
+                TyError::new(
+                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err),
+                    self.source,
+                )
+            },
+        )?;
         let ty =
             self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
         if !ty.is_fully_alive() {
@@ -1337,14 +1369,31 @@ impl<'a> TyChecker<'a> {
                 ))));
             }
             let res_ty_ctx = if pl_ty.copyable() {
-                self.own_checker
-                    .ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)
-                    .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
+                // TODO refactor
+                borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)
+                    .map_err(|err| {
+                        TyError::new(
+                            TyErrorKind::ConflictingBorrow(
+                                Box::new(pl_expr.clone()),
+                                Ownership::Shrd,
+                                err,
+                            ),
+                            self.source,
+                        )
+                    })?;
                 ty_ctx
             } else {
-                self.own_checker
-                    .ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)
-                    .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
+                borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)
+                    .map_err(|err| {
+                        TyError::new(
+                            TyErrorKind::ConflictingBorrow(
+                                Box::new(pl_expr.clone()),
+                                Ownership::Uniq,
+                                err,
+                            ),
+                            self.source,
+                        )
+                    })?;
                 ty_ctx.kill_place(&place)
             };
             (res_ty_ctx, pl_ty)
@@ -1365,7 +1414,6 @@ impl<'a> TyChecker<'a> {
         let prv_val_name = match prv {
             Provenance::Value(prv_val_name) => prv_val_name,
             Provenance::Ident(_) => {
-                // return Err("Cannot borrow using a provenance variable.".to_string())
                 return Err(self.ty_error(TyErrorKind::String(format!(
                     "Cannot borrow using a provenance variable {:?}.",
                     prv
@@ -1383,10 +1431,13 @@ impl<'a> TyChecker<'a> {
                 prv_val_name
             ))));
         }
-        let loans = self
-            .own_checker
-            .ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr)
-            .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
+        let loans =
+            borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr).map_err(|err| {
+                TyError::new(
+                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), own, err),
+                    self.source,
+                )
+            })?;
         let (ty, mem) =
             self.place_expr_ty_mem_under_exec_own(kind_ctx, &ty_ctx, exec, own, pl_expr)?;
         if !ty.is_fully_alive() {
@@ -1483,7 +1534,7 @@ impl<'a> TyChecker<'a> {
         own: Ownership,
         pl_expr: &PlaceExpr,
     ) -> TyResult<(Ty, Option<Memory>, Vec<Provenance>)> {
-        match &pl_expr.kind {
+        match &pl_expr.pl_expr {
             // TC-Var
             PlaceExprKind::Ident(ident) => {
                 self.var_expr_ty_mem_empty_prvs_under_exec_own(ty_ctx, exec, &ident)
