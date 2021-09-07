@@ -1,4 +1,4 @@
-mod internal;
+pub mod internal;
 
 mod span;
 #[macro_use]
@@ -1204,9 +1204,7 @@ impl PartialEq for Nat {
     }
 }
 
-use crate::parser::SourceCode;
 use std::cmp::Ordering;
-
 impl PartialOrd for Nat {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {

@@ -64,6 +64,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv>(
             let view_changes: [[ &'i uniq gpu.global (bool, bool, bool, i32); n]] =
                 to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
 
+>>>>>>> 3e0be45a508b975f31cd26de4646d43b94144730
             let zipped_nodes_changes: [[ <&'r shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
                 zip::<n, &'r shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view, view_changes);
         
