@@ -145,7 +145,7 @@ impl std::fmt::Display for Stmt {
             IndexCheck { size, ind, label } => {
                 writeln!(f, "if ( {} > {} ) {{", size, ind)?;
                 writeln!(f, "\x2F\x2F out of bounds case")?;
-                writeln!(f, "goto {}", label);
+                writeln!(f, "goto {};", label);
                 write!(f, "}}")
             }
             Return(expr) => {

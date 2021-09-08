@@ -319,7 +319,7 @@ impl<'a> TyChecker<'a> {
                 cond_ty
             ))));
         }
-        if !matches!(&body_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Bool))) {
+        if !matches!(&body_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Unit))) {
             return Err(self.ty_error(TyErrorKind::String(format!(
                 "Body of while loop is not of unit type, instead got {:?}",
                 body_ty
