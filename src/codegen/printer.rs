@@ -143,7 +143,7 @@ impl std::fmt::Display for Stmt {
             }
             EmptyCheck => Ok(()),
             IndexCheck { size, ind, label } => {
-                writeln!(f, "if ( {} > {} ) {{", size, ind)?;
+                writeln!(f, "if ( {} > {} ) {{", ind, size)?;
                 writeln!(f, "\x2F\x2F out of bounds case")?;
                 writeln!(f, "goto {};", label);
                 write!(f, "}}")
