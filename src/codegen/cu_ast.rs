@@ -30,10 +30,7 @@ pub(super) enum Stmt {
         expr: Option<Expr>,
     },
     Block(Box<Stmt>),
-    Seq (
-        Box<Stmt>,
-        Box<Stmt>,
-    ),
+    Seq (Box<Stmt>, Box<Stmt>),
     Expr(Expr),
     If {
         cond: Expr,
