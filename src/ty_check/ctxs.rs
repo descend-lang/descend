@@ -153,7 +153,7 @@ impl TyCtx {
     // ∀π:τ ∈ Γ
     pub fn all_places(&self) -> Vec<TypedPlace> {
         self.idents_typed()
-            .flat_map(|IdentTyped { ident, ty }| TyCtx::explode_places(ident, ty))
+            .flat_map(|IdentTyped { ident, ty, .. }| TyCtx::explode_places(&ident, &ty))
             .collect()
     }
 
@@ -204,13 +204,17 @@ impl TyCtx {
         explode(internal::Place::new(ident.clone(), vec![]), ty.clone())
     }
 
-    pub fn ident_ty(&self, ident: &Ident) -> CtxResult<&Ty> {
+    pub fn ty_of_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
+        Ok(&self.ident_ty(ident)?.ty)
+    }
+
+    pub fn ident_ty(&self, ident: &Ident) -> CtxResult<&IdentTyped> {
         match self
             .idents_typed()
             .rev()
             .find(|id_ty| &id_ty.ident == ident)
         {
-            Some(id) => Ok(&id.ty),
+            Some(id) => Ok(id),
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
@@ -234,7 +238,7 @@ impl TyCtx {
             }
             Ok(res_ty)
         }
-        let ident_ty = self.ident_ty(&place.ident)?;
+        let ident_ty = self.ty_of_ident(&place.ident)?;
         proj_ty(ident_ty.clone(), &place.path)
     }
 
@@ -502,6 +506,7 @@ fn test_kill_place_ident() {
     let x = IdentTyped::new(
         Ident::new("x"),
         Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+        Mutability::Const,
     );
     let place = internal::Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);

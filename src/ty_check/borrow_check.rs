@@ -2,6 +2,7 @@ use super::ctxs::{KindCtx, TyCtx};
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::BorrowingError;
+use crate::ty_check::error::BorrowingError::TyError;
 use crate::ty_check::TyChecker;
 use std::collections::HashSet;
 

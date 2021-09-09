@@ -12,7 +12,7 @@ fn reduce<n: nat, a: prv, b: prv>(
   ha_array: &a uniq cpu.heap [i32; n]
 ) -[cpu.thread]-> () {
   letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
-    let gpu: Gpu = gpu_device(0);
+    let mut gpu: Gpu = gpu_device(0);
 
     let mut a_array: [i32; n] @ gpu.global =
       gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);

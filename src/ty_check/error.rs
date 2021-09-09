@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr};
+use crate::ast::{Expr, Ident, Ownership, PlaceExpr};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -25,6 +25,10 @@ pub enum TyError {
     // This would mean that the reference points to nothing, e.g., because the value was moved
     // out from under the reference which is forbidden.
     ReferenceToDeadTy,
+    // Assignment to a constant place expression.
+    AssignToConst(PlaceExpr, Expr),
+    // Trying to borrow uniquely but place is not mutable
+    ConstBorrow(PlaceExpr),
     // TODO remove as soon as possible
     String(String),
 }
@@ -127,6 +131,9 @@ impl TyError {
                         }
                     }
                 }
+            }
+            TyError::ConstBorrow(p) => {
+                eprintln!("const borrow: {:?}", p)
             }
             err => {
                 eprintln!("{:?}", err);

@@ -60,7 +60,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
     h_block_sums: &c uniq cpu.heap [i32; n/64]
 ) -[cpu.thread]-> () {
     letprov <'r, 's, 'c, 'd, 'e, 'f, 'g, 'h, 'm, 'k, 'l, 'z, 'y, 'x> {
-        let gpu: Gpu = gpu_device(0);
+        let mut gpu: Gpu = gpu_device(0);
 
         let a_array: [i32; n] @ gpu.global =
             gpu_alloc::<'c, a, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, ha_array);

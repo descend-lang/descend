@@ -3,7 +3,7 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
     h_output: &b uniq cpu.heap [i32; 64]
 ) -[cpu.thread]-> () {
     letprov <'r, 's, 'c, 'd, 'e, 'f, 'g, 'h, 'm> {
-        let gpu: Gpu = gpu_device(0);
+        let mut gpu: Gpu = gpu_device(0);
 
         let a_array: [i32; n] @ gpu.global =
             gpu_alloc::<'c, a, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, ha_array);

@@ -68,9 +68,10 @@ impl TyChecker {
             &vec![],
             gf.param_decls
                 .iter()
-                .map(|ParamDecl { ident, ty, .. }| IdentTyped {
+                .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
                     ident: ident.clone(),
                     ty: ty.clone(),
+                    mutbl: mutbl.clone(),
                 })
                 .collect(),
         );
@@ -121,8 +122,8 @@ impl TyChecker {
                 self.ty_check_letprov(kind_ctx, ty_ctx, exec, prvs, body)?
             }
             // TODO respect mutability
-            ExprKind::Let(mutable, ident, ty, ref mut e1, ref mut e2) => {
-                self.ty_check_let(kind_ctx, ty_ctx, exec, ident, ty, e1, e2)?
+            ExprKind::Let(mutbl, ident, ty, ref mut e1, ref mut e2) => {
+                self.ty_check_let(kind_ctx, ty_ctx, exec, *mutbl, ident, ty, e1, e2)?
             }
             ExprKind::LetUninit(ident, ty, e) => {
                 self.ty_check_let_uninit(kind_ctx, ty_ctx, exec, ident, ty, e)?
@@ -180,7 +181,8 @@ impl TyChecker {
             }
             ExprKind::UnOp(un_op, e) => self.ty_check_unary_op(kind_ctx, ty_ctx, exec, un_op, e)?,
             ExprKind::Split(n, r1, r2, view) => {
-                self.ty_check_split(kind_ctx, ty_ctx, exec, n, r1, r2, view)?
+                //                self.ty_check_split(kind_ctx, ty_ctx, exec, n, r1, r2, view)?
+                unimplemented!()
             }
             ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
             ExprKind::Idx(_, _) => {
@@ -205,21 +207,17 @@ impl TyChecker {
         ty_ctx: TyCtx,
         exec: Exec,
         n: &Nat,
-        r1: &Provenance,
-        r2: &Provenance,
+        r1: &str,
+        r2: &str,
         view: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         // let view_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, view)?;
         // if let TyKind::View(ViewTy::Array(elem_ty, n)) = view.ty.unwrap().ty {
-        //     if !(view_ty_ctx.loans_for_prv(r1)?
-        //         .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?.
-        //         is_empty()) {
-        //         return Err(TyError::new(TyErrorKind::PrvValueAlreadyInUse(r1.to_string()), self.source));
+        //     if !(view_ty_ctx.loans_for_prv(r1)?.is_empty()) {
+        //         return Err(TyError::PrvValueAlreadyInUse(r1.to_string()));
         //     }
-        //     if !(view_ty_ctx.loans_for_prv(r2)?
-        //         .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?.
-        //         is_empty()) {
-        //         return Err(TyError::new(TyErrorKind::PrvValueAlreadyInUse(r2.to_string()), self.source));
+        //     if !(view_ty_ctx.loans_for_prv(r2)?.is_empty()) {
+        //         return Err(TyError::PrvValueAlreadyInUse(r2.to_string()));
         //     }
         //
         //     // TODO work on any dimension by using all contained provenances
@@ -286,6 +284,7 @@ impl TyChecker {
         let collec_ty_ctx_with_ident = collec_ty_ctx.clone().append_ident_typed(IdentTyped::new(
             ident.clone(),
             Ty::new(TyKind::Data(ident_dty)),
+            Mutability::Const,
         ));
         let final_ctx = self.ty_check_expr(kind_ctx, collec_ty_ctx_with_ident, exec, body)?;
         if !matches!(
@@ -537,9 +536,10 @@ impl TyChecker {
             &vec![],
             params
                 .iter()
-                .map(|ParamDecl { ident, ty, .. }| IdentTyped {
+                .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
                     ident: ident.clone(),
                     ty: ty.clone(),
+                    mutbl: mutbl.clone(),
                 })
                 .collect(),
         );
@@ -602,14 +602,18 @@ impl TyChecker {
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+
         let place = pl_expr.to_place().unwrap();
         let place_ty = assigned_val_ty_ctx.place_ty(&place)?;
-
         if matches!(&place_ty.ty, TyKind::View(_)) {
             return Err(TyError::String(format!(
                 "Assigning views is forbidden. Trying to assign view {:?}",
                 e
             )));
+        }
+        let ident_ty = assigned_val_ty_ctx.ident_ty(&place.ident)?;
+        if pl_expr.is_place() && ident_ty.mutbl != Mutability::Mut {
+            return Err(TyError::AssignToConst(pl_expr.clone(), e.clone()));
         }
 
         // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
@@ -626,21 +630,22 @@ impl TyChecker {
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
             })?;
-            // This block of code asserts that nothing unexpected happens.
-            // May not necessarily be needed.
-            assert_eq!(pl_uniq_loans.len(), 1);
-            let place_loan = Loan {
-                place_expr: pl_expr.clone(),
-                own: Ownership::Uniq,
-            };
-            matches!(pl_uniq_loans.get(&place_loan), Some(_));
+            // TODO remove this is always true if borrow_check::ownership_safe succeeds
+            // assert_eq!(pl_uniq_loans.len(), 1);
+            // let place_loan = Loan {
+            //     place_expr: pl_expr.clone(),
+            //     own: Ownership::Uniq,
+            // };
+            // if !matches!(pl_uniq_loans.get(&place_loan), Some(_)) {
+            //     return Err(TyError::)
+            // }
         }
 
         let after_subty_ctx = subty::check(
             kind_ctx,
             assigned_val_ty_ctx,
             e.ty.as_ref().unwrap().dty(),
-            &place_ty.dty(),
+            place_ty.dty(),
         )?;
         let adjust_place_ty_ctx =
             after_subty_ctx.set_place_ty(&place, e.ty.as_ref().unwrap().clone());
@@ -1214,6 +1219,7 @@ impl TyChecker {
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
+        mutbl: Mutability,
         ident: &mut Ident,
         ty: &Option<Ty>,
         e1: &mut Expr,
@@ -1225,6 +1231,7 @@ impl TyChecker {
 
         let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
             (TyKind::View(_), TyKind::View(_)) => {
+                // TODO use subtyping
                 if ty != e1_ty {
                     return Err(TyError::String(format!(
                         "Trying to bind view expression of type {:?} to identifier of type {:?}",
@@ -1243,7 +1250,7 @@ impl TyChecker {
                 )))
             }
         };
-        let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone());
+        let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone(), mutbl);
         let garbage_coll_ty_ctx_with_ident = ty_ctx_sub
             .append_ident_typed(ident_with_annotated_ty)
             .garbage_collect_loans();
@@ -1269,6 +1276,7 @@ impl TyChecker {
             let ident_with_ty = IdentTyped::new(
                 ident.clone(),
                 Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty.clone())))),
+                Mutability::Mut,
             );
             let final_ty_ctx = self.ty_check_expr(
                 kind_ctx,
@@ -1389,6 +1397,12 @@ impl TyChecker {
         own: Ownership,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
+        if let Some(place) = pl_expr.to_place() {
+            if own == Ownership::Uniq && ty_ctx.ident_ty(&place.ident)?.mutbl == Mutability::Const {
+                return Err(TyError::ConstBorrow(pl_expr.clone()));
+            }
+        }
+
         let prv_val_name = match prv {
             Provenance::Value(prv_val_name) => prv_val_name,
             Provenance::Ident(_) => {
@@ -1514,7 +1528,7 @@ impl TyChecker {
         exec: Exec,
         ident: &Ident,
     ) -> TyResult<(Ty, Option<Memory>, Vec<Provenance>)> {
-        let ty = if let Ok(tty) = ty_ctx.ident_ty(&ident) {
+        let ty = if let Ok(tty) = ty_ctx.ty_of_ident(&ident) {
             tty
         } else {
             self.gl_ctx.fun_ty_by_ident(&ident)?
