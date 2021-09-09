@@ -283,7 +283,7 @@ impl TyCtx {
             self.set_place_ty(
                 pl,
                 match pl_ty.ty {
-                    TyKind::Ident(ident) => unimplemented!(),
+                    TyKind::Ident(_) => unimplemented!(),
                     TyKind::Fn(_, _, _, _) => unimplemented!(),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty)))),
                     TyKind::View(vty) => Ty::new(TyKind::View(ViewTy::Dead(Box::new(vty)))),
@@ -506,11 +506,8 @@ fn test_kill_place_ident() {
     let place = internal::Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);
     ty_ctx = ty_ctx.kill_place(&place);
-    assert!(
-        if let TyKind::Data(DataTy::Dead(_)) = ty_ctx.idents_typed().next().unwrap().ty.ty {
-            true
-        } else {
-            false
-        }
-    );
+    assert!(matches!(
+        ty_ctx.idents_typed().next().unwrap().ty.ty,
+        TyKind::Data(DataTy::Dead(_))
+    ));
 }

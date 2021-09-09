@@ -104,7 +104,6 @@ impl Expr {
             }
         }
 
-        use visit::Visitor;
         struct SubstIdents<'a> {
             subst_map: &'a HashMap<&'a str, &'a Expr>,
         }
@@ -169,7 +168,6 @@ impl Expr {
     }
 
     pub fn subst_kinded_idents(&mut self, subst_map: HashMap<&str, &ArgKinded>) {
-        use visit::Visitor;
         struct SubstKindedIdents<'a> {
             subst_map: HashMap<&'a str, &'a ArgKinded>,
         }
@@ -399,7 +397,6 @@ impl fmt::Display for Ownership {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum UnOp {
-    Deref,
     Not,
     Neg,
 }
@@ -407,7 +404,6 @@ pub enum UnOp {
 impl fmt::Display for UnOp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let str = match self {
-            Self::Deref => "*",
             Self::Not => "!",
             Self::Neg => "-",
         };
@@ -870,6 +866,26 @@ impl DataTy {
         }
     }
 
+    pub fn occurs_in(&self, dty: &DataTy) -> bool {
+        if self == dty {
+            return true;
+        }
+        match dty {
+            DataTy::Scalar(_) | DataTy::Ident(_) => false,
+            DataTy::Dead(_) => panic!("unexpected"),
+            DataTy::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
+            DataTy::Tuple(elem_dtys) => {
+                let mut found = false;
+                for elem_dty in elem_dtys {
+                    found = self.occurs_in(elem_dty);
+                }
+                found
+            }
+            DataTy::Array(elem_dty, _) => self.occurs_in(elem_dty),
+            DataTy::At(elem_dty, _) => self.occurs_in(elem_dty),
+        }
+    }
+
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
@@ -1100,7 +1116,7 @@ impl Nat {
                 BinOpNat::Div => Ok(l.eval()? / r.eval()?),
                 BinOpNat::Mod => Ok(l.eval()? % r.eval()?),
             },
-            Nat::App(fun, args) => unimplemented!(),
+            Nat::App(_, _) => unimplemented!(),
         }
     }
 
@@ -1149,7 +1165,9 @@ impl PartialEq for Nat {
     }
 }
 
+use crate::ast::visit::Visitor;
 use std::cmp::Ordering;
+
 impl PartialOrd for Nat {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {

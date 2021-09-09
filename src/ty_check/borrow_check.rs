@@ -1,8 +1,8 @@
 use super::ctxs::{KindCtx, TyCtx};
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
-use crate::parser::SourceCode;
 use crate::ty_check::error::BorrowingError;
+use crate::ty_check::TyChecker;
 use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
@@ -12,8 +12,10 @@ type OwnResult<T> = Result<T, BorrowingError>;
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
 pub(super) fn ownership_safe(
+    ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,
     p: &PlaceExpr,
@@ -27,8 +29,10 @@ pub(super) fn ownership_safe(
         match ty_ctx.place_ty(&most_spec_pl)?.ty {
             TyKind::Data(DataTy::Ref(Provenance::Value(prv_val_name), ref_own, _, _)) => {
                 ownership_safe_deref(
+                    ty_checker,
                     kind_ctx,
                     ty_ctx,
+                    exec,
                     reborrows,
                     own,
                     &pl_ctx_no_deref,
@@ -39,8 +43,10 @@ pub(super) fn ownership_safe(
             }
             TyKind::Data(DataTy::Ref(Provenance::Ident(_), ref_own, _, _)) => {
                 ownership_safe_deref_abs(
+                    ty_checker,
                     kind_ctx,
                     ty_ctx,
+                    exec,
                     reborrows,
                     own,
                     &pl_ctx_no_deref,
@@ -70,8 +76,10 @@ fn ownership_safe_place(
 }
 
 fn ownership_safe_deref(
+    ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
@@ -93,8 +101,10 @@ fn ownership_safe_deref(
 
     // ∀i ∈ {1...n}.Δ;Γ ⊢ω List<πe>,List<πi>,π  p□[pi] ⇒ {ω pi′}
     let mut potential_prvs_after_subst = subst_pl_with_potential_prvs_ownership_safe(
+        ty_checker,
         kind_ctx,
         ty_ctx,
+        exec,
         &extended_reborrows,
         own,
         pl_ctx_no_deref,
@@ -118,8 +128,10 @@ fn ownership_safe_deref(
 }
 
 fn subst_pl_with_potential_prvs_ownership_safe(
+    ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
@@ -133,8 +145,10 @@ fn subst_pl_with_potential_prvs_ownership_safe(
             |mut loans, pl_expr| -> OwnResult<HashSet<Loan>> {
                 let insert_dereferenced_pl_expr = &pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
                 let loans_for_possible_prv_pl_expr = ownership_safe(
+                    ty_checker,
                     kind_ctx,
                     ty_ctx,
+                    exec,
                     reborrows,
                     own,
                     insert_dereferenced_pl_expr,
@@ -146,8 +160,10 @@ fn subst_pl_with_potential_prvs_ownership_safe(
 }
 
 fn ownership_safe_deref_abs(
+    ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
+    exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
@@ -157,8 +173,13 @@ fn ownership_safe_deref_abs(
     let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
-    // TODO why would this check be needed if it is not needed for dereferencing with prv values?
-    //let ty = super::place_expr_ty_under_own(kind_ctx, ty_ctx, own, &currently_checked_pl_expr)?;
+    let _ty = ty_checker.place_expr_ty_under_exec_own(
+        kind_ctx,
+        ty_ctx,
+        exec,
+        own,
+        &currently_checked_pl_expr,
+    )?;
     new_own_weaker_equal(own, ref_own)?;
     ownership_safe_under_existing_loans(ty_ctx, reborrows, own, &currently_checked_pl_expr)?;
     let mut passed_through_prvs = HashSet::new();

@@ -211,7 +211,6 @@ impl std::fmt::Display for Expr {
 impl std::fmt::Display for Lit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Lit::Void => Ok(()),
             Lit::Bool(b) => write!(f, "{}", b),
             Lit::I32(i) => write!(f, "{}", i),
             Lit::F32(fl) => write!(f, "{}", fl),
@@ -246,8 +245,6 @@ impl std::fmt::Display for TemplParam {
 impl std::fmt::Display for UnOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Ref => write!(f, "&"),
-            Self::Deref => write!(f, "*"),
             Self::Not => write!(f, "!"),
             Self::Neg => write!(f, "-"),
         }

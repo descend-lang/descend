@@ -27,12 +27,12 @@ pub(super) fn check(
         (sub, sup) if sub == sup => Ok(ty_ctx),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
         (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size)) if sub_size == sup_size => {
-            check(kind_ctx, ty_ctx, &sub_elem_ty, &sup_elem_ty)
+            check(kind_ctx, ty_ctx, sub_elem_ty, sup_elem_ty)
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′
         (Ref(sub_prv, Shrd, sub_mem, sub_ty), Ref(sup_prv, Shrd, sup_mem, sup_ty)) => {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            check(kind_ctx, res_outl_ty_ctx, &sub_ty, &sup_ty)
+            check(kind_ctx, res_outl_ty_ctx, sub_ty, sup_ty)
         }
         // Δ; Γ ⊢ &B ρ1 uniq τ1 ≲ &B ρ2 uniq τ2 ⇒ Γ''
         (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty)) => {
@@ -56,10 +56,10 @@ pub(super) fn check(
         (sub, Dead(sup)) => check(kind_ctx, ty_ctx, sub, sup),
         //TODO add case for Transitiviy?
         // Δ; Γ ⊢ τ1 ≲ τ3 ⇒ Γ''
-        (sub, sup) => panic!(format!(
+        (sub, sup) => panic!(
             "No case implemented for, \n sub: {:?}\n sup: {:?}\n",
             sub, sup
-        )),
+        ),
     }
 }
 

@@ -1,5 +1,5 @@
 use super::Ty;
-use crate::ast::internal::{Place, PrvMapping};
+use crate::ast::internal::Place;
 use crate::ast::{Ident, Ownership, PlaceExpr};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
@@ -9,56 +9,47 @@ use annotate_snippets::snippet::{Annotation, AnnotationType, Slice, Snippet};
 
 #[must_use]
 #[derive(Debug)]
-pub struct TyError<'a> {
-    err: TyErrorKind<'a>,
-    // TODO remove source and with this remove this struct and rename TyErrorKind to TyError
-    source: &'a SourceCode<'a>,
-}
-
-#[derive(Debug)]
-pub enum TyErrorKind<'a> {
-    MultiError(Vec<TyError<'a>>),
+pub enum TyError {
+    MultiError(Vec<TyError>),
     MutabilityNotAllowed(Ty),
     CtxError(CtxError),
     SubTyError(SubTyError),
     // "Trying to violate existing borrow of {:?}.",
     // p1 under own1 is in conflict because of BorrowingError
     ConflictingBorrow(Box<PlaceExpr>, Ownership, BorrowingError),
+    PrvValueAlreadyInUse(String),
+    // No loan the reference points to has a type that fits the reference element type
+    ReferenceToIncompatibleType,
+    // ownership of reference and loan it refers to do not fit
+    ReferenceToWrongOwnership,
+    // This would mean that the reference points to nothing, e.g., because the value was moved
+    // out from under the reference which is forbidden.
+    ReferenceToDeadTy,
     // TODO remove as soon as possible
     String(String),
 }
 
-impl<'a> std::iter::FromIterator<TyError<'a>> for TyError<'a> {
-    fn from_iter<T: IntoIterator<Item = TyError<'a>>>(iter: T) -> Self {
-        let mut iter = iter.into_iter().peekable();
-        let source = iter
-            .peek()
-            .expect("Cannot create a MultiError from zero errors.")
-            .source;
-        // FIXME currently assumes that the sources for all errors are the same
-        TyError::new(TyErrorKind::MultiError(iter.collect()), source)
+impl<'a> std::iter::FromIterator<TyError> for TyError {
+    fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
+        TyError::MultiError(iter.into_iter().collect())
     }
 }
 
-impl<'a> TyError<'a> {
-    pub fn new(err: TyErrorKind<'a>, source: &'a SourceCode<'a>) -> Self {
-        TyError { err, source }
-    }
-
-    pub fn emit(&self) -> ErrorReported {
-        match &self.err {
-            TyErrorKind::MultiError(errs) => {
+impl TyError {
+    pub fn emit(&self, source: &SourceCode) -> ErrorReported {
+        match &self {
+            TyError::MultiError(errs) => {
                 for err in errs {
-                    err.emit();
+                    err.emit(source);
                 }
             }
-            TyErrorKind::MutabilityNotAllowed(ty) => {
+            TyError::MutabilityNotAllowed(ty) => {
                 if let Some(span) = ty.span {
                     let label = "mutability not allowed";
-                    let (begin_line, begin_column) = self.source.get_line_col(span.begin);
-                    let (_, end_column) = self.source.get_line_col(span.begin);
+                    let (begin_line, begin_column) = source.get_line_col(span.begin);
+                    let (_, end_column) = source.get_line_col(span.begin);
                     let snippet = error::single_line_snippet(
-                        self.source,
+                        source,
                         label,
                         begin_line,
                         begin_column,
@@ -66,10 +57,10 @@ impl<'a> TyError<'a> {
                     );
                     eprintln!("{}", DisplayList::from(snippet).to_string());
                 } else {
-                    eprintln!("{:?}", &self.err);
+                    eprintln!("{:?}", &self);
                 };
             }
-            TyErrorKind::String(str) => {
+            TyError::String(str) => {
                 let snippet = Snippet {
                     title: Some(Annotation {
                         id: None,
@@ -88,16 +79,16 @@ impl<'a> TyError<'a> {
                 };
                 eprintln!("{}", DisplayList::from(snippet).to_string());
             }
-            TyErrorKind::CtxError(CtxError::IdentNotFound(ident)) => {
+            TyError::CtxError(CtxError::IdentNotFound(ident)) => {
                 if let Some(span) = ident.span {
                     let label = "identifier not found in context";
-                    let (begin_line, begin_column) = self.source.get_line_col(span.begin);
-                    let (end_line, end_column) = self.source.get_line_col(span.end);
+                    let (begin_line, begin_column) = source.get_line_col(span.begin);
+                    let (end_line, end_column) = source.get_line_col(span.end);
                     if begin_line != end_line {
                         panic!("an identifier can't span multiple lines")
                     }
                     let snippet = error::single_line_snippet(
-                        self.source,
+                        source,
                         label,
                         begin_line,
                         begin_column,
@@ -105,19 +96,19 @@ impl<'a> TyError<'a> {
                     );
                     eprintln!("{}", DisplayList::from(snippet).to_string());
                 } else {
-                    eprintln!("{:?}", &self.err);
+                    eprintln!("{:?}", &self);
                 };
             }
-            TyErrorKind::ConflictingBorrow(pl_expr, own, conflict) => {
+            TyError::ConflictingBorrow(pl_expr, _own, conflict) => {
                 if let Some(pl_expr_span) = pl_expr.span {
                     match conflict {
                         BorrowingError::BorrowNotInReborrowList(place) => {
                             let label = "cannot borrow";
                             let (begin_line, begin_column) =
-                                self.source.get_line_col(pl_expr_span.begin);
-                            let (_, end_column) = self.source.get_line_col(pl_expr_span.end);
+                                source.get_line_col(pl_expr_span.begin);
+                            let (_, end_column) = source.get_line_col(pl_expr_span.end);
                             let snippet = error::single_line_snippet(
-                                self.source,
+                                source,
                                 label,
                                 begin_line,
                                 begin_column,
@@ -126,11 +117,14 @@ impl<'a> TyError<'a> {
                             eprintln!("{}", DisplayList::from(snippet).to_string());
                             eprintln!("conflicting with {:?}", place);
                         }
-                        BorrowingError::TemporaryConflictingBorrow(prv) => {
+                        BorrowingError::TemporaryConflictingBorrow(_prv) => {
                             eprintln!("{:?}", conflict)
                         }
                         BorrowingError::ConflictingOwnership => eprintln!("{:?}", conflict),
                         BorrowingError::CtxError(ctx_err) => eprintln!("{:?}", ctx_err),
+                        BorrowingError::TyError(ty_err) => {
+                            ty_err.emit(source);
+                        }
                     }
                 }
             }
@@ -139,6 +133,17 @@ impl<'a> TyError<'a> {
             }
         };
         ErrorReported
+    }
+}
+
+impl From<CtxError> for TyError {
+    fn from(err: CtxError) -> Self {
+        TyError::CtxError(err)
+    }
+}
+impl From<SubTyError> for TyError {
+    fn from(err: SubTyError) -> Self {
+        TyError::SubTyError(err)
     }
 }
 
@@ -186,8 +191,14 @@ pub enum BorrowingError {
     // The borrowing place is not in the reborrow list
     BorrowNotInReborrowList(Place),
     TemporaryConflictingBorrow(String),
+    TyError(Box<TyError>),
 }
 
+impl From<TyError> for BorrowingError {
+    fn from(err: TyError) -> Self {
+        BorrowingError::TyError(Box::new(err))
+    }
+}
 impl From<CtxError> for BorrowingError {
     fn from(err: CtxError) -> Self {
         BorrowingError::CtxError(err)

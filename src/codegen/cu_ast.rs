@@ -105,7 +105,6 @@ pub(super) enum Expr {
 
 #[derive(Clone, Debug)]
 pub(super) enum Lit {
-    Void,
     Bool(bool),
     I32(i32),
     F32(f32),
@@ -113,8 +112,6 @@ pub(super) enum Lit {
 
 #[derive(Clone, Debug)]
 pub(super) enum UnOp {
-    Ref,
-    Deref,
     Not,
     Neg,
 }

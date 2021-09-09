@@ -613,7 +613,6 @@ fn gen_expr(
         },
         UnOp(op, arg) => cu::Expr::UnOp {
             op: match op {
-                desc::UnOp::Deref => cu::UnOp::Deref,
                 desc::UnOp::Not => cu::UnOp::Not,
                 desc::UnOp::Neg => cu::UnOp::Neg,
             },

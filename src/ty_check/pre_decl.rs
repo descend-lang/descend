@@ -459,80 +459,80 @@ fn group_ty() -> Ty {
 
 // join:
 //  <m: nat, n: nat, t: ty>([[ [[t; n]]; m]]) -> [[t; m*n]]
-fn join_ty() -> Ty {
-    let m = Ident::new("m");
-    let n = Ident::new("n");
-    let t = Ident::new("t");
-    let m_nat = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Nat,
-    };
-    let n_nat = IdentKinded {
-        ident: n.clone(),
-        kind: Kind::Nat,
-    };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
-    };
-    Ty::new(TyKind::Fn(
-        vec![m_nat, n_nat, t_ty],
-        vec![Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t.clone()))),
-                Nat::Ident(n.clone()),
-            )))),
-            Nat::Ident(m.clone()),
-        )))],
-        Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::Ident(t))),
-            Nat::BinOp(
-                BinOpNat::Mul,
-                Box::new(Nat::Ident(m)),
-                Box::new(Nat::Ident(n)),
-            ),
-        )))),
-    ))
-}
+// fn join_ty() -> Ty {
+//     let m = Ident::new("m");
+//     let n = Ident::new("n");
+//     let t = Ident::new("t");
+//     let m_nat = IdentKinded {
+//         ident: m.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let n_nat = IdentKinded {
+//         ident: n.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let t_ty = IdentKinded {
+//         ident: t.clone(),
+//         kind: Kind::Ty,
+//     };
+//     Ty::new(TyKind::Fn(
+//         vec![m_nat, n_nat, t_ty],
+//         vec![Ty::new(TyKind::View(ViewTy::Array(
+//             Box::new(Ty::new(TyKind::View(ViewTy::Array(
+//                 Box::new(Ty::new(TyKind::Ident(t.clone()))),
+//                 Nat::Ident(n.clone()),
+//             )))),
+//             Nat::Ident(m.clone()),
+//         )))],
+//         Exec::View,
+//         Box::new(Ty::new(TyKind::View(ViewTy::Array(
+//             Box::new(Ty::new(TyKind::Ident(t))),
+//             Nat::BinOp(
+//                 BinOpNat::Mul,
+//                 Box::new(Nat::Ident(m)),
+//                 Box::new(Nat::Ident(n)),
+//             ),
+//         )))),
+//     ))
+// }
 
 // transpose:
 //  <m: nat, n: nat, t: ty>([[ [[t; n]]; m]]) -> [[ [[t; m]]; n]]
-fn transpose_ty() -> Ty {
-    let m = Ident::new("m");
-    let n = Ident::new("n");
-    let t = Ident::new("t");
-    let m_nat = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Nat,
-    };
-    let n_nat = IdentKinded {
-        ident: n.clone(),
-        kind: Kind::Nat,
-    };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
-    };
-    Ty::new(TyKind::Fn(
-        vec![m_nat, n_nat, t_ty],
-        vec![Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t.clone()))),
-                Nat::Ident(n.clone()),
-            )))),
-            Nat::Ident(m.clone()),
-        )))],
-        Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t))),
-                Nat::Ident(m),
-            )))),
-            Nat::Ident(n),
-        )))),
-    ))
-}
+// fn transpose_ty() -> Ty {
+//     let m = Ident::new("m");
+//     let n = Ident::new("n");
+//     let t = Ident::new("t");
+//     let m_nat = IdentKinded {
+//         ident: m.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let n_nat = IdentKinded {
+//         ident: n.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let t_ty = IdentKinded {
+//         ident: t.clone(),
+//         kind: Kind::Ty,
+//     };
+//     Ty::new(TyKind::Fn(
+//         vec![m_nat, n_nat, t_ty],
+//         vec![Ty::new(TyKind::View(ViewTy::Array(
+//             Box::new(Ty::new(TyKind::View(ViewTy::Array(
+//                 Box::new(Ty::new(TyKind::Ident(t.clone()))),
+//                 Nat::Ident(n.clone()),
+//             )))),
+//             Nat::Ident(m.clone()),
+//         )))],
+//         Exec::View,
+//         Box::new(Ty::new(TyKind::View(ViewTy::Array(
+//             Box::new(Ty::new(TyKind::View(ViewTy::Array(
+//                 Box::new(Ty::new(TyKind::Ident(t))),
+//                 Nat::Ident(m),
+//             )))),
+//             Nat::Ident(n),
+//         )))),
+//     ))
+// }
 
 // zip:
 //  <n: nat, t1: ty, t2:ty>([[t1; n]], [[t2; n]]) -> [[{t1, t2}; n]]

@@ -9,12 +9,11 @@ use crate::ast::DataTy::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
-use crate::parser::SourceCode;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::ops::Deref;
 
-type TyResult<'a, T> = Result<T, TyError<'a>>;
+type TyResult<T> = Result<T, TyError>;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------
@@ -23,27 +22,21 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
     let compil_unit_clone = compil_unit.clone();
     let ty_checker = TyChecker::new(&compil_unit_clone);
     ty_checker.ty_check(compil_unit).map_err(|err| {
-        err.emit();
+        err.emit(compil_unit.source);
         ErrorReported
     })
 }
 
-struct TyChecker<'a> {
+struct TyChecker {
     gl_ctx: GlobalCtx,
-    source: &'a SourceCode<'a>,
 }
 
-impl<'a> TyChecker<'a> {
-    pub fn new(compil_unit: &'a CompilUnit<'a>) -> Self {
+impl TyChecker {
+    pub fn new(compil_unit: &CompilUnit) -> Self {
         let gl_ctx = GlobalCtx::new()
             .append_from_gl_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
-        let source = compil_unit.source;
-        TyChecker { gl_ctx, source }
-    }
-
-    fn ty_error(&self, err: TyErrorKind<'a>) -> TyError {
-        TyError::new(err, self.source)
+        TyChecker { gl_ctx }
     }
 
     fn ty_check(&self, compil_unit: &mut CompilUnit) -> TyResult<()> {
@@ -66,8 +59,9 @@ impl<'a> TyChecker<'a> {
 
     // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
     fn ty_check_global_fun_def(&self, gf: &mut FunDef) -> TyResult<()> {
-        let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())
-            .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?;
+        let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())?;
+
+        // TODO check that every prv_rel only uses provenance variables bound in generic_params
 
         // Build frame typing for this function
         let glf_frame = internal::append_idents_typed(
@@ -90,15 +84,12 @@ impl<'a> TyChecker<'a> {
             TyCtx::new(),
             gf.body_expr.ty.as_ref().unwrap().dty(),
             &gf.ret_dty,
-        )
-        .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?;
+        )?;
         //TODO why is this the case?
         assert!(
             empty_ty_ctx.is_empty(),
-            format!(
-                "Expected typing context to be empty. But TyCtx:\n {:?}",
-                empty_ty_ctx
-            )
+            "Expected typing context to be empty. But TyCtx:\n {:?}",
+            empty_ty_ctx
         );
         Ok(())
     }
@@ -121,7 +112,7 @@ impl<'a> TyChecker<'a> {
         let (res_ty_ctx, ty) = match &mut expr.expr {
             ExprKind::PlaceExpr(pl_expr) => {
                 if pl_expr.is_place() {
-                    self.ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, pl_expr)?
+                    self.ty_check_pl_expr_without_deref(kind_ctx, ty_ctx, exec, pl_expr)?
                 } else {
                     self.ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
                 }
@@ -201,7 +192,9 @@ impl<'a> TyChecker<'a> {
             ),
         };
 
-        // TODO type well formed under output contexts
+        if let Err(err) = self.ty_well_formed(kind_ctx, &res_ty_ctx, exec, &ty) {
+            panic!("{:?}", err);
+        }
         expr.ty = Some(ty);
         Ok(res_ty_ctx)
     }
@@ -216,6 +209,24 @@ impl<'a> TyChecker<'a> {
         r2: &Provenance,
         view: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
+        // let view_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, view)?;
+        // if let TyKind::View(ViewTy::Array(elem_ty, n)) = view.ty.unwrap().ty {
+        //     if !(view_ty_ctx.loans_for_prv(r1)?
+        //         .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?.
+        //         is_empty()) {
+        //         return Err(TyError::new(TyErrorKind::PrvValueAlreadyInUse(r1.to_string()), self.source));
+        //     }
+        //     if !(view_ty_ctx.loans_for_prv(r2)?
+        //         .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?.
+        //         is_empty()) {
+        //         return Err(TyError::new(TyErrorKind::PrvValueAlreadyInUse(r2.to_string()), self.source));
+        //     }
+        //
+        //     // TODO work on any dimension by using all contained provenances
+        //     let TyKind::Data(DataTy::Ref(prv, own, mem, dty)) = elem_ty.ty {
+        //         view_ty_ctx.loans_for_prv(prv)
+        //     }
+        // }
         unimplemented!()
     }
 
@@ -259,17 +270,17 @@ impl<'a> TyChecker<'a> {
                 if let DataTy::Array(elem_dty, _) = arr_dty.as_ref() {
                     DataTy::Ref(prv.clone(), own.clone(), mem.clone(), elem_dty.clone())
                 } else {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Expected reference to array data type, but found {:?}",
                         *arr_dty
-                    ))));
+                    )));
                 }
             }
             _ => {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Expected array data type or reference to array data type, but found {:?}",
                     collec.ty.as_ref().unwrap()
-                ))));
+                )));
             }
         };
         let collec_ty_ctx_with_ident = collec_ty_ctx.clone().append_ident_typed(IdentTyped::new(
@@ -281,17 +292,17 @@ impl<'a> TyChecker<'a> {
             body.ty.as_ref().unwrap().ty,
             TyKind::Data(DataTy::Scalar(ScalarTy::Unit))
         ) {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "A loop body cannot have a return type.".to_string(),
-            )));
+            ));
         }
         match final_ctx.drop_ident(ident) {
             Some(ctx) if ctx == collec_ty_ctx => {
                 Ok((ctx, Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))))
             }
-            _ => Err(self.ty_error(TyErrorKind::String(
+            _ => Err(TyError::String(
                 "Trying to use illegal element in for-loop.".to_string(),
-            ))),
+            )),
         }
     }
 
@@ -308,31 +319,31 @@ impl<'a> TyChecker<'a> {
 
         let cond_temp_ty_ctx = self.ty_check_expr(kind_ctx, body_ty_ctx.clone(), exec, cond)?;
         if body_ty_ctx != cond_temp_ty_ctx {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "Context should have stayed the same".to_string(),
-            )));
+            ));
         }
         let body_temp_ty_ctx = self.ty_check_expr(kind_ctx, body_ty_ctx.clone(), exec, body)?;
         if body_ty_ctx != body_temp_ty_ctx {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "Context should have stayed the same".to_string(),
-            )));
+            ));
         }
 
         let cond_ty = cond.ty.as_ref().unwrap();
         let body_ty = body.ty.as_ref().unwrap();
 
         if !matches!(&cond_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Bool))) {
-            return Err(self.ty_error(TyErrorKind::String(format!(
+            return Err(TyError::String(format!(
                 "Expected condition in while loop, instead got {:?}",
                 cond_ty
-            ))));
+            )));
         }
         if !matches!(&body_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Bool))) {
-            return Err(self.ty_error(TyErrorKind::String(format!(
+            return Err(TyError::String(format!(
                 "Body of while loop is not of unit type, instead got {:?}",
                 body_ty
-            ))));
+            )));
         }
         Ok((
             body_ty_ctx,
@@ -378,10 +389,10 @@ impl<'a> TyChecker<'a> {
             self.ty_check_expr(kind_ctx, ty_ctx.clone(), exec, parall_collec)?;
         let allowed_exec = to_exec_and_size(parall_collec);
         if allowed_exec != exec {
-            return Err(self.ty_error(TyErrorKind::String(format!(
+            return Err(TyError::String(format!(
                 "Trying to run a parallel for-loop over {:?} inside of {:?}",
                 parall_collec, exec
-            ))));
+            )));
         }
         let input_ty_ctx = self.ty_check_expr(kind_ctx, parall_collec_ty_ctx, exec, input)?;
         // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
@@ -409,9 +420,9 @@ impl<'a> TyChecker<'a> {
                 })
                 .collect(),
             _ => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Provided input expression is not a tuple view.".to_string(),
-                )))
+                ));
             }
         };
 
@@ -420,7 +431,11 @@ impl<'a> TyChecker<'a> {
             TyKind::View(ViewTy::Tuple(funs)) => {
                 if let TyKind::View(ViewTy::Tuple(pcs)) = &parall_collec.ty.as_ref().unwrap().ty {
                     if pcs.len() != funs.len() {
-                        return Err(self.ty_error(TyErrorKind::String("Branching in parallel collections is of different amount than provided functions.".to_string())));
+                        return Err(TyError::String(
+                            "Branching in parallel collections is of different amount than \
+                            provided functions."
+                                .to_string(),
+                        ));
                     }
                     for (f, p) in funs.iter().zip(pcs) {
                         //executable_over_parall_collec_and_input(f, p, input)?
@@ -440,9 +455,9 @@ impl<'a> TyChecker<'a> {
                         ThreadHierchyTy::Warp => None,
                     },
                     _ => {
-                        return Err(self.ty_error(TyErrorKind::String(
+                        return Err(TyError::String(
                             "Provided expression is not a parallel collection.".to_string(),
-                        )))
+                        ))
                     }
                 };
                 let param_offset = match parall_elem_ty {
@@ -451,11 +466,11 @@ impl<'a> TyChecker<'a> {
                 };
                 let num_fun_params = in_param_tys.len() + param_offset;
                 if param_tys.len() != num_fun_params {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Wrong amount of parameters in provided function. Expected {},\
                     one for parallelism expression and one for input.",
                         num_fun_params
-                    ))));
+                    )));
                 }
                 let fun_parall_elem_ty = match &param_tys[0].ty {
                     TyKind::ThreadHierchy(th_hierchy) => Some(th_hierchy.as_ref().clone()),
@@ -465,18 +480,18 @@ impl<'a> TyChecker<'a> {
                     param_tys[param_offset..].iter().map(|t| t).collect();
 
                 if &fun_parall_elem_ty != &parall_elem_ty {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Function does not fit the provided parallel collection. \
                         Expected: {:?}, but found: {:?}",
                         parall_elem_ty, fun_parall_elem_ty
-                    ))));
+                    )));
                 }
                 if fun_input_elem_tys != in_param_tys {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Function does not fit the provided input. \
                         Expected: {:?},\n but found: {:?}",
                         in_param_tys, fun_input_elem_tys
-                    ))));
+                    )));
                 }
                 let f_exec = match parall_elem_ty {
                     Some(ThreadHierchyTy::ThreadGrp(_, _, _)) => Exec::GpuBlock,
@@ -484,27 +499,27 @@ impl<'a> TyChecker<'a> {
                     Some(ThreadHierchyTy::Warp) => Exec::GpuWarp,
                     None => Exec::GpuThread,
                     Some(ThreadHierchyTy::BlockGrp(_, _, _, _, _, _)) => {
-                        return Err(self.ty_error(TyErrorKind::String(
+                        return Err(TyError::String(
                             "Cannot parallelize over multiple Grids.".to_string(),
-                        )))
+                        ))
                     }
                 };
                 if fun_exec != &f_exec {
-                    return Err(self.ty_error(TyErrorKind::String(
+                    return Err(TyError::String(
                         "Execution resource does not fit.".to_string(),
-                    )));
+                    ));
                 }
                 if &ret_ty.as_ref().ty != &TyKind::Data(Scalar(ScalarTy::Unit)) {
-                    return Err(self.ty_error(TyErrorKind::String(
+                    return Err(TyError::String(
                         "Function has wrong return type. Expected ().".to_string(),
-                    )));
+                    ));
                 }
 
                 Ok(())
             }
-            _ => Err(self.ty_error(TyErrorKind::String(
+            _ => Err(TyError::String(
                 "The provided expression is not a function or tuple view of functions.".to_string(),
-            ))),
+            )),
         }
     }
 
@@ -529,29 +544,23 @@ impl<'a> TyChecker<'a> {
                 .collect(),
         );
         // Copy porvenance mappings into scope and append scope frame.
-        let mut fun_ty_ctx = TyCtx::new();
-        for prv_mapping in ty_ctx.prv_mappings() {
-            fun_ty_ctx = fun_ty_ctx.append_prv_mapping(prv_mapping.clone());
-        }
-        fun_ty_ctx = fun_ty_ctx.append_frm_ty(fun_frame);
+        // FIXME check that no variables are captured.
+        let fun_ty_ctx = ty_ctx.clone().append_frm_ty(fun_frame);
 
-        self.ty_check_expr(&kind_ctx, fun_ty_ctx, exec, body)?;
+        self.ty_check_expr(kind_ctx, fun_ty_ctx, exec, body)?;
 
         // t <= t_f
         let empty_ty_ctx = subty::check(
-            &kind_ctx,
+            kind_ctx,
             TyCtx::new(),
             body.ty.as_ref().unwrap().dty(),
-            &ret_dty,
-        )
-        .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?;
+            ret_dty,
+        )?;
 
         assert!(
             empty_ty_ctx.is_empty(),
-            format!(
-                "Expected typing context to be empty. But TyCtx:\n {:?}",
-                empty_ty_ctx
-            )
+            "Expected typing context to be empty. But TyCtx:\n {:?}",
+            empty_ty_ctx
         );
 
         let fun_ty = Ty::new(TyKind::Fn(
@@ -594,31 +603,28 @@ impl<'a> TyChecker<'a> {
     ) -> TyResult<(TyCtx, Ty)> {
         let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let place = pl_expr.to_place().unwrap();
-        let place_ty = assigned_val_ty_ctx
-            .place_ty(&place)
-            .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?;
+        let place_ty = assigned_val_ty_ctx.place_ty(&place)?;
 
         if matches!(&place_ty.ty, TyKind::View(_)) {
-            return Err(self.ty_error(TyErrorKind::String(format!(
+            return Err(TyError::String(format!(
                 "Assigning views is forbidden. Trying to assign view {:?}",
                 e
-            ))));
+            )));
         }
 
         // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
         if !matches!(&place_ty.ty, TyKind::Data(DataTy::Dead(_))) {
             let pl_uniq_loans = borrow_check::ownership_safe(
+                self,
                 kind_ctx,
                 &assigned_val_ty_ctx,
+                exec,
                 &[],
                 Ownership::Uniq,
                 pl_expr,
             )
             .map_err(|err| {
-                TyError::new(
-                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err),
-                    self.source,
-                )
+                TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
             })?;
             // This block of code asserts that nothing unexpected happens.
             // May not necessarily be needed.
@@ -635,8 +641,7 @@ impl<'a> TyChecker<'a> {
             assigned_val_ty_ctx,
             e.ty.as_ref().unwrap().dty(),
             &place_ty.dty(),
-        )
-        .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?;
+        )?;
         let adjust_place_ty_ctx =
             after_subty_ctx.set_place_ty(&place, e.ty.as_ref().unwrap().clone());
         Ok((
@@ -663,29 +668,24 @@ impl<'a> TyChecker<'a> {
         )?;
 
         if !deref_ty.is_fully_alive() {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "Trying to assign through reference, to a type which is not fully alive."
                     .to_string(),
-            )));
+            ));
         }
 
         if let TyKind::Data(deref_dty) = &deref_ty.ty {
             borrow_check::ownership_safe(
+                self,
                 kind_ctx,
                 &assigned_val_ty_ctx,
+                exec,
                 &[],
                 Ownership::Uniq,
                 deref_expr,
             )
             .map_err(|err| {
-                TyError::new(
-                    TyErrorKind::ConflictingBorrow(
-                        Box::new(deref_expr.clone()),
-                        Ownership::Uniq,
-                        err,
-                    ),
-                    self.source,
-                )
+                TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
             })?;
 
             let after_subty_ctx = subty::check(
@@ -693,16 +693,15 @@ impl<'a> TyChecker<'a> {
                 assigned_val_ty_ctx,
                 e.ty.as_ref().unwrap().dty(),
                 deref_dty,
-            )
-            .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?;
+            )?;
             Ok((
                 after_subty_ctx.without_reborrow_loans(deref_expr),
                 Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
             ))
         } else {
-            Err(self.ty_error(TyErrorKind::String(
+            Err(TyError::String(
                 "Trying to dereference view type which is not allowed.".to_string(),
-            )))
+            ))
         }
     }
 
@@ -716,10 +715,10 @@ impl<'a> TyChecker<'a> {
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         if exec != Exec::CpuThread && exec != Exec::GpuThread {
-            return Err(self.ty_error(TyErrorKind::String(format!(
+            return Err(TyError::String(format!(
                 "Trying to assign to memory from {}.",
                 exec
-            ))));
+            )));
         }
 
         let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
@@ -736,47 +735,47 @@ impl<'a> TyChecker<'a> {
                 if let DataTy::Array(elem_ty, n) = arr_dty.as_ref() {
                     unimplemented!() //(Ty::Data(*elem_ty), n)
                 } else {
-                    return Err(self.ty_error(TyErrorKind::String(
+                    return Err(TyError::String(
                         "Trying to index into non array type.".to_string(),
-                    )));
+                    ));
                 }
             }
             TyKind::View(ViewTy::Array(elem_ty, n)) => {
                 if let TyKind::Data(DataTy::Ref(_, own, mem, dty)) = elem_ty.ty {
                     (n, dty, own, mem)
                 } else {
-                    return Err(self.ty_error(TyErrorKind::String(
+                    return Err(TyError::String(
                         "Expected a reference as element type of array view.".to_string(),
-                    )));
+                    ));
                 }
             }
             _ => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Trying to index into non array type.".to_string(),
-                )))
+                ))
             }
         };
 
         if !dty.is_fully_alive() {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "Trying to assign through reference, to a type which is not fully alive."
                     .to_string(),
-            )));
+            ));
         }
-        self.accessible_memory(exec, &mem)?;
+        Self::accessible_memory(exec, &mem)?;
 
         if own != Ownership::Uniq {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "Cannot assigned through shared references.".to_string(),
-            )));
+            ));
         }
 
         match n.partial_cmp(idx) {
             Some(std::cmp::Ordering::Less) => (),
             Some(std::cmp::Ordering::Equal) | Some(std::cmp::Ordering::Greater) => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Trying to access array out-of-bounds.".to_string(),
-                )))
+                ))
             }
             None => println!(
             "WARNING: Cannot check out-of-bounds indexing for index `{}` in array with size `{}`",
@@ -797,8 +796,7 @@ impl<'a> TyChecker<'a> {
             assigned_val_ty_ctx,
             e.ty.as_ref().unwrap().dty(),
             &dty,
-        )
-        .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?;
+        )?;
 
         Ok((
             after_subty_ctx,
@@ -815,14 +813,10 @@ impl<'a> TyChecker<'a> {
         idx: &mut Nat,
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO refactor
-        borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr).map_err(
-            |err| {
-                TyError::new(
-                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err),
-                    self.source,
-                )
-            },
-        )?;
+        borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], Ownership::Shrd, pl_expr)
+            .map_err(|err| {
+                TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
+            })?;
         let pl_expr_ty =
             self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
         let (elem_dty, n) = match pl_expr_ty.ty {
@@ -831,35 +825,35 @@ impl<'a> TyChecker<'a> {
                 if let DataTy::Array(elem_ty, n) = *arr_ty {
                     (*elem_ty, n)
                 } else {
-                    return Err(self.ty_error(TyErrorKind::String(
+                    return Err(TyError::String(
                         "Trying to index into non array type.".to_string(),
-                    )));
+                    ));
                 }
             }
             TyKind::View(ViewTy::Array(ref_dty, n)) => {
                 if let TyKind::Data(DataTy::Ref(_, own, mem, dty)) = ref_dty.ty {
-                    self.accessible_memory(exec, &mem)?;
+                    Self::accessible_memory(exec, &mem)?;
                     // TODO is ownership checking necessary here?
                     (*dty, n)
                 } else {
-                    return Err(self.ty_error(TyErrorKind::String(
+                    return Err(TyError::String(
                         "Expected a reference as element type of array view.".to_string(),
-                    )));
+                    ));
                 }
             }
             _ => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Trying to index into non array type.".to_string(),
-                )))
+                ))
             }
         };
 
         match n.partial_cmp(idx) {
             Some(std::cmp::Ordering::Less) => (),
             Some(std::cmp::Ordering::Equal) | Some(std::cmp::Ordering::Greater) => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Trying to access array out-of-bounds.".to_string(),
-                )))
+                ))
             }
             None => println!(
             "WARNING: Cannot check out-of-bounds indexing for index `{}` in array with size `{}`",
@@ -870,9 +864,9 @@ impl<'a> TyChecker<'a> {
         if elem_dty.copyable() {
             Ok((ty_ctx, Ty::new(TyKind::Data(elem_dty))))
         } else {
-            Err(self.ty_error(TyErrorKind::String(
+            Err(TyError::String(
                 "Cannot move out of array type.".to_string(),
-            )))
+            ))
         }
     }
 
@@ -901,10 +895,10 @@ impl<'a> TyChecker<'a> {
                 TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
                 TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
             ) => Ok((rhs_ty_ctx, lhs_ty.clone())),
-            _ => Err(self.ty_error(TyErrorKind::String(format!(
+            _ => Err(TyError::String(format!(
             "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
             bin_op, lhs, rhs
-        )))),
+        ))),
         }
     }
 
@@ -922,10 +916,10 @@ impl<'a> TyChecker<'a> {
         match &e_ty.ty {
             TyKind::Data(DataTy::Scalar(ScalarTy::F32))
             | TyKind::Data(DataTy::Scalar(ScalarTy::I32)) => Ok((res_ctx, e_ty.clone())),
-            _ => Err(self.ty_error(TyErrorKind::String(format!(
+            _ => Err(TyError::String(format!(
                 "Exected a number type (i.e., f32 or i32), but found {:?}",
                 e_ty
-            )))),
+            ))),
         }
     }
 
@@ -943,28 +937,28 @@ impl<'a> TyChecker<'a> {
         let mut res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, ef)?;
         if let TyKind::Fn(gen_params, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
             if !exec_f.callable_in(exec) {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Trying to apply function for execution resource `{}` \
                 under execution resource `{}`",
                     exec_f, exec
-                ))));
+                )));
             }
             if gen_params.len() != k_args.len() {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Wrong amount of generic arguments. Expected {}, found {}",
                     gen_params.len(),
                     k_args.len()
-                ))));
+                )));
             }
             for (gp, kv) in gen_params.iter().zip(&*k_args) {
                 self.check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
             }
             if args.len() != param_tys.len() {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Wrong amount of arguments. Expected {}, found {}",
                     param_tys.len(),
                     args.len()
-                ))));
+                )));
             }
             let subst_param_tys: Vec<_> = param_tys
                 .iter()
@@ -980,11 +974,11 @@ impl<'a> TyChecker<'a> {
             for (arg, param_ty) in args.iter_mut().zip(subst_param_tys) {
                 res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, exec, arg)?;
                 if arg.ty.as_ref().unwrap() != &param_ty {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Argument types do not match.\n Expected {:?}, but found {:?}.",
                         param_ty,
                         arg.ty.as_ref().unwrap()
-                    ))));
+                    )));
                 }
             }
             // TODO check provenance relations
@@ -997,10 +991,10 @@ impl<'a> TyChecker<'a> {
             };
             Ok((res_ty_ctx, subst_out_ty))
         } else {
-            Err(self.ty_error(TyErrorKind::String(format!(
+            Err(TyError::String(format!(
                 "The provided function expression\n {:?}\n does not have a function type.",
                 ef
-            ))))
+            )))
         }
     }
 
@@ -1015,11 +1009,11 @@ impl<'a> TyChecker<'a> {
         let mut res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, ef)?;
         if let TyKind::Fn(gen_params, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
             if gen_params.len() != k_args.len() {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Wrong amount of generic arguments. Expected {}, found {}",
                     gen_params.len(),
                     k_args.len()
-                ))));
+                )));
             }
             for (gp, kv) in gen_params.iter().zip(&*k_args) {
                 self.check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
@@ -1049,10 +1043,10 @@ impl<'a> TyChecker<'a> {
             ));
             Ok((res_ty_ctx, subst_fun_ty))
         } else {
-            Err(self.ty_error(TyErrorKind::String(format!(
+            Err(TyError::String(format!(
                 "The provided function expression\n {:?}\n does not have a function type.",
                 ef
-            ))))
+            )))
         }
     }
 
@@ -1069,21 +1063,11 @@ impl<'a> TyChecker<'a> {
             ArgKinded::Memory(_) if expected == &Kind::Memory => Ok(()),
             // TODO?
             //  KindedArg::Frame(_) if expected == &Kind::Frame => Ok(()),
-            ArgKinded::Ident(k_ident)
-                if expected
-                    == kind_ctx
-                        .get_kind(k_ident)
-                        .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))? =>
-            {
-                Ok(())
-            }
-            _ => Err(TyError::new(
-                TyErrorKind::String(format!(
-                    "expected argument of kind {:?}, but the provided argument is {:?}",
-                    expected, kv
-                )),
-                self.source,
-            )),
+            ArgKinded::Ident(k_ident) if expected == kind_ctx.get_kind(k_ident)? => Ok(()),
+            _ => Err(TyError::String(format!(
+                "expected argument of kind {:?}, but the provided argument is {:?}",
+                expected, kv
+            ))),
         }
     }
 
@@ -1102,19 +1086,19 @@ impl<'a> TyChecker<'a> {
             .iter()
             .map(|elem| match &elem.ty.as_ref().unwrap().ty {
                 TyKind::Data(dty) => Ok(dty.clone()),
-                TyKind::View(_) => Err(self.ty_error(TyErrorKind::String(
+                TyKind::View(_) => Err(TyError::String(
                     "Tuple elements cannot be views.".to_string(),
-                ))),
-                TyKind::ThreadHierchy(_) => Err(self.ty_error(TyErrorKind::String(
+                )),
+                TyKind::ThreadHierchy(_) => Err(TyError::String(
                     "Tuple elements must be data types, but found thread hierarchy.".to_string(),
-                ))),
-                TyKind::Ident(_) => Err(self.ty_error(TyErrorKind::String(
+                )),
+                TyKind::Ident(_) => Err(TyError::String(
                     "Tuple elements must be data types, but found general type identifier."
                         .to_string(),
-                ))),
-                TyKind::Fn(_, _, _, _) => Err(self.ty_error(TyErrorKind::String(
+                )),
+                TyKind::Fn(_, _, _, _) => Err(TyError::String(
                     "Tuple elements must be data types, but found function type.".to_string(),
-                ))),
+                )),
             })
             .collect();
         Ok((tmp_ty_ctx, Ty::new(TyKind::Data(DataTy::Tuple(elem_tys?)))))
@@ -1137,27 +1121,27 @@ impl<'a> TyChecker<'a> {
             TyKind::Data(DataTy::Tuple(dtys)) => match dtys.get(i) {
                 Some(dty) => Ty::new(TyKind::Data(dty.clone())),
                 None => {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Cannot project element `{}` from tuple with {} elements.",
                         i,
                         dtys.len()
-                    ))))
+                    )))
                 }
             },
             TyKind::View(ViewTy::Tuple(tys)) => match tys.get(i) {
                 Some(ty) => ty.clone(),
                 None => {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Cannot project element `{}` from tuple with {} elements.",
                         i,
                         tys.len()
-                    ))))
+                    )))
                 }
             },
             _ => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Cannot project from non tuple type.".to_string(),
-                )))
+                ))
             }
         };
 
@@ -1196,14 +1180,14 @@ impl<'a> TyChecker<'a> {
         }
         let ty = elems.first().unwrap().ty.as_ref();
         if !matches!(&ty.unwrap().ty, TyKind::Data(_)) {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "Array elements cannot be views.".to_string(),
-            )));
+            ));
         }
         if elems.iter().any(|elem| ty != elem.ty.as_ref()) {
-            Err(self.ty_error(TyErrorKind::String(
+            Err(TyError::String(
                 "Not all provided elements have the same type.".to_string(),
-            )))
+            ))
         } else {
             Ok((
                 tmp_ty_ctx,
@@ -1242,22 +1226,21 @@ impl<'a> TyChecker<'a> {
         let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
             (TyKind::View(_), TyKind::View(_)) => {
                 if ty != e1_ty {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "Trying to bind view expression of type {:?} to identifier of type {:?}",
                         e1_ty, ty
-                    ))));
+                    )));
                 }
                 ty_ctx_e1
             }
             (TyKind::Data(dty), TyKind::Data(e1_dty)) => {
-                subty::check(kind_ctx, ty_ctx_e1, e1_dty, dty)
-                    .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?
+                subty::check(kind_ctx, ty_ctx_e1, e1_dty, dty)?
             }
             _ => {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Trying to bind expression of type {:?} to identifier of type {:?}",
                     e1_ty, ty
-                ))))
+                )))
             }
         };
         let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone());
@@ -1295,7 +1278,7 @@ impl<'a> TyChecker<'a> {
             )?;
             Ok((final_ty_ctx, expr.ty.as_ref().unwrap().clone()))
         } else {
-            Err(self.ty_error(TyErrorKind::MutabilityNotAllowed(ty.clone())))
+            Err(TyError::MutabilityNotAllowed(ty.clone()))
         }
         // TODO check if ident is fully dead after e?
     }
@@ -1322,28 +1305,22 @@ impl<'a> TyChecker<'a> {
         pl_expr: &PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO refactor
-        borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr).map_err(
-            |err| {
-                TyError::new(
-                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err),
-                    self.source,
-                )
-            },
-        )?;
+        borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], Ownership::Shrd, pl_expr)
+            .map_err(|err| {
+                TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
+            })?;
         let ty =
             self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
         if !ty.is_fully_alive() {
-            return Err(self.ty_error(TyErrorKind::String(format!(
+            return Err(TyError::String(format!(
                 "Part of Place {:?} was moved before.",
                 pl_expr
-            ))));
+            )));
         }
         if ty.copyable() {
             Ok((ty_ctx, ty))
         } else {
-            Err(self.ty_error(TyErrorKind::String(
-                "Data type is not copyable.".to_string(),
-            )))
+            Err(TyError::String("Data type is not copyable.".to_string()))
         }
     }
 
@@ -1351,6 +1328,7 @@ impl<'a> TyChecker<'a> {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
+        exec: Exec,
         pl_expr: &PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
         let place = pl_expr.to_place().unwrap();
@@ -1359,41 +1337,41 @@ impl<'a> TyChecker<'a> {
             (ty_ctx, fun_ty.clone())
         } else {
             // If place is NOT referring to a globally declared function
-            let pl_ty = ty_ctx
-                .place_ty(&place)
-                .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?;
+            let pl_ty = ty_ctx.place_ty(&place)?;
             if !pl_ty.is_fully_alive() {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Part of Place {:?} was moved before.",
                     pl_expr
-                ))));
+                )));
             }
             let res_ty_ctx = if pl_ty.copyable() {
                 // TODO refactor
-                borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Shrd, pl_expr)
-                    .map_err(|err| {
-                        TyError::new(
-                            TyErrorKind::ConflictingBorrow(
-                                Box::new(pl_expr.clone()),
-                                Ownership::Shrd,
-                                err,
-                            ),
-                            self.source,
-                        )
-                    })?;
+                borrow_check::ownership_safe(
+                    self,
+                    kind_ctx,
+                    &ty_ctx,
+                    exec,
+                    &[],
+                    Ownership::Shrd,
+                    pl_expr,
+                )
+                .map_err(|err| {
+                    TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
+                })?;
                 ty_ctx
             } else {
-                borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], Ownership::Uniq, pl_expr)
-                    .map_err(|err| {
-                        TyError::new(
-                            TyErrorKind::ConflictingBorrow(
-                                Box::new(pl_expr.clone()),
-                                Ownership::Uniq,
-                                err,
-                            ),
-                            self.source,
-                        )
-                    })?;
+                borrow_check::ownership_safe(
+                    self,
+                    kind_ctx,
+                    &ty_ctx,
+                    exec,
+                    &[],
+                    Ownership::Uniq,
+                    pl_expr,
+                )
+                .map_err(|err| {
+                    TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
+                })?;
                 ty_ctx.kill_place(&place)
             };
             (res_ty_ctx, pl_ty)
@@ -1414,36 +1392,24 @@ impl<'a> TyChecker<'a> {
         let prv_val_name = match prv {
             Provenance::Value(prv_val_name) => prv_val_name,
             Provenance::Ident(_) => {
-                return Err(self.ty_error(TyErrorKind::String(format!(
+                return Err(TyError::String(format!(
                     "Cannot borrow using a provenance variable {:?}.",
                     prv
-                ))));
+                )));
             }
         };
 
-        if !ty_ctx
-            .loans_for_prv(prv_val_name)
-            .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?
-            .is_empty()
-        {
-            return Err(self.ty_error(TyErrorKind::String(format!(
-                "Trying to borrow with a provenance that is used in a different borrow: {}",
-                prv_val_name
-            ))));
+        if !ty_ctx.loans_for_prv(prv_val_name)?.is_empty() {
+            return Err(TyError::PrvValueAlreadyInUse(prv_val_name.clone()));
         }
-        let loans =
-            borrow_check::ownership_safe(kind_ctx, &ty_ctx, &[], own, pl_expr).map_err(|err| {
-                TyError::new(
-                    TyErrorKind::ConflictingBorrow(Box::new(pl_expr.clone()), own, err),
-                    self.source,
-                )
-            })?;
+        let loans = borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], own, pl_expr)
+            .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
         let (ty, mem) =
             self.place_expr_ty_mem_under_exec_own(kind_ctx, &ty_ctx, exec, own, pl_expr)?;
         if !ty.is_fully_alive() {
-            return Err(self.ty_error(TyErrorKind::String(
+            return Err(TyError::String(
                 "The place was at least partially moved before.".to_string(),
-            )));
+            ));
         }
         let (reffed_ty, rmem) = match &ty.ty {
             TyKind::Data(DataTy::Dead(_)) => panic!("Cannot happen because of the alive check."),
@@ -1453,35 +1419,29 @@ impl<'a> TyChecker<'a> {
                 match mem {
                     Some(m) => m,
                     None => {
-                        return Err(self.ty_error(TyErrorKind::String(
+                        return Err(TyError::String(
                             "Trying to borrow value that does not exist for the current \
             execution resource."
                                 .to_string(),
-                        )))
+                        ))
                     }
                 },
             ),
-            TyKind::View(_) => {
-                return Err(
-                    self.ty_error(TyErrorKind::String("Trying to borrow a view.".to_string()))
-                )
-            }
+            TyKind::View(_) => return Err(TyError::String("Trying to borrow a view.".to_string())),
             TyKind::ThreadHierchy(_) => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Trying to borrow thread hierarchy.".to_string(),
-                )))
+                ))
             }
             TyKind::Fn(_, _, _, _) => {
-                return Err(self.ty_error(TyErrorKind::String(
-                    "Trying to borrow a function.".to_string(),
-                )))
+                return Err(TyError::String("Trying to borrow a function.".to_string()))
             }
             TyKind::Ident(_) => {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Borrowing from value of unspecified type. This could be a view.\
             Therefore it is not allowed to borrow."
                         .to_string(),
-                )))
+                ))
             }
         };
         let res_ty = DataTy::Ref(
@@ -1490,9 +1450,7 @@ impl<'a> TyChecker<'a> {
             rmem,
             Box::new(reffed_ty),
         );
-        let res_ty_ctx = ty_ctx
-            .extend_loans_for_prv(prv_val_name, loans)
-            .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?;
+        let res_ty_ctx = ty_ctx.extend_loans_for_prv(prv_val_name, loans)?;
         Ok((res_ty_ctx, Ty::new(TyKind::Data(res_ty))))
     }
 
@@ -1559,27 +1517,25 @@ impl<'a> TyChecker<'a> {
         let ty = if let Ok(tty) = ty_ctx.ident_ty(&ident) {
             tty
         } else {
-            self.gl_ctx
-                .fun_ty_by_ident(&ident)
-                .map_err(|err| TyError::new(TyErrorKind::CtxError(err), self.source))?
+            self.gl_ctx.fun_ty_by_ident(&ident)?
         };
 
         match &ty.ty {
             TyKind::Data(dty) => {
                 if !dty.is_fully_alive() {
-                    return Err(self.ty_error(TyErrorKind::String(format!(
+                    return Err(TyError::String(format!(
                         "The value in this identifier `{}` has been moved out.",
                         ident
-                    ))));
+                    )));
                 }
                 let mem = Self::default_mem_by_exec(exec);
                 Ok((ty.clone(), mem, vec![]))
             }
             TyKind::View(vty) => {
                 if !vty.is_fully_alive() {
-                    return Err(self.ty_error(TyErrorKind::String(
+                    return Err(TyError::String(
                         "The value in this identifier has been moved out.".to_string(),
-                    )));
+                    ));
                 }
                 Ok((ty.clone(), None, vec![]))
             }
@@ -1624,9 +1580,9 @@ impl<'a> TyChecker<'a> {
                 if let Some(ty) = elem_dtys.get(n) {
                     Ok((Ty::new(TyKind::Data(ty.clone())), mem, passed_prvs))
                 } else {
-                    Err(self.ty_error(TyErrorKind::String(
+                    Err(TyError::String(
                         "Trying to access non existing tuple element.".to_string(),
-                    )))
+                    ))
                 }
             }
             TyKind::View(ViewTy::Tuple(elem_tys)) => {
@@ -1638,17 +1594,17 @@ impl<'a> TyChecker<'a> {
                     };
                     Ok((ty.clone(), mem, passed_prvs))
                 } else {
-                    Err(self.ty_error(TyErrorKind::String(
+                    Err(TyError::String(
                         "Trying to access non existing tuple element.".to_string(),
-                    )))
+                    ))
                 }
             }
-            TyKind::Ident(_) => Err(self.ty_error(TyErrorKind::String(
+            TyKind::Ident(_) => Err(TyError::String(
                 "Type unspecified. Cannot project from potentially non tuple type.".to_string(),
-            ))),
-            _ => Err(self.ty_error(TyErrorKind::String(
+            )),
+            _ => Err(TyError::String(
                 "Trying to project from non tuple value.".to_string(),
-            ))),
+            )),
         }
     }
 
@@ -1664,24 +1620,23 @@ impl<'a> TyChecker<'a> {
             .place_expr_ty_mem_passed_prvs_under_exec_own(kind_ctx, ty_ctx, exec, own, borr_expr)?;
         if let TyKind::Data(DataTy::Ref(prv, ref_own, mem, dty)) = pl_expr_ty.ty {
             if ref_own < own {
-                return Err(self.ty_error(TyErrorKind::String(
+                return Err(TyError::String(
                     "Trying to dereference and mutably use a shrd reference.".to_string(),
-                )));
+                ));
             }
             let outl_rels = passed_prvs.iter().map(|passed_prv| (&prv, passed_prv));
-            subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)
-                .map_err(|err| TyError::new(TyErrorKind::SubTyError(err), self.source))?;
-            self.accessible_memory(exec, &mem)?;
+            subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
+            Self::accessible_memory(exec, &mem)?;
             passed_prvs.push(prv);
             Ok((Ty::new(TyKind::Data(*dty)), Some(mem), passed_prvs))
         } else {
-            Err(self.ty_error(TyErrorKind::String(
+            Err(TyError::String(
                 "Trying to dereference non reference type.".to_string(),
-            )))
+            ))
         }
     }
 
-    fn accessible_memory(&self, exec: Exec, mem: &Memory) -> TyResult<()> {
+    fn accessible_memory(exec: Exec, mem: &Memory) -> TyResult<()> {
         let gpu_exec_to_mem = vec![
             (Exec::CpuThread, Memory::CpuStack),
             (Exec::CpuThread, Memory::CpuHeap),
@@ -1692,10 +1647,142 @@ impl<'a> TyChecker<'a> {
         if gpu_exec_to_mem.contains(&(exec, mem.clone())) {
             Ok(())
         } else {
-            Err(self.ty_error(TyErrorKind::String(format!(
+            Err(TyError::String(format!(
                 "Trying to dereference pointer to `{}` from execution resource `{}`",
                 mem, exec
-            ))))
+            )))
         }
+    }
+
+    // TODO respect memory
+    fn ty_well_formed(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: &TyCtx,
+        exec: Exec,
+        ty: &Ty,
+    ) -> TyResult<()> {
+        match &ty.ty {
+            TyKind::Data(dty) => match dty {
+                // TODO variables of Dead types can be reassigned. So why do we not have to check
+                //  well-formedness of the type in Dead(ty)? (According paper).
+                DataTy::Scalar(_) | DataTy::Dead(_) => {}
+                DataTy::Ident(ident) => {
+                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
+                        Err(CtxError::KindedIdentNotFound(ident.clone()))?
+                    }
+                }
+                DataTy::Ref(Provenance::Value(prv), own, mem, dty) => {
+                    let elem_ty = Ty::new(TyKind::Data(dty.as_ref().clone()));
+                    if !elem_ty.is_fully_alive() {
+                        return Err(TyError::ReferenceToDeadTy);
+                    }
+                    let loans = ty_ctx.loans_for_prv(prv)?;
+                    if !loans.is_empty() {
+                        let mut exists = false;
+                        for loan in loans {
+                            let Loan {
+                                place_expr,
+                                own: l_own,
+                            } = loan;
+                            if l_own != own {
+                                return Err(TyError::ReferenceToWrongOwnership);
+                            }
+                            if let TyKind::Data(pl_expr_dty) = self
+                                .place_expr_ty_under_exec_own(
+                                    kind_ctx, ty_ctx, exec, *l_own, place_expr,
+                                )?
+                                .ty
+                            {
+                                if !pl_expr_dty.is_fully_alive() {
+                                    return Err(TyError::ReferenceToDeadTy);
+                                }
+                                if dty.occurs_in(&pl_expr_dty) {
+                                    exists = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if !exists {
+                            return Err(TyError::ReferenceToIncompatibleType);
+                        }
+                    }
+                    self.ty_well_formed(kind_ctx, ty_ctx, exec, &elem_ty)?;
+                }
+                DataTy::Ref(Provenance::Ident(ident), _, mem, dty) => {
+                    let elem_ty = Ty::new(TyKind::Data(dty.as_ref().clone()));
+                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Provenance) {
+                        Err(CtxError::KindedIdentNotFound(ident.clone()))?
+                    }
+                    self.ty_well_formed(kind_ctx, ty_ctx, exec, &elem_ty)?;
+                }
+                DataTy::Tuple(elem_dtys) => {
+                    for elem_dty in elem_dtys {
+                        self.ty_well_formed(
+                            kind_ctx,
+                            ty_ctx,
+                            exec,
+                            &Ty::new(TyKind::Data(elem_dty.clone())),
+                        )?;
+                    }
+                }
+                DataTy::Array(elem_dty, n) => {
+                    self.ty_well_formed(
+                        kind_ctx,
+                        ty_ctx,
+                        exec,
+                        &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
+                    )?;
+                    // TODO well-formed nat
+                }
+                DataTy::At(elem_dty, Memory::Ident(ident)) => {
+                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
+                        Err(TyError::CtxError(CtxError::KindedIdentNotFound(
+                            ident.clone(),
+                        )))?;
+                    }
+                    self.ty_well_formed(
+                        kind_ctx,
+                        ty_ctx,
+                        exec,
+                        &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
+                    )?;
+                }
+                DataTy::At(elem_dty, _) => {
+                    self.ty_well_formed(
+                        kind_ctx,
+                        ty_ctx,
+                        exec,
+                        &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
+                    )?;
+                }
+            },
+            TyKind::Ident(ident) => {
+                if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
+                    Err(CtxError::KindedIdentNotFound(ident.clone()))?
+                }
+            }
+            TyKind::ThreadHierchy(th_hierchy) => {} // TODO check well-formedness of Nats
+            TyKind::View(view_ty) => match view_ty {
+                // TODO check well-formedness of Nats
+                ViewTy::Tuple(elem_tys) => {
+                    for elem_ty in elem_tys {
+                        self.ty_well_formed(kind_ctx, ty_ctx, exec, elem_ty)?;
+                    }
+                }
+                ViewTy::Array(elem_ty, nat) => {
+                    self.ty_well_formed(kind_ctx, ty_ctx, exec, elem_ty)?
+                }
+                ViewTy::Dead(_) => {}
+            },
+            TyKind::Fn(idents_kinded, param_tys, exec, ret_ty) => {
+                let extended_kind_ctx = kind_ctx.clone().append_idents(idents_kinded.clone());
+                self.ty_well_formed(&extended_kind_ctx, ty_ctx, *exec, ret_ty)?;
+                for param_ty in param_tys {
+                    self.ty_well_formed(&extended_kind_ctx, ty_ctx, *exec, param_ty)?;
+                }
+            }
+        }
+        Ok(())
     }
 }

@@ -2,8 +2,7 @@
 
 extern crate descend;
 
-use descend::parser::{parse, SourceCode};
-use descend::ty_check;
+use descend::parser::SourceCode;
 
 #[test]
 fn scan() -> Result<(), descend::error::ErrorReported> {

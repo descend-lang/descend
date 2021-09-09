@@ -34,11 +34,6 @@ impl<'a> SourceCode<'a> {
         }
     }
 
-    /// Returns a SourceCodeSlice containing the line to which offset is pointing
-    pub fn line_slice(offset: usize) {
-        unimplemented!()
-    }
-
     fn line_offsets(source: &str) -> Vec<usize> {
         source
             .split("\n")

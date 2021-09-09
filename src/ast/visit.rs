@@ -32,10 +32,6 @@ pub trait Visitor: Sized {
     // internal
     // TODO
     fn visit_frm_expr(&mut self, frm_expr: &mut FrameExpr) {}
-    fn visit_frm_entry(&mut self, frm_entry: &mut FrameEntry) {}
-    fn visit_ident_typed(&mut self, ident_typed: &mut IdentTyped) {}
-    fn visit_prv_mapping(&mut self, prv_mapping: &mut PrvMapping) {}
-    fn visit_loan(&mut self, loan: &mut Loan) {}
 }
 
 // Taken from the Rust compiler
