@@ -1,13 +1,13 @@
 mod cu_ast;
 mod printer;
 
+use  super::utils;
 use crate::ast as desc;
 use crate::ast::{CompilUnit, Ident, PlaceExprKind, ThreadHierchyTy};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
 
-static mut LABEL_COUNTER: i32 = 0; 
 
 // FIXME Indexing and genreation of view expressions is bugged. Mainly because it is hard to
 //  recognize which part of a place expression is a view expression.
@@ -615,13 +615,7 @@ fn gen_par_for(
 
         let l = match label.clone() {
             None => {
-                let l_text: String = String::from("test"); // TODO global var + unsafe, not nice
-                let l_num: String;
-                unsafe {
-                    l_num = LABEL_COUNTER.to_string();
-                    LABEL_COUNTER += 1;
-                }
-                format!("{}{}", l_text, l_num)
+                utils::fresh_name("label")
             },
             Some(l) => l,
         };
