@@ -193,6 +193,9 @@ using array = std::array<T, n>;
 template<typename ... Types>
 using tuple = thrust::tuple<Types...>;
 
+template<typename T>
+using atomic = std::atomic<T>;
+
 using Gpu = size_t;
 
 Gpu gpu_device(size_t device_id) {

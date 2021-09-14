@@ -312,7 +312,7 @@ impl std::fmt::Display for Ty {
                 BufferKind::Ident(name) => write!(f, "{}", name),
             },
             Scalar(sty) => write!(f, "{}", sty),
-            Atomic(at) => write!(f, "{}", at),
+            Atomic(at) => write!(f, "descend::atomic<{}>", at),
             Ident(name) => write!(f, "{}", name),
         }
     }

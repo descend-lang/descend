@@ -44,6 +44,28 @@ pub fn gen(compil_unit: &CompilUnit) -> String {
     printer::print(&cu_program)
 }
 
+enum CheckedStmt {
+    Stmt(cu::Stmt),
+    StmtIdxCheck(cu::Stmt, cu::Stmt),
+}
+
+enum CheckedExpr {
+    Expr(cu::Expr),
+    ExprIdxCheck(cu::Stmt, cu::Expr),
+}
+
+impl CheckedExpr {
+    fn map<F>(&self, f: F) -> Self
+    where
+        F: Fn(cu::Expr) -> cu::Expr,
+    {
+        match self {
+            Self::Expr(e) => Self::Expr(f(e.clone())),
+            Self::ExprIdxCheck(c, e) => Self::ExprIdxCheck(c.clone(), f(e.clone())),
+        }
+    }
+}
+
 fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef]) -> cu::Item {
     let desc::FunDef {
         name,
@@ -367,11 +389,6 @@ fn gen_stmt(
     }
 }
 
-enum CheckedStmt {
-    Stmt(cu::Stmt),
-    StmtIdxCheck(cu::Stmt, cu::Stmt),
-}
-
 fn has_generatable_ty(e: &desc::Expr) -> bool {
     matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Ident(_))
         || matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Data(_))
@@ -470,7 +487,7 @@ fn gen_exec(
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
     label: Option<String>,
-) -> cu::Expr {
+) -> CheckedExpr {
     // Prepare parameter declarations for inputs
     let mut input_view_expr = ViewExpr::create_from(view_expr, view_ctx);
     let name_to_exprs = input_view_expr.collect_and_rename_input_exprs();
@@ -494,7 +511,7 @@ fn gen_exec(
         CheckedExpr::Expr(e) => e,
         CheckedExpr::ExprIdxCheck(_, _) => {
             panic!("Did not expect to check a condition for GPU")
-        } // TODO did I?
+        }
     };
 
     // FIXME only allows Lambdas
@@ -516,37 +533,55 @@ fn gen_exec(
                 CheckedStmt::Stmt(st) => Box::new(st),
                 CheckedStmt::StmtIdxCheck(_, _) => panic!("this should never happen"),
             },
-            // Box::new(gen_stmt(
-            //     &body,
-            //     false,
-            //     &mut scope_parall_ctx,
-            //     view_ctx,
-            //     comp_unit,
-            // )),
             ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
             is_dev_fun: true,
         }
     } else {
         panic!("Currently only lambdas can be passed.")
     };
-
+    let mut checks: Vec<cu::Stmt> = vec![];
     let mut input: Vec<_> = name_to_exprs
         .iter()
         .map(|(_, pl_expr)| {
-            // TODO is this right?
             match gen_expr(pl_expr, &mut HashMap::new(), &mut HashMap::new(), comp_unit, label.clone()) {
                 CheckedExpr::Expr(expr) => expr,
-                CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                CheckedExpr::ExprIdxCheck(check, expr) => {
+                    checks.push(check);
+                    expr
+                },
             }
         })
         .collect();
     let template_args = gen_args_kinded(vec![blocks.clone(), threads.clone()].as_slice());
     let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
     args.append(&mut input);
-    cu::Expr::FunCall {
-        fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
-        template_args,
-        args,
+
+    if checks.is_empty() {
+        CheckedExpr::Expr(
+            cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+                template_args,
+                args,
+            }
+        )
+    } else if checks.len() == 1{
+        CheckedExpr::ExprIdxCheck(
+            checks.pop().unwrap(),
+            cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+                template_args,
+                args,
+            }
+        )
+    } else {
+        CheckedExpr::ExprIdxCheck(
+            build_seq(checks),
+            cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+                template_args,
+                args,
+            }
+        )
     }
 }
 
@@ -611,7 +646,6 @@ fn gen_par_for(
                 panic!("Inputs to par_for are always tuple views.")
             }
         }
-        // println!("\tfound body which needs label: {:?}", body);
 
         let l = match label.clone() {
             None => {
@@ -627,12 +661,8 @@ fn gen_par_for(
             comp_unit, 
             Some(l)
         ) {
-            CheckedStmt::Stmt(st) => {
-                println!("\tlolfound smth: {:?}", st);
-                st
-            },
+            CheckedStmt::Stmt(st) => st,
             CheckedStmt::StmtIdxCheck(ch, st) => {
-                println!("\tfound smth else: {:?}", st);
                 cu::Stmt::Seq(
                     Box::new(ch),
                     Box::new(st),
@@ -843,23 +873,6 @@ fn gen_checked_stmt(
     }
 }
 
-enum CheckedExpr {
-    Expr(cu::Expr),
-    ExprIdxCheck(cu::Stmt, cu::Expr),
-}
-
-impl CheckedExpr {
-    fn map<F>(&self, f: F) -> Self
-    where
-        F: Fn(cu::Expr) -> cu::Expr,
-    {
-        match self {
-            Self::Expr(e) => Self::Expr(f(e.clone())),
-            Self::ExprIdxCheck(c, e) => Self::ExprIdxCheck(c.clone(), f(e.clone())),
-        }
-    }
-}
-
 fn gen_expr(
     expr: &desc::Expr,
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
@@ -966,13 +979,6 @@ fn gen_expr(
                 CheckedStmt::Stmt(st) => Box::new(st),
                 CheckedStmt::StmtIdxCheck(_, _) => panic!("this should not happen!"),
             },
-            //  Box::new(gen_stmt(
-            //     expr,
-            //     !matches!(ty.as_ref(), desc::DataTy::Scalar(desc::ScalarTy::Unit)),
-            //     parall_ctx,
-            //     view_ctx,
-            //     comp_unit,
-            // )),
             ret_ty: gen_ty(
                 &desc::TyKind::Data(ty.as_ref().clone()),
                 desc::Mutability::Mut,
@@ -983,7 +989,7 @@ fn gen_expr(
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
                 kind: PlaceExprKind::Ident(name),
                 ..
-            }) if name.name == "exec" => CheckedExpr::Expr(gen_exec(
+            }) if name.name == "exec" => gen_exec(
                 &kinded_args[0],
                 &kinded_args[1],
                 &args[0],
@@ -992,7 +998,7 @@ fn gen_expr(
                 view_ctx,
                 comp_unit,
                 label,
-            )),
+            ),
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
                 kind: PlaceExprKind::Ident(ident),
                 ..
@@ -1791,7 +1797,15 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
     let cu_ty = match ty {
         Ident(ident) => cu::Ty::Ident(ident.name.clone()),
         Fn(_, _, _, _) => unimplemented!("needed?"),
-        Data(d::Scalar(s)) | Data(d::Atomic(s)) => match s {
+        Data(d::Atomic(a)) => match a {
+            desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
+            desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
+            desc::ScalarTy::U32 => cu::Ty::Atomic(cu::ScalarTy::U32),
+            desc::ScalarTy::F32 => cu::Ty::Atomic(cu::ScalarTy::F32),
+            desc::ScalarTy::Bool => cu::Ty::Atomic(cu::ScalarTy::Bool),
+            desc::ScalarTy::Gpu => cu::Ty::Atomic(cu::ScalarTy::Gpu),
+        }
+        Data(d::Scalar(s)) => match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::U32 => cu::Ty::Scalar(cu::ScalarTy::U32),

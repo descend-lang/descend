@@ -47,5 +47,8 @@ fn bfs() -> Result<(), descend::error::ErrorReported> {
 
 #[test]
 fn computed_indexing() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!("{}", descend::compile("examples/computed_indexing.desc")?))
+    Ok(println!(
+        "{}",
+        descend::compile("examples/computed_indexing.desc")?
+    ))
 }
