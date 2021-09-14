@@ -710,6 +710,7 @@ impl<'a> TyChecker<'a> {
             Ownership::Uniq,
             pl_expr,
         )?;
+        pl_expr.ty = Some(pl_expr_ty.clone());
         let (n, dty, own, mem) = match pl_expr_ty.ty {
             TyKind::Data(DataTy::Array(elem_ty, n)) => unimplemented!(), //(Ty::Data(*elem_ty), n),
             TyKind::Data(DataTy::At(arr_dty, mem)) => {
@@ -799,6 +800,7 @@ impl<'a> TyChecker<'a> {
             .map_err(|err| TyError::new(TyErrorKind::OwnError(err), self.source))?;
         let pl_expr_ty =
             self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
+        pl_expr.ty = Some(pl_expr_ty.clone());
         let (elem_dty, n) = match pl_expr_ty.ty {
             TyKind::Data(DataTy::Array(elem_ty, n)) => (*elem_ty, n),
             TyKind::Data(DataTy::At(arr_ty, _)) => {

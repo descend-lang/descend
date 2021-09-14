@@ -100,10 +100,8 @@ impl std::fmt::Display for Stmt {
                 writeln!(f, "{}", stmt)?;
                 write!(f, "}}")
             }
-            Seq ( stmt1, stmt2 ) => {
-                if !matches!(*stmt1.as_ref(), EmptyCheck) {
-                    writeln!(f, "{}", stmt1)?;
-                }
+            Seq(stmt1, stmt2) => {
+                writeln!(f, "{}", stmt1)?;
                 write!(f, "{}", stmt2)
             }
             Expr(expr) => {
@@ -136,18 +134,6 @@ impl std::fmt::Display for Stmt {
                 stmt,
             } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
             Label(l) => write!(f, "{}:", l),
-            GlobalCheck => {
-                writeln!(f, "if (*global_failure != -1) {{");
-                writeln!(f, "return;");
-                write!(f, "}}")
-            }
-            EmptyCheck => Ok(()),
-            IndexCheck { size, ind, label } => {
-                writeln!(f, "if ( {} > {} ) {{", ind, size)?;
-                writeln!(f, "\x2F\x2F out of bounds case")?;
-                writeln!(f, "goto {};", label);
-                write!(f, "}}")
-            }
             Return(expr) => {
                 write!(f, "return")?;
                 if let Some(e) = expr {

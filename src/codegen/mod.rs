@@ -185,27 +185,12 @@ fn gen_stmt(
                     }
                     (Some(ch), CheckedStmt::Stmt(st)) => {
                         CheckedStmt::Stmt(build_seq(vec![ch, var, st]))
-                        // CheckedStmt::Stmt(cu::Stmt::Seq(
-                        //     Box::new(ch),
-                        //     Box::new(cu::Stmt::Seq(Box::new(var), Box::new(st))),
-                        // ))
                     },
                     (None, CheckedStmt::StmtIdxCheck(ch, st)) => {
                         CheckedStmt::Stmt(build_seq(vec![var, ch, st]))
-                        // CheckedStmt::Stmt(cu::Stmt::Seq(
-                        //     Box::new(var),
-                        //     Box::new(cu::Stmt::Seq(Box::new(ch), Box::new(st))),
-                        // ))
                     },
                     (Some(ch1), CheckedStmt::StmtIdxCheck(ch2, st)) => {
                         CheckedStmt::Stmt(build_seq(vec![ch1, var, ch2, st]))
-                        // CheckedStmt::Stmt(cu::Stmt::Seq(
-                        //     Box::new(ch1),
-                        //     Box::new(cu::Stmt::Seq(
-                        //         Box::new(var),
-                        //         Box::new(cu::Stmt::Seq(Box::new(ch2), Box::new(st))),
-                        //     )),
-                        // ))
                     }
                 }
             } // else {
@@ -228,11 +213,6 @@ fn gen_stmt(
         )),
         LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit, label),
         // e1 ; e2
-        // if let Some(ch) = checks {
-        //     for check in ch.iter() {
-        //         writeln!(f, "{}", check);
-        //     }
-        // }
         Seq(e1, e2) => {
             match (
                 gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit, label.clone()),
@@ -240,36 +220,17 @@ fn gen_stmt(
             ) {
                 (CheckedStmt::StmtIdxCheck(ch1, st1), CheckedStmt::StmtIdxCheck(ch2, st2)) => {
                     CheckedStmt::Stmt(build_seq(vec![ch1, st1, ch2, st2]))
-                    // CheckedStmt::Stmt(cu::Stmt::Seq(
-                    //     Box::new(ch1),
-                    //     Box::new(cu::Stmt::Seq(
-                    //         Box::new(st1),
-                    //         Box::new(cu::Stmt::Seq(Box::new(ch2), Box::new(st2))),
-                    //     )),
-                    // ))
                 }
                 (CheckedStmt::StmtIdxCheck(ch, st1), CheckedStmt::Stmt(st2)) => {
                     CheckedStmt::Stmt(build_seq(vec![ch, st1, st2]))
-                    // CheckedStmt::Stmt(cu::Stmt::Seq(
-                    //     Box::new(ch),
-                    //     Box::new(cu::Stmt::Seq(Box::new(st1), Box::new(st2))),
-                    // ))
                 }
                 (CheckedStmt::Stmt(st1), CheckedStmt::StmtIdxCheck(ch, st2)) => {
                     CheckedStmt::Stmt(build_seq(vec![st1, ch, st2]))
-                    // CheckedStmt::Stmt(cu::Stmt::Seq(
-                    //     Box::new(st1),
-                    //     Box::new(cu::Stmt::Seq(Box::new(ch), Box::new(st2))),
-                    // ))
                 }
                 (CheckedStmt::Stmt(st1), CheckedStmt::Stmt(st2)) => {
                     CheckedStmt::Stmt(cu::Stmt::Seq(Box::new(st1), Box::new(st2)))
                 }
             }
-            // cu::Stmt::Seq(
-            //     Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
-            //     Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-            // )
         }
         ForNat(ident, range, body) => {
             let i = cu::Expr::Ident(ident.name.clone());
@@ -697,12 +658,6 @@ fn gen_par_for(
             ),
             desc::ThreadHierchyTy::ThreadGrp(_, _, _) => (
                 desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
-                // cu::Stmt::Expr(cu::Expr::FunCall {
-                //     fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                //     template_args: vec![],
-                //     args: vec![],
-                // }),
-
                 build_seq(vec![
                     cu::Stmt::Label(match label.clone() {
                         Some(l) => l,
@@ -713,34 +668,22 @@ fn gen_par_for(
                         template_args: vec![],
                         args: vec![],
                     }),
-                    cu::Stmt::GlobalCheck,
+                    cu::Stmt::If{
+                        cond: cu::Expr::BinOp{
+                            op: cu::BinOp::Neq,
+                            lhs: Box::new(cu::Expr::Ident("global_failure".to_string())),
+                            rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(-1))),
+                        },
+                        body: Box::new(cu::Stmt::Block(
+                            Box::new(cu::Stmt::Return(None)),
+                        ))
+                    },
                     cu::Stmt::Expr(cu::Expr::FunCall {
                         fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
                         template_args: vec![],
                         args: vec![],
                     })
                 ]),
-                // cu::Stmt::Seq(
-                //     Box::new(cu::Stmt::Label(match label.clone() {
-                //         Some(l) => l,
-                //         None => panic!("exptected label!")
-                //     })),
-                //     Box::new(cu::Stmt::Seq(
-                //         Box::new(cu::Stmt::Expr(cu::Expr::FunCall {
-                //             fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                //             template_args: vec![],
-                //             args: vec![],
-                //         })),
-                //         Box::new(cu::Stmt::Seq(
-                //             Box::new(cu::Stmt::GlobalCheck),
-                //             Box::new(cu::Stmt::Expr(cu::Expr::FunCall {
-                //                 fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                //                 template_args: vec![],
-                //                 args: vec![],
-                //             }))
-                //         ))
-                //     ))
-                // ),
                 false,
             ),
             desc::ThreadHierchyTy::WarpGrp(_) => (
@@ -872,34 +815,36 @@ fn gen_checked_stmt(
         Index(pl_expr, i) => {
             match label {
                 Some(l) => {
-                    // TODO implement arr size
-                    // let n = match pl_expr.clone().ty {
-                    //     Some(s) => s,
-                    //     None => panic!("found none"),
-                    // };
-                    // let n = match n.ty {
-                    //     TyKind::Data(DataTy::Array(_, m)) => m,
-                    //     TyKind::View(ViewTy::Array(_, m)) => m,
-                    //     _ => panic!("cannot index into non array type!"),
-                    // };
-                    
+                    let n = match &pl_expr.ty.as_ref().expect(&format!("{:?}", pl_expr)).ty {
+                        TyKind::Data(DataTy::Array(_, m)) => m,
+                        TyKind::Data(DataTy::Ref(_, _, _, a)) => if let DataTy::Array(_, m) = a.as_ref() {
+                            m
+                        } else {
+                            panic!("cannot index into non array type!");
+                        }, 
+                        TyKind::View(ViewTy::Array(_, m)) => m,
+                        t => panic!("cannot index into non array type!{:?}", t),
+                    };
                     use crate::ast::*;
-                    cu::Stmt::IndexCheck {
-                        size: Nat::Lit(100),
-                        ind: i.clone(),
-                        label: l,
+                    cu::Stmt::If{
+                        cond: cu::Expr::BinOp{
+                            op: cu::BinOp::Gt, 
+                            lhs: Box::new(cu::Expr::Nat(i.clone())),
+                            rhs: Box::new(cu::Expr::Nat(n.clone())),
+                        } ,
+                        body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Expr(
+                            cu::Expr::Ident(format!("goto {}", l))
+                        )))) ,
                     }
                 },
                 None => {
-                    println!("\tno label found: {:?}", expr);
-                    cu::Stmt::EmptyCheck
+                    cu::Stmt::Expr(cu::Expr::Empty)
                 }
             }
-
            
         }
         Assign(_, expr) => gen_checked_stmt(expr, view_ctx, comp_unit, label),
-        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => cu::Stmt::EmptyCheck,
+        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => cu::Stmt::Expr(cu::Expr::Empty),
         _ => panic!("Smth not yet implemented {:?}", &expr), // TODO not all cases implemented
     }
 }
@@ -1166,7 +1111,7 @@ fn gen_expr(
         Idx(e, i) => CheckedExpr::Expr(cu::Expr::ArraySubscript {
             array: Box::new(match gen_expr(e, parall_ctx, view_ctx, comp_unit, label) {
                 CheckedExpr::Expr(expr) => expr,
-                CheckedExpr::ExprIdxCheck(_, _) => panic!("should never happen"), // ?ONLY for codegen, so no check needed?
+                CheckedExpr::ExprIdxCheck(_, _) => panic!("should never happen"), // ?ONLY for codegen, so no check needed? 
             }),
             index: i.clone(),
         }),
