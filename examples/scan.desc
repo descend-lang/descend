@@ -5,14 +5,14 @@ fn scan_inplace<a: prv, m: nat>(
     for d in data {
         let next = *d + accum;
         *d = accum;
-        accum = next;
+        accum = next
     }
 }
 
 fn upsweep_inplace_red_add<a: prv, d: nat>(
     arr: [[&a uniq gpu.shared i32; 64/d]]
 ) -[gpu.thread]-> () {
-    arr[64/d-1] = arr[64/d-1] + arr[32/d-1];
+    arr[64/d-1] = arr[64/d-1] + arr[32/d-1]
 }
 
 fn upsweep<a: prv>(
@@ -24,8 +24,7 @@ fn upsweep<a: prv>(
             to_view_mut::<a, gpu.shared, 64, i32>(arr_ref));
         for split_thread_grp::<d, 32, 1, 1>(thread_grp).0
         with <tmp_up_view>
-        do
-            upsweep_inplace_red_add::<a, d>;
+        do upsweep_inplace_red_add::<a, d>
     }
 }
 
@@ -34,7 +33,7 @@ fn downsweep_inplace_red_add<a: prv, d: nat>(
 ) -[gpu.thread]-> () {
     let t = arr[32/d-1];
     arr[32/d-1] = arr[64/d-1];
-    arr[64/d-1] = arr[64/d-1] + t;
+    arr[64/d-1] = arr[64/d-1] + t
 }
 
 fn downsweep<a: prv>(
@@ -46,8 +45,7 @@ fn downsweep<a: prv>(
             to_view_mut::<a, gpu.shared, 64, i32>(arr_ref));
         for split_thread_grp::<d, 32, 1, 1>(block).0
         with <tmp_down_view>
-        do
-            downsweep_inplace_red_add::<a, d>;
+        do downsweep_inplace_red_add::<a, d>
     }
 }
 
@@ -106,7 +104,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                       ib: [[&'r shrd gpu.global i32; 64]],
                       block_out: [[&'m uniq gpu.global i32; 64]],
                       bsum: [[&'k uniq gpu.global i32; 1]],
-                      tmpb: [i32; 64] @ gpu.shared
+                      mut tmpb: [i32; 64] @ gpu.shared
                     | -[gpu.block]-> () {
                          let tmp_view: [[&'e uniq gpu.shared i32; 64]] =
                             to_view_mut::<'e, gpu.shared, 64, i32>(&'e uniq tmpb);
@@ -124,7 +122,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                                 dst_1: &'e uniq gpu.shared i32
                             | -[gpu.thread]-> () {
                                 *dst_0 = *src_0;
-                                *dst_1 = *src_1;
+                                *dst_1 = *src_1
                             };
 
                          upsweep::<'f>(block, &'f uniq tmpb);
@@ -143,7 +141,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                               last: &'l uniq gpu.shared i32
                             | -[gpu.thread]-> () {
                                 *sum = *last;
-                                *last = 0;
+                                *last = 0
                             };
 
                         downsweep::<'f>(block, &'f uniq tmpb);
@@ -160,9 +158,9 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                                 src_1: &'e uniq gpu.shared i32
                             | -[gpu.thread]-> () {
                                 *dst_0 = *src_0;
-                                *dst_1 = *src_1;
-                            };
-                    };
+                                *dst_1 = *src_1
+                            }
+                    }
             }
         );
 
@@ -199,12 +197,12 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                               scanned_val: &'m uniq gpu.global i32,
                               sum: &'k shrd gpu.global i32
                             | -[gpu.thread]-> () {
-                                *scanned_val = *scanned_val + *sum;
-                            };
-                    };
+                                *scanned_val = *scanned_val + *sum
+                            }
+                    }
             }
         );
 
-        copy_to_host::<'g, 'x, cpu.heap, [i32; n]>(&'g shrd out_array, &'x uniq *h_output);
+        copy_to_host::<'g, 'x, cpu.heap, [i32; n]>(&'g shrd out_array, &'x uniq *h_output)
     }
 }

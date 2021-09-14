@@ -26,7 +26,7 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
                     | block: ThreadGrp<1024>,
                       ib: [[&'r shrd gpu.global i32; 1024]],
                       out_elem: [[&'m uniq gpu.global i32; 1]],
-                      tmpb: [i32; 1024] @ gpu.shared
+                      mut tmpb: [i32; 1024] @ gpu.shared
                     | -[gpu.block]-> () {
                          let tmp_view: [[&'e uniq gpu.shared i32; 1024]] =
                             to_view_mut::<'e, gpu.shared, 1024, i32>(&'e uniq tmpb);
@@ -36,7 +36,7 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
                             |
                               inp: &'r shrd gpu.global i32 , tmp_in: &'e uniq gpu.shared i32
                             | -[gpu.thread]-> () {
-                                 *tmp_in = *inp;
+                                 *tmp_in = *inp
                             };
                          for_nat k in halved_range(512) {
                              let active_halves = split_at::<k, 2*k, &'s uniq gpu.shared i32>(
@@ -48,8 +48,8 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
                                 |
                                   a: &'s uniq gpu.shared i32, b: &'s uniq gpu.shared i32
                                 | -[gpu.thread]-> () {
-                                    *a = *a + *b;
-                                };
+                                    *a = *a + *b
+                                }
                          };
                          let tmp_res = split_at::<1, 1024, &'f uniq gpu.shared i32>(
                             to_view_mut::<'f, gpu.shared, 1024, i32>(&'f uniq tmpb)).0;
@@ -59,14 +59,14 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
                             |
                               out_elem: &'m uniq gpu.global i32 , tmp_val: &'f uniq gpu.shared i32
                             | -[gpu.thread]-> () {
-                                *out_elem = *tmp_val;
-                            };
-                     };
+                                *out_elem = *tmp_val
+                            }
+                     }
             }
         );
         // Todo
         //  There is no check for n == 64 (which is NOT the case). Therefore it is wrong to specify
         //  [i32; n] as the array type. However, this still type checks.
-        copy_to_host::<'g, b, cpu.heap, [i32; 64]>(&'g shrd out_array, h_output);
+        copy_to_host::<'g, b, cpu.heap, [i32; 64]>(&'g shrd out_array, h_output)
     }
 }

@@ -5,7 +5,7 @@ fn red_add<r: prv>(
   fst_half: &r uniq gpu.global i32,
   snd_half: &r uniq gpu.global i32
 ) -[gpu.thread]-> () {
-  *fst_half = *fst_half + *snd_half;
+  *fst_half = *fst_half + *snd_half
 }
 
 fn reduce<n: nat, a: prv, b: prv>(
@@ -33,12 +33,12 @@ fn reduce<n: nat, a: prv, b: prv>(
               let active_halves = split_at::<k, 2*k, &'r uniq gpu.global i32>(
                 split_at::<2*k, 1024, &'r uniq gpu.global i32>(ib).0);
               for split_thread_grp::<k, 1024, 1, 1>(block).0
-              with active_halves do red_add::<'r>;
-            };
-        };
+              with active_halves do red_add::<'r>
+            }
+        }
       }
     );
 
-    copy_to_host::<'g, a, cpu.heap, [i32; n]>(&'g shrd a_array, ha_array);
+    copy_to_host::<'g, a, cpu.heap, [i32; n]>(&'g shrd a_array, ha_array)
   }
 }

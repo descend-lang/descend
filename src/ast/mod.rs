@@ -265,16 +265,16 @@ pub enum ExprKind {
     LetProv(Vec<String>, Box<Expr>),
     // Variable declaration
     // let mut x: ty;
-    LetUninit(Ident, Box<Ty>, Box<Expr>),
+    LetUninit(Ident, Box<Ty>),
     // Variable declaration, assignment and sequencing
-    // let w x: ty = e1; e2
-    Let(Mutability, Ident, Box<Option<Ty>>, Box<Expr>, Box<Expr>),
+    // let w x: ty = e1
+    Let(Mutability, Ident, Box<Option<Ty>>, Box<Expr>),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
     // e1[i] = e2
     IdxAssign(PlaceExpr, Nat, Box<Expr>),
     // e1 ; e2
-    Seq(Box<Expr>, Box<Expr>),
+    Seq(Vec<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     Lambda(Vec<ParamDecl>, Exec, Box<DataTy>, Box<Expr>),

@@ -2,8 +2,6 @@
 
 extern crate descend;
 
-use descend::parser::SourceCode;
-
 #[test]
 fn scan() -> Result<(), descend::error::ErrorReported> {
     Ok(println!("{}", descend::compile("examples/scan.desc")?))

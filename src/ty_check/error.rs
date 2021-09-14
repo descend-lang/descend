@@ -26,7 +26,7 @@ pub enum TyError {
     // out from under the reference which is forbidden.
     ReferenceToDeadTy,
     // Assignment to a constant place expression.
-    AssignToConst(PlaceExpr, Expr),
+    AssignToConst(PlaceExpr, Box<Expr>),
     // Trying to borrow uniquely but place is not mutable
     ConstBorrow(PlaceExpr),
     // TODO remove as soon as possible

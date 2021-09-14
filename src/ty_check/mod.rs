@@ -121,14 +121,11 @@ impl TyChecker {
             ExprKind::LetProv(prvs, body) => {
                 self.ty_check_letprov(kind_ctx, ty_ctx, exec, prvs, body)?
             }
-            // TODO respect mutability
-            ExprKind::Let(mutbl, ident, ty, ref mut e1, ref mut e2) => {
-                self.ty_check_let(kind_ctx, ty_ctx, exec, *mutbl, ident, ty, e1, e2)?
+            ExprKind::Let(mutbl, ident, ty, e) => {
+                self.ty_check_let(kind_ctx, ty_ctx, exec, *mutbl, ident, ty, e)?
             }
-            ExprKind::LetUninit(ident, ty, e) => {
-                self.ty_check_let_uninit(kind_ctx, ty_ctx, exec, ident, ty, e)?
-            }
-            ExprKind::Seq(e1, e2) => self.ty_check_seq(kind_ctx, ty_ctx, exec, e1, e2)?,
+            ExprKind::LetUninit(ident, ty) => self.ty_check_let_uninit(ty_ctx, exec, ident, ty)?,
+            ExprKind::Seq(es) => self.ty_check_seq(kind_ctx, ty_ctx, exec, es)?,
             ExprKind::Lit(l) => Self::ty_check_literal(ty_ctx, l),
             ExprKind::Array(elems) => self.ty_check_array(kind_ctx, ty_ctx, exec, elems)?,
             ExprKind::Tuple(elems) => self.ty_check_tuple(kind_ctx, ty_ctx, exec, elems)?,
@@ -263,10 +260,11 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let collec_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, collec)?;
         let ident_dty = match &collec.ty.as_ref().unwrap().ty {
+            // TODO
             TyKind::Data(DataTy::Array(elem_dty, n)) => unimplemented!(),
             TyKind::Data(DataTy::Ref(prv, own, mem, arr_dty)) => {
                 if let DataTy::Array(elem_dty, _) = arr_dty.as_ref() {
-                    DataTy::Ref(prv.clone(), own.clone(), mem.clone(), elem_dty.clone())
+                    DataTy::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
                 } else {
                     return Err(TyError::String(format!(
                         "Expected reference to array data type, but found {:?}",
@@ -613,7 +611,7 @@ impl TyChecker {
         }
         let ident_ty = assigned_val_ty_ctx.ident_ty(&place.ident)?;
         if pl_expr.is_place() && ident_ty.mutbl != Mutability::Mut {
-            return Err(TyError::AssignToConst(pl_expr.clone(), e.clone()));
+            return Err(TyError::AssignToConst(pl_expr.clone(), Box::new(e.clone())));
         }
 
         // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
@@ -1222,11 +1220,10 @@ impl TyChecker {
         mutbl: Mutability,
         ident: &mut Ident,
         ty: &Option<Ty>,
-        e1: &mut Expr,
-        e2: &mut Expr,
+        expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let ty_ctx_e1 = self.ty_check_expr(kind_ctx, ty_ctx, exec, e1)?;
-        let e1_ty = e1.ty.as_ref().unwrap();
+        let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
+        let e1_ty = expr.ty.as_ref().unwrap();
         let ty = if let Some(tty) = ty { tty } else { e1_ty };
 
         let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
@@ -1238,10 +1235,10 @@ impl TyChecker {
                         e1_ty, ty
                     )));
                 }
-                ty_ctx_e1
+                ty_ctx_e
             }
             (TyKind::Data(dty), TyKind::Data(e1_dty)) => {
-                subty::check(kind_ctx, ty_ctx_e1, e1_dty, dty)?
+                subty::check(kind_ctx, ty_ctx_e, e1_dty, dty)?
             }
             _ => {
                 return Err(TyError::String(format!(
@@ -1251,26 +1248,20 @@ impl TyChecker {
             }
         };
         let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone(), mutbl);
-        let garbage_coll_ty_ctx_with_ident = ty_ctx_sub
-            .append_ident_typed(ident_with_annotated_ty)
-            .garbage_collect_loans();
-        // TODO check that x is dead,
-        //  the derivation needs to call T-Drop in case of copy types then.
-        //  Equivalent to saying that the variable must be used.
-        let ty_ctx_e2 = self.ty_check_expr(kind_ctx, garbage_coll_ty_ctx_with_ident, exec, e2)?;
-        let ty_ctx_e2_no_ident = ty_ctx_e2.drop_ident(ident).unwrap();
-        Ok((ty_ctx_e2_no_ident, e2.ty.as_ref().unwrap().clone()))
+        let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
+        Ok((
+            ty_ctx_with_ident,
+            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+        ))
     }
 
-    // TODO respect mutability, uninit vars must always be mutable
+    // TODO repsect exec?
     fn ty_check_let_uninit(
         &self,
-        kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
         ident: &Ident,
         ty: &Ty,
-        expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         if let TyKind::Data(dty) = &ty.ty {
             let ident_with_ty = IdentTyped::new(
@@ -1278,17 +1269,14 @@ impl TyChecker {
                 Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty.clone())))),
                 Mutability::Mut,
             );
-            let final_ty_ctx = self.ty_check_expr(
-                kind_ctx,
-                ty_ctx.append_ident_typed(ident_with_ty),
-                exec,
-                expr,
-            )?;
-            Ok((final_ty_ctx, expr.ty.as_ref().unwrap().clone()))
+            let ty_ctx_with_ident = ty_ctx.append_ident_typed(ident_with_ty);
+            Ok((
+                ty_ctx_with_ident,
+                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            ))
         } else {
             Err(TyError::MutabilityNotAllowed(ty.clone()))
         }
-        // TODO check if ident is fully dead after e?
     }
 
     fn ty_check_seq(
@@ -1296,13 +1284,15 @@ impl TyChecker {
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
-        e1: &mut Expr,
-        e2: &mut Expr,
+        es: &mut [Expr],
     ) -> TyResult<(TyCtx, Ty)> {
-        let ty_ctx_e1 = self.ty_check_expr(kind_ctx, ty_ctx, exec, e1)?;
-        let ty_ctx_e2 =
-            self.ty_check_expr(kind_ctx, ty_ctx_e1.garbage_collect_loans(), exec, e2)?;
-        Ok((ty_ctx_e2, e2.ty.as_ref().unwrap().clone()))
+        let mut ty_ctx = ty_ctx;
+        for e in &mut *es {
+            ty_ctx = self
+                .ty_check_expr(kind_ctx, ty_ctx, exec, e)?
+                .garbage_collect_loans();
+        }
+        Ok((ty_ctx, es.last().unwrap().ty.as_ref().unwrap().clone()))
     }
 
     fn ty_check_pl_expr_with_deref(

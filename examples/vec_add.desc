@@ -1,7 +1,7 @@
 fn add<r: prv, s: prv>(
     inp: <&r uniq gpu.global i32, &s shrd gpu.global i32>
 ) -[gpu.thread]-> () {
-    *inp.0 = *inp.0 + *inp.1;
+    *inp.0 = *inp.0 + *inp.1
 }
 
 fn inplace_vector_add<n: nat, a: prv, b: prv>(
@@ -36,9 +36,9 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
                       ib: [[<&'r uniq gpu.global i32, &'s shrd gpu.global i32>; 1024]]
                     | -[gpu.block]-> () {
                          for block with <ib> do add::<'r, 's>
-                    };
+                    }
             }
         );
-        copy_to_host::<'g, a, cpu.stack, [i32; n]>(&'g shrd a_array, ha_array);
+        copy_to_host::<'g, a, cpu.stack, [i32; n]>(&'g shrd a_array, ha_array)
     }
 }

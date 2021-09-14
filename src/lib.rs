@@ -1,14 +1,13 @@
 use crate::error::ErrorReported;
 
-// TODO remove pub where possible. only public because of basic_syntax tests
 #[macro_use]
-pub mod ast;
+mod ast;
 #[macro_use]
-pub mod codegen;
+mod codegen;
 pub mod error;
 mod nat;
-pub mod parser;
-pub mod ty_check;
+mod parser;
+mod ty_check;
 mod utils;
 
 pub fn compile(file_path: &str) -> Result<String, ErrorReported> {

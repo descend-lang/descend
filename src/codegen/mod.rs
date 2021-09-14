@@ -79,36 +79,36 @@ fn gen_stmt(
 ) -> cu::Stmt {
     use desc::ExprKind::*;
     match &expr.expr {
-        Let(mutbl, ident, _, e1, e2) => {
+        Let(mutbl, ident, _, e) => {
             // Let View
-            if matches!(&e1.ty.as_ref().unwrap().ty, desc::TyKind::View(_)) {
+            if matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::View(_)) {
                 if let Some(old) =
-                    view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e1, view_ctx))
+                    view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e, view_ctx))
                 {
                     panic!(
                         "Reassigning view expression variable from `{i} = {old:?}` to `{i} = {new:?}`",
                         i = ident.name,
                         old = old,
-                        new = ViewExpr::create_from(e1, view_ctx)
+                        new = ViewExpr::create_from(e, view_ctx)
                     )
                 }
-                gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
+                cu::Stmt::Skip
             // Let Expression
-            } else if is_parall_collec_ty(e1.ty.as_ref().unwrap()) {
+            } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
                 if let Some(old) = parall_ctx.insert(
                     ident.name.clone(),
-                    ParallelityCollec::create_from(e1, parall_ctx),
+                    ParallelityCollec::create_from(e, parall_ctx),
                 ) {
                     panic!(
                         "Reassigning parallel collection expression identifier from `{i} = {old:?}` to `{i} = {new:?}`",
                         i = ident.name,
                         old = old,
-                        new = ParallelityCollec::create_from(e1, parall_ctx)
+                        new = ParallelityCollec::create_from(e, parall_ctx)
                     )
                 }
-                gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
+                cu::Stmt::Skip
             } else if let desc::TyKind::Data(desc::DataTy::At(dty, desc::Memory::GpuShared)) =
-                &e1.ty.as_ref().unwrap().ty
+                &e.ty.as_ref().unwrap().ty
             {
                 let cu_ty = if let desc::DataTy::Array(elem_dty, n) = dty.as_ref() {
                     cu::Ty::CArray(
@@ -121,25 +121,19 @@ fn gen_stmt(
                 } else {
                     gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl)
                 };
-                let var = cu::Stmt::VarDecl {
+                cu::Stmt::VarDecl {
                     name: ident.name.clone(),
                     ty: cu_ty,
                     addr_space: Some(cu::GpuAddrSpace::Shared),
                     expr: None,
-                };
-                cu::Stmt::Seq(
-                    Box::new(var),
-                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
+                }
             } else {
                 //if has_generatable_ty(e1) {
-                let gened_ty = gen_ty(&e1.ty.as_ref().unwrap().ty, *mutbl);
+                let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, *mutbl);
                 let (init_expr, cu_ty) = match gened_ty {
-                    cu::Ty::Array(_, _) => {
-                        (gen_expr(e1, parall_ctx, view_ctx, comp_unit), gened_ty)
-                    }
+                    cu::Ty::Array(_, _) => (gen_expr(e, parall_ctx, view_ctx, comp_unit), gened_ty),
                     _ => (
-                        gen_expr(e1, parall_ctx, view_ctx, comp_unit),
+                        gen_expr(e, parall_ctx, view_ctx, comp_unit),
                         if *mutbl == desc::Mutability::Mut {
                             cu::Ty::Scalar(cu::ScalarTy::Auto)
                         } else {
@@ -147,35 +141,41 @@ fn gen_stmt(
                         },
                     ),
                 };
-                let var = cu::Stmt::VarDecl {
+                cu::Stmt::VarDecl {
                     name: ident.name.clone(),
                     ty: cu_ty,
                     addr_space: None,
                     expr: Some(init_expr),
-                };
-                cu::Stmt::Seq(
-                    Box::new(var),
-                    Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-                )
+                }
             } // else {
               //     gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
               // }
         }
-        LetUninit(ident, ty, e) => cu::Stmt::Seq(
-            Box::new(cu::Stmt::VarDecl {
-                name: ident.name.clone(),
-                ty: gen_ty(&ty.as_ref().ty, desc::Mutability::Mut),
-                addr_space: None,
-                expr: None,
-            }),
-            Box::new(gen_stmt(e, return_value, parall_ctx, view_ctx, comp_unit)),
-        ),
+        LetUninit(ident, ty) => cu::Stmt::VarDecl {
+            name: ident.name.clone(),
+            ty: gen_ty(&ty.as_ref().ty, desc::Mutability::Mut),
+            addr_space: None,
+            expr: None,
+        },
         LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
         // e1 ; e2
-        Seq(e1, e2) => cu::Stmt::Seq(
-            Box::new(gen_stmt(e1, false, parall_ctx, view_ctx, comp_unit)),
-            Box::new(gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)),
-        ),
+        Seq(stmts) => {
+            let (last, leading) = stmts.split_last().unwrap();
+            cu::Stmt::Seq({
+                let mut stmts = leading
+                    .iter()
+                    .map(|stmt| gen_stmt(stmt, false, &mut *parall_ctx, &mut *view_ctx, comp_unit))
+                    .collect::<Vec<_>>();
+                stmts.append(&mut vec![gen_stmt(
+                    last,
+                    return_value,
+                    parall_ctx,
+                    view_ctx,
+                    comp_unit,
+                )]);
+                stmts
+            })
+        }
         ForNat(ident, range, body) => {
             let i = cu::Expr::Ident(ident.name.clone());
             let (init, cond, iter) = match range {
@@ -563,7 +563,7 @@ fn gen_par_for(
         par_section
     };
 
-    cu::Stmt::Seq(Box::new(body), Box::new(sync_stmt))
+    cu::Stmt::Seq(vec![body, sync_stmt])
 }
 
 fn gen_expr(
@@ -770,11 +770,11 @@ fn gen_expr(
             array: Box::new(gen_expr(e, parall_ctx, view_ctx, comp_unit)),
             index: i.clone(),
         },
-        Let(_, _, _, _, _)
-        | LetUninit(_, _, _)
+        Let(_, _, _, _)
+        | LetUninit(_, _)
         | LetProv(_, _)
         | IfElse(_, _, _)
-        | Seq(_, _)
+        | Seq(_)
         | While(_, _)
         | For(_, _, _)
         | ForNat(_, _, _)

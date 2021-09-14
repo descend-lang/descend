@@ -77,6 +77,7 @@ impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Stmt::*;
         match self {
+            Skip => Ok(()),
             VarDecl {
                 name,
                 ty,
@@ -104,9 +105,12 @@ impl std::fmt::Display for Stmt {
                 writeln!(f, "{}", stmt)?;
                 write!(f, "}}")
             }
-            Seq(stmt1, stmt2) => {
-                writeln!(f, "{}", stmt1)?;
-                write!(f, "{}", stmt2)
+            Seq(stmt) => {
+                let (last, leading) = stmt.split_last().unwrap();
+                for stmt in leading {
+                    writeln!(f, "{}", stmt)?;
+                }
+                write!(f, "{}", last)
             }
             Expr(expr) => {
                 if let super::cu_ast::Expr::Empty = expr {

@@ -23,6 +23,7 @@ pub(super) struct ParamDecl {
 
 #[derive(Clone, Debug)]
 pub(super) enum Stmt {
+    Skip,
     VarDecl {
         name: String,
         ty: Ty,
@@ -30,7 +31,7 @@ pub(super) enum Stmt {
         expr: Option<Expr>,
     },
     Block(Box<Stmt>),
-    Seq(Box<Stmt>, Box<Stmt>),
+    Seq(Vec<Stmt>),
     Expr(Expr),
     If {
         cond: Expr,

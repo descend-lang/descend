@@ -126,45 +126,32 @@ peg::parser! {
 
         /// Parse a sequence of expressions (might also just be one)
         pub(crate) rule expression_seq() -> Expr
-            = begin:position!() head:expression() _ ";" _ tail:expression_seq()? end:position!() {
-                match tail{
-                    None => head,
-                    Some(tail) => {
-                        let tail_ty = tail.ty.clone();
-                        Expr {
-                            expr: ExprKind::Seq(Box::new(head), Box::new(tail)),
-                            ty: tail_ty,
-                            span: Some(Span::new(begin, end))
-                        }
-                    }
-                }
-            }
-            / begin:position!() "let" __ m:(m:mutability() __ {m})? ident:ident()
-                typ:(_ ":" _ ty:ty() { ty })? _ "=" _ expr:expression() _ ";" _
-                tail:expression_seq() end:position!()
-            {
-                let tail_ty = tail.ty.clone();
-                Expr {
-                    expr:ExprKind::Let(m.unwrap_or(Mutability::Const), ident, Box::new(typ), Box::new(expr), Box::new(tail)),
-                    ty: tail_ty,
-                    span: Some(Span::new(begin, end))
-                }
-            }
-            / begin:position!() "let" __ "mut" __ ident:ident() _ ":" _ ty:ty() _ ";" _ tail:expression_seq() end:position!()
-            {
-                let tail_ty = tail.ty.clone();
-                Expr {
-                    expr: ExprKind::LetUninit(ident, Box::new(ty), Box::new(tail)),
-                    ty: tail_ty,
-                    span: Some(Span::new(begin, end))
-                }
+            = begin:position!() expressions:expression() **<2,> (_ ";" _) end:position!() {
+                Expr::with_span(ExprKind::Seq(expressions), Span::new(begin, end))
             }
             / expr:expression() { expr }
 
         // These rules lead to stackoverflows when integrated in rule expression
         // FIXME: How to integrate this properly into the precedence parser?
         pub(crate) rule expr_helper() -> Expr =
-            "for" __ ident:ident() __ "in" __ collection:expression()
+            begin:position!() "let" __ m:(m:mutability() __ {m})? ident:ident()
+                typ:(_ ":" _ ty:ty() { ty })? _ "=" _ expr:expression() end:position!()
+            {
+                Expr::with_span(
+                    ExprKind::Let(m.unwrap_or(Mutability::Const), ident,
+                        Box::new(typ), Box::new(expr)),
+                    Span::new(begin, end)
+                )
+            }
+            / begin:position!() "let" __ "mut" __ ident:ident() _ ":"
+                _ ty:ty() end:position!()
+            {
+                Expr::with_span(
+                    ExprKind::LetUninit(ident, Box::new(ty)),
+                    Span::new(begin, end)
+                )
+            }
+            / "for" __ ident:ident() __ "in" __ collection:expression()
                 _ "{" _ body:expression_seq() _ "}"
             {
                 Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body)))
@@ -267,6 +254,7 @@ peg::parser! {
             "[" _ expressions:expression() ** (_ "," _) _ "]" {
                 Expr::new(ExprKind::Array(expressions))
             }
+            // TODO unify single vs vec rules?
             "(" _ expression:expression() _ "," _ ")" {
                 Expr::new(ExprKind::Tuple(vec![expression]))
             }
@@ -1441,36 +1429,27 @@ mod tests {
     #[test]
     fn expression_let() {
         assert_eq!(
-            descend::expression_seq("let mut x : f32 = 17.123f32; true"),
-            Ok(Expr::with_type(
-                ExprKind::Let(
-                    Mutability::Mut,
-                    Ident::new("x"),
-                    Box::new(Some(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32))))),
-                    Box::new(Expr::with_type(
-                        ExprKind::Lit(Lit::F32(17.123)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32)))
-                    )),
-                    Box::new(Expr::with_type(
-                        ExprKind::Lit(Lit::Bool(true)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))
-                    ))
-                ),
-                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))
-            ))
+            descend::expression_seq("let mut x : f32 = 17.123f32"),
+            Ok(Expr::new(ExprKind::Let(
+                Mutability::Mut,
+                Ident::new("x"),
+                Box::new(Some(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32))))),
+                Box::new(Expr::with_type(
+                    ExprKind::Lit(Lit::F32(17.123)),
+                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32)))
+                ))
+            ),))
         );
     }
 
     #[test]
     fn expression_let_negative() {
         // Does there always have to be another instruction after let ?
-        let result = descend::expression_seq("let mut x : f32 = 17.123f32;");
+        let result = descend::expression_seq("let mut x : 32 = 17.123f32;");
         assert!(result.is_err());
-        let result = descend::expression_seq("let mut x : 32 = 17.123f32; true");
+        let result = descend::expression_seq("let mut x:bool@gpu.shared@ = false;");
         assert!(result.is_err());
-        let result = descend::expression_seq("let mut x:bool@gpu.shared@ = false; true");
-        assert!(result.is_err());
-        let result = descend::expression_seq("let x:bool@Memory.Location = false; true");
+        let result = descend::expression_seq("let x:bool@Memory.Location = false;");
         assert!(result.is_err());
     }
 
@@ -1723,37 +1702,18 @@ mod tests {
     //span testing
     #[test]
     fn span_test_let_expression() {
-        let line_col_source = SourceCode::new("let mut result : i32 = true;\nresult".to_string());
-        ////span from expression after semicolon. Assumed we know the expression in which the error occurs
-        let no_syntax_error_but_semantics_error =
-            descend::expression_seq("let mut result : i32 = true;\nresult");
-        let result = match no_syntax_error_but_semantics_error {
-            Ok(Expr {
-                expr: ExprKind::Let(_, _, _, _, expr2),
-                ..
-            }) => match (*expr2).span {
-                Some(span) => Some(line_col_source.get_line_col(span.begin)),
-                None => None,
-            },
-            _ => None,
-        };
-        assert_eq!(
-            result,
-            Some((1, 0)),
-            "cannot extract correct line and column from span"
-        );
+        let line_col_source = SourceCode::new("let mut result : i32 = true".to_string());
 
         //span from expression after assertion
         let no_syntax_error_but_semantics_error =
-            descend::expression_seq("let mut result : i32 = true;\nresult");
+            descend::expression_seq("let mut result : i32 = true");
         let result = match no_syntax_error_but_semantics_error {
             Ok(Expr {
-                expr: ExprKind::Let(_, _, _, expr1, _),
+                expr: ExprKind::Let(_, _, _, expr),
                 ..
-            }) => match (*expr1).span {
-                Some(span) => Some(line_col_source.get_line_col(span.begin)),
-                None => None,
-            },
+            }) => expr
+                .span
+                .map(|span| line_col_source.get_line_col(span.begin)),
             _ => None,
         };
         assert_eq!(
@@ -1764,16 +1724,18 @@ mod tests {
 
         //span from variable identifier
         let no_syntax_error_but_semantics_error =
-            descend::expression_seq("let mut result : i32 = true;\nresult");
+            descend::expression_seq("let mut result : i32 = true");
         let result = match no_syntax_error_but_semantics_error {
             Ok(Expr {
-                expr: ExprKind::Let(_, ident, _, _, _),
+                expr: ExprKind::Let(_, ident, _, _),
                 ..
-            }) => match ident.span {
-                Some(span) => Some(line_col_source.get_line_col(span.begin)),
-                None => None,
-            },
-            _ => None,
+            }) => ident
+                .span
+                .map(|span| line_col_source.get_line_col(span.begin)),
+            err => {
+                eprintln!("{:?}", err);
+                None
+            }
         };
         assert_eq!(
             result,
@@ -1784,7 +1746,7 @@ mod tests {
 
     #[test]
     fn while_loop() {
-        let src = r#"while 1 <= 2 { let x = 5; () }"#;
+        let src = r#"while 1 <= 2 { let x = 5 }"#;
         let result = descend::expression(src);
         print!("{:?}", result.as_ref().unwrap());
 
@@ -1803,22 +1765,15 @@ mod tests {
                         Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
                     ))
                 ))),
-                Box::new(Expr::with_type(
-                    ExprKind::Let(
-                        Mutability::Const,
-                        Ident::new("x"),
-                        Box::new(None),
-                        Box::new(Expr::with_type(
-                            ExprKind::Lit(Lit::I32(5)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
-                        )),
-                        Box::new(Expr::with_type(
-                            ExprKind::Lit(Lit::Unit),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))
-                        ))
-                    ),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))
-                ))
+                Box::new(Expr::new(ExprKind::Let(
+                    Mutability::Const,
+                    Ident::new("x"),
+                    Box::new(None),
+                    Box::new(Expr::with_type(
+                        ExprKind::Lit(Lit::I32(5)),
+                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                    ))
+                )))
             )))
         )
     }
