@@ -822,6 +822,7 @@ impl TyChecker {
             })?;
         let pl_expr_ty =
             self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
+        pl_expr.ty = Some(pl_expr_ty.clone());
         let (elem_dty, n) = match pl_expr_ty.ty {
             TyKind::Data(DataTy::Array(elem_ty, n)) => (*elem_ty, n),
             TyKind::Data(DataTy::At(arr_ty, _)) => {
@@ -844,6 +845,14 @@ impl TyChecker {
                     ));
                 }
             }
+            TyKind::Data(DataTy::Ref(_, _, _, arr_ty)) => match *arr_ty {
+                DataTy::Array(elem_ty, n) => (*elem_ty, n),
+                _ => {
+                    return Err(TyError::String(
+                        "Trying to index into non array type.".to_string(),
+                    ))
+                }
+            },
             _ => {
                 return Err(TyError::String(
                     "Trying to index into non array type.".to_string(),
@@ -1207,6 +1216,7 @@ impl TyChecker {
             Lit::Unit => ScalarTy::Unit,
             Lit::Bool(_) => ScalarTy::Bool,
             Lit::I32(_) => ScalarTy::I32,
+            Lit::U32(_) => ScalarTy::U32,
             Lit::F32(_) => ScalarTy::F32,
         };
         (ty_ctx, Ty::new(TyKind::Data(DataTy::Scalar(scalar_data))))
@@ -1670,7 +1680,7 @@ impl TyChecker {
             TyKind::Data(dty) => match dty {
                 // TODO variables of Dead types can be reassigned. So why do we not have to check
                 //  well-formedness of the type in Dead(ty)? (According paper).
-                DataTy::Scalar(_) | DataTy::Dead(_) => {}
+                DataTy::Scalar(_) | DataTy::Atomic(_) | DataTy::Dead(_) => {}
                 DataTy::Ident(ident) => {
                     if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
                         Err(CtxError::KindedIdentNotFound(ident.clone()))?

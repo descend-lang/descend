@@ -336,6 +336,7 @@ pub enum Lit {
     Unit,
     Bool(bool),
     I32(i32),
+    U32(u32),
     F32(f32),
 }
 
@@ -358,6 +359,7 @@ impl fmt::Display for Lit {
             Self::Unit => write!(f, "()"),
             Self::Bool(b) => write!(f, "{}", b),
             Self::I32(i) => write!(f, "{}", i),
+            Self::U32(u) => write!(f, "{}", u),
             Self::F32(fl) => write!(f, "{}", fl),
         }
     }
@@ -827,6 +829,7 @@ impl ViewTy {
 pub enum DataTy {
     Ident(Ident),
     Scalar(ScalarTy),
+    Atomic(ScalarTy),
     Array(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
@@ -841,12 +844,13 @@ impl DataTy {
 
         match self {
             Scalar(_) => false,
+            Atomic(_) => false,
             Ident(_) => true,
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
             At(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Array(ty, _) => ty.non_copyable(),
+            Array(_, _) => true,
             Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
         }
     }
@@ -858,7 +862,7 @@ impl DataTy {
     pub fn is_fully_alive(&self) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | Ref(_, _, _, _) | At(_, _) | Array(_, _) => true,
+            Scalar(_) | Atomic(_) | Ident(_) | Ref(_, _, _, _) | At(_, _) | Array(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -873,6 +877,7 @@ impl DataTy {
         match dty {
             DataTy::Scalar(_) | DataTy::Ident(_) => false,
             DataTy::Dead(_) => panic!("unexpected"),
+            DataTy::Atomic(sty) => self == &DataTy::Scalar(sty.clone()),
             DataTy::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
             DataTy::Tuple(elem_dtys) => {
                 let mut found = false;
@@ -889,7 +894,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Ident(_) | Dead(_) => false,
+            Scalar(_) | Atomic(_) | Ident(_) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -911,6 +916,7 @@ impl DataTy {
         use DataTy::*;
         match self {
             Scalar(_) => self.clone(),
+            Atomic(_) => self.clone(),
             Ident(id) => {
                 if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
                     match with {
@@ -957,6 +963,7 @@ impl DataTy {
 pub enum ScalarTy {
     Unit,
     I32,
+    U32,
     F32,
     Bool,
     Gpu,

@@ -84,10 +84,6 @@ impl std::fmt::Display for Stmt {
                 addr_space,
                 expr,
             } => {
-                //  if let Ty::Const(_) = ty {
-                //      write!(f, "const ")?
-                //  }
-                //  write!(f, "auto {}", name)?;
                 if let Some(addrs) = addr_space {
                     write!(f, "{} ", addrs)?;
                 }
@@ -141,6 +137,7 @@ impl std::fmt::Display for Stmt {
                 iter,
                 stmt,
             } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
+            Label(l) => write!(f, "{}:", l),
             Return(expr) => {
                 write!(f, "return")?;
                 if let Some(e) = expr {
@@ -217,6 +214,7 @@ impl std::fmt::Display for Lit {
         match self {
             Lit::Bool(b) => write!(f, "{}", b),
             Lit::I32(i) => write!(f, "{}", i),
+            Lit::U32(u) => write!(f, "{}", u),
             Lit::F32(fl) => write!(f, "{}", fl),
         }
     }
@@ -315,6 +313,7 @@ impl std::fmt::Display for Ty {
                 BufferKind::Ident(name) => write!(f, "{}", name),
             },
             Scalar(sty) => write!(f, "{}", sty),
+            Atomic(at) => write!(f, "descend::atomic<{}>", at),
             Ident(name) => write!(f, "{}", name),
         }
     }
@@ -327,6 +326,7 @@ impl std::fmt::Display for ScalarTy {
             Auto => write!(f, "auto"),
             Void => write!(f, "void"),
             I32 => write!(f, "descend::i32"),
+            U32 => write!(f, "descend::u32"),
             F32 => write!(f, "descend::f32"),
             SizeT => write!(f, "std::size_t"),
             Bool => write!(f, "bool"),

@@ -1,6 +1,7 @@
 mod cu_ast;
 mod printer;
 
+use super::utils;
 use crate::ast as desc;
 use crate::ast::{CompilUnit, Ident, PlaceExprKind, ThreadHierchyTy};
 use cu_ast as cu;
@@ -42,6 +43,28 @@ pub fn gen(compil_unit: &CompilUnit) -> String {
     printer::print(&cu_program)
 }
 
+enum CheckedStmt {
+    Stmt(cu::Stmt),
+    StmtIdxCheck(cu::Stmt, cu::Stmt),
+}
+
+enum CheckedExpr {
+    Expr(cu::Expr),
+    ExprIdxCheck(cu::Stmt, cu::Expr),
+}
+
+impl CheckedExpr {
+    fn map<F>(&self, f: F) -> Self
+    where
+        F: Fn(cu::Expr) -> cu::Expr,
+    {
+        match self {
+            Self::Expr(e) => Self::Expr(f(e.clone())),
+            Self::ExprIdxCheck(c, e) => Self::ExprIdxCheck(c.clone(), f(e.clone())),
+        }
+    }
+}
+
 fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef]) -> cu::Item {
     let desc::FunDef {
         name,
@@ -58,13 +81,17 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef]) -> cu::Item {
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
         ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut),
-        body: gen_stmt(
+        body: match gen_stmt(
             body_expr,
             !matches!(ret_ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
             &mut HashMap::new(),
             &mut HashMap::new(),
             comp_unit,
-        ),
+            None,
+        ) {
+            CheckedStmt::Stmt(s) => s,
+            CheckedStmt::StmtIdxCheck(_, _) => panic!("idx checks should have been compiled away"),
+        },
         is_dev_fun: is_dev_fun(*exec),
     }
 }
@@ -76,7 +103,8 @@ fn gen_stmt(
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
-) -> cu::Stmt {
+    label: Option<String>,
+) -> CheckedStmt {
     use desc::ExprKind::*;
     match &expr.expr {
         Let(mutbl, ident, _, e) => {
@@ -92,7 +120,7 @@ fn gen_stmt(
                         new = ViewExpr::create_from(e, view_ctx)
                     )
                 }
-                cu::Stmt::Skip
+                CheckedStmt::Stmt(cu::Stmt::Skip)
             // Let Expression
             } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
                 if let Some(old) = parall_ctx.insert(
@@ -106,7 +134,7 @@ fn gen_stmt(
                         new = ParallelityCollec::create_from(e, parall_ctx)
                     )
                 }
-                cu::Stmt::Skip
+                CheckedStmt::Stmt(cu::Stmt::Skip)
             } else if let desc::TyKind::Data(desc::DataTy::At(dty, desc::Memory::GpuShared)) =
                 &e.ty.as_ref().unwrap().ty
             {
@@ -121,60 +149,96 @@ fn gen_stmt(
                 } else {
                     gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl)
                 };
-                cu::Stmt::VarDecl {
+                CheckedStmt::Stmt(cu::Stmt::VarDecl {
                     name: ident.name.clone(),
                     ty: cu_ty,
                     addr_space: Some(cu::GpuAddrSpace::Shared),
                     expr: None,
-                }
+                })
             } else {
                 //if has_generatable_ty(e1) {
                 let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, *mutbl);
-                let (init_expr, cu_ty) = match gened_ty {
-                    cu::Ty::Array(_, _) => (gen_expr(e, parall_ctx, view_ctx, comp_unit), gened_ty),
-                    _ => (
-                        gen_expr(e, parall_ctx, view_ctx, comp_unit),
-                        if *mutbl == desc::Mutability::Mut {
-                            cu::Ty::Scalar(cu::ScalarTy::Auto)
-                        } else {
-                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
-                        },
-                    ),
+                let (init_expr, cu_ty, checks) = match gened_ty {
+                    cu::Ty::Array(_, _) => {
+                        let (ex, ch) =
+                            match gen_expr(e, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                                CheckedExpr::Expr(e) => (e, None),
+                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+                            };
+                        (ex, gened_ty, ch)
+                    }
+                    _ => {
+                        let (ex, ch) =
+                            match gen_expr(e, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                                CheckedExpr::Expr(e) => (e, None),
+                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+                            };
+                        (
+                            ex,
+                            if *mutbl == desc::Mutability::Mut {
+                                cu::Ty::Scalar(cu::ScalarTy::Auto)
+                            } else {
+                                cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                            },
+                            ch,
+                        )
+                    }
                 };
-                cu::Stmt::VarDecl {
+                let var_decl = cu::Stmt::VarDecl {
                     name: ident.name.clone(),
                     ty: cu_ty,
                     addr_space: None,
                     expr: Some(init_expr),
-                }
-            } // else {
-              //     gen_stmt(e2, return_value, parall_ctx, view_ctx, comp_unit)
-              // }
+                };
+                CheckedStmt::Stmt(if checks.is_none() {
+                    var_decl
+                } else {
+                    cu::Stmt::Seq(vec![checks.unwrap(), var_decl])
+                })
+            }
         }
-        LetUninit(ident, ty) => cu::Stmt::VarDecl {
+        LetUninit(ident, ty) => CheckedStmt::Stmt(cu::Stmt::VarDecl {
             name: ident.name.clone(),
             ty: gen_ty(&ty.as_ref().ty, desc::Mutability::Mut),
             addr_space: None,
             expr: None,
-        },
-        LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
+        }),
+        LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit, label),
         // e1 ; e2
         Seq(stmts) => {
             let (last, leading) = stmts.split_last().unwrap();
-            cu::Stmt::Seq({
-                let mut stmts = leading
-                    .iter()
-                    .map(|stmt| gen_stmt(stmt, false, &mut *parall_ctx, &mut *view_ctx, comp_unit))
-                    .collect::<Vec<_>>();
-                stmts.append(&mut vec![gen_stmt(
-                    last,
-                    return_value,
-                    parall_ctx,
-                    view_ctx,
-                    comp_unit,
-                )]);
-                stmts
-            })
+            let mut checked_stmts = leading
+                .iter()
+                .map(|stmt| {
+                    gen_stmt(
+                        stmt,
+                        false,
+                        &mut *parall_ctx,
+                        &mut *view_ctx,
+                        comp_unit,
+                        label.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            checked_stmts.append(&mut vec![gen_stmt(
+                last,
+                return_value,
+                parall_ctx,
+                view_ctx,
+                comp_unit,
+                label,
+            )]);
+            let mut checks_stmts_seq = vec![];
+            for chkd_stmt in checked_stmts {
+                match chkd_stmt {
+                    CheckedStmt::Stmt(stmt) => checks_stmts_seq.push(stmt),
+                    CheckedStmt::StmtIdxCheck(chk, stmt) => {
+                        checks_stmts_seq.push(chk);
+                        checks_stmts_seq.push(stmt);
+                    }
+                }
+            }
+            CheckedStmt::Stmt(cu::Stmt::Seq(checks_stmts_seq))
         }
         ForNat(ident, range, body) => {
             let i = cu::Expr::Ident(ident.name.clone());
@@ -232,38 +296,72 @@ fn gen_stmt(
                 _ => panic!("Currently ranges are assumed to be predeclared functions."),
             };
 
-            cu::Stmt::ForLoop {
+            CheckedStmt::Stmt(cu::Stmt::ForLoop {
                 init: Box::new(init),
-                cond,
+                cond, // TODO needs some kind of checking
                 iter,
-                stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
-                    body, false, parall_ctx, view_ctx, comp_unit,
-                )))),
+                stmt: match gen_stmt(body, false, parall_ctx, view_ctx, comp_unit, label) {
+                    CheckedStmt::Stmt(st) => Box::new(cu::Stmt::Block(Box::new(st))),
+                    CheckedStmt::StmtIdxCheck(_, _) => {
+                        panic!("body of for-loop should not have to be checked")
+                    }
+                },
+            })
+        }
+        While(cond, body) => CheckedStmt::Stmt(cu::Stmt::While {
+            cond: match gen_expr(cond, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                CheckedExpr::Expr(expr) => expr,
+                CheckedExpr::ExprIdxCheck(_, expr) => {
+                    println!("found a condition in while-loop which needs checks!"); // TODO implement checks
+                    expr
+                }
+            },
+            stmt: match gen_stmt(body, false, parall_ctx, view_ctx, comp_unit, label) {
+                CheckedStmt::Stmt(st) => Box::new(cu::Stmt::Block(Box::new(st))),
+                CheckedStmt::StmtIdxCheck(_, _) => {
+                    panic!("body of while-loop should not have to be checked")
+                }
+            },
+        }),
+        For(ident, coll_expr, body) => CheckedStmt::Stmt(gen_for_each(
+            ident, coll_expr, body, parall_ctx, view_ctx, comp_unit, label,
+        )),
+        ParFor(parall_collec, input, funs) => CheckedStmt::Stmt(gen_par_for(
+            parall_collec,
+            input,
+            funs,
+            parall_ctx,
+            view_ctx,
+            comp_unit,
+            label,
+        )),
+        // FIXME this assumes that IfElse is not an Expression.
+        IfElse(cond, e_tt, e_ff) => {
+            match gen_expr(cond, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                CheckedExpr::ExprIdxCheck(check, con) => CheckedStmt::Stmt(cu::Stmt::Seq(vec![
+                    check,
+                    gen_if_else(con, e_tt, e_ff, parall_ctx, view_ctx, comp_unit, label),
+                ])),
+                CheckedExpr::Expr(con) => CheckedStmt::Stmt(gen_if_else(
+                    con, e_tt, e_ff, parall_ctx, view_ctx, comp_unit, label,
+                )),
             }
         }
-        While(cond, body) => cu::Stmt::While {
-            cond: gen_expr(cond, parall_ctx, view_ctx, comp_unit),
-            stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
-                body, false, parall_ctx, view_ctx, comp_unit,
-            )))),
-        },
-        For(ident, coll_expr, body) => {
-            gen_for_each(ident, coll_expr, body, parall_ctx, view_ctx, comp_unit)
-        }
-        ParFor(parall_collec, input, funs) => {
-            gen_par_for(parall_collec, input, funs, parall_ctx, view_ctx, comp_unit)
-        }
-        // FIXME this assumes that IfElse is not an Expression.
-        IfElse(cond, e_tt, e_ff) => cu::Stmt::IfElse {
-            cond: gen_expr(cond, parall_ctx, view_ctx, comp_unit),
-            true_body: Box::new(gen_stmt(e_tt, false, parall_ctx, view_ctx, comp_unit)),
-            false_body: Box::new(gen_stmt(e_ff, false, parall_ctx, view_ctx, comp_unit)),
-        },
         _ => {
             if return_value {
-                cu::Stmt::Return(Some(gen_expr(&expr, parall_ctx, view_ctx, comp_unit)))
+                match gen_expr(&expr, parall_ctx, view_ctx, comp_unit, label) {
+                    CheckedExpr::Expr(e) => CheckedStmt::Stmt(cu::Stmt::Return(Some(e))),
+                    CheckedExpr::ExprIdxCheck(ch, e) => {
+                        CheckedStmt::StmtIdxCheck(ch, cu::Stmt::Return(Some(e)))
+                    }
+                }
             } else {
-                cu::Stmt::Expr(gen_expr(&expr, parall_ctx, view_ctx, comp_unit))
+                match gen_expr(&expr, parall_ctx, view_ctx, comp_unit, label) {
+                    CheckedExpr::Expr(e) => CheckedStmt::Stmt(cu::Stmt::Expr(e)),
+                    CheckedExpr::ExprIdxCheck(ch, e) => {
+                        CheckedStmt::StmtIdxCheck(ch, cu::Stmt::Expr(e))
+                    }
+                }
             }
         }
     }
@@ -274,6 +372,32 @@ fn has_generatable_ty(e: &desc::Expr) -> bool {
         || matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Data(_))
 }
 
+fn gen_if_else(
+    cond: cu_ast::Expr,
+    e_tt: &desc::Expr,
+    e_ff: &desc::Expr,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+    comp_unit: &[desc::FunDef],
+    label: Option<String>,
+) -> cu::Stmt {
+    cu::Stmt::IfElse {
+        cond: cond,
+        true_body: match gen_stmt(e_tt, false, parall_ctx, view_ctx, comp_unit, label.clone()) {
+            CheckedStmt::Stmt(st) => Box::new(st),
+            CheckedStmt::StmtIdxCheck(_, _) => {
+                panic!("body of true-case of if-else should not need checks")
+            }
+        },
+        false_body: match gen_stmt(e_ff, false, parall_ctx, view_ctx, comp_unit, label) {
+            CheckedStmt::Stmt(st) => Box::new(st),
+            CheckedStmt::StmtIdxCheck(_, _) => {
+                panic!("body of false-case of if-else should not need checks")
+            }
+        },
+    }
+}
+
 fn gen_for_each(
     ident: &Ident,
     coll_expr: &desc::Expr,
@@ -281,6 +405,7 @@ fn gen_for_each(
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
+    label: Option<String>,
 ) -> cu::Stmt {
     let i_name = crate::utils::fresh_name("_i_");
     let i_decl = cu::Stmt::VarDecl {
@@ -317,13 +442,17 @@ fn gen_for_each(
                 rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
             }),
         },
-        stmt: Box::new(cu::Stmt::Block(Box::new(gen_stmt(
+        stmt: match gen_stmt(
             body,
             false,
             parall_ctx,
             &mut scoped_view_ctx,
             comp_unit,
-        )))),
+            label,
+        ) {
+            CheckedStmt::Stmt(st) => Box::new(cu::Stmt::Block(Box::new(st))),
+            CheckedStmt::StmtIdxCheck(_, _) => panic!("this should not happen"),
+        },
     }
 }
 
@@ -335,11 +464,12 @@ fn gen_exec(
     fun: &desc::Expr,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
-) -> cu::Expr {
+    label: Option<String>,
+) -> CheckedExpr {
     // Prepare parameter declarations for inputs
     let mut input_view_expr = ViewExpr::create_from(view_expr, view_ctx);
     let name_to_exprs = input_view_expr.collect_and_rename_input_exprs();
-    let param_decls: Vec<_> = name_to_exprs
+    let mut param_decls: Vec<_> = name_to_exprs
         .iter()
         .map(|(name, expr)| cu::ParamDecl {
             name: name.clone(),
@@ -347,14 +477,34 @@ fn gen_exec(
             ty: gen_ty(&expr.ty.as_ref().unwrap().ty, desc::Mutability::Const),
         })
         .collect();
-
+    param_decls.insert(
+        0,
+        cu::ParamDecl {
+            name: "global_failure".to_string(),
+            ty: gen_ty(
+                &desc::TyKind::Data(desc::DataTy::Ref(
+                    desc::Provenance::Ident(Ident::new("smth")),
+                    desc::Ownership::Uniq,
+                    desc::Memory::GpuGlobal,
+                    Box::new(desc::DataTy::Scalar(desc::ScalarTy::Bool)),
+                )),
+                desc::Mutability::Const,
+            ),
+        },
+    );
     // GPU argument
-    let gpu = gen_expr(
+    let gpu = match gen_expr(
         gpu_expr,
         &mut HashMap::new(),
         &mut HashMap::new(),
         comp_unit,
-    );
+        None,
+    ) {
+        CheckedExpr::Expr(e) => e,
+        CheckedExpr::ExprIdxCheck(_, _) => {
+            panic!("Did not expect to check a condition for GPU")
+        }
+    };
 
     // FIXME only allows Lambdas
     let dev_fun = if let desc::ExprKind::Lambda(params, _, _, body) = &fun.expr {
@@ -371,31 +521,74 @@ fn gen_exec(
 
         cu::Expr::Lambda {
             params: param_decls,
-            body: Box::new(gen_stmt(
+            body: match gen_stmt(
                 &body,
                 false,
                 &mut scope_parall_ctx,
                 view_ctx,
                 comp_unit,
-            )),
+                label.clone(),
+            ) {
+                CheckedStmt::Stmt(st) => Box::new(st),
+                CheckedStmt::StmtIdxCheck(_, _) => panic!("this should never happen"),
+            },
             ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
             is_dev_fun: true,
         }
     } else {
         panic!("Currently only lambdas can be passed.")
     };
-
+    let mut checks: Vec<cu::Stmt> = vec![];
     let mut input: Vec<_> = name_to_exprs
         .iter()
-        .map(|(_, pl_expr)| gen_expr(pl_expr, &mut HashMap::new(), &mut HashMap::new(), comp_unit))
+        .map(|(_, pl_expr)| {
+            match gen_expr(
+                pl_expr,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+                comp_unit,
+                label.clone(),
+            ) {
+                CheckedExpr::Expr(expr) => expr,
+                CheckedExpr::ExprIdxCheck(check, expr) => {
+                    checks.push(check);
+                    expr
+                }
+            }
+        })
         .collect();
+    input.insert(
+        0,
+        cu::Expr::Ref(Box::new(cu::Expr::Ident("d_fail".to_string()))),
+    );
     let template_args = gen_args_kinded(vec![blocks.clone(), threads.clone()].as_slice());
     let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
     args.append(&mut input);
-    cu::Expr::FunCall {
-        fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
-        template_args,
-        args,
+
+    if checks.is_empty() {
+        CheckedExpr::Expr(cu::Expr::FunCall {
+            fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+            template_args,
+            args,
+        })
+    } else if checks.len() == 1 {
+        CheckedExpr::ExprIdxCheck(
+            checks.pop().unwrap(),
+            cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+                template_args,
+                args,
+            },
+        )
+    } else {
+        CheckedExpr::ExprIdxCheck(
+            cu::Stmt::Seq(checks),
+            cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+                template_args,
+                args,
+            },
+        )
     }
 }
 
@@ -406,6 +599,7 @@ fn gen_par_for(
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
+    label: Option<String>,
 ) -> cu::Stmt {
     fn gen_parall_section(
         has_th_hierchy_elem_ty: bool,
@@ -415,6 +609,7 @@ fn gen_par_for(
         pid: &desc::Nat,
         view_ctx: &mut HashMap<String, ViewExpr>,
         comp_unit: &[desc::FunDef],
+        label: Option<String>,
     ) -> cu::Stmt {
         let mut offset_begin_input_params = 0;
         let mut scope_parall_ctx: HashMap<String, ParallelityCollec> = HashMap::new();
@@ -459,7 +654,22 @@ fn gen_par_for(
             }
         }
 
-        gen_stmt(body, false, &mut scope_parall_ctx, view_ctx, comp_unit)
+        let l = match label.clone() {
+            None => utils::fresh_name("label"),
+            Some(l) => l,
+        };
+        match gen_stmt(
+            body,
+            false,
+            &mut scope_parall_ctx,
+            view_ctx,
+            comp_unit,
+            Some(l),
+        ) {
+            CheckedStmt::Stmt(st) => st,
+            // TODO prepend check to returned sequence statement
+            CheckedStmt::StmtIdxCheck(ch, st) => cu::Stmt::Seq(vec![ch, st]),
+        }
     }
 
     let (pid, sync_stmt, has_th_hierchy_elem) = match &parall_collec.ty.as_ref().unwrap().ty {
@@ -473,11 +683,30 @@ fn gen_par_for(
             ),
             desc::ThreadHierchyTy::ThreadGrp(_, _, _) => (
                 desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
-                cu::Stmt::Expr(cu::Expr::FunCall {
-                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                    template_args: vec![],
-                    args: vec![],
-                }),
+                cu::Stmt::Seq(vec![
+                    cu::Stmt::Label(match label.clone() {
+                        Some(l) => l,
+                        None => panic!("exptected label!"),
+                    }),
+                    cu::Stmt::Expr(cu::Expr::FunCall {
+                        fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                        template_args: vec![],
+                        args: vec![],
+                    }),
+                    cu::Stmt::If {
+                        cond: cu::Expr::BinOp {
+                            op: cu::BinOp::Neq,
+                            lhs: Box::new(cu::Expr::Ident("global_failure".to_string())),
+                            rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(-1))),
+                        },
+                        body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Return(None)))),
+                    },
+                    cu::Stmt::Expr(cu::Expr::FunCall {
+                        fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                        template_args: vec![],
+                        args: vec![],
+                    }),
+                ]),
                 false,
             ),
             desc::ThreadHierchyTy::WarpGrp(_) => (
@@ -522,6 +751,7 @@ fn gen_par_for(
                 &pid,
                 view_ctx,
                 comp_unit,
+                label,
             ),
             desc::ExprKind::DepApp(fun, gen_args) => {
                 let ident = extract_ident(fun);
@@ -540,6 +770,7 @@ fn gen_par_for(
                         &pid,
                         view_ctx,
                         comp_unit,
+                        label,
                     )
                 } else {
                     panic!("instatiate_gen_fun did not return a lambda expression")
@@ -563,7 +794,58 @@ fn gen_par_for(
         par_section
     };
 
+    // TODO append sync_stmt to sequence statement of body
     cu::Stmt::Seq(vec![body, sync_stmt])
+}
+
+fn gen_checked_stmt(
+    expr: &desc::Expr,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+    comp_unit: &[desc::FunDef],
+    label: Option<String>,
+) -> cu::Stmt {
+    use desc::ExprKind::*;
+    match &expr.expr {
+        // Let(_, _, _, expr1, expr2) => cu::Stmt::Seq(
+        //     Box::new(gen_checked_stmt(expr1, view_ctx, comp_unit, label.clone())),
+        //     Box::new(gen_checked_stmt(expr2, view_ctx, comp_unit, label)),
+        // ),
+        // Seq(e1, e2) => cu::Stmt::Seq(
+        //     Box::new(gen_checked_stmt(e1, view_ctx, comp_unit, label.clone())),
+        //     Box::new(gen_checked_stmt(e2, view_ctx, comp_unit, label)),
+        // ),
+        Index(pl_expr, i) => match label {
+            Some(l) => {
+                let n = match &pl_expr.ty.as_ref().expect(&format!("{:?}", pl_expr)).ty {
+                    TyKind::Data(DataTy::Array(_, m)) => m,
+                    TyKind::Data(DataTy::Ref(_, _, _, a)) => {
+                        if let DataTy::Array(_, m) = a.as_ref() {
+                            m
+                        } else {
+                            panic!("cannot index into non array type!");
+                        }
+                    }
+                    TyKind::View(ViewTy::Array(_, m)) => m,
+                    t => panic!("cannot index into non array type!{:?}", t),
+                };
+                use crate::ast::*;
+                cu::Stmt::If {
+                    cond: cu::Expr::BinOp {
+                        op: cu::BinOp::Gt,
+                        lhs: Box::new(cu::Expr::Nat(i.clone())),
+                        rhs: Box::new(cu::Expr::Nat(n.clone())),
+                    },
+                    body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Expr(cu::Expr::Ident(
+                        format!("goto {}", l),
+                    ))))),
+                }
+            }
+            None => cu::Stmt::Expr(cu::Expr::Empty),
+        },
+        //Assign(_, expr) => gen_checked_stmt(expr, view_ctx, comp_unit, label),
+        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => cu::Stmt::Expr(cu::Expr::Empty),
+        _ => panic!("Smth not yet implemented {:?}", &expr), // TODO not all cases implemented
+    }
 }
 
 fn gen_expr(
@@ -571,109 +853,111 @@ fn gen_expr(
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
-) -> cu::Expr {
+    label: Option<String>,
+) -> CheckedExpr {
     use desc::ExprKind::*;
 
     match &expr.expr {
-        Lit(l) => gen_lit(*l),
-        PlaceExpr(pl_expr) => gen_pl_expr(pl_expr, view_ctx, comp_unit),
+        Lit(l) => CheckedExpr::Expr(gen_lit(*l)),
+        PlaceExpr(pl_expr) => CheckedExpr::Expr(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
         Proj(tuple, idx) => {
             if let desc::TyKind::View(_) = expr.ty.as_ref().unwrap().ty {
-                gen_view(
+                CheckedExpr::Expr(gen_view(
                     &ViewExpr::create_from(expr, view_ctx),
                     vec![],
                     view_ctx,
                     comp_unit,
-                )
+                ))
             } else {
-                cu::Expr::Proj {
-                    tuple: Box::new(gen_expr(tuple, parall_ctx, view_ctx, comp_unit)),
+                gen_expr(tuple, parall_ctx, view_ctx, comp_unit, label).map(|e| cu::Expr::Proj {
+                    tuple: Box::new(e),
                     n: *idx,
-                }
+                })
             }
         }
-        BinOp(op, lhs, rhs) => cu::Expr::BinOp {
-            op: match op {
-                desc::BinOp::Add => cu::BinOp::Add,
-                desc::BinOp::Sub => cu::BinOp::Sub,
-                desc::BinOp::Mul => cu::BinOp::Mul,
-                desc::BinOp::Div => cu::BinOp::Div,
-                desc::BinOp::Mod => cu::BinOp::Mod,
-                desc::BinOp::And => cu::BinOp::And,
-                desc::BinOp::Or => cu::BinOp::Or,
-                desc::BinOp::Eq => cu::BinOp::Eq,
-                desc::BinOp::Lt => cu::BinOp::Lt,
-                desc::BinOp::Le => cu::BinOp::Le,
-                desc::BinOp::Gt => cu::BinOp::Gt,
-                desc::BinOp::Ge => cu::BinOp::Ge,
-                desc::BinOp::Neq => cu::BinOp::Neq,
-            },
-            lhs: Box::new(gen_expr(lhs, parall_ctx, view_ctx, comp_unit)),
-            rhs: Box::new(gen_expr(rhs, parall_ctx, view_ctx, comp_unit)),
-        },
-        UnOp(op, arg) => cu::Expr::UnOp {
-            op: match op {
-                desc::UnOp::Not => cu::UnOp::Not,
-                desc::UnOp::Neg => cu::UnOp::Neg,
-            },
-            arg: Box::new(gen_expr(arg, parall_ctx, view_ctx, comp_unit)),
-        },
+        BinOp(op, lhs, rhs) => {
+            gen_bin_op_expr(op, lhs, rhs, parall_ctx, view_ctx, comp_unit, label)
+        }
+        UnOp(op, arg) => {
+            gen_expr(arg, parall_ctx, view_ctx, comp_unit, label).map(|e| cu::Expr::UnOp {
+                op: match op {
+                    desc::UnOp::Not => cu::UnOp::Not,
+                    desc::UnOp::Neg => cu::UnOp::Neg,
+                },
+                arg: Box::new(e),
+            })
+        }
         Ref(_, _, pl_expr) => match &expr.ty.as_ref().unwrap().ty {
             desc::TyKind::Data(desc::DataTy::Ref(_, _, desc::Memory::GpuShared, _)) => {
-                gen_pl_expr(pl_expr, view_ctx, comp_unit)
+                CheckedExpr::Expr(gen_pl_expr(pl_expr, view_ctx, comp_unit))
             }
-            _ => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit))),
+            _ => CheckedExpr::Expr(cu::Expr::Ref(Box::new(gen_pl_expr(
+                pl_expr, view_ctx, comp_unit,
+            )))),
         },
         BorrowIndex(_, _, pl_expr, n) => {
             if contains_view_expr(pl_expr, view_ctx) {
                 panic!("It should not be allowed to borrow from a view expression.")
             } else {
-                cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
+                CheckedExpr::Expr(cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
                     array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
                     index: n.clone(),
-                }))
+                })))
             }
         }
         Index(pl_expr, idx) => {
             if contains_view_expr(pl_expr, view_ctx) {
-                gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit)
+                CheckedExpr::ExprIdxCheck(
+                    gen_checked_stmt(&expr, view_ctx, comp_unit, label),
+                    gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit),
+                )
             } else {
-                cu::Expr::ArraySubscript {
-                    array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-                    index: idx.clone(),
-                }
+                CheckedExpr::ExprIdxCheck(
+                    gen_checked_stmt(&expr, view_ctx, comp_unit, label),
+                    cu::Expr::ArraySubscript {
+                        array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
+                        index: idx.clone(),
+                    },
+                )
             }
         }
-        IdxAssign(pl_expr, idx, expr) => cu::Expr::Assign {
-            lhs: Box::new(if contains_view_expr(pl_expr, view_ctx) {
-                gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit)
-            } else {
-                cu::Expr::ArraySubscript {
-                    array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-                    index: idx.clone(),
-                }
+        IdxAssign(pl_expr, idx, expr) => gen_expr(expr, parall_ctx, view_ctx, comp_unit, label)
+            .map(|e| cu::Expr::Assign {
+                lhs: Box::new(if contains_view_expr(pl_expr, view_ctx) {
+                    gen_idx_into_view(pl_expr, idx, &mut view_ctx.clone(), comp_unit)
+                } else {
+                    cu::Expr::ArraySubscript {
+                        array: Box::new(gen_pl_expr(pl_expr, &mut view_ctx.clone(), comp_unit)),
+                        index: idx.clone(),
+                    }
+                }),
+                rhs: Box::new(e),
             }),
-            rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
-        },
-        Assign(pl_expr, expr) => cu::Expr::Assign {
-            lhs: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
-            rhs: Box::new(gen_expr(expr, parall_ctx, view_ctx, comp_unit)),
-        },
-        Lambda(params, exec, ty, expr) => cu::Expr::Lambda {
+        Assign(pl_expr, expr) => {
+            gen_expr(expr, parall_ctx, view_ctx, comp_unit, label).map(|e| cu::Expr::Assign {
+                lhs: Box::new(gen_pl_expr(pl_expr, &mut view_ctx.clone(), comp_unit)),
+                rhs: Box::new(e),
+            })
+        }
+        Lambda(params, exec, ty, expr) => CheckedExpr::Expr(cu::Expr::Lambda {
             params: gen_param_decls(params.as_slice()),
-            body: Box::new(gen_stmt(
+            body: match gen_stmt(
                 expr,
                 !matches!(ty.as_ref(), desc::DataTy::Scalar(desc::ScalarTy::Unit)),
                 parall_ctx,
                 view_ctx,
                 comp_unit,
-            )),
+                label,
+            ) {
+                CheckedStmt::Stmt(st) => Box::new(st),
+                CheckedStmt::StmtIdxCheck(_, _) => panic!("this should not happen!"),
+            },
             ret_ty: gen_ty(
                 &desc::TyKind::Data(ty.as_ref().clone()),
                 desc::Mutability::Mut,
             ),
             is_dev_fun: is_dev_fun(*exec),
-        },
+        }),
         App(fun, kinded_args, args) => match &fun.expr {
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
                 pl_expr: PlaceExprKind::Ident(name),
@@ -686,6 +970,7 @@ fn gen_expr(
                 &args[2],
                 view_ctx,
                 comp_unit,
+                label,
             ),
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
                 pl_expr: PlaceExprKind::Ident(ident),
@@ -695,24 +980,35 @@ fn gen_expr(
                 .any(|(name, _)| &ident.name == name) =>
             {
                 let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
-                cu::Expr::FunCall {
-                    fun: Box::new(gen_expr(
-                        &desc::Expr::with_type(
-                            desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(PlaceExprKind::Ident(
-                                pre_decl_ident,
-                            ))),
-                            fun.ty.as_ref().unwrap().clone(),
-                        ),
-                        parall_ctx,
-                        view_ctx,
-                        comp_unit,
-                    )),
+                CheckedExpr::Expr(cu::Expr::FunCall {
+                    fun: Box::new(
+                        match gen_expr(
+                            &desc::Expr::with_type(
+                                desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(
+                                    PlaceExprKind::Ident(pre_decl_ident),
+                                )),
+                                fun.ty.as_ref().unwrap().clone(),
+                            ),
+                            parall_ctx,
+                            view_ctx,
+                            comp_unit,
+                            label.clone(),
+                        ) {
+                            CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                        },
+                    ),
                     template_args: gen_args_kinded(kinded_args),
                     args: args
                         .iter()
-                        .map(|e| gen_expr(e, parall_ctx, view_ctx, comp_unit))
+                        .map(|e| {
+                            match gen_expr(e, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                                CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => {
+                                    expr
+                                }
+                            }
+                        })
                         .collect::<Vec<_>>(),
-                }
+                })
             }
             _ => {
                 let (reduced_fun, data_args, red_kinded_args) = match create_lambda_no_view_args(
@@ -726,14 +1022,25 @@ fn gen_expr(
                     Some((reduced_fun, data_args)) => (reduced_fun, data_args, vec![]),
                     None => (*fun.clone(), args.clone(), kinded_args.clone()),
                 };
-                cu::Expr::FunCall {
-                    fun: Box::new(gen_expr(&reduced_fun, parall_ctx, view_ctx, comp_unit)),
+                CheckedExpr::Expr(cu::Expr::FunCall {
+                    fun: Box::new({
+                        match gen_expr(&reduced_fun, parall_ctx, view_ctx, comp_unit, label.clone())
+                        {
+                            CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                        }
+                    }),
                     template_args: gen_args_kinded(&red_kinded_args),
                     args: data_args
                         .iter()
-                        .map(|e| gen_expr(e, parall_ctx, view_ctx, comp_unit))
+                        .map(|e| {
+                            match gen_expr(e, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                                CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => {
+                                    expr
+                                }
+                            }
+                        })
                         .collect::<Vec<_>>(),
-                }
+                })
             }
         },
         DepApp(fun, kinded_args) => {
@@ -743,14 +1050,21 @@ fn gen_expr(
                 .find(|fun_def| fun_def.name == ident.name)
                 .expect("Cannot find function definition.");
             let inst_fun = partial_app_gen_args(fun_def, &kinded_args);
-            gen_expr(&inst_fun, parall_ctx, view_ctx, comp_unit)
+            gen_expr(&inst_fun, parall_ctx, view_ctx, comp_unit, label)
         }
-        Array(elems) => cu::Expr::InitializerList {
+        Array(elems) => CheckedExpr::Expr(cu::Expr::InitializerList {
             elems: elems
                 .iter()
-                .map(|e| gen_expr(e, parall_ctx, view_ctx, comp_unit))
+                .map(
+                    |e| match gen_expr(e, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                        CheckedExpr::Expr(expr) => expr,
+                        CheckedExpr::ExprIdxCheck(_, _) => {
+                            panic!("Elements of an array should not have to be checked!")
+                        }
+                    },
+                )
                 .collect(),
-        },
+        }),
         // cu::Expr::FunCall {
         //     fun: Box::new(cu::Expr::Ident("descend::create_array".to_string())),
         //     template_args: vec![],
@@ -759,17 +1073,34 @@ fn gen_expr(
         //         .map(|e| gen_expr(e, parall_ctx, view_ctx))
         //         .collect::<Vec<_>>(),
         // },
-        Tuple(elems) => cu::Expr::Tuple(
+        Tuple(elems) => CheckedExpr::Expr(cu::Expr::Tuple(
             elems
                 .iter()
-                .map(|el| gen_expr(el, parall_ctx, view_ctx, comp_unit))
+                .map(
+                    |el| match gen_expr(el, parall_ctx, view_ctx, comp_unit, label.clone()) {
+                        CheckedExpr::Expr(expr) => expr,
+                        CheckedExpr::ExprIdxCheck(_, _) => {
+                            panic!("Elements of a tuple should not have to be checked!")
+                        }
+                    },
+                )
                 .collect::<Vec<_>>(),
-        ),
-        Deref(e) => cu::Expr::Deref(Box::new(gen_expr(e, parall_ctx, view_ctx, comp_unit))),
-        Idx(e, i) => cu::Expr::ArraySubscript {
-            array: Box::new(gen_expr(e, parall_ctx, view_ctx, comp_unit)),
+        )),
+        Deref(e) => CheckedExpr::Expr(cu::Expr::Deref(Box::new(
+            match gen_expr(e, parall_ctx, view_ctx, comp_unit, label) {
+                CheckedExpr::Expr(expr) => expr,
+                CheckedExpr::ExprIdxCheck(_, _) => {
+                    panic!("did not expect a check after deref!")
+                }
+            },
+        ))),
+        Idx(e, i) => CheckedExpr::Expr(cu::Expr::ArraySubscript {
+            array: Box::new(match gen_expr(e, parall_ctx, view_ctx, comp_unit, label) {
+                CheckedExpr::Expr(expr) => expr,
+                CheckedExpr::ExprIdxCheck(_, _) => panic!("should never happen"),
+            }),
             index: i.clone(),
-        },
+        }),
         Let(_, _, _, _)
         | LetUninit(_, _)
         | LetProv(_, _)
@@ -787,6 +1118,63 @@ fn gen_expr(
         }
         TupleView(_) => {
             panic!("All tuple views should have been deconstructed using projections by now.")
+        }
+    }
+}
+
+fn gen_bin_op_expr(
+    op: &desc::BinOp,
+    lhs: &desc::Expr,
+    rhs: &desc::Expr,
+    parall_ctx: &mut HashMap<String, ParallelityCollec>,
+    view_ctx: &mut HashMap<String, ViewExpr>,
+    comp_unit: &[desc::FunDef],
+    label: Option<String>,
+) -> CheckedExpr {
+    {
+        let op = match op {
+            desc::BinOp::Add => cu::BinOp::Add,
+            desc::BinOp::Sub => cu::BinOp::Sub,
+            desc::BinOp::Mul => cu::BinOp::Mul,
+            desc::BinOp::Div => cu::BinOp::Div,
+            desc::BinOp::Mod => cu::BinOp::Mod,
+            desc::BinOp::And => cu::BinOp::And,
+            desc::BinOp::Or => cu::BinOp::Or,
+            desc::BinOp::Eq => cu::BinOp::Eq,
+            desc::BinOp::Lt => cu::BinOp::Lt,
+            desc::BinOp::Le => cu::BinOp::Le,
+            desc::BinOp::Gt => cu::BinOp::Gt,
+            desc::BinOp::Ge => cu::BinOp::Ge,
+            desc::BinOp::Neq => cu::BinOp::Neq,
+        };
+        use CheckedExpr as ce;
+        match (
+            gen_expr(lhs, parall_ctx, view_ctx, comp_unit, label.clone()),
+            gen_expr(rhs, parall_ctx, view_ctx, comp_unit, label),
+        ) {
+            (ce::ExprIdxCheck(ch1, e1), ce::ExprIdxCheck(ch2, e2)) => CheckedExpr::ExprIdxCheck(
+                cu::Stmt::Seq(vec![ch1, ch2]),
+                cu::Expr::BinOp {
+                    op: op,
+                    lhs: Box::new(e1),
+                    rhs: Box::new(e2),
+                },
+            ),
+            (ce::Expr(e1), ce::ExprIdxCheck(ch, e2)) | (ce::ExprIdxCheck(ch, e1), ce::Expr(e2)) => {
+                CheckedExpr::ExprIdxCheck(
+                    ch,
+                    cu::Expr::BinOp {
+                        op: op,
+                        lhs: Box::new(e1),
+                        rhs: Box::new(e2),
+                    },
+                )
+            }
+            (ce::Expr(e1), ce::Expr(e2)) => CheckedExpr::Expr(cu::Expr::BinOp {
+                op: op,
+                lhs: Box::new(e1),
+                rhs: Box::new(e2),
+            }),
         }
     }
 }
@@ -1026,6 +1414,7 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
     match l {
         desc::Lit::Bool(b) => cu::Expr::Lit(cu::Lit::Bool(b)),
         desc::Lit::I32(i) => cu::Expr::Lit(cu::Lit::I32(i)),
+        desc::Lit::U32(u) => cu::Expr::Lit(cu::Lit::U32(u)),
         desc::Lit::F32(f) => cu::Expr::Lit(cu::Lit::F32(f)),
         desc::Lit::Unit => cu::Expr::Empty,
     }
@@ -1183,7 +1572,7 @@ fn gen_view(
 ) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[desc::Nat]) -> cu::Expr {
         let index = if path.is_empty() {
-            panic!("Unexpected.")
+            return expr;
         } else if path.len() == 1 {
             path[0].clone()
         } else {
@@ -1207,14 +1596,24 @@ fn gen_view(
         (ViewExpr::ToView { ref_expr, .. }, _) => {
             path.reverse();
             gen_indexing(
-                gen_expr(ref_expr, &mut HashMap::new(), view_ctx, comp_unit),
+                match gen_expr(ref_expr, &mut HashMap::new(), view_ctx, comp_unit, None) {
+                    CheckedExpr::Expr(e) => e,
+                    CheckedExpr::ExprIdxCheck(_, _) => panic!("should never happen"),
+                },
                 &path,
             )
         }
         (ViewExpr::Tuple { views }, [path @ .., prj]) => match prj.eval() {
             Ok(i) => match &views[i] {
                 ViewOrExpr::V(view_expr) => gen_view(view_expr, path.to_vec(), view_ctx, comp_unit),
-                ViewOrExpr::E(expr) => gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
+                ViewOrExpr::E(expr) => gen_view(
+                    &ViewExpr::ToView {
+                        ref_expr: Box::new(expr.clone()),
+                    },
+                    path.to_vec(),
+                    view_ctx,
+                    comp_unit,
+                ), // gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
             },
             Err(e) => panic!(e),
         },
@@ -1385,9 +1784,18 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
     let cu_ty = match ty {
         Ident(ident) => cu::Ty::Ident(ident.name.clone()),
         Fn(_, _, _, _) => unimplemented!("needed?"),
+        Data(d::Atomic(a)) => match a {
+            desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
+            desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
+            desc::ScalarTy::U32 => cu::Ty::Atomic(cu::ScalarTy::U32),
+            desc::ScalarTy::F32 => cu::Ty::Atomic(cu::ScalarTy::F32),
+            desc::ScalarTy::Bool => cu::Ty::Atomic(cu::ScalarTy::Bool),
+            desc::ScalarTy::Gpu => cu::Ty::Atomic(cu::ScalarTy::Gpu),
+        },
         Data(d::Scalar(s)) => match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
+            desc::ScalarTy::U32 => cu::Ty::Scalar(cu::ScalarTy::U32),
             desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),

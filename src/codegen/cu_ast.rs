@@ -53,6 +53,7 @@ pub(super) enum Stmt {
         stmt: Box<Stmt>,
     },
     Return(Option<Expr>),
+    Label(String),
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +109,7 @@ pub(super) enum Expr {
 pub(super) enum Lit {
     Bool(bool),
     I32(i32),
+    U32(u32),
     F32(f32),
 }
 
@@ -161,6 +163,7 @@ pub(super) enum GpuAddrSpace {
 #[derive(Clone, Debug)]
 pub(super) enum Ty {
     Scalar(ScalarTy),
+    Atomic(ScalarTy),
     Tuple(Vec<Ty>),
     Array(Box<Ty>, Nat),
     CArray(Box<Ty>, Nat),
@@ -195,6 +198,7 @@ pub(super) enum ScalarTy {
     Auto,
     Void,
     I32,
+    U32,
     F32,
     Bool,
     SizeT,
