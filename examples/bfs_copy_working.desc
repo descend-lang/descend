@@ -21,10 +21,10 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
             store_atomic_host::<'a5, cpu.heap>(&'a5 shrd *h_atomic_stop, 0);
             copy_to_gpu::<'a6, 'a7, Atomic<i32>>(&'a6 uniq atomic_stop, &'a7 shrd *h_atomic_stop);
 
-            let nodes_view: [[ &'r1 shrd gpu.global (i32, i32); n]] =
+            let nodes_view: &'r1 shrd gpu.global [[(i32, i32); n]] =
                 to_view::<'r1, gpu.global, n, (i32, i32)>(&'r1 shrd nodes);
 
-            let view_changes: [[ &'i uniq gpu.global (bool, bool, bool, i32); n]] =
+            let view_changes: &'i uniq gpu.global [[(bool, bool, bool, i32); n]] =
                 to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
 
             let zipped_nodes_changes: [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
@@ -69,10 +69,10 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
                         }
                 }
             );
-            let nodes_view2: [[ &'r2 shrd gpu.global (i32, i32); n]] =
+            let nodes_view2: &'r2 shrd gpu.global [[(i32, i32); n]] =
                 to_view::<'r2, gpu.global, n, (i32, i32)>(&'r2 shrd nodes);
 
-            let view_changes2: [[ &'i uniq gpu.global (bool, bool, bool, i32); n]] =
+            let view_changes2: &'i uniq gpu.global [[(bool, bool, bool, i32); n]] =
                 to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
 
             let zipped_nodes_changes2: [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =

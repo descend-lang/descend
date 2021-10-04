@@ -1,6 +1,6 @@
 use crate::ast::{
     BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, ScalarTy,
-    ThreadHierchyTy, Ty, TyKind, ViewTy,
+    ThreadHierchyTy, Ty, TyKind,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -18,6 +18,7 @@ pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
 pub static SPLIT_AT: &str = "split_at";
 pub static GROUP: &str = "group";
+pub static GROUP_MUT: &str = "group_mut";
 pub static JOIN: &str = "join";
 pub static ZIP: &str = "zip";
 pub static TRANSPOSE: &str = "transpose";
@@ -41,9 +42,10 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
-        (SPLIT_AT, split_at_ty()),
-        (ZIP, zip_ty()),
-        (GROUP, group_ty()),
+        //(SPLIT_AT, split_at_ty()),
+        // (ZIP, zip_ty()),
+        (GROUP, group_ty(Ownership::Shrd)),
+        (GROUP_MUT, group_ty(Ownership::Uniq)),
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
     ];
@@ -86,7 +88,7 @@ fn split_thread_grp_ty() -> Ty {
             ),
         )))],
         Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+        Box::new(Ty::new(TyKind::TupleView(vec![
             Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
                 Nat::Ident(k.clone()),
                 Nat::Ident(n2.clone()),
@@ -101,7 +103,7 @@ fn split_thread_grp_ty() -> Ty {
                 Nat::Ident(n2.clone()),
                 Nat::Ident(n3.clone()),
             )))),
-        ])))),
+        ]))),
     ))
 }
 
@@ -117,7 +119,7 @@ fn split_warp_ty() -> Ty {
             ThreadHierchyTy::Warp,
         )))],
         Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+        Box::new(Ty::new(TyKind::TupleView(vec![
             Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
                 Nat::Ident(k.clone()),
                 Nat::Lit(1),
@@ -132,7 +134,7 @@ fn split_warp_ty() -> Ty {
                 Nat::Lit(1),
                 Nat::Lit(1),
             )))),
-        ])))),
+        ]))),
     ))
 }
 
@@ -480,12 +482,12 @@ fn shared_alloc_ty() -> Ty {
     ))
 }
 
-// TODO FIX Error: t: ty is too general. This means [t; n] could contain a view
+// TODO FIX Error: t: ty is too general this means it could contain functions
 //  (which is not well-kinded).
 // to_view:
-//  <r: prv, m: mem, n: nat, t: ty>(&r shrd m [t; n]) -[view]-> [[&r shrd m t; n]]
+//  <r: prv, m: mem, n: nat, t: dty>(&r shrd m [t; n]) -[view]-> &r shrd m [[t; n]]
 // to_view_mut:
-//  <r: prv, m: mem, n: nat, t: ty>(&r uniq m [t; n]) -[view]-> [[&r uniq m t; n]]
+//  <r: prv, m: mem, n: nat, t: ty>(&r uniq m [t; n]) -[view]-> &r uniq m [[t; n]]
 fn to_view_ty(own: Ownership) -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -519,27 +521,34 @@ fn to_view_ty(own: Ownership) -> Ty {
             )),
         )))],
         Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::Data(DataTy::Ref(
-                Provenance::Ident(r),
-                own,
-                Memory::Ident(m),
-                Box::new(DataTy::Ident(t)),
-            )))),
-            Nat::Ident(n),
+        Box::new(Ty::new(TyKind::Data(DataTy::Ref(
+            Provenance::Ident(r),
+            own,
+            Memory::Ident(m),
+            Box::new(DataTy::ArrayView(Box::new(DataTy::Ident(t)), Nat::Ident(n))),
         )))),
     ))
 }
 
-// group:
-//  <size: nat, n: nat, t: ty>([[t; n]]) -> [[ [[t; size]]; n/size ]]
-fn group_ty() -> Ty {
+// group/group_mut:
+//  <size: nat, r: prv, m: mem, n: nat, t: ty>(&r W m [[t; n]]) -> &r W m [[ [[t; size]]; n/size ]]
+fn group_ty(own: Ownership) -> Ty {
     let s = Ident::new("s");
+    let r = Ident::new("r");
+    let m = Ident::new("m");
     let n = Ident::new("n");
     let t = Ident::new("t");
     let s_nat = IdentKinded {
         ident: s.clone(),
         kind: Kind::Nat,
+    };
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
     };
     let n_nat = IdentKinded {
         ident: n.clone(),
@@ -550,22 +559,32 @@ fn group_ty() -> Ty {
         kind: Kind::Ty,
     };
     Ty::new(TyKind::Fn(
-        vec![s_nat, n_nat, t_ty],
-        vec![Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::Ident(t.clone()))),
-            Nat::Ident(n.clone()),
+        vec![s_nat, r_prv, m_mem, n_nat, t_ty],
+        vec![Ty::new(TyKind::Data(DataTy::Ref(
+            Provenance::Ident(r.clone()),
+            own,
+            Memory::Ident(m.clone()),
+            Box::new(DataTy::ArrayView(
+                Box::new(DataTy::Ident(t.clone())),
+                Nat::Ident(n.clone()),
+            )),
         )))],
         Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t.clone()))),
-                Nat::Ident(s.clone()),
-            )))),
-            Nat::BinOp(
-                BinOpNat::Div,
-                Box::new(Nat::Ident(n)),
-                Box::new(Nat::Ident(s)),
-            ),
+        Box::new(Ty::new(TyKind::Data(DataTy::Ref(
+            Provenance::Ident(r),
+            own,
+            Memory::Ident(m),
+            Box::new(DataTy::ArrayView(
+                Box::new(DataTy::ArrayView(
+                    Box::new(DataTy::Ident(t)),
+                    Nat::Ident(s.clone()),
+                )),
+                Nat::BinOp(
+                    BinOpNat::Div,
+                    Box::new(Nat::Ident(n)),
+                    Box::new(Nat::Ident(s)),
+                ),
+            )),
         )))),
     ))
 }
@@ -648,84 +667,86 @@ fn group_ty() -> Ty {
 // }
 
 // zip:
-//  <n: nat, t1: ty, t2:ty>([[t1; n]], [[t2; n]]) -> [[{t1, t2}; n]]
-fn zip_ty() -> Ty {
-    let n = Ident::new("n");
-    let t1 = Ident::new("t1");
-    let t2 = Ident::new("t2");
-    let n_nat = IdentKinded {
-        ident: n.clone(),
-        kind: Kind::Nat,
-    };
-    let t1_ty = IdentKinded {
-        ident: t1.clone(),
-        kind: Kind::Ty,
-    };
-    let t2_ty = IdentKinded {
-        ident: t2.clone(),
-        kind: Kind::Ty,
-    };
-    Ty::new(TyKind::Fn(
-        vec![n_nat, t1_ty, t2_ty],
-        vec![
-            Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t1.clone()))),
-                Nat::Ident(n.clone()),
-            ))),
-            Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t2.clone()))),
-                Nat::Ident(n.clone()),
-            ))),
-        ],
-        Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
-                Ty::new(TyKind::Ident(t1)),
-                Ty::new(TyKind::Ident(t2)),
-            ])))),
-            Nat::Ident(n),
-        )))),
-    ))
-}
+//  <n: nat, r1: prv, r2: prv, m1: mem, m2: mem, t1: ty, t2:ty>(
+//      &r1 W1 m1 [[t1; n]], &r2 W2 m2 [[t2; n]]
+//  ) -> ZipView<&r1 W1 m1 [[t1; n]], &r2 W2 m2 [[t2; n]]>
+// fn zip_ty() -> Ty {
+//     let n = Ident::new("n");
+//     let t1 = Ident::new("t1");
+//     let t2 = Ident::new("t2");
+//     let n_nat = IdentKinded {
+//         ident: n.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let t1_ty = IdentKinded {
+//         ident: t1.clone(),
+//         kind: Kind::Ty,
+//     };
+//     let t2_ty = IdentKinded {
+//         ident: t2.clone(),
+//         kind: Kind::Ty,
+//     };
+//     Ty::new(TyKind::Fn(
+//         vec![n_nat, t1_ty, t2_ty],
+//         vec![
+//             Ty::new(TyKind::View(ViewTy::Array(
+//                 Box::new(Ty::new(TyKind::Ident(t1.clone()))),
+//                 Nat::Ident(n.clone()),
+//             ))),
+//             Ty::new(TyKind::View(ViewTy::Array(
+//                 Box::new(Ty::new(TyKind::Ident(t2.clone()))),
+//                 Nat::Ident(n.clone()),
+//             ))),
+//         ],
+//         Exec::View,
+//         Box::new(Ty::new(TyKind::View(ViewTy::Array(
+//             Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+//                 Ty::new(TyKind::Ident(t1)),
+//                 Ty::new(TyKind::Ident(t2)),
+//             ])))),
+//             Nat::Ident(n),
+//         )))),
+//     ))
+// }
 
 // split:
-//  <s: nat, n: nat, t: ty>([[t; n]]) -> <[[t; s]], [[t; n-s]]>
-fn split_at_ty() -> Ty {
-    let s = Ident::new("s");
-    let n = Ident::new("n");
-    let t = Ident::new("t");
-    let s_nat = IdentKinded {
-        ident: s.clone(),
-        kind: Kind::Nat,
-    };
-    let n_nat = IdentKinded {
-        ident: n.clone(),
-        kind: Kind::Nat,
-    };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
-    };
-    Ty::new(TyKind::Fn(
-        vec![s_nat, n_nat, t_ty],
-        vec![Ty::new(TyKind::View(ViewTy::Array(
-            Box::new(Ty::new(TyKind::Ident(t.clone()))),
-            Nat::Ident(n.clone()),
-        )))],
-        Exec::View,
-        Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
-            Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t.clone()))),
-                Nat::Ident(s.clone()),
-            ))),
-            Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Ident(t))),
-                Nat::BinOp(
-                    BinOpNat::Sub,
-                    Box::new(Nat::Ident(n)),
-                    Box::new(Nat::Ident(s)),
-                ),
-            ))),
-        ])))),
-    ))
-}
+//  <s: nat, n: nat, t: ty>(&[[t; n]]) -> <[[t; s]], [[t; n-s]]>
+// fn split_at_ty() -> Ty {
+//     let s = Ident::new("s");
+//     let n = Ident::new("n");
+//     let t = Ident::new("t");
+//     let s_nat = IdentKinded {
+//         ident: s.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let n_nat = IdentKinded {
+//         ident: n.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let t_ty = IdentKinded {
+//         ident: t.clone(),
+//         kind: Kind::Ty,
+//     };
+//     Ty::new(TyKind::Fn(
+//         vec![s_nat, n_nat, t_ty],
+//         vec![Ty::new(TyKind::View(ViewTy::Array(
+//             Box::new(Ty::new(TyKind::Ident(t.clone()))),
+//             Nat::Ident(n.clone()),
+//         )))],
+//         Exec::View,
+//         Box::new(Ty::new(TyKind::View(ViewTy::Tuple(vec![
+//             Ty::new(TyKind::View(ViewTy::Array(
+//                 Box::new(Ty::new(TyKind::Ident(t.clone()))),
+//                 Nat::Ident(s.clone()),
+//             ))),
+//             Ty::new(TyKind::View(ViewTy::Array(
+//                 Box::new(Ty::new(TyKind::Ident(t))),
+//                 Nat::BinOp(
+//                     BinOpNat::Sub,
+//                     Box::new(Nat::Ident(n)),
+//                     Box::new(Nat::Ident(s)),
+//                 ),
+//             ))),
+//         ])))),
+//     ))
+// }

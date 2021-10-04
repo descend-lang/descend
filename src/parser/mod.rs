@@ -200,6 +200,10 @@ peg::parser! {
                     |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
                 )
             }
+            begin:position!() "split" _ r1:prov_value() _ r2:prov_value() _ o:ownership() _
+                    s:nat() _ view:place_expression() end:position!() {
+                Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
+            }
             begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
@@ -245,7 +249,7 @@ peg::parser! {
                     }
                 }
             }
-            "&" _ prov:provenance() __ own:ownership() __ p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? {
+            "&" _ prov:prov_value() __ own:ownership() __ p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? {
                 match idx {
                     None => Expr::new(ExprKind::Ref(prov, own, p)),
                     Some(idx) => Expr::new(ExprKind::BorrowIndex(prov, own, p,idx))
@@ -372,14 +376,14 @@ peg::parser! {
 
 
         pub(crate) rule ty() -> Ty
-            = begin:position!() vty:vty() end:position!() {
-                Ty::with_span(TyKind::View(vty), Span::new(begin, end))
-            }
-            / begin:position!() th_hy:th_hy() end:position!() {
+            = begin:position!() th_hy:th_hy() end:position!() {
                 Ty::with_span(TyKind::ThreadHierchy(Box::new(th_hy)), Span::new(begin, end))
             }
             / begin:position!() dty:dty() end:position!() {
                 Ty::with_span(TyKind::Data(dty), Span::new(begin, end))
+            }
+            / begin:position!() "<" _ tys:ty() **<1,> (_ "," _) _ ">" end:position!() {
+                Ty::with_span(TyKind::TupleView(tys), Span::new(begin, end))
             }
 
         /// Parse a type token
@@ -401,14 +405,12 @@ peg::parser! {
             / name:ident() { DataTy::Ident(name) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTy::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTy::Array(Box::new(t), n) }
+            / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
+                DataTy::ArrayView(Box::new(dty), n)
+            }
             / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ dty:dty() {
                 DataTy::Ref(prov, own, mem, Box::new(dty))
             }
-
-        pub(crate) rule vty() -> ViewTy
-            = "[[" _ t:ty() _ ";" _ n:nat() _ "]]" { ViewTy::Array(Box::new(t), n) }
-            / "<" _ ty:ty() _ ">" { ViewTy::Tuple(vec![ty]) }
-            / "<" _ tys:ty() **<2,> (_ "," _) _ ">" { ViewTy::Tuple(tys) }
 
         pub(crate) rule th_hy() -> ThreadHierchyTy =
         "BlockGrp" _ "<" _ n1:nat() _ ns:("," _ n2:nat() _ "," _ n3:nat() _ { (n2, n3) })? "," _
@@ -744,8 +746,8 @@ mod tests {
         // ), "does not recognize [();N] type");
         assert_eq!(
             descend::ty("[[i32;24]]"),
-            Ok(Ty::new(TyKind::View(ViewTy::Array(
-                Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))),
+            Ok(Ty::new(TyKind::Data(DataTy::ArrayView(
+                Box::new(DataTy::Scalar(ScalarTy::I32)),
                 Nat::Lit(24)
             )))),
             "does not recognize [[f32;24]] type"
@@ -1271,23 +1273,15 @@ mod tests {
         assert_eq!(
             descend::expression_seq("&'prov uniq variable"),
             Ok(Expr::new(ExprKind::Ref(
-                Provenance::Value(String::from("'prov")),
+                String::from("'prov"),
                 Ownership::Uniq,
-                PlaceExpr::new(PlaceExprKind::Ident(Ident::new("variable")))
-            )))
-        );
-        assert_eq!(
-            descend::expression_seq("&prov_var shrd variable"),
-            Ok(Expr::new(ExprKind::Ref(
-                Provenance::Ident(Ident::new("prov_var")),
-                Ownership::Shrd,
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("variable")))
             )))
         );
         assert_eq!(
             descend::expression_seq("&'prov uniq var[7]"),
             Ok(Expr::new(ExprKind::BorrowIndex(
-                Provenance::Value(String::from("'prov")),
+                String::from("'prov"),
                 Ownership::Uniq,
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var"))),
                 Nat::Lit(7)
@@ -1296,7 +1290,7 @@ mod tests {
         assert_eq!(
             descend::expression_seq("&'prov uniq var[token]"),
             Ok(Expr::new(ExprKind::BorrowIndex(
-                Provenance::Value(String::from("'prov")),
+                String::from("'prov"),
                 Ownership::Uniq,
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var"))),
                 Nat::Ident(Ident::new("token"))

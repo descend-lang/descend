@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Expr, Ident, Ownership, PlaceExpr};
+use crate::ast::{Ident, Ownership, PlaceExpr, TyKind};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -26,9 +26,20 @@ pub enum TyError {
     // out from under the reference which is forbidden.
     ReferenceToDeadTy,
     // Assignment to a constant place expression.
-    AssignToConst(PlaceExpr, Box<Expr>),
+    AssignToConst(PlaceExpr), //, Box<Expr>),
+    // Assigning to a view is forbidden
+    AssignToView,
     // Trying to borrow uniquely but place is not mutable
     ConstBorrow(PlaceExpr),
+    // Trying to split a non-view array.
+    SplittingNonViewArray,
+    // Expected a different type
+    ExpectedTupleType(TyKind, PlaceExpr),
+    // The borrowed view type is at least paritally dead
+    BorrowingDeadView,
+    // Trying to type an expression with dead type
+    DeadTy,
+    UnexpectedType,
     // TODO remove as soon as possible
     String(String),
 }
@@ -134,6 +145,23 @@ impl TyError {
             }
             TyError::ConstBorrow(p) => {
                 eprintln!("const borrow: {:?}", p)
+            }
+            TyError::ExpectedTupleType(ty_kind, pl_expr) => {
+                if let Some(pl_expr_span) = pl_expr.span {
+                    let label = format!("expected tuple type but found `{:?}`", ty_kind);
+                    let (begin_line, begin_column) = source.get_line_col(pl_expr_span.begin);
+                    let (end_line, end_column) = source.get_line_col(pl_expr_span.end);
+                    let snippet = error::single_line_snippet(
+                        source,
+                        &label,
+                        begin_line,
+                        begin_column,
+                        end_column,
+                    );
+                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                } else {
+                    eprintln!("{:?}", &self);
+                };
             }
             err => {
                 eprintln!("{:?}", err);

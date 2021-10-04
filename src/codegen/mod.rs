@@ -3,16 +3,13 @@ mod printer;
 
 use super::utils;
 use crate::ast as desc;
-use crate::ast::{CompilUnit, Ident, PlaceExprKind, ThreadHierchyTy};
+use crate::ast::{CompilUnit, Ident, PlaceExprKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-// FIXME Indexing and genreation of view expressions is bugged. Mainly because it is hard to
-//  recognize which part of a place expression is a view expression.
-
-// Precondition. all function defitions are successfully typechecked and
+// Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &CompilUnit) -> String {
     let preproc_fun_defs = compil_unit
@@ -27,10 +24,9 @@ pub fn gen(compil_unit: &CompilUnit) -> String {
     let fun_defs_to_be_generated = preproc_fun_defs
         .iter()
         .filter(|f| {
-            f.param_decls.iter().all(|p| {
-                !matches!(&p.ty.ty, desc::TyKind::View(_))
-                    && !matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
-            })
+            f.param_decls
+                .iter()
+                .all(|p| !is_view_ty(&p.ty) && !matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_)))
         })
         .cloned()
         .collect::<Vec<desc::FunDef>>();
@@ -110,7 +106,7 @@ fn gen_stmt(
     match &expr.expr {
         Let(mutbl, ident, _, e) => {
             // Let View
-            if matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::View(_)) {
+            if is_view_ty(&e.ty.as_ref().unwrap()) {
                 if let Some(old) =
                     view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e, view_ctx))
                 {
@@ -644,10 +640,8 @@ fn gen_par_for(
                 view_ctx,
             );
 
-            if let desc::TyKind::View(desc::ViewTy::Tuple(elem_tys)) =
-                &input_expr.ty.as_ref().unwrap().ty
-            {
-                if let desc::TyKind::View(_) = &elem_tys[i].ty {
+            if let desc::TyKind::TupleView(elem_tys) = &input_expr.ty.as_ref().unwrap().ty {
+                if is_view_ty(&elem_tys[i]) {
                     view_ctx.insert(
                         id.clone(),
                         ViewExpr::Idx {
@@ -753,7 +747,7 @@ fn gen_par_for(
 
     // FIXME this assumes that the only functions given are syntactically lambdas
     let par_section = match &funs.ty.as_ref().unwrap().ty {
-        desc::TyKind::View(desc::ViewTy::Tuple(_)) => unimplemented!(),
+        desc::TyKind::TupleView(_) => unimplemented!(),
         desc::TyKind::Fn(_, _, _, _) => match &funs.expr {
             desc::ExprKind::Lambda(params, _, _, body) => gen_parall_section(
                 has_th_hierchy_elem,
@@ -821,15 +815,12 @@ fn gen_check_idx_stmt(
             Some(l) => {
                 let n = match &pl_expr.ty.as_ref().expect(&format!("{:?}", pl_expr)).ty {
                     TyKind::Data(DataTy::Array(_, m)) => m,
-                    TyKind::Data(DataTy::Ref(_, _, _, a)) => {
-                        if let DataTy::Array(_, m) = a.as_ref() {
-                            m
-                        } else {
-                            panic!("cannot index into non array type!");
-                        }
-                    }
-                    TyKind::View(ViewTy::Array(_, m)) => m,
-                    t => panic!("cannot index into non array type!{:?}", t),
+                    TyKind::Data(DataTy::Ref(_, _, _, a)) => match a.as_ref() {
+                        DataTy::Array(_, m) => m,
+                        DataTy::ArrayView(_, m) => m,
+                        _ => panic!("cannot index into non array type!"),
+                    },
+                    t => panic!("cannot index into non array type! {:?}", t),
                 };
                 use crate::ast::*;
                 cu::Stmt::If {
@@ -874,7 +865,7 @@ fn gen_expr(
         Lit(l) => CheckedExpr::Expr(gen_lit(*l)),
         PlaceExpr(pl_expr) => CheckedExpr::Expr(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
         Proj(tuple, idx) => {
-            if let desc::TyKind::View(_) = expr.ty.as_ref().unwrap().ty {
+            if is_view_ty(expr.ty.as_ref().unwrap()) {
                 CheckedExpr::Expr(gen_view(
                     &ViewExpr::create_from(expr, view_ctx),
                     vec![],
@@ -1126,7 +1117,7 @@ fn gen_expr(
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),
-        Split(_, _, _, _) => {
+        Split(_, _, _, _, _) => {
             panic!("The split operator should have been descontructed by now.")
         }
         TupleView(_) => {
@@ -1337,7 +1328,7 @@ fn get_data_param_tys(fun: &desc::Expr) -> Vec<desc::Ty> {
     if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
         param_tys
             .iter()
-            .filter(|p_ty| !matches!(&p_ty.ty, desc::TyKind::View(_)))
+            .filter(|p_ty| !is_view_ty(&p_ty))
             .cloned()
             .collect()
     } else {
@@ -1389,10 +1380,9 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
 }
 
 fn contains_view_or_th_hierchy_params(param_decls: &[desc::ParamDecl]) -> bool {
-    param_decls.iter().any(|p| {
-        matches!(&p.ty.ty, desc::TyKind::View(_))
-            || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
-    })
+    param_decls
+        .iter()
+        .any(|p| is_view_ty(&p.ty) || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_)))
 }
 
 fn filter_and_map_view_th_hierchy_params<'a>(
@@ -1403,13 +1393,12 @@ fn filter_and_map_view_th_hierchy_params<'a>(
 ) -> Vec<(&'a desc::ParamDecl, &'a desc::Expr)> {
     let (reducable_parms_with_args, data_params_with_args): (Vec<_>, Vec<_>) =
         param_decls.iter().zip(args.iter()).partition(|&(p, _)| {
-            matches!(&p.ty.ty, desc::TyKind::View(_))
-                || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
+            is_view_ty(&p.ty) || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
         });
     let (view_params_with_args, th_hierchy_params_with_args): (Vec<_>, Vec<_>) =
         reducable_parms_with_args
             .iter()
-            .partition(|&(p, _)| matches!(&p.ty.ty, desc::TyKind::View(_)));
+            .partition(|&(p, _)| is_view_ty(&p.ty));
     for (p, arg) in view_params_with_args {
         view_ctx.insert(p.ident.name.clone(), ViewExpr::create_from(arg, view_ctx));
     }
@@ -1768,7 +1757,7 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ..
         }) => unimplemented!(),
         desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::View(_),
+            ty: desc::TyKind::TupleView(_),
             ..
         }) => None,
         desc::ArgKinded::Ty(desc::Ty {
@@ -1782,6 +1771,10 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
         desc::ArgKinded::Memory(_) | desc::ArgKinded::Provenance(_) | desc::ArgKinded::Ident(_) => {
             None
         }
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: desc::TyKind::Dead(_),
+            ..
+        }) => panic!("Dead types cannot be generated."),
     }
 }
 
@@ -1796,7 +1789,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
         Ident(ident) => cu::Ty::Ident(ident.name.clone()),
-        Fn(_, _, _, _) => unimplemented!("needed?"),
         Data(d::Atomic(a)) => match a {
             desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
@@ -1865,16 +1857,23 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
         Data(d::Ident(ident)) => cu::Ty::Ident(ident.name.clone()),
+        Data(d::ArrayView(_, _)) => panic!(
+            "Cannot generate array view types.\
+            Anything with this type should have been compiled away."
+        ),
         Data(d::Dead(_)) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
-        View(_) => panic!(
-            "Cannot generate view types. Anything with this type should have been compiled away."
+        Fn(_, _, _, _) => unimplemented!("needed?"),
+        TupleView(_) => panic!(
+            "Cannot generate tuple view types.\
+            Anything with this type should have been compiled away."
         ),
         ThreadHierchy(t) => panic!(
             "Cannot generate thread hierarchy types. \
         Anything with this type should ave been compiled away."
         ),
+        Dead(_) => panic!("Dead types cannot be generated."),
     };
 
     if matches!(mutbl, desc::Mutability::Mut) {
@@ -2085,9 +2084,9 @@ impl ViewExpr {
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {
                         ViewExpr::create_to_view_view(args)
-                    } else if ident.name == crate::ty_check::pre_decl::SPLIT_AT {
-                        ViewExpr::create_split_at_view(gen_args, args, view_ctx)
-                    } else if ident.name == crate::ty_check::pre_decl::GROUP {
+                    } else if ident.name == crate::ty_check::pre_decl::GROUP
+                        || ident.name == crate::ty_check::pre_decl::GROUP_MUT
+                    {
                         ViewExpr::create_group_view(gen_args, args, view_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::JOIN {
                         ViewExpr::create_join_view(gen_args, args, view_ctx)
@@ -2101,6 +2100,9 @@ impl ViewExpr {
                 } else {
                     panic!("Non-globally defined view functions do not exist.")
                 }
+            }
+            desc::ExprKind::Split(_, _, _, s, view) => {
+                ViewExpr::create_split_at_view(s, view.as_ref(), view_ctx)
             }
             desc::ExprKind::PlaceExpr(pl_expr) => ViewExpr::create_pl_expr_view(pl_expr, view_ctx),
             desc::ExprKind::TupleView(elems) => ViewExpr::create_tuple_view(elems, view_ctx),
@@ -2157,26 +2159,29 @@ impl ViewExpr {
         ViewExpr::Tuple {
             views: elems
                 .iter()
-                .map(|e| match &e.ty.as_ref().unwrap().ty {
-                    desc::TyKind::View(_) => ViewOrExpr::V(ViewExpr::create_from(e, view_ctx)),
-                    _ => ViewOrExpr::E(e.clone()),
+                .map(|e| {
+                    if is_view_ty(&e.ty.as_ref().unwrap()) {
+                        ViewOrExpr::V(ViewExpr::create_from(e, view_ctx))
+                    } else {
+                        ViewOrExpr::E(e.clone())
+                    }
                 })
                 .collect(),
         }
     }
 
     fn create_split_at_view(
-        gen_args: &[desc::ArgKinded],
-        args: &[desc::Expr],
+        s: &desc::Nat,
+        view: &desc::PlaceExpr,
         view_ctx: &HashMap<String, ViewExpr>,
     ) -> ViewExpr {
-        if let (desc::ArgKinded::Nat(s), Some(v)) = (&gen_args[0], args.first()) {
-            return ViewExpr::SplitAt {
-                pos: s.clone(),
-                view: Box::new(ViewExpr::create_from(v, view_ctx)),
-            };
+        ViewExpr::SplitAt {
+            pos: s.clone(),
+            view: Box::new(ViewExpr::create_from(
+                &desc::Expr::new(desc::ExprKind::PlaceExpr(view.clone())),
+                view_ctx,
+            )),
         }
-        panic!("Cannot create `split_at` from the provided arguments.");
     }
 
     fn create_group_view(
@@ -2185,7 +2190,7 @@ impl ViewExpr {
         view_ctx: &HashMap<String, ViewExpr>,
     ) -> ViewExpr {
         if let (desc::ArgKinded::Nat(s), desc::ArgKinded::Nat(n), Some(v)) =
-            (&gen_args[0], &gen_args[1], args.first())
+            (&gen_args[0], &gen_args[3], args.first())
         {
             return ViewExpr::Group {
                 size: s.clone(),
@@ -2449,6 +2454,16 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
     let mut inliner = InlineParForFuns { comp_unit };
     inliner.visit_fun_def(&mut fun_def);
     fun_def
+}
+
+fn is_view_ty(ty: &desc::Ty) -> bool {
+    match &ty.ty {
+        desc::TyKind::Data(desc::DataTy::Ref(_, _, _, arr_vty)) => {
+            matches!(arr_vty.as_ref(), desc::DataTy::ArrayView(_, _))
+        }
+        desc::TyKind::TupleView(_) => true,
+        _ => false,
+    }
 }
 
 static mut IDX_CHECK_COUNTER: AtomicI32 = AtomicI32::new(0);

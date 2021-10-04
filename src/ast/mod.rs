@@ -260,8 +260,8 @@ pub enum ExprKind {
     // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
     Proj(Box<Expr>, usize),
     // Borrow Expressions
-    Ref(Provenance, Ownership, PlaceExpr),
-    BorrowIndex(Provenance, Ownership, PlaceExpr, Nat),
+    Ref(String, Ownership, PlaceExpr),
+    BorrowIndex(String, Ownership, PlaceExpr, Nat),
     LetProv(Vec<String>, Box<Expr>),
     // Variable declaration
     // let mut x: ty;
@@ -294,7 +294,7 @@ pub enum ExprKind {
     UnOp(UnOp, Box<Expr>),
     ParFor(Box<Expr>, Box<Expr>, Box<Expr>),
     TupleView(Vec<Expr>),
-    Split(Nat, Provenance, Provenance, Box<Expr>),
+    Split(String, String, Ownership, Nat, Box<PlaceExpr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),
     // Index into an array; ONLY for codegen
@@ -491,7 +491,7 @@ pub struct PlaceExpr {
     pub span: Option<Span>,
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ViewSplitTag {
     Fst,
     Snd,
@@ -607,10 +607,11 @@ pub struct Ty {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind {
     Data(DataTy),
-    View(ViewTy),
+    TupleView(Vec<Ty>),
     ThreadHierchy(Box<ThreadHierchyTy>),
     Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
     Ident(Ident),
+    Dead(Box<Ty>),
 }
 
 impl Ty {
@@ -633,38 +634,45 @@ impl Ty {
     }
 
     pub fn non_copyable(&self) -> bool {
-        match &self.ty {
-            TyKind::Data(dty) => dty.non_copyable(),
-            TyKind::View(vty) => vty.non_copyable(),
-            TyKind::ThreadHierchy(_) => false,
-            TyKind::Fn(_, _, _, _) => false,
-            TyKind::Ident(_) => true,
-        }
+        !self.copyable()
     }
 
     pub fn copyable(&self) -> bool {
-        !self.non_copyable()
+        match &self.ty {
+            TyKind::Data(dty) => dty.copyable(),
+            TyKind::TupleView(elem_tys) => elem_tys.iter().all(|ty| ty.copyable()),
+            TyKind::ThreadHierchy(_) => true,
+            TyKind::Fn(_, _, _, _) => true,
+            TyKind::Ident(_) => false,
+            TyKind::Dead(_) => panic!(
+                "This case is not expected to mean anything.\
+                The type is dead. There is nothing we can do with it."
+            ),
+        }
     }
 
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::View(vty) => vty.is_fully_alive(),
+            TyKind::TupleView(elem_tys) => elem_tys.iter().all(|ty| ty.is_fully_alive()),
             TyKind::ThreadHierchy(_) | TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
+            TyKind::Dead(_) => false,
         }
     }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
-            TyKind::View(vty) => vty.contains_ref_to_prv(prv_val_name),
+            TyKind::TupleView(elem_tys) => elem_tys
+                .iter()
+                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
             TyKind::Fn(_, param_tys, _, ret_ty) => {
                 param_tys
                     .iter()
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
                     || ret_ty.contains_ref_to_prv(prv_val_name)
             }
-            TyKind::ThreadHierchy(_) | TyKind::Ident(_) => false,
+            TyKind::ThreadHierchy(_) | TyKind::Ident(_) | TyKind::Dead(_) => false,
         }
     }
 
@@ -672,7 +680,12 @@ impl Ty {
         match &self.ty {
             // FIXME mutate and do not create a new type (also this drops the span).
             TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
-            TyKind::View(vty) => Ty::new(TyKind::View(vty.subst_ident_kinded(ident_kinded, with))),
+            TyKind::TupleView(elem_tys) => Ty::new(TyKind::TupleView(
+                elem_tys
+                    .iter()
+                    .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
+            )),
             TyKind::ThreadHierchy(th_hy) => Ty::new(TyKind::ThreadHierchy(Box::new(
                 th_hy.subst_ident_kinded(ident_kinded, with),
             ))),
@@ -696,6 +709,7 @@ impl Ty {
                     self.clone()
                 }
             }
+            TyKind::Dead(ty) => ty.subst_ident_kinded(ident_kinded, with),
         }
     }
 }
@@ -750,87 +764,13 @@ impl ThreadHierchyTy {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum ViewTy {
-    //    Ident(Ident),
-    Array(Box<Ty>, Nat),
-    Tuple(Vec<Ty>),
-    // Only for type checking purposes.
-    Dead(Box<ViewTy>),
-}
-
-impl ViewTy {
-    pub fn non_copyable(&self) -> bool {
-        use ViewTy::*;
-        match self {
-            //Ident(_) => true,
-            Array(ty, _) => ty.non_copyable(),
-            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
-        }
-    }
-
-    pub fn copyable(&self) -> bool {
-        !self.non_copyable()
-    }
-
-    pub fn is_fully_alive(&self) -> bool {
-        use ViewTy::*;
-        match self {
-            //Ident(_) |
-            Array(_, _) => true,
-            Tuple(elem_tys) => elem_tys
-                .iter()
-                .fold(true, |acc, ty| acc & ty.is_fully_alive()),
-            Dead(_) => false,
-        }
-    }
-
-    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
-        match self {
-            //ViewTy::Ident(_) |
-            ViewTy::Dead(_) => false,
-            ViewTy::Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
-            ViewTy::Tuple(elem_tys) => elem_tys
-                .iter()
-                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
-        }
-    }
-
-    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
-        use ViewTy::*;
-        match self {
-            // ViewTy::Ident(id) => {
-            //     if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
-            //         match with {
-            //             ArgKinded::Ident(idk) => Ident(idk.clone()),
-            //             ArgKinded::Ty(Ty::View(vty)) => vty.clone(),
-            //             _ => panic!("Trying to substitute type identifier with non-type value."),
-            //         }
-            //     } else {
-            //         self.clone()
-            //     }
-            // }
-            Tuple(elem_tys) => Tuple(
-                elem_tys
-                    .iter()
-                    .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
-                    .collect(),
-            ),
-            Array(ty, n) => Array(
-                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
-                n.subst_ident_kinded(ident_kinded, with),
-            ),
-            Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum DataTy {
     Ident(Ident),
     Scalar(ScalarTy),
     Atomic(ScalarTy),
     Array(Box<DataTy>, Nat),
+    // [[ dty; n ]]
+    ArrayView(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
@@ -849,9 +789,13 @@ impl DataTy {
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
             At(_, _) => true,
+            ArrayView(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Array(_, _) => true,
-            Dead(_) => panic!("This case is not expected to mean anything. The type is dead. There is nothign we can do with it."),
+            Array(ty, _) => true,
+            Dead(_) => panic!(
+                "This case is not expected to mean anything.\
+                The type is dead. There is nothign we can do with it."
+            ),
         }
     }
 
@@ -862,7 +806,13 @@ impl DataTy {
     pub fn is_fully_alive(&self) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Atomic(_) | Ident(_) | Ref(_, _, _, _) | At(_, _) | Array(_, _) => true,
+            Scalar(_)
+            | Atomic(_)
+            | Ident(_)
+            | Ref(_, _, _, _)
+            | At(_, _)
+            | Array(_, _)
+            | ArrayView(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -887,6 +837,7 @@ impl DataTy {
                 found
             }
             DataTy::Array(elem_dty, _) => self.occurs_in(elem_dty),
+            DataTy::ArrayView(elem_dty, _) => self.occurs_in(elem_dty),
             DataTy::At(elem_dty, _) => self.occurs_in(elem_dty),
         }
     }
@@ -903,9 +854,9 @@ impl DataTy {
                 };
                 found_reference || ty.contains_ref_to_prv(prv_val_name)
             }
-
-            At(ty, _) => ty.contains_ref_to_prv(prv_val_name),
-            Array(ty, _) => ty.contains_ref_to_prv(prv_val_name),
+            At(dty, _) => dty.contains_ref_to_prv(prv_val_name),
+            Array(dty, _) => dty.contains_ref_to_prv(prv_val_name),
+            ArrayView(dty, _) => dty.contains_ref_to_prv(prv_val_name),
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
@@ -940,8 +891,8 @@ impl DataTy {
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
             ),
 
-            At(ty, mem) => At(
-                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+            At(dty, mem) => At(
+                Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 mem.subst_ident_kinded(ident_kinded, with),
             ),
             Tuple(elem_tys) => Tuple(
@@ -950,8 +901,12 @@ impl DataTy {
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
             ),
-            Array(ty, n) => Array(
-                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+            Array(dty, n) => Array(
+                Box::new(dty.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
+            ArrayView(dty, n) => ArrayView(
+                Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
             ),
             Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),

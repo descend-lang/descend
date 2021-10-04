@@ -19,6 +19,14 @@ fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
 fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
+        descend::compile("examples/tree_reduce_working.desc")?
+    ))
+}
+
+#[test]
+fn tree_reduce_sequencing_fail() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
         descend::compile("examples/tree_reduce.desc")?
     ))
 }

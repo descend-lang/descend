@@ -12,7 +12,6 @@ pub trait Visitor: Sized {
     fn visit_mem(&mut self, mem: &mut Memory) { walk_mem(self, mem) }
     fn visit_prv(&mut self, prv: &mut Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
-    fn visit_vty(&mut self, vty: &mut ViewTy) { walk_vty(self, vty) }
     fn visit_th_hierchy(&mut self, th_hierchy: &mut ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
     fn visit_dty(&mut self, dty: &mut DataTy) { walk_dty(self, dty) }
     fn visit_ty(&mut self, ty: &mut Ty) { walk_ty(self, ty) }
@@ -84,18 +83,6 @@ pub fn walk_prv<V: Visitor>(visitor: &mut V, prv: &mut Provenance) {
     }
 }
 
-pub fn walk_vty<V: Visitor>(visitor: &mut V, vty: &mut ViewTy) {
-    match vty {
-        //ViewTy::Ident(ident) => visitor.visit_ident(ident),
-        ViewTy::Tuple(elem_tys) => walk_list!(visitor, visit_ty, elem_tys),
-        ViewTy::Array(elem_ty, n) => {
-            visitor.visit_ty(elem_ty);
-            visitor.visit_nat(n)
-        }
-        ViewTy::Dead(vty) => visitor.visit_vty(vty),
-    }
-}
-
 pub fn walk_th_hierchy<V: Visitor>(visitor: &mut V, th_hierchy: &mut ThreadHierchyTy) {
     match th_hierchy {
         ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3) => {
@@ -126,6 +113,10 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
         }
+        DataTy::ArrayView(dty, n) => {
+            visitor.visit_dty(dty);
+            visitor.visit_nat(n);
+        }
         DataTy::At(dty, mem) => {
             visitor.visit_dty(dty);
             visitor.visit_mem(mem)
@@ -143,7 +134,7 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
 pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
     match &mut ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::View(vty) => visitor.visit_vty(vty),
+        TyKind::TupleView(elem_tys) => walk_list!(visitor, visit_ty, elem_tys),
         TyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         TyKind::Fn(gen_params, params, exec, ret_ty) => {
             walk_list!(visitor, visit_ident_kinded, gen_params);
@@ -152,6 +143,7 @@ pub fn walk_ty<V: Visitor>(visitor: &mut V, ty: &mut Ty) {
             visitor.visit_ty(ret_ty)
         }
         TyKind::Ident(ident) => visitor.visit_ident(ident),
+        TyKind::Dead(ty) => visitor.visit_ty(ty),
     }
 }
 
@@ -184,8 +176,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_pl_expr(pl_expr);
             visitor.visit_nat(n)
         }
-        ExprKind::Ref(prv, own, pl_expr) => {
-            visitor.visit_prv(prv);
+        ExprKind::Ref(_, own, pl_expr) => {
             visitor.visit_own(own);
             visitor.visit_pl_expr(pl_expr);
         }
@@ -203,8 +194,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             };
             visitor.visit_expr(e);
         }
-        ExprKind::BorrowIndex(prv, own, pl_expr, n) => {
-            visitor.visit_prv(prv);
+        ExprKind::BorrowIndex(_, own, pl_expr, n) => {
             visitor.visit_own(own);
             visitor.visit_pl_expr(pl_expr);
             visitor.visit_nat(n)
@@ -281,11 +271,10 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::TupleView(elems) => {
             walk_list!(visitor, visit_expr, elems);
         }
-        ExprKind::Split(n, r1, r2, view) => {
-            visitor.visit_nat(n);
-            visitor.visit_prv(r1);
-            visitor.visit_prv(r2);
-            visitor.visit_expr(view);
+        ExprKind::Split(_prv_val1, _prv_val2, own, s, view) => {
+            visitor.visit_own(own);
+            visitor.visit_nat(s);
+            visitor.visit_pl_expr(view);
         }
         ExprKind::Idx(e, i) => {
             visitor.visit_expr(e);

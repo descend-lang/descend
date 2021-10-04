@@ -2,7 +2,6 @@ use super::ctxs::{KindCtx, TyCtx};
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::BorrowingError;
-use crate::ty_check::error::BorrowingError::TyError;
 use crate::ty_check::TyChecker;
 use std::collections::HashSet;
 
@@ -171,15 +170,15 @@ fn ownership_safe_deref_abs(
     most_spec_pl: &internal::Place,
     ref_own: Ownership,
 ) -> OwnResult<HashSet<Loan>> {
-    let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+    let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
-    let _ty = ty_checker.place_expr_ty_under_exec_own(
+    ty_checker.place_expr_ty_under_exec_own(
         kind_ctx,
         ty_ctx,
         exec,
         own,
-        &currently_checked_pl_expr,
+        &mut currently_checked_pl_expr,
     )?;
     new_own_weaker_equal(own, ref_own)?;
     ownership_safe_under_existing_loans(ty_ctx, reborrows, own, &currently_checked_pl_expr)?;

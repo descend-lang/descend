@@ -29,6 +29,13 @@ impl TyCtx {
         self
     }
 
+    pub fn drop_last_frm_ty(mut self) -> Self {
+        self.frame_tys
+            .pop()
+            .expect("It should never be the case that there is no frame typing.");
+        self
+    }
+
     pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
         let frame_typing = self.frame_tys.iter_mut().last().unwrap();
         frame_typing.push(FrameEntry::Var(id_typed));
@@ -165,7 +172,6 @@ impl TyCtx {
 
         fn explode(pl: internal::Place, ty: Ty) -> Vec<TypedPlace> {
             use DataTy as d;
-            use ViewTy as v;
 
             match &ty.ty {
                 TyKind::Ident(_)
@@ -173,28 +179,28 @@ impl TyCtx {
                 | TyKind::Data(d::Atomic(_))
                 | TyKind::Data(d::Scalar(_))
                 | TyKind::Data(d::Array(_, _))
+                | TyKind::Data(d::ArrayView(_, _))
                 | TyKind::Data(d::At(_, _))
                 | TyKind::Data(d::Ref(_, _, _, _))
                 | TyKind::Data(d::Ident(_))
                 | TyKind::Data(d::Dead(_))
-//                | Ty::View(v::Ident(_))
-                | TyKind::View(v::Array(_, _))
-                | TyKind::View(v::Dead(_))
-                | TyKind::ThreadHierchy(_) => vec![(pl, ty.clone())],
+                | TyKind::ThreadHierchy(_)
+                | TyKind::Dead(_) => vec![(pl, ty.clone())],
                 TyKind::Data(d::Tuple(tys)) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
-                        let mut exploded_index =
-                            explode(proj(pl.clone(), index), Ty::new(TyKind::Data(proj_ty.clone())));
+                        let mut exploded_index = explode(
+                            proj(pl.clone(), index),
+                            Ty::new(TyKind::Data(proj_ty.clone())),
+                        );
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
                 }
-                TyKind::View(v::Tuple(tys)) => {
+                TyKind::TupleView(tys) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
-                        let mut exploded_index =
-                            explode(proj(pl.clone(), index), proj_ty.clone());
+                        let mut exploded_index = explode(proj(pl.clone(), index), proj_ty.clone());
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
@@ -228,7 +234,7 @@ impl TyCtx {
                     TyKind::Data(DataTy::Tuple(elem_tys)) => {
                         res_ty = Ty::new(TyKind::Data(elem_tys[*n].clone()));
                     }
-                    TyKind::View(ViewTy::Tuple(elem_tys)) => {
+                    TyKind::TupleView(elem_tys) => {
                         res_ty = elem_tys[*n].clone();
                     }
                     t => panic!(
@@ -265,10 +271,10 @@ impl TyCtx {
                     };
                     Ty::new(TyKind::Data(DataTy::Tuple(elem_tys)))
                 }
-                TyKind::View(ViewTy::Tuple(mut elem_tys)) => {
+                TyKind::TupleView(mut elem_tys) => {
                     elem_tys[*idx] =
                         set_ty_for_path_in_ty(elem_tys[*idx].clone(), &path[1..], part_ty);
-                    Ty::new(TyKind::View(ViewTy::Tuple(elem_tys)))
+                    Ty::new(TyKind::TupleView(elem_tys))
                 }
                 _ => panic!("Path not compatible with type."),
             }
@@ -287,13 +293,16 @@ impl TyCtx {
         if let Ok(pl_ty) = self.place_ty(pl) {
             self.set_place_ty(
                 pl,
-                match pl_ty.ty {
+                match &pl_ty.ty {
                     TyKind::Ident(_) => unimplemented!(),
                     TyKind::Fn(_, _, _, _) => unimplemented!(),
-                    TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty)))),
-                    TyKind::View(vty) => Ty::new(TyKind::View(ViewTy::Dead(Box::new(vty)))),
+                    TyKind::TupleView(elem_tys) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
+                    TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty.clone())))),
                     TyKind::ThreadHierchy(_) => {
                         panic!("Thread hierarchy types are always copyable.")
+                    }
+                    TyKind::Dead(_) => {
+                        panic!("Cannot kill dead type.")
                     }
                 },
             )
