@@ -27,42 +27,46 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
             let view_changes: &'i uniq gpu.global [[(bool, bool, bool, i32); n]] =
                 to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
 
-            let zipped_nodes_changes: [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
-                zip::<n, &'r1 shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view, view_changes);
-        
-            let grouped_nodes_changes: [[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; n/16]] =
-                group::<16, n, <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes);
+            let grouped_nodes = group::<16, 'r1, gpu.global, n, (i32,i32)>(nodes_view);
+            let grouped_changes = group_mut::<16, 'i, gpu.global, n, (bool, bool, bool, i32)>(view_changes);
+
             //kernel 1
-            exec::< 4 , 16, 'j, cpu.stack,  <[[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; 4]],
-                                                &'k shrd gpu.global [i32; m],
-                                                &'n uniq gpu.global [(bool, bool, bool, i32); n] >
-                                                >(
+            exec::<4 , 16, 'j, cpu.stack,
+                    <&'r1 shrd gpu.global [[[[(i32, i32); 16]]; 4]],
+                    &'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]],
+                    &'k shrd gpu.global [i32; m],
+                    &'n uniq gpu.global [(bool, bool, bool, i32); n]>>(
                 &'j uniq gpu,
-                <grouped_nodes_changes, &'k shrd edges, &'n uniq d_changes>,
+                <grouped_nodes, grouped_changes, &'k shrd edges, &'n uniq d_changes>,
                 | grid: BlockGrp<4, ThreadGrp<16>>,  //  Grid<Block<Thread, 16>, 4>,
-                  input: <[[ [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; 4]],
-                         &'k shrd gpu.global [i32; m],
-                         &'n uniq gpu.global [(bool, bool, bool, i32); n]>
+                  input: <&'r1 shrd gpu.global [[[[(i32, i32); 16]]; 4]],
+                          &'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]],
+                          &'k shrd gpu.global [i32; m],
+                          &'n uniq gpu.global [(bool, bool, bool, i32); n]>
                 | -[gpu.grid]-> () {
 
                     let nod_view = input.0;
-                    let edg = input.1;
-                    let all_changes = input.2;
+                    let chgn_view = input.1;
+                    let edg = input.2;
+                    let all_changes = input.3;
 
-                      for grid with <nod_view, edg, all_changes> do
+                      for grid with <nod_view, chgn_view, edg, all_changes> do
 
                         | block: ThreadGrp<16>, 
-                          ib: [[ <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]] ,
+                          nod: &'r1 shrd gpu.global [[(i32, i32); 16]],
+                          chgn: &'i uniq gpu.global [[(bool, bool, bool, i32); 16]],
                           ed: &'k shrd gpu.global [i32; m],
                           all_ch: &'n uniq gpu.global [(bool, bool, bool, i32); n]
                         | -[gpu.block]-> () {
-                            for block with <ib, ed, all_ch> do 
-                                |  inp: <&'r1 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)>,
+                            for block with <nod, chgn, ed, all_ch> do
+                                | node: &'r1 shrd gpu.global (i32, i32),
+                                  change: &'i uniq gpu.global (bool, bool, bool, i32),
                                   e: &'k shrd gpu.global [i32; m], 
                                   ch: &'n uniq gpu.global [(bool, bool, bool, i32); n]
                                 | -[gpu.thread]-> () {
-                                    let something = inp.0;
-                                    let anything = inp.1;
+                                    // FIXME what is happening here?
+                                    let something = node;
+                                    let anything = change;
                                     let temp_car = e; // e[2]; // try to index into non array type
                                     let something_else = ch
                                 }
@@ -75,32 +79,31 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
             let view_changes2: &'i uniq gpu.global [[(bool, bool, bool, i32); n]] =
                 to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
 
-            let zipped_nodes_changes2: [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; n ]] =
-                zip::<n, &'r2 shrd gpu.global (i32, i32), &'i uniq gpu.global (bool, bool, bool, i32) >(nodes_view2, view_changes2);
-        
-            let grouped_nodes_changes2: [[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; n/16]] =
-                group::<16, n, <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32)> >(zipped_nodes_changes2);
+            let grouped_nodes2 = group::<16, 'r1, gpu.global, n, (i32,i32)>(nodes_view2);
+            let grouped_changes2 = group_mut::<16, 'i, gpu.global, (bool, bool, bool, i32)>(view_changes2);
+
             // kernel 2 
-            exec::<4, 16, 'j, cpu.stack, 
-                    <[[ [[ <&'r2 shrd gpu.global (i32, i32),  
-                    &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; 4]], 
-                    &'a8 uniq gpu.global Atomic<i32>>
-                >(
+            exec::<4, 16, 'j, cpu.stack,
+                   <&'r2 shrd gpu.global [[[[(i32, i32); 16]]; 4]],
+                    &'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]],
+                    &'a8 uniq gpu.global Atomic<i32>>>(
                 &'j uniq gpu,
-                <grouped_nodes_changes2, &'a8 uniq atomic_stop>,
+                <grouped_nodes2, grouped_changes2, &'a8 uniq atomic_stop>,
                 | grid:  BlockGrp<4, ThreadGrp<16>>, 
-                    input2: <[[ [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]]; 4]],
-                    &'a8 uniq gpu.global Atomic<i32>>
+                    input2: <&'r2 shrd gpu.global [[[[(i32, i32); 16]]; 4]], &'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]], &'a8 uniq gpu.global Atomic<i32>, &'a8 uniq gpu.global Atomic<i32>>
                 | -[gpu.grid]-> () {
-                        let changes2 = input2.0;
-                        let a_stop_temp = input2.1;
-                        for grid with <changes2, a_stop_temp> do
+                        let nodes = input2.0;
+                        let changes = input2.1;
+                        let a_stop_temp = input2.2;
+                        for grid with <nodes, changes, a_stop_temp> do
                         | block: ThreadGrp<16>, 
-                            ib2: [[ <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >; 16 ]],
-                            a_stop: &'a8 uniq gpu.global Atomic<i32>
+                            nods2: &'r2 shrd gpu.global [[(i32, i32); 16]],
+                            chngs2: &'i uniq gpu.global [[(bool, bool, bool, i32); 16]],
+                            a_stop2: &'a8 uniq gpu.global Atomic<i32>
                         | -[gpu.block]-> () {
-                            for block with <ib2, a_stop> do
-                                |    inp: <&'r2 shrd gpu.global (i32, i32),  &'i uniq gpu.global (bool, bool, bool, i32) >,
+                            for block with <nods, chngs, a_stop> do
+                                |   node2: &'r2 shrd gpu.global (i32, i32),
+                                    change2: &'i uniq gpu.global (bool, bool, bool, i32),
                                     a_st: &'a8 uniq gpu.global Atomic<i32>
                                 | -[gpu.thread]-> () {
                                         store_atomic::<'a9, gpu.global>(&'a9 shrd *a_st, 1)

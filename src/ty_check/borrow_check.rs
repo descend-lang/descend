@@ -55,7 +55,7 @@ pub(super) fn ownership_safe(
                 )
             }
             // TODO improve error message
-            _ => panic!("Is the type dead?"),
+            t => panic!("Is the type dead? `{:?}`", t),
         }
     }
 }
