@@ -41,3 +41,19 @@ fn warp_reduce() -> Result<(), descend::error::ErrorReported> {
 fn bfs() -> Result<(), descend::error::ErrorReported> {
     Ok(println!("{}", descend::compile("examples/bfs_copy.desc")?))
 }
+
+#[test]
+fn bfs_working() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/bfs_copy_working.desc")?
+    ))
+}
+
+#[test]
+fn computed_indexing() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/computed_indexing.desc")?
+    ))
+}

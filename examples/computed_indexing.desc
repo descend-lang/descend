@@ -1,0 +1,66 @@
+fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
+    h_indices: &a shrd cpu.heap [u32; n],
+    h_results: &b uniq cpu.heap [i32; n],
+    h_data: &c shrd cpu.heap [i32; m]
+)   -[cpu.thread]-> () {
+    letprov <'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k> {
+        let mut gpu: Gpu = gpu_device(0);
+
+        let indices: [u32; n] @ gpu.global =
+            gpu_alloc::<'c, a, cpu.stack, cpu.heap, [u32; n]>(&'c uniq gpu, h_indices);
+        let indices_view: [[&'g shrd gpu.global u32; n]] =
+            to_view::<'g, gpu.global, n, u32>(&'g shrd indices);
+        let grouped_indices: [[ [[&'g shrd gpu.global u32; 16]]; 4]] = 
+            group::<16, n, &'g shrd gpu.global u32>(indices_view);
+
+        let mut results: [i32; n] @ gpu.global =
+            gpu_alloc::<'d, 'e, cpu.stack, cpu.heap, [i32; n]>(&'d uniq gpu, &'e shrd *h_results);
+        let results_view: [[&'h uniq gpu.global i32; n]] =
+            to_view_mut::<'h, gpu.global, n, i32>(&'h uniq results);
+        let grouped_results: [[ [[&'h uniq gpu.global i32; 16]]; 4]] =
+            group::<16, n, &'h uniq gpu.global i32>(results_view);
+
+
+        let d_data: [i32; m] @ gpu.global =
+            gpu_alloc::<'f, c, cpu.stack, cpu.heap, [i32; m]>(&'f uniq gpu, h_data);
+
+        exec::<4, 16, 'i, cpu.stack,
+                <[[ [[&'g shrd gpu.global u32; 16]]; 4]],
+                 [[ [[&'h uniq gpu.global i32; 16]]; 4]],
+                 &'j shrd gpu.global [i32; m]>
+        >(
+            &'i uniq gpu,
+            <grouped_indices, grouped_results, &'j shrd d_data>,
+            | grid: BlockGrp<4, ThreadGrp<16>>,
+              inputs: <[[ [[&'g shrd gpu.global u32; 16]]; 4]],
+                      [[ [[&'h uniq gpu.global i32; 16]]; 4]],
+                      &'j shrd gpu.global [i32; m]>
+            | -[gpu.grid]-> () {
+                let indices_input = inputs.0;
+                let results_input = inputs.1;
+                let data = inputs.2;
+
+                for grid with <indices_input, results_input, data> do
+
+                    | block: ThreadGrp<16>,
+                      indices_inp: [[&'g shrd gpu.global u32; 16]],
+                      results_inp: [[&'h uniq gpu.global i32; 16]],
+                      dat: &'j shrd gpu.global [i32; m]
+                    | -[gpu.block]-> () {
+
+                        for block with <indices_inp, results_inp, dat> do 
+                            | ind: &'g shrd gpu.global u32, 
+                              res: &'h uniq gpu.global i32,
+                              d: &'j shrd gpu.global [i32; m]
+                            | -[gpu.thread]-> () {
+                                let i = *ind;
+                                *res = d[i]
+                            }
+
+                    } 
+
+            }
+        );
+        copy_to_host::<'k, b, cpu.heap, [i32; n]>(&'k shrd results, h_results)
+    }
+}

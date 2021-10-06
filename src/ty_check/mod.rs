@@ -71,7 +71,7 @@ impl TyChecker {
                 .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
                     ident: ident.clone(),
                     ty: ty.clone(),
-                    mutbl: mutbl.clone(),
+                    mutbl: *mutbl,
                 })
                 .collect(),
         );
@@ -357,7 +357,45 @@ impl TyChecker {
         case_true: &mut Expr,
         case_false: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        unimplemented!()
+        // TODO deal with provenances in cases
+        let cond_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, cond)?;
+        let _case_true_ty_ctx =
+            self.ty_check_expr(kind_ctx, cond_ty_ctx.clone(), exec, case_true)?;
+        let case_false_ty_ctx = self.ty_check_expr(kind_ctx, cond_ty_ctx, exec, case_false)?;
+
+        let cond_ty = cond.ty.as_ref().unwrap();
+        let case_true_ty = case_true.ty.as_ref().unwrap();
+        let case_false_ty = case_false.ty.as_ref().unwrap();
+
+        if !matches!(&cond_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Bool))) {
+            return Err(TyError::String(format!(
+                "Expected condition in if case, instead got {:?}",
+                cond_ty
+            )));
+        }
+        if !matches!(
+            &case_true_ty.ty,
+            TyKind::Data(DataTy::Scalar(ScalarTy::Unit))
+        ) {
+            return Err(TyError::String(format!(
+                "Body of the true case is not of unit type, instead got {:?}",
+                case_true_ty
+            )));
+        }
+        if !matches!(
+            &case_false_ty.ty,
+            TyKind::Data(DataTy::Scalar(ScalarTy::Unit))
+        ) {
+            return Err(TyError::String(format!(
+                "Body of the false case is not of unit type, instead got {:?}",
+                case_false_ty
+            )));
+        }
+
+        Ok((
+            case_false_ty_ctx,
+            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+        ))
     }
 
     // TODO split up groupings, i.e., deal with TupleViews and require enough functions.
@@ -898,6 +936,18 @@ impl TyChecker {
 
         let lhs_ty = lhs.ty.as_ref().unwrap();
         let rhs_ty = rhs.ty.as_ref().unwrap();
+        let ret = match bin_op {
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Mod
+            | BinOp::And
+            | BinOp::Or => lhs_ty.clone(),
+            BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Neq => {
+                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))
+            }
+        };
         match (&lhs_ty.ty, &rhs_ty.ty) {
             (
                 TyKind::Data(DataTy::Scalar(ScalarTy::F32)),
@@ -906,7 +956,7 @@ impl TyChecker {
             | (
                 TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
                 TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
-            ) => Ok((rhs_ty_ctx, lhs_ty.clone())),
+            ) => Ok((rhs_ty_ctx, ret)),
             _ => Err(TyError::String(format!(
             "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
             bin_op, lhs, rhs

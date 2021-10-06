@@ -182,6 +182,8 @@ public:
 };
 #endif
 
+extern const i32 NO_ERROR = -1;
+// TODO cuda::std::int32_t
 using i32 = std::int32_t;
 using u32 = std::uint32_t;
 // FIXME there is no way to guarantee that float holds 32 bits
@@ -195,12 +197,6 @@ using tuple = thrust::tuple<Types...>;
 
 template<typename T>
 using atomic = std::atomic<T>;
-
-using Gpu = size_t;
-
-Gpu gpu_device(size_t device_id) {
-    return device_id;
-};
 
 template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
@@ -230,6 +226,31 @@ enum Memory {
 
 template<Memory mem, typename DescendType>
 class Buffer;
+
+using GpuId = size_t;
+
+// TODO remove copy constructor, assign constructor and add move constructor
+class Gpu {
+
+public:
+    const GpuId id;
+    i32 * fail_code;
+
+    Gpu(const size_t device_id) : id{device_id} {
+        CHECK_CUDA_ERR( cudaSetDevice(device_id) );
+        CHECK_CUDA_ERR( cudaMalloc(&fail_code, size_in_bytes<i32>()) );
+        CHECK_CUDA_ERR( cudaMemcpy(fail_code, &NO_ERROR, size_in_bytes<i32>(), cudaMemcpyHostToDevice) );
+    }
+
+    ~Gpu() {
+        CHECK_CUDA_ERR( cudaSetDevice(id) );
+        CHECK_CUDA_ERR( cudaFree(fail_code) );
+    }
+};
+
+Gpu gpu_device(size_t device_id) {
+   return Gpu(device_id);
+}
 
 template<typename DescendType>
 class Buffer<Memory::CpuHeap, DescendType> {
@@ -289,20 +310,20 @@ public:
 
 template<typename DescendType>
 class Buffer<Memory::GpuGlobal, DescendType> {
-    const Gpu gpu_;
+    const Gpu *gpu_;
     DescendType * dev_ptr_;
 
 public:
     static constexpr std::size_t size = size_in_bytes<DescendType>();
 
-    Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr): gpu_{*gpu} {
-        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+    Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr): gpu_{gpu} {
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_->id) );
         CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
         CHECK_CUDA_ERR( cudaMemcpy(dev_ptr_, init_ptr, size_in_bytes<DescendType>(), cudaMemcpyHostToDevice) );
     }
 
     ~Buffer() {
-        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_->id) );
         CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
     }
 
@@ -317,26 +338,26 @@ public:
 
 template<typename DescendType, std::size_t n>
 class Buffer<Memory::GpuGlobal, descend::array<DescendType, n>> {
-    const Gpu gpu_;
+    const Gpu *gpu_;
     DescendType * dev_ptr_;
 
 public:
     static constexpr std::size_t size = size_in_bytes<array<DescendType, n>>();
 
-    Buffer(const Gpu * const __restrict__ gpu, const DescendType default_value): gpu_{*gpu} {
-        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+    Buffer(const Gpu * const __restrict__ gpu, const DescendType default_value): gpu_{gpu} {
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_->id) );
         CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
-        CHECK_CUDA_ERR( cudaMemset(&dev_ptr_, default_value, size));
+        CHECK_CUDA_ERR( cudaMemset(dev_ptr_, default_value, size));
     }
 
-    Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{*gpu} {
-        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+    Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{gpu} {
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_->id) );
         CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
         CHECK_CUDA_ERR( cudaMemcpy(dev_ptr_, init_ptr, size, cudaMemcpyHostToDevice) );
     }
 
     ~Buffer() {
-        CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+        CHECK_CUDA_ERR( cudaSetDevice(gpu_->id) );
         CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
     }
 
@@ -377,18 +398,28 @@ __global__ void launch(F f, Args... args)
 
 template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
 auto exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
-    CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
+    CHECK_CUDA_ERR( cudaSetDevice(gpu->id) );
 #ifdef BENCH
     Timing timing{};
     timing.record_begin();
 #endif
-    launch<<<num_blocks, num_threads>>>(f, args...);
+    launch<<<num_blocks, num_threads>>>(f, gpu->fail_code, args...);
 #ifdef BENCH
     timing.record_end();
     benchmark.current_run().insert_timing(timing);
 #endif
     CHECK_CUDA_ERR( cudaPeekAtLastError() );
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
+    // download here
+    i32 h_gl_fail = NO_ERROR;
+    descend::copy_to_host<int>(gpu->fail_code, &h_gl_fail);
+    if (h_gl_fail != NO_ERROR) {
+        std::cerr << "had indexing error nr: " << h_gl_fail << std::endl;
+    }
+}
+
+void __device__ atomic_set(int *adress, int value) {
+    atomicExch(adress, value);
 }
 
 namespace detail

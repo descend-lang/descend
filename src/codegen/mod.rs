@@ -7,6 +7,7 @@ use crate::ast::{CompilUnit, Ident, PlaceExprKind, ThreadHierchyTy};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 // FIXME Indexing and genreation of view expressions is bugged. Mainly because it is hard to
 //  recognize which part of a place expression is a view expression.
@@ -384,13 +385,13 @@ fn gen_if_else(
     cu::Stmt::IfElse {
         cond: cond,
         true_body: match gen_stmt(e_tt, false, parall_ctx, view_ctx, comp_unit, label.clone()) {
-            CheckedStmt::Stmt(st) => Box::new(st),
+            CheckedStmt::Stmt(st) => Box::new(cu::Stmt::Block(Box::new(st))),
             CheckedStmt::StmtIdxCheck(_, _) => {
                 panic!("body of true-case of if-else should not need checks")
             }
         },
         false_body: match gen_stmt(e_ff, false, parall_ctx, view_ctx, comp_unit, label) {
-            CheckedStmt::Stmt(st) => Box::new(st),
+            CheckedStmt::Stmt(st) => Box::new(cu::Stmt::Block(Box::new(st))),
             CheckedStmt::StmtIdxCheck(_, _) => {
                 panic!("body of false-case of if-else should not need checks")
             }
@@ -481,14 +482,9 @@ fn gen_exec(
         0,
         cu::ParamDecl {
             name: "global_failure".to_string(),
-            ty: gen_ty(
-                &desc::TyKind::Data(desc::DataTy::Ref(
-                    desc::Provenance::Ident(Ident::new("smth")),
-                    desc::Ownership::Uniq,
-                    desc::Memory::GpuGlobal,
-                    Box::new(desc::DataTy::Scalar(desc::ScalarTy::Bool)),
-                )),
-                desc::Mutability::Const,
+            ty: cu::Ty::Ptr(
+                Box::new(cu::Ty::Scalar(cu::ScalarTy::I32)),
+                Some(cu::GpuAddrSpace::Global),
             ),
         },
     );
@@ -519,19 +515,38 @@ fn gen_exec(
         let in_name = params[1].ident.name.clone();
         view_ctx.insert(in_name, input_view_expr);
 
+        let gpu_fun_body = match gen_stmt(
+            body,
+            false,
+            &mut scope_parall_ctx,
+            view_ctx,
+            comp_unit,
+            label.clone(),
+        ) {
+            CheckedStmt::Stmt(st) => Box::new(st),
+            CheckedStmt::StmtIdxCheck(_, _) => panic!("this should never happen"),
+        };
+        let gpu_fun_body_idx_check = cu::Stmt::Seq(vec![
+            cu::Stmt::If {
+                cond: cu::Expr::BinOp {
+                    lhs: Box::new(cu::Expr::Deref(Box::new(cu::Expr::Ident(
+                        "global_failure".to_string(),
+                    )))),
+                    op: cu::BinOp::Neq,
+                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(-1))),
+                },
+                body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Return(None)))),
+            },
+            cu::Stmt::Expr(cu::Expr::FunCall {
+                fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                template_args: vec![],
+                args: vec![],
+            }),
+            gpu_fun_body.as_ref().clone(),
+        ]);
         cu::Expr::Lambda {
             params: param_decls,
-            body: match gen_stmt(
-                &body,
-                false,
-                &mut scope_parall_ctx,
-                view_ctx,
-                comp_unit,
-                label.clone(),
-            ) {
-                CheckedStmt::Stmt(st) => Box::new(st),
-                CheckedStmt::StmtIdxCheck(_, _) => panic!("this should never happen"),
-            },
+            body: Box::new(gpu_fun_body_idx_check),
             ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
             is_dev_fun: true,
         }
@@ -557,10 +572,6 @@ fn gen_exec(
             }
         })
         .collect();
-    input.insert(
-        0,
-        cu::Expr::Ref(Box::new(cu::Expr::Ident("d_fail".to_string()))),
-    );
     let template_args = gen_args_kinded(vec![blocks.clone(), threads.clone()].as_slice());
     let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
     args.append(&mut input);
@@ -654,7 +665,7 @@ fn gen_par_for(
             }
         }
 
-        let l = match label.clone() {
+        let l = match label {
             None => utils::fresh_name("label"),
             Some(l) => l,
         };
@@ -667,7 +678,6 @@ fn gen_par_for(
             Some(l),
         ) {
             CheckedStmt::Stmt(st) => st,
-            // TODO prepend check to returned sequence statement
             CheckedStmt::StmtIdxCheck(ch, st) => cu::Stmt::Seq(vec![ch, st]),
         }
     }
@@ -696,7 +706,9 @@ fn gen_par_for(
                     cu::Stmt::If {
                         cond: cu::Expr::BinOp {
                             op: cu::BinOp::Neq,
-                            lhs: Box::new(cu::Expr::Ident("global_failure".to_string())),
+                            lhs: Box::new(cu::Expr::Deref(Box::new(cu::Expr::Ident(
+                                "global_failure".to_string(),
+                            )))),
                             rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(-1))),
                         },
                         body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Return(None)))),
@@ -794,27 +806,18 @@ fn gen_par_for(
         par_section
     };
 
-    // TODO append sync_stmt to sequence statement of body
     cu::Stmt::Seq(vec![body, sync_stmt])
 }
 
-fn gen_checked_stmt(
+fn gen_check_idx_stmt(
     expr: &desc::Expr,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
     label: Option<String>,
 ) -> cu::Stmt {
     use desc::ExprKind::*;
-    match &expr.expr {
-        // Let(_, _, _, expr1, expr2) => cu::Stmt::Seq(
-        //     Box::new(gen_checked_stmt(expr1, view_ctx, comp_unit, label.clone())),
-        //     Box::new(gen_checked_stmt(expr2, view_ctx, comp_unit, label)),
-        // ),
-        // Seq(e1, e2) => cu::Stmt::Seq(
-        //     Box::new(gen_checked_stmt(e1, view_ctx, comp_unit, label.clone())),
-        //     Box::new(gen_checked_stmt(e2, view_ctx, comp_unit, label)),
-        // ),
-        Index(pl_expr, i) => match label {
+    if let Index(pl_expr, i) = &expr.expr {
+        match label {
             Some(l) => {
                 let n = match &pl_expr.ty.as_ref().expect(&format!("{:?}", pl_expr)).ty {
                     TyKind::Data(DataTy::Array(_, m)) => m,
@@ -835,16 +838,26 @@ fn gen_checked_stmt(
                         lhs: Box::new(cu::Expr::Nat(i.clone())),
                         rhs: Box::new(cu::Expr::Nat(n.clone())),
                     },
-                    body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Expr(cu::Expr::Ident(
-                        format!("goto {}", l),
-                    ))))),
+                    body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
+                        cu::Stmt::Expr(cu::Expr::FunCall {
+                            fun: Box::new(cu::Expr::Ident("descend::atomic_set".to_string())),
+                            template_args: vec![],
+                            args: vec![
+                                cu::Expr::Ident("global_failure".to_string()),
+                                cu::Expr::Lit(cu::Lit::I32(increment_idx_check_counter())),
+                            ],
+                        }),
+                        cu::Stmt::Expr(cu::Expr::Ident(format!("goto {}", l))),
+                    ])))),
                 }
             }
             None => cu::Stmt::Expr(cu::Expr::Empty),
-        },
-        //Assign(_, expr) => gen_checked_stmt(expr, view_ctx, comp_unit, label),
-        App(_, _, _) | ParFor(_, _, _) | PlaceExpr(_) | Lit(_) => cu::Stmt::Expr(cu::Expr::Empty),
-        _ => panic!("Smth not yet implemented {:?}", &expr), // TODO not all cases implemented
+        }
+    } else {
+        panic!(
+            "cannot generate index statement from non index expression: {:?}",
+            expr
+        )
     }
 }
 
@@ -908,12 +921,12 @@ fn gen_expr(
         Index(pl_expr, idx) => {
             if contains_view_expr(pl_expr, view_ctx) {
                 CheckedExpr::ExprIdxCheck(
-                    gen_checked_stmt(&expr, view_ctx, comp_unit, label),
+                    gen_check_idx_stmt(&expr, view_ctx, comp_unit, label),
                     gen_idx_into_view(pl_expr, idx, view_ctx, comp_unit),
                 )
             } else {
                 CheckedExpr::ExprIdxCheck(
-                    gen_checked_stmt(&expr, view_ctx, comp_unit, label),
+                    gen_check_idx_stmt(&expr, view_ctx, comp_unit, label),
                     cu::Expr::ArraySubscript {
                         array: Box::new(gen_pl_expr(pl_expr, view_ctx, comp_unit)),
                         index: idx.clone(),
@@ -2436,4 +2449,13 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
     let mut inliner = InlineParForFuns { comp_unit };
     inliner.visit_fun_def(&mut fun_def);
     fun_def
+}
+
+static mut IDX_CHECK_COUNTER: AtomicI32 = AtomicI32::new(0);
+pub fn increment_idx_check_counter() -> i32 {
+    let i;
+    unsafe {
+        i = IDX_CHECK_COUNTER.fetch_add(1, Ordering::SeqCst);
+    }
+    i
 }

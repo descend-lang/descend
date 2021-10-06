@@ -9,6 +9,10 @@ pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
 pub static SHARED_ALLOC: &str = "shared_alloc";
 pub static COPY_TO_GPU: &str = "copy_to_gpu";
+pub static LOAD_ATOMIC: &str = "load_atomic";
+pub static LOAD_ATOMIC_HOST: &str = "load_atomic_host";
+pub static STORE_ATOMIC: &str = "store_atomic";
+pub static STORE_ATOMIC_HOST: &str = "store_atomic_host";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -30,6 +34,10 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (EXEC, exec_ty()),
         (SHARED_ALLOC, shared_alloc_ty()),
         (COPY_TO_GPU, copy_to_gpu_ty()),
+        (LOAD_ATOMIC, load_atomic_ty()),
+        (LOAD_ATOMIC_HOST, load_atomic_host_ty()),
+        (STORE_ATOMIC, store_atomic_ty()),
+        (STORE_ATOMIC_HOST, store_atomic_host_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -136,6 +144,111 @@ fn gpu_device_ty() -> Ty {
         vec![Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))],
         Exec::CpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Gpu)))),
+    ))
+}
+
+//  <r: prv, m: mem>(&r shrd m Atomic<i32>) -[gpu.global]-> i32
+fn load_atomic_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    Ty::new(TyKind::Fn(
+        vec![r_prv, m_mem],
+        vec![Ty::new(TyKind::Data(DataTy::Ref(
+            Provenance::Ident(r),
+            Ownership::Shrd,
+            Memory::Ident(m),
+            Box::new(DataTy::Atomic(ScalarTy::I32)),
+        )))],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))),
+    ))
+}
+
+fn load_atomic_host_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    Ty::new(TyKind::Fn(
+        vec![r_prv, m_mem],
+        vec![Ty::new(TyKind::Data(DataTy::Ref(
+            Provenance::Ident(r),
+            Ownership::Shrd,
+            Memory::Ident(m),
+            Box::new(DataTy::Atomic(ScalarTy::I32)),
+        )))],
+        Exec::CpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))),
+    ))
+}
+
+// <r: prv, m: mem>(&r shrd m t, i32) -[gpu.global]-> ()
+fn store_atomic_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    Ty::new(TyKind::Fn(
+        vec![r_prv, m_mem],
+        vec![
+            Ty::new(TyKind::Data(DataTy::Ref(
+                Provenance::Ident(r),
+                Ownership::Shrd,
+                Memory::Ident(m),
+                Box::new(DataTy::Atomic(ScalarTy::I32)),
+            ))),
+            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+        ],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+    ))
+}
+
+// <r: prv, m: mem>(&r shrd m t, i32) -[gpu.global]-> ()
+fn store_atomic_host_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    Ty::new(TyKind::Fn(
+        vec![r_prv, m_mem],
+        vec![
+            Ty::new(TyKind::Data(DataTy::Ref(
+                Provenance::Ident(r),
+                Ownership::Shrd,
+                Memory::Ident(m),
+                Box::new(DataTy::Atomic(ScalarTy::I32)),
+            ))),
+            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+        ],
+        Exec::CpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
     ))
 }
 
