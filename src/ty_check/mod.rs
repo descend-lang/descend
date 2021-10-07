@@ -338,16 +338,20 @@ impl TyChecker {
         let ident_dty = match &collec.ty.as_ref().unwrap().ty {
             // TODO
             TyKind::Data(DataTy::Array(elem_dty, n)) => unimplemented!(),
-            TyKind::Data(DataTy::Ref(prv, own, mem, arr_dty)) => {
-                if let DataTy::Array(elem_dty, _) = arr_dty.as_ref() {
+            TyKind::Data(DataTy::Ref(prv, own, mem, arr_dty)) => match arr_dty.as_ref() {
+                DataTy::Array(elem_dty, _) => {
                     DataTy::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
-                } else {
+                }
+                DataTy::ArrayView(elem_dty, _) => {
+                    DataTy::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
+                }
+                _ => {
                     return Err(TyError::String(format!(
                         "Expected reference to array data type, but found {:?}",
                         *arr_dty
-                    )));
+                    )))
                 }
-            }
+            },
             _ => {
                 return Err(TyError::String(format!(
                     "Expected array data type or reference to array data type, but found {:?}",

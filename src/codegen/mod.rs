@@ -385,7 +385,7 @@ fn gen_for_each(
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
 ) -> cu::Stmt {
-    let i_name = crate::utils::fresh_name("_i_");
+    let i_name = crate::utils::fresh_name("i__");
     let i_decl = cu::Stmt::VarDecl {
         name: i_name.clone(),
         ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
@@ -398,11 +398,16 @@ fn gen_for_each(
         ident.name.clone(),
         ViewExpr::Idx {
             idx: desc::Nat::Ident(Ident::new(&i_name)),
-            view: Box::new(ViewExpr::ToView {
-                ref_expr: Box::new(coll_expr.clone()),
+            view: Box::new(if is_view_ty(coll_expr.ty.as_ref().unwrap()) {
+                ViewExpr::create_from(coll_expr, view_ctx)
+            } else {
+                ViewExpr::ToView {
+                    ref_expr: Box::new(coll_expr.clone()),
+                }
             }),
         },
     );
+
     cu::Stmt::ForLoop {
         init: Box::new(i_decl),
         cond: cu::Expr::BinOp {
@@ -1827,6 +1832,7 @@ fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
         desc::TyKind::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
         desc::TyKind::Data(desc::DataTy::Ref(_, _, _, arr)) => match arr.as_ref() {
             desc::DataTy::Array(_, n) => Some(n.clone()),
+            desc::DataTy::ArrayView(_, n) => Some(n.clone()),
             _ => None,
         },
         _ => None,
