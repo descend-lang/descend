@@ -314,35 +314,53 @@ peg::parser! {
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
-            = begin:position!() begin_derefs:(begin_deref:position!() "*" _ { begin_deref })*
-                ident:ident()
-                ns_with_ends:(_ ns_with_ends:(
-                    "." _ n:nat_literal() end_proj:position!() { (n, end_proj) })+ {ns_with_ends}
-                )? end:position!()
-            {
-                let ns_with_ends = ns_with_ends.unwrap_or(vec![]);
-                let ident_span = ident.span.unwrap();
-                let root = PlaceExpr::with_span(PlaceExprKind::Ident(ident), ident_span);
-                // . operator binds stronger
-                let proj = ns_with_ends.into_iter().fold(root,
-                    |prev, (n, end_proj) | {
-                        let begin = prev.span.unwrap().begin;
-                        PlaceExpr::with_span(
-                            PlaceExprKind::Proj(Box::new(prev), n),
-                            Span::new(begin, end_proj)
-                        )
-                });
-                // * operator binds weaker
-                begin_derefs.iter().fold(proj,
-                    |prev, begin_deref| {
-                    let end = prev.span.unwrap().end;
-                    PlaceExpr::with_span(
-                        PlaceExprKind::Deref(Box::new(prev)),
-                        Span::new(*begin_deref, end)
-                    )
-                })
-                // TODO: Allow parentheses for priority override?
+            = precedence!{
+                "*" _ deref:@ { PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref))) }
+                --
+                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n))}
+                --
+                begin:position!() pl_expr:@ end:position!() {
+                    PlaceExpr {
+                        span: Some(Span::new(begin, end)),
+                        ..pl_expr
+                    }
+                }
+                ident:ident() { PlaceExpr::new(PlaceExprKind::Ident(ident)) }
+                "(" _ pl_expr:place_expression() _ ")" { pl_expr }
             }
+            // = begin:position!() begin_derefs:(begin_deref:position!() "*" _ { begin_deref })*
+            //     ident:ident()
+            //     ns_with_ends:(_ ns_with_ends:(
+            //         "." _ n:nat_literal() end_proj:position!() { (n, end_proj) })+ {ns_with_ends}
+            //     )? end:position!()
+            // {
+            //     let ns_with_ends = ns_with_ends.unwrap_or(vec![]);
+            //     let ident_span = ident.span.unwrap();
+            //     let root = PlaceExpr::with_span(PlaceExprKind::Ident(ident), ident_span);
+            //     // . operator binds stronger
+            //     let proj = ns_with_ends.into_iter().fold(root,
+            //         |prev, (n, end_proj) | {
+            //             let begin = prev.span.unwrap().begin;
+            //             PlaceExpr::with_span(
+            //                 PlaceExprKind::Proj(Box::new(prev), n),
+            //                 Span::new(begin, end_proj)
+            //             )
+            //     });
+            //     // * operator binds weaker
+            //     begin_derefs.iter().fold(proj,
+            //         |prev, begin_deref| {
+            //         let end = prev.span.unwrap().end;
+            //         PlaceExpr::with_span(
+            //             PlaceExprKind::Deref(Box::new(prev)),
+            //             Span::new(*begin_deref, end)
+            //         )
+            //     })
+            // }
+            // / begin:position!() "(" _ pl_expr:place_expression() ")" end:position!()  {
+            //     let mut ple = pl_expr;
+            //     ple.span = Some(Span::new(begin, end));
+            //     ple
+            // }
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat = precedence! {

@@ -385,16 +385,24 @@ impl TyChecker {
         body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         let cond_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, cond)?;
-        let body_ty_ctx = self.ty_check_expr(kind_ctx, cond_ty_ctx, exec, body)?;
+        let body_ty_ctx =
+            self.ty_check_expr(kind_ctx, cond_ty_ctx.append_frm_ty(vec![]), exec, body)?;
 
-        let cond_temp_ty_ctx = self.ty_check_expr(kind_ctx, body_ty_ctx.clone(), exec, cond)?;
-        if body_ty_ctx != cond_temp_ty_ctx {
+        let body_outer_ty_ctx = body_ty_ctx.drop_last_frm_ty();
+        let cond_temp_ty_ctx =
+            self.ty_check_expr(kind_ctx, body_outer_ty_ctx.clone(), exec, cond)?;
+        if body_outer_ty_ctx != cond_temp_ty_ctx {
             return Err(TyError::String(
                 "Context should have stayed the same".to_string(),
             ));
         }
-        let body_temp_ty_ctx = self.ty_check_expr(kind_ctx, body_ty_ctx.clone(), exec, body)?;
-        if body_ty_ctx != body_temp_ty_ctx {
+        let body_temp_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            body_outer_ty_ctx.clone().append_frm_ty(vec![]),
+            exec,
+            body,
+        )?;
+        if body_outer_ty_ctx != body_temp_ty_ctx.drop_last_frm_ty() {
             return Err(TyError::String(
                 "Context should have stayed the same".to_string(),
             ));
@@ -409,14 +417,14 @@ impl TyChecker {
                 cond_ty
             )));
         }
-        if !matches!(&body_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Bool))) {
+        if !matches!(&body_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Unit))) {
             return Err(TyError::String(format!(
                 "Body of while loop is not of unit type, instead got {:?}",
                 body_ty
             )));
         }
         Ok((
-            body_ty_ctx,
+            body_outer_ty_ctx,
             Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
         ))
     }

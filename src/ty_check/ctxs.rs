@@ -237,10 +237,13 @@ impl TyCtx {
                     TyKind::TupleView(elem_tys) => {
                         res_ty = elem_tys[*n].clone();
                     }
-                    t => panic!(
-                        "Trying to project element data type of a non tuple type:\n {:?}",
-                        t
-                    ),
+                    t => {
+                        let fail = 0;
+                        panic!(
+                            "Trying to project element data type of a non tuple type:\n {:?}",
+                            t
+                        )
+                    }
                 }
             }
             Ok(res_ty)
