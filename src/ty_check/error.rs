@@ -207,6 +207,8 @@ pub enum CtxError {
     PrvIdentNotFound(Ident),
     // format!("{} is not defined as outliving {}.", l, s)
     OutlRelNotDefined(Ident, Ident),
+    // TODO move to TyError
+    IllegalProjection,
 }
 
 impl From<CtxError> for SubTyError {

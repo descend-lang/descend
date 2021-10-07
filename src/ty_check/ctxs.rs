@@ -232,13 +232,18 @@ impl TyCtx {
             for n in path {
                 match &res_ty.ty {
                     TyKind::Data(DataTy::Tuple(elem_tys)) => {
+                        if elem_tys.len() <= *n {
+                            return Err(CtxError::IllegalProjection);
+                        }
                         res_ty = Ty::new(TyKind::Data(elem_tys[*n].clone()));
                     }
                     TyKind::TupleView(elem_tys) => {
+                        if elem_tys.len() <= *n {
+                            return Err(CtxError::IllegalProjection);
+                        }
                         res_ty = elem_tys[*n].clone();
                     }
                     t => {
-                        let fail = 0;
                         panic!(
                             "Trying to project element data type of a non tuple type:\n {:?}",
                             t

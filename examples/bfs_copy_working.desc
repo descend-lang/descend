@@ -11,7 +11,8 @@ fn store<r2: prv, i: prv, a8: prv>(
             c.2 = true;
             store_atomic::<'a9, gpu.global>(&'a9 shrd *a_st, 1);
             // *inp.1.1 = false;
-            store_atomic::<'b5, gpu.global>(&'b5 shrd (*change3).1, 0)
+            //store_atomic::<'b5, gpu.global>(&'b5 shrd (*change3).1, 0)
+            (*change3).1 = 0
         } else {
             ()
         }
@@ -100,12 +101,11 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
                     &'j uniq gpu,
                     <grouped_changes2, &'a8 uniq atomic_stop>,
                     | grid:  BlockGrp<4, ThreadGrp<16>>,
-                        input2: <&'r2 shrd gpu.global [[[[(i32, i32); 16]]; 4]], &'i uniq gpu.global [[[[(bool, i32, bool, i32); 16 ]]; 4]], &'a8 uniq gpu.global Atomic<i32>>
+                      input2: <&'i uniq gpu.global [[[[(bool, i32, bool, i32); 16 ]]; 4]], &'a8 uniq gpu.global Atomic<i32>>
                     | -[gpu.grid]-> () {
-                            let nodes = input2.0;
-                            let changes = input2.1;
-                            let a_stop_temp = input2.2;
-                            for grid with <nodes, changes, a_stop_temp> do
+                            let changes = input2.0;
+                            let a_stop_temp = input2.1;
+                            for grid with <changes, a_stop_temp> do
                             | block: ThreadGrp<16>,
                                 chngs2: &'i uniq gpu.global [[(bool, i32, bool, i32); 16]],
                                 a_stop2: &'a8 uniq gpu.global Atomic<i32>
