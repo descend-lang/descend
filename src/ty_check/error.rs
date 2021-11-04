@@ -29,12 +29,12 @@ pub enum TyError {
     AssignToConst(PlaceExpr), //, Box<Expr>),
     // Assigning to a view is forbidden
     AssignToView,
-    // Trying to borrow uniquely but place is not mutable
-    ConstBorrow(PlaceExpr),
     // Trying to split a non-view array.
     SplittingNonViewArray,
     // Expected a different type
     ExpectedTupleType(TyKind, PlaceExpr),
+    // Trying to borrow uniquely but place is not mutable
+    ConstBorrow(PlaceExpr),
     // The borrowed view type is at least paritally dead
     BorrowingDeadView,
     // Trying to type an expression with dead type
@@ -141,6 +141,8 @@ impl TyError {
                             ty_err.emit(source);
                         }
                     }
+                } else {
+                    eprintln!("Span was None: {:?}", self)
                 }
             }
             TyError::ConstBorrow(p) => {

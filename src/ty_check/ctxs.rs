@@ -29,7 +29,7 @@ impl TyCtx {
         self
     }
 
-    pub fn drop_last_frm_ty(mut self) -> Self {
+    pub fn drop_last_frm(mut self) -> Self {
         self.frame_tys
             .pop()
             .expect("It should never be the case that there is no frame typing.");

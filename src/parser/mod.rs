@@ -96,7 +96,7 @@ peg::parser! {
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
-            "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
+            "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
             "{" _ body_expr:expression_seq() _"}" {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
@@ -291,7 +291,7 @@ peg::parser! {
                 Expr::new(ExprKind::ParFor(Box::new(parall_collec), Box::new(input), Box::new(funs)))
             }
             "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
-              "-[" _ exec:execution_resource() _ "]->" _ ret_dty:dty() _
+              "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
               "{" _ body_expr:expression_seq() _"}" {
                 Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
             }

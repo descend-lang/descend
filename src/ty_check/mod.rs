@@ -226,29 +226,6 @@ impl TyChecker {
         }
 
         self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, own, view)?;
-        if !(ty_ctx.loans_for_prv(r1)?.is_empty()) {
-            return Err(TyError::PrvValueAlreadyInUse(r1.to_string()));
-        }
-        if !(ty_ctx.loans_for_prv(r2)?.is_empty()) {
-            return Err(TyError::PrvValueAlreadyInUse(r2.to_string()));
-        }
-        let loans = borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], own, view)
-            .map_err(|err| {
-                TyError::ConflictingBorrow(Box::new(view.clone()), Ownership::Uniq, err)
-            })?;
-        let (fst_loans, snd_loans) = split_loans(loans);
-        let r1_to_loans = PrvMapping {
-            prv: r1.to_string(),
-            loans: fst_loans,
-        };
-        let r2_to_loans = PrvMapping {
-            prv: r2.to_string(),
-            loans: snd_loans,
-        };
-        let split_ty_ctx = ty_ctx
-            .append_prv_mapping(r1_to_loans)
-            .append_prv_mapping(r2_to_loans);
-
         let split_ty = if let TyKind::Data(DataTy::Ref(_, _, m, arr_view_ty)) =
             &view.ty.as_ref().unwrap().ty
         {
@@ -282,6 +259,35 @@ impl TyChecker {
             return Err(TyError::UnexpectedType);
         };
 
+        if !(ty_ctx.loans_for_prv(r1)?.is_empty()) {
+            return Err(TyError::PrvValueAlreadyInUse(r1.to_string()));
+        }
+        if !(ty_ctx.loans_for_prv(r2)?.is_empty()) {
+            return Err(TyError::PrvValueAlreadyInUse(r2.to_string()));
+        }
+        let loans = borrow_check::ownership_safe(
+            self,
+            kind_ctx,
+            &ty_ctx,
+            exec,
+            &[],
+            own,
+            &PlaceExpr::new(PlaceExprKind::Deref(Box::new(view.clone()))),
+        )
+        .map_err(|err| TyError::ConflictingBorrow(Box::new(view.clone()), Ownership::Uniq, err))?;
+        let (fst_loans, snd_loans) = split_loans(loans);
+        let r1_to_loans = PrvMapping {
+            prv: r1.to_string(),
+            loans: fst_loans,
+        };
+        let r2_to_loans = PrvMapping {
+            prv: r2.to_string(),
+            loans: snd_loans,
+        };
+        let split_ty_ctx = ty_ctx
+            .append_prv_mapping(r1_to_loans)
+            .append_prv_mapping(r2_to_loans);
+
         Ok((split_ty_ctx, split_ty))
     }
 
@@ -304,15 +310,11 @@ impl TyChecker {
             exec,
             body,
         )?;
-        let ty_ctx_1_no_body = ty_ctx_1.drop_last_frm_ty();
+        let ty_ctx_1_no_body = ty_ctx_1.drop_last_frm();
         if ty_ctx != ty_ctx_1_no_body {
-            eprintln!("{:?}", ty_ctx);
-            eprintln!("{:?}", ty_ctx_1_no_body);
-
-            let diff: Vec<_> = ty_ctx
+            let diff: Vec<_> = ty_ctx_1_no_body
                 .prv_mappings()
-                .zip(ty_ctx_1_no_body.prv_mappings())
-                .filter(|(old, new)| old != new)
+                .filter(|new| ty_ctx.prv_mappings().any(|old| &old == new))
                 .collect();
             eprintln!("{:?}", diff);
             return Err(TyError::String(
@@ -368,7 +370,7 @@ impl TyChecker {
                     Mutability::Const,
                 ))]);
         let iter_ty_ctx = self.ty_check_expr(kind_ctx, collec_ty_ctx_with_ident, exec, body)?;
-        let ty_ctx_no_body = iter_ty_ctx.drop_last_frm_ty();
+        let ty_ctx_no_body = iter_ty_ctx.drop_last_frm();
         if collec_ty_ctx != ty_ctx_no_body {
             return Err(TyError::String(
                 "Using a data type in loop that can only be used once.".to_string(),
@@ -392,7 +394,7 @@ impl TyChecker {
         let body_ty_ctx =
             self.ty_check_expr(kind_ctx, cond_ty_ctx.append_frm_ty(vec![]), exec, body)?;
 
-        let body_outer_ty_ctx = body_ty_ctx.drop_last_frm_ty();
+        let body_outer_ty_ctx = body_ty_ctx.drop_last_frm();
         let cond_temp_ty_ctx =
             self.ty_check_expr(kind_ctx, body_outer_ty_ctx.clone(), exec, cond)?;
         if body_outer_ty_ctx != cond_temp_ty_ctx {
@@ -406,7 +408,7 @@ impl TyChecker {
             exec,
             body,
         )?;
-        if body_outer_ty_ctx != body_temp_ty_ctx.drop_last_frm_ty() {
+        if body_outer_ty_ctx != body_temp_ty_ctx.drop_last_frm() {
             return Err(TyError::String(
                 "Context should have stayed the same".to_string(),
             ));
@@ -714,7 +716,7 @@ impl TyChecker {
         prvs: &[String],
         body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let mut ty_ctx_with_prvs = ty_ctx;
+        let mut ty_ctx_with_prvs = ty_ctx.append_frm_ty(vec![]);
         for prv in prvs {
             ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping {
                 prv: prv.clone(),
@@ -722,7 +724,8 @@ impl TyChecker {
             })
         }
         // TODO do we have to check that the prvs in res_ty_ctx have loans now?
-        let res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_prvs, exec, body)?;
+        let body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_prvs, exec, body)?;
+        let res_ty_ctx = body_ty_ctx.drop_last_frm();
         Ok((res_ty_ctx, body.ty.as_ref().unwrap().clone()))
     }
 
@@ -1546,33 +1549,38 @@ impl TyChecker {
         own: Ownership,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
+        // If borrowing a place uniquely, is it mutable?
         if let Some(place) = pl_expr.to_place() {
             if own == Ownership::Uniq && ty_ctx.ident_ty(&place.ident)?.mutbl == Mutability::Const {
                 return Err(TyError::ConstBorrow(pl_expr.clone()));
             }
         }
+
         if !ty_ctx.loans_for_prv(prv_val_name)?.is_empty() {
             return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
         }
         let loans = borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], own, pl_expr)
             .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
-        let mem = self.place_expr_ty_mem_under_exec_own(kind_ctx, &ty_ctx, exec, own, pl_expr)?;
 
-        if !pl_expr.ty.as_ref().unwrap().is_fully_alive() {
+        let mems = self.place_expr_ty_mems_under_exec_own(kind_ctx, &ty_ctx, exec, own, pl_expr)?;
+        mems.iter()
+            .try_for_each(|mem| Self::accessible_memory(exec, mem))?;
+
+        let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
+        if !pl_expr_ty.is_fully_alive() {
             return Err(TyError::String(
                 "The place was at least partially moved before.".to_string(),
             ));
         }
-        let (reffed_ty, rmem) = match &pl_expr.ty.as_ref().unwrap().ty {
+        let (reffed_ty, rmem) = match &pl_expr_ty.ty {
             TyKind::Data(DataTy::Dead(_)) | TyKind::Dead(_) => {
                 panic!("Cannot happen because of the alive check.")
             }
             TyKind::Data(DataTy::At(inner_ty, m)) => (inner_ty.deref().clone(), m.clone()),
             TyKind::Data(dty) => (
                 dty.clone(),
-                if !mem.is_empty() {
-                    let m = mem.last().unwrap();
-                    Self::accessible_memory(exec, m)?;
+                if !mems.is_empty() {
+                    let m = mems.last().unwrap();
                     m.clone()
                 } else {
                     return Err(TyError::String(
@@ -1603,6 +1611,11 @@ impl TyChecker {
                 ))
             }
         };
+        if rmem == Memory::GpuLocal {
+            return Err(TyError::String(
+                "Trying to take reference of unaddressable gpu.local memory.".to_string(),
+            ));
+        }
         let res_ty = DataTy::Ref(
             Provenance::Value(prv_val_name.to_string()),
             own,
@@ -1623,11 +1636,11 @@ impl TyChecker {
         own: Ownership,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<()> {
-        let _mem = self.place_expr_ty_mem_under_exec_own(kind_ctx, ty_ctx, exec, own, pl_expr)?;
+        let _mem = self.place_expr_ty_mems_under_exec_own(kind_ctx, ty_ctx, exec, own, pl_expr)?;
         Ok(())
     }
 
-    fn place_expr_ty_mem_under_exec_own(
+    fn place_expr_ty_mems_under_exec_own(
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
@@ -1675,10 +1688,10 @@ impl TyChecker {
         exec: Exec,
         ident: &Ident,
     ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-        let ty = if let Ok(tty) = ty_ctx.ty_of_ident(&ident) {
+        let ty = if let Ok(tty) = ty_ctx.ty_of_ident(ident) {
             tty
         } else {
-            self.gl_ctx.fun_ty_by_ident(&ident)?
+            self.gl_ctx.fun_ty_by_ident(ident)?
         };
 
         match &ty.ty {
@@ -1689,6 +1702,8 @@ impl TyChecker {
                         ident
                     )));
                 }
+                // FIXME Should throw an error if thread local memory is accessed by a block
+                //  for example.
                 let mem = Self::default_mem_by_exec(exec);
                 Ok((
                     ty.clone(),
@@ -1700,7 +1715,7 @@ impl TyChecker {
                     vec![],
                 ))
             }
-            TyKind::TupleView(elem_tys) => {
+            TyKind::TupleView(_) => {
                 if !ty.is_fully_alive() {
                     return Err(TyError::String(
                         "The value in this identifier has been moved out.".to_string(),
@@ -1729,7 +1744,10 @@ impl TyChecker {
         match exec {
             Exec::CpuThread => Some(Memory::CpuStack),
             Exec::GpuThread => Some(Memory::GpuLocal),
-            Exec::GpuGrid | Exec::GpuBlock | Exec::GpuWarp | Exec::View => None,
+            Exec::GpuGrid => Some(Memory::GpuLocal),
+            Exec::GpuBlock => Some(Memory::GpuLocal),
+            Exec::GpuWarp => Some(Memory::GpuLocal),
+            Exec::View => None,
         }
     }
 
@@ -1827,6 +1845,16 @@ impl TyChecker {
             (Exec::CpuThread, Memory::CpuHeap),
             (Exec::GpuThread, Memory::GpuGlobal),
             (Exec::GpuThread, Memory::GpuShared),
+            (Exec::GpuThread, Memory::GpuLocal),
+            (Exec::GpuGrid, Memory::GpuGlobal),
+            (Exec::GpuGrid, Memory::GpuShared),
+            (Exec::GpuGrid, Memory::GpuLocal),
+            (Exec::GpuBlock, Memory::GpuGlobal),
+            (Exec::GpuBlock, Memory::GpuShared),
+            (Exec::GpuBlock, Memory::GpuLocal),
+            (Exec::GpuWarp, Memory::GpuGlobal),
+            (Exec::GpuWarp, Memory::GpuShared),
+            (Exec::GpuWarp, Memory::GpuLocal),
         ];
 
         if gpu_exec_to_mem.contains(&(exec, mem.clone())) {

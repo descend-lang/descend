@@ -11,7 +11,7 @@ fn red_add<r1: prv, r2: prv>(
 fn reduce<n: nat, a: prv, b: prv>(
   ha_array: &a uniq cpu.heap [i32; n]
 ) -[cpu.thread]-> () {
-  letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h, 'r1, 'r2, 's1, 's2> {
+  letprov <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h> {
     let mut gpu: Gpu = gpu_device(0);
 
     let mut a_array: [i32; n] @ gpu.global =
@@ -30,11 +30,13 @@ fn reduce<n: nat, a: prv, b: prv>(
             ib: &'r uniq gpu.global [[i32; 1024]] | -[gpu.block]-> () {
 
             for_nat k in halved_range(512) {
-              let split_ib = (split 'r1 'r2 uniq 2*k ib).0;
-              let active_halves = split 's1 's2 uniq k split_ib;
-              for split_thread_grp::<k, 1024, 1, 1>(block).0
-              with active_halves
-              do red_add::<'s1, 's2>
+              letprov<'r1, 'r2, 's1, 's2> {
+                let split_ib = (split 'r1 'r2 uniq 2*k ib).0;
+                let active_halves = split 's1 's2 uniq k split_ib;
+                for split_thread_grp::<k, 1024, 1, 1>(block).0
+                with active_halves
+                do red_add::<'s1, 's2>
+              }
             }
         }
       }

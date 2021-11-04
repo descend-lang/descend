@@ -104,7 +104,7 @@ fn gen_stmt(
     match &expr.expr {
         Let(mutbl, ident, _, e) => {
             // Let View
-            if is_view_ty(&e.ty.as_ref().unwrap()) {
+            if is_view_ty(e.ty.as_ref().unwrap()) {
                 if let Some(old) =
                     view_ctx.insert(ident.name.clone(), ViewExpr::create_from(e, view_ctx))
                 {
