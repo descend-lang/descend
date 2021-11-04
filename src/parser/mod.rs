@@ -97,7 +97,7 @@ peg::parser! {
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
             "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
-            "{" _ body_expr:expression_seq() _"}" {
+            body_expr:block() {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
                     None => vec![]
@@ -152,11 +152,11 @@ peg::parser! {
                 )
             }
             / "for" __ ident:ident() __ "in" __ collection:expression()
-                _ "{" _ body:expression_seq() _ "}"
+                _ body:block()
             {
                 Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body)))
             }
-            / "while" __ cond:expression() __ "{" _ body:expression_seq() _ "}" {
+            / "while" __ cond:expression() __ body:block() {
                 Expr::new(ExprKind::While(Box::new(cond), Box::new(body)))
             }
             // Parentheses to override precedence
@@ -271,19 +271,12 @@ peg::parser! {
             "<" _ expressions:expression() **<2,> (_ "," _) _ ">" {
                 Expr::new(ExprKind::TupleView(expressions))
             }
-            "if" __ cond:expression() _ "{" _ iftrue:expression_seq() _ "}" _ "else" _ "{" _ iffalse:expression_seq() _ "}" {
+            "if" __ cond:expression() _ iftrue:block() _ "else" _ iffalse:block() {
                 Expr::new(
                     ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse))
                 )
             }
-            "letprov" _ "<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _
-                "{" _ body:expression_seq() _ "}"
-            {
-                Expr::new(
-                    ExprKind::LetProv(prov_values, Box::new(body))
-                )
-            }
-            "for_nat" __ ident:ident() __ "in" __ range:nat() _ "{" _ body:expression_seq() _ "}" {
+           "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
             "for" __ parall_collec:expression() __ "with" __ input:expression() __
@@ -292,11 +285,21 @@ peg::parser! {
             }
             "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
-              "{" _ body_expr:expression_seq() _"}" {
+              body_expr:block() {
                 Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
             }
+            block:block() { block }
             expression: expr_helper() { expression }
         }
+
+        rule block() -> Expr =
+            "<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _
+                "{" _ body:expression_seq() _ "}"
+            {
+                Expr::new(
+                    ExprKind::Block(prov_values, Box::new(body))
+                )
+            }
 
         // TODO make nat expressions aside from literals parsable.
         //  the current problem is, that a nat expression cannot be recognized as such, if it starts

@@ -180,7 +180,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_own(own);
             visitor.visit_pl_expr(pl_expr);
         }
-        ExprKind::LetProv(_, expr) => visitor.visit_expr(expr),
+        ExprKind::Block(_, expr) => visitor.visit_expr(expr),
         ExprKind::LetUninit(ident, ty) => {
             visitor.visit_ident(ident);
             visitor.visit_ty(ty);

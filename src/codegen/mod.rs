@@ -196,7 +196,7 @@ fn gen_stmt(
             addr_space: None,
             expr: None,
         }),
-        LetProv(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
+        Block(_, expr) => gen_stmt(expr, return_value, parall_ctx, view_ctx, comp_unit),
         // e1 ; e2
         Seq(stmts) => {
             let (last, leading) = stmts.split_last().unwrap();
@@ -1042,7 +1042,7 @@ fn gen_expr(
         }),
         Let(_, _, _, _)
         | LetUninit(_, _)
-        | LetProv(_, _)
+        | Block(_, _)
         | IfElse(_, _, _)
         | Seq(_)
         | While(_, _)
@@ -2268,7 +2268,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
     impl Visitor for ReplaceArgKindedIdents {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
-                ExprKind::LetProv(prvs, body) => {
+                ExprKind::Block(prvs, body) => {
                     self.ident_names_to_kinds
                         .extend(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
                     self.visit_expr(body)

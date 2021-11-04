@@ -262,7 +262,7 @@ pub enum ExprKind {
     // Borrow Expressions
     Ref(String, Ownership, PlaceExpr),
     BorrowIndex(String, Ownership, PlaceExpr, Nat),
-    LetProv(Vec<String>, Box<Expr>),
+    Block(Vec<String>, Box<Expr>),
     // Variable declaration
     // let mut x: ty;
     LetUninit(Ident, Box<Ty>),

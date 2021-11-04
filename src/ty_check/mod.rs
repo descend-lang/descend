@@ -119,7 +119,7 @@ impl TyChecker {
                     self.ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, exec, pl_expr)?
                 }
             }
-            ExprKind::LetProv(prvs, body) => {
+            ExprKind::Block(prvs, body) => {
                 self.ty_check_letprov(kind_ctx, ty_ctx, exec, prvs, body)?
             }
             ExprKind::Let(mutbl, ident, ty, e) => {
