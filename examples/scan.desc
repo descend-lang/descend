@@ -95,7 +95,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
             let block_sums_d = views.2;
 
             // size(block_input) == size(tmp) == size(output)
-            let mut tmp: [i32; 64] @ gpu.shared = shared_alloc::<[i32; 64]>();
+            let mut tmp: [i32; 64] @ gpu.shared;
 
             for grid with <block_input_d, output_d, block_sums_d, tmp> do
                 | block: ThreadGrp<32>,

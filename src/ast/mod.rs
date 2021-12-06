@@ -770,7 +770,7 @@ pub enum DataTy {
     Atomic(ScalarTy),
     Array(Box<DataTy>, Nat),
     // [[ dty; n ]]
-    ArrayView(Box<DataTy>, Nat),
+    ArrayShape(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
@@ -789,7 +789,7 @@ impl DataTy {
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
             At(_, _) => true,
-            ArrayView(_, _) => true,
+            ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
             Array(ty, _) => true,
             Dead(_) => panic!(
@@ -812,7 +812,7 @@ impl DataTy {
             | Ref(_, _, _, _)
             | At(_, _)
             | Array(_, _)
-            | ArrayView(_, _) => true,
+            | ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
@@ -837,7 +837,7 @@ impl DataTy {
                 found
             }
             DataTy::Array(elem_dty, _) => self.occurs_in(elem_dty),
-            DataTy::ArrayView(elem_dty, _) => self.occurs_in(elem_dty),
+            DataTy::ArrayShape(elem_dty, _) => self.occurs_in(elem_dty),
             DataTy::At(elem_dty, _) => self.occurs_in(elem_dty),
         }
     }
@@ -856,7 +856,7 @@ impl DataTy {
             }
             At(dty, _) => dty.contains_ref_to_prv(prv_val_name),
             Array(dty, _) => dty.contains_ref_to_prv(prv_val_name),
-            ArrayView(dty, _) => dty.contains_ref_to_prv(prv_val_name),
+            ArrayShape(dty, _) => dty.contains_ref_to_prv(prv_val_name),
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
@@ -905,7 +905,7 @@ impl DataTy {
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
             ),
-            ArrayView(dty, n) => ArrayView(
+            ArrayShape(dty, n) => ArrayShape(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
             ),
@@ -967,7 +967,6 @@ pub enum Memory {
     GpuGlobal,
     GpuShared,
     GpuLocal,
-    None,
     Ident(Ident),
 }
 
@@ -996,7 +995,6 @@ impl fmt::Display for Memory {
             Memory::GpuGlobal => write!(f, "gpu.global"),
             Memory::GpuShared => write!(f, "gpu.shared"),
             Memory::GpuLocal => write!(f, "gpu.local"),
-            Memory::None => write!(f, "none"),
             Memory::Ident(x) => write!(f, "{}", x),
         }
     }

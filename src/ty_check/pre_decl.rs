@@ -525,7 +525,10 @@ fn to_view_ty(own: Ownership) -> Ty {
             Provenance::Ident(r),
             own,
             Memory::Ident(m),
-            Box::new(DataTy::ArrayView(Box::new(DataTy::Ident(t)), Nat::Ident(n))),
+            Box::new(DataTy::ArrayShape(
+                Box::new(DataTy::Ident(t)),
+                Nat::Ident(n),
+            )),
         )))),
     ))
 }
@@ -564,7 +567,7 @@ fn group_ty(own: Ownership) -> Ty {
             Provenance::Ident(r.clone()),
             own,
             Memory::Ident(m.clone()),
-            Box::new(DataTy::ArrayView(
+            Box::new(DataTy::ArrayShape(
                 Box::new(DataTy::Ident(t.clone())),
                 Nat::Ident(n.clone()),
             )),
@@ -574,8 +577,8 @@ fn group_ty(own: Ownership) -> Ty {
             Provenance::Ident(r),
             own,
             Memory::Ident(m),
-            Box::new(DataTy::ArrayView(
-                Box::new(DataTy::ArrayView(
+            Box::new(DataTy::ArrayShape(
+                Box::new(DataTy::ArrayShape(
                     Box::new(DataTy::Ident(t)),
                     Nat::Ident(s.clone()),
                 )),

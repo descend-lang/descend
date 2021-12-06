@@ -179,7 +179,7 @@ impl TyCtx {
                 | TyKind::Data(d::Atomic(_))
                 | TyKind::Data(d::Scalar(_))
                 | TyKind::Data(d::Array(_, _))
-                | TyKind::Data(d::ArrayView(_, _))
+                | TyKind::Data(d::ArrayShape(_, _))
                 | TyKind::Data(d::At(_, _))
                 | TyKind::Data(d::Ref(_, _, _, _))
                 | TyKind::Data(d::Ident(_))

@@ -427,7 +427,7 @@ peg::parser! {
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTy::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTy::Array(Box::new(t), n) }
             / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
-                DataTy::ArrayView(Box::new(dty), n)
+                DataTy::ArrayShape(Box::new(dty), n)
             }
             / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ dty:dty() {
                 DataTy::Ref(prov, own, mem, Box::new(dty))
@@ -767,7 +767,7 @@ mod tests {
         // ), "does not recognize [();N] type");
         assert_eq!(
             descend::ty("[[i32;24]]"),
-            Ok(Ty::new(TyKind::Data(DataTy::ArrayView(
+            Ok(Ty::new(TyKind::Data(DataTy::ArrayShape(
                 Box::new(DataTy::Scalar(ScalarTy::I32)),
                 Nat::Lit(24)
             )))),
@@ -1414,11 +1414,11 @@ mod tests {
             };
         };
         assert_eq!(
-            descend::expression_seq("if 7<8 {7+8} else {7*8}"),
+            descend::expression_seq("if 7<8 <>{7+8} else <>{7*8}"),
             Ok(Expr::new(ExprKind::IfElse(
                 common_expr!(BinOp::Lt),
-                common_expr!(BinOp::Add),
-                common_expr!(BinOp::Mul),
+                Box::new(Expr::new(ExprKind::Block(vec![], common_expr!(BinOp::Add)))),
+                Box::new(Expr::new(ExprKind::Block(vec![], common_expr!(BinOp::Mul)))),
             )))
         );
     }
@@ -1427,7 +1427,7 @@ mod tests {
     fn expression_for_loop() {
         let x = Ident::new("x");
         assert_eq!(
-            descend::expression_seq("for x in [1,2,3] {x = x+1}"),
+            descend::expression_seq("for x in [1,2,3] <>{x = x+1}"),
             Ok(Expr::new(ExprKind::For(
                 x.clone(),
                 Box::new(Expr::new(ExprKind::Array(vec![
@@ -1444,19 +1444,22 @@ mod tests {
                         Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
                     )
                 ]))),
-                Box::new(Expr::new(ExprKind::Assign(
-                    PlaceExpr::new(PlaceExprKind::Ident(x.clone())),
-                    Box::new(Expr::new(ExprKind::BinOp(
-                        BinOp::Add,
-                        Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
-                            PlaceExprKind::Ident(x.clone())
-                        )))),
-                        Box::new(Expr::with_type(
-                            ExprKind::Lit(Lit::I32(1)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
-                        ))
+                Box::new(Expr::new(ExprKind::Block(
+                    vec![],
+                    Box::new(Expr::new(ExprKind::Assign(
+                        PlaceExpr::new(PlaceExprKind::Ident(x.clone())),
+                        Box::new(Expr::new(ExprKind::BinOp(
+                            BinOp::Add,
+                            Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                                PlaceExprKind::Ident(x.clone())
+                            )))),
+                            Box::new(Expr::with_type(
+                                ExprKind::Lit(Lit::I32(1)),
+                                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                            ))
+                        ),))
                     ),))
-                ),))
+                )))
             ),))
         );
     }
@@ -1634,7 +1637,7 @@ mod tests {
         // all currently available kinds are tested
         let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem>(
             ha_array: &a uniq cpu.heap [i32; n]
-        ) -[cpu.thread]-> () {
+        ) -[cpu.thread]-> () <>{
             42
         }"#;
         let body = r#"42"#;
@@ -1671,7 +1674,10 @@ mod tests {
             param_decls: params,
             exec,
             prv_rels,
-            body_expr: descend::expression_seq(body).unwrap(),
+            body_expr: Expr::new(ExprKind::Block(
+                vec![],
+                Box::new(descend::expression(body).unwrap()),
+            )),
             generic_params,
             ret_dty,
         };
@@ -1692,14 +1698,14 @@ mod tests {
         let src_1 = r#"fn no_kinds(
             ha_array: &'a uniq cpu.heap [i32; n],
             hb_array: &'b shrd cpu.heap [i32; n]
-        ) -[cpu.thread]-> () {
+        ) -[cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
         let src_2 = r#"fn no_kinds<>(
             ha_array: &'a uniq cpu.heap [i32; n],
             hb_array: &'b shrd cpu.heap [i32; n]
-        ) -[cpu.thread]-> () {
+        ) -[cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
@@ -1731,7 +1737,7 @@ mod tests {
 
     #[test]
     fn global_fun_def_no_function_parameters_required() {
-        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {            
+        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () <>{            
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
@@ -1787,7 +1793,7 @@ mod tests {
 
     #[test]
     fn while_loop() {
-        let src = r#"while 1 <= 2 { let x = 5 }"#;
+        let src = r#"while 1 <= 2 <>{ let x = 5 }"#;
         let result = descend::expression(src);
         print!("{:?}", result.as_ref().unwrap());
 
@@ -1806,14 +1812,17 @@ mod tests {
                         Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
                     ))
                 ))),
-                Box::new(Expr::new(ExprKind::Let(
-                    Mutability::Const,
-                    Ident::new("x"),
-                    Box::new(None),
-                    Box::new(Expr::with_type(
-                        ExprKind::Lit(Lit::I32(5)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
-                    ))
+                Box::new(Expr::new(ExprKind::Block(
+                    vec![],
+                    Box::new(Expr::new(ExprKind::Let(
+                        Mutability::Const,
+                        Ident::new("x"),
+                        Box::new(None),
+                        Box::new(Expr::with_type(
+                            ExprKind::Lit(Lit::I32(5)),
+                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        ))
+                    )))
                 )))
             )))
         )
@@ -1823,7 +1832,7 @@ mod tests {
     fn compil_unit_test_one() {
         let src = r#"
         
-        fn foo() -[cpu.thread]-> () {
+        fn foo() -[cpu.thread]-> () <>{
             42
         }
         
@@ -1837,16 +1846,16 @@ mod tests {
     fn compil_unit_test_multiple() {
         let src = r#"
         
-        fn foo() -[cpu.thread]-> () {
+        fn foo() -[cpu.thread]-> () <>{
             42
         }
 
-        fn bar() -[cpu.thread]-> () {
+        fn bar() -[cpu.thread]-> () <>{
             24
         }
 
 
-        fn baz() -[cpu.thread]-> () {
+        fn baz() -[cpu.thread]-> () <>{
             1337
         }
         

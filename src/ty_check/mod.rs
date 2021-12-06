@@ -229,7 +229,7 @@ impl TyChecker {
         let split_ty = if let TyKind::Data(DataTy::Ref(_, _, m, arr_view_ty)) =
             &view.ty.as_ref().unwrap().ty
         {
-            if let DataTy::ArrayView(elem_dty, n) = arr_view_ty.as_ref() {
+            if let DataTy::ArrayShape(elem_dty, n) = arr_view_ty.as_ref() {
                 if s > n {
                     return Err(TyError::String(
                         "Trying to access array out-of-bounds.".to_string(),
@@ -240,13 +240,13 @@ impl TyChecker {
                         Provenance::Value(r1.to_string()),
                         own,
                         m.clone(),
-                        Box::new(DataTy::ArrayView(elem_dty.clone(), s.clone())),
+                        Box::new(DataTy::ArrayShape(elem_dty.clone(), s.clone())),
                     ))),
                     Ty::new(TyKind::Data(DataTy::Ref(
                         Provenance::Value(r2.to_string()),
                         own,
                         m.clone(),
-                        Box::new(DataTy::ArrayView(
+                        Box::new(DataTy::ArrayShape(
                             elem_dty.clone(),
                             Nat::BinOp(BinOpNat::Sub, Box::new(n.clone()), Box::new(s.clone())),
                         )),
@@ -344,7 +344,7 @@ impl TyChecker {
                 DataTy::Array(elem_dty, _) => {
                     DataTy::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
                 }
-                DataTy::ArrayView(elem_dty, _) => {
+                DataTy::ArrayShape(elem_dty, _) => {
                     DataTy::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
                 }
                 _ => {
@@ -540,7 +540,7 @@ impl TyChecker {
                 .iter()
                 .map(|t| match &t.ty {
                     TyKind::Data(DataTy::Ref(r, o, m, arr_view)) => {
-                        if let DataTy::ArrayView(tty, n) = arr_view.as_ref() {
+                        if let DataTy::ArrayShape(tty, n) = arr_view.as_ref() {
                             Ty::new(TyKind::Data(DataTy::Ref(
                                 r.clone(),
                                 *o,
@@ -888,10 +888,10 @@ impl TyChecker {
             // FIXME is this allowed? There is no reborrow but this leaks the lifetime and does not
             //  consume the array view.
             TyKind::Data(DataTy::Ref(prv, own, mem, arr_view)) => match arr_view.as_ref() {
-                DataTy::ArrayView(sdty, n) if matches!(sdty.as_ref(), DataTy::Scalar(_)) => {
+                DataTy::ArrayShape(sdty, n) if matches!(sdty.as_ref(), DataTy::Scalar(_)) => {
                     (n, own, mem, sdty.as_ref())
                 }
-                DataTy::ArrayView(_, _) => return Err(TyError::AssignToView),
+                DataTy::ArrayShape(_, _) => return Err(TyError::AssignToView),
                 _ => {
                     return Err(TyError::String(
                         "Expected a reference to array view.".to_string(),
@@ -978,10 +978,10 @@ impl TyChecker {
             }
             TyKind::Data(DataTy::Ref(prv, own, mem, dty)) => {
                 match dty.as_ref() {
-                    DataTy::ArrayView(sty, n) if matches!(sty.as_ref(), DataTy::Scalar(_)) => {
+                    DataTy::ArrayShape(sty, n) if matches!(sty.as_ref(), DataTy::Scalar(_)) => {
                         (sty.as_ref().clone(), n.clone())
                     }
-                    DataTy::ArrayView(view_ty, n) => {
+                    DataTy::ArrayShape(view_ty, n) => {
                         Self::accessible_memory(exec, &mem)?;
                         // TODO is ownership checking necessary here?
                         (DataTy::Ref(prv, own, mem, view_ty.clone()), n.clone())
@@ -1920,7 +1920,7 @@ impl TyChecker {
                             }
                         }
                         if !exists {
-                            if let DataTy::ArrayView(_, _) = dty.as_ref() {
+                            if let DataTy::ArrayShape(_, _) = dty.as_ref() {
                                 eprintln!("WARNING: Did not check well-formedness of view type reference.")
                             } else {
                                 return Err(TyError::ReferenceToIncompatibleType);
@@ -1955,7 +1955,7 @@ impl TyChecker {
                     )?;
                     // TODO well-formed nat
                 }
-                DataTy::ArrayView(elem_dty, n) => {
+                DataTy::ArrayShape(elem_dty, n) => {
                     self.ty_well_formed(
                         kind_ctx,
                         ty_ctx,

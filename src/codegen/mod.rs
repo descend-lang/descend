@@ -765,7 +765,7 @@ fn gen_check_idx_stmt(
                 TyKind::Data(DataTy::Array(_, m)) => m,
                 TyKind::Data(DataTy::Ref(_, _, _, a)) => match a.as_ref() {
                     DataTy::Array(_, m) => m,
-                    DataTy::ArrayView(_, m) => m,
+                    DataTy::ArrayShape(_, m) => m,
                     _ => panic!("cannot index into non array type!"),
                 },
                 t => panic!("cannot index into non array type! {:?}", t),
@@ -1551,7 +1551,7 @@ fn gen_view(
                     comp_unit,
                 ), // gen_expr(expr, &mut HashMap::new(), view_ctx, comp_unit),
             },
-            Err(e) => panic!(e),
+            Err(e) => panic!("{:?}", e),
         },
         (ViewExpr::Idx { idx, view }, _) => {
             path.push(idx.clone());
@@ -1581,7 +1581,7 @@ fn gen_view(
                             panic!("split_at can only generate a 2-tuple view.")
                         }
                     }
-                    Err(m) => panic!(m),
+                    Err(m) => panic!("{:?}", m),
                 },
                 _ => panic!("Cannot create SplitAt view. Index or projection missing."),
             }
@@ -1623,7 +1623,7 @@ fn gen_view(
                         path.push(i);
                         gen_view(inner_view, path, view_ctx, comp_unit)
                     }
-                    Err(m) => panic!(m),
+                    Err(m) => panic!("{:?}", m),
                 },
                 _ => panic!("Cannot generate Zip View. Index or projection missing."),
             }
@@ -1761,9 +1761,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                     desc::Memory::GpuGlobal => cu::BufferKind::GpuGlobal,
                     desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
                     desc::Memory::GpuShared => unimplemented!(),
-                    desc::Memory::None => {
-                        panic!("No memory is not valid for At types. should never appear here.")
-                    }
                     desc::Memory::GpuLocal => {
                         panic!("GpuLocal is not valid for At types. Should never appear here.")
                     }
@@ -1791,7 +1788,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
         Data(d::Ident(ident)) => cu::Ty::Ident(ident.name.clone()),
-        Data(d::ArrayView(_, _)) => panic!(
+        Data(d::ArrayShape(_, _)) => panic!(
             "Cannot generate array view types.\
             Anything with this type should have been compiled away."
         ),
@@ -1832,7 +1829,7 @@ fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
         desc::TyKind::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
         desc::TyKind::Data(desc::DataTy::Ref(_, _, _, arr)) => match arr.as_ref() {
             desc::DataTy::Array(_, n) => Some(n.clone()),
-            desc::DataTy::ArrayView(_, n) => Some(n.clone()),
+            desc::DataTy::ArrayShape(_, n) => Some(n.clone()),
             _ => None,
         },
         _ => None,
@@ -2394,7 +2391,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
 fn is_view_ty(ty: &desc::Ty) -> bool {
     match &ty.ty {
         desc::TyKind::Data(desc::DataTy::Ref(_, _, _, arr_vty)) => {
-            matches!(arr_vty.as_ref(), desc::DataTy::ArrayView(_, _))
+            matches!(arr_vty.as_ref(), desc::DataTy::ArrayShape(_, _))
         }
         desc::TyKind::TupleView(_) => true,
         _ => false,

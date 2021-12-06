@@ -113,7 +113,7 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
         }
-        DataTy::ArrayView(dty, n) => {
+        DataTy::ArrayShape(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n);
         }
