@@ -7,7 +7,7 @@ use crate::ast::{CompilUnit, Ident, PlaceExprKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::iter;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -309,14 +309,18 @@ fn gen_stmt(
         For(ident, coll_expr, body) => CheckedStmt::Stmt(gen_for_each(
             ident, coll_expr, body, parall_ctx, view_ctx, comp_unit,
         )),
-        ParFor(parall_collec, input, funs) => CheckedStmt::Stmt(gen_par_for(
-            parall_collec,
-            input,
-            funs,
-            parall_ctx,
-            view_ctx,
-            comp_unit,
-        )),
+        ParForWith(parall_ident, parall_collec, input_idents, input_exprs, body) => {
+            CheckedStmt::Stmt(gen_par_for(
+                parall_ident,
+                parall_collec,
+                input_idents,
+                input_exprs,
+                body,
+                parall_ctx,
+                view_ctx,
+                comp_unit,
+            ))
+        }
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => match gen_expr(cond, parall_ctx, view_ctx, comp_unit) {
             CheckedExpr::ExprIdxCheck(check, con) => CheckedStmt::Stmt(cu::Stmt::Seq(vec![
@@ -564,61 +568,47 @@ fn gen_exec(
 }
 
 fn gen_par_for(
+    parall_ident: &Option<desc::Ident>,
     parall_collec: &desc::Expr,
-    input: &desc::Expr,
-    funs: &desc::Expr,
+    input_idents: &[Ident],
+    inputs: &[desc::Expr],
+    body: &desc::Expr,
     parall_ctx: &mut HashMap<String, ParallelityCollec>,
     view_ctx: &mut HashMap<String, ViewExpr>,
     comp_unit: &[desc::FunDef],
 ) -> cu::Stmt {
     fn gen_parall_section(
-        has_th_hierchy_elem_ty: bool,
-        params: &[desc::ParamDecl],
+        parall_ident: &Option<desc::Ident>,
+        input_idents: &[desc::Ident],
+        input_exprs: &[desc::Expr],
         body: &desc::Expr,
-        input_expr: &desc::Expr,
-        pid: &desc::Nat,
+        pindex: &desc::Nat,
         view_ctx: &mut HashMap<String, ViewExpr>,
         comp_unit: &[desc::FunDef],
     ) -> cu::Stmt {
-        let mut offset_begin_input_params = 0;
         let mut scope_parall_ctx: HashMap<String, ParallelityCollec> = HashMap::new();
-        if has_th_hierchy_elem_ty {
-            let parall_collec = params[0].ident.clone();
+        if parall_ident.is_some() {
+            let parall_ident = parall_ident.as_ref().unwrap().clone();
             scope_parall_ctx.insert(
-                parall_collec.name.clone(),
-                ParallelityCollec::Ident(parall_collec),
+                parall_ident.name.clone(),
+                ParallelityCollec::Ident(parall_ident),
             );
-            offset_begin_input_params += 1;
         }
 
-        //        let mut new_body = body.clone();
-        for (i, id) in params[offset_begin_input_params..]
+        for (ident, input_expr) in input_idents
             .iter()
-            .map(|p| p.ident.name.clone())
-            .enumerate()
+            .map(|ident| ident.name.clone())
+            .zip(input_exprs)
         {
-            let input_arg_view = ViewExpr::create_from(
-                &desc::Expr::new(desc::ExprKind::Proj(Box::new(input_expr.clone()), i)),
-                view_ctx,
-            );
+            let input_arg_view = ViewExpr::create_from(input_expr, view_ctx);
 
-            if let desc::TyKind::TupleView(elem_tys) = &input_expr.ty.as_ref().unwrap().ty {
-                if is_view_ty(&elem_tys[i]) {
-                    view_ctx.insert(
-                        id.clone(),
-                        ViewExpr::Idx {
-                            idx: pid.clone(),
-                            view: Box::new(input_arg_view),
-                        },
-                    );
-                } else {
-                    // FIXME Leads to stackoverflow if the same names are used
-                    //  as input elemenent (input_arg_view) and identifier (id)
-                    view_ctx.insert(id, input_arg_view);
-                }
-            } else {
-                panic!("Inputs to par_for are always tuple views.")
-            }
+            view_ctx.insert(
+                ident.clone(),
+                ViewExpr::Idx {
+                    idx: pindex.clone(),
+                    view: Box::new(input_arg_view),
+                },
+            );
         }
 
         match gen_stmt(body, false, &mut scope_parall_ctx, view_ctx, comp_unit) {
@@ -627,12 +617,12 @@ fn gen_par_for(
         }
     }
 
-    let (pid, sync_stmt, has_th_hierchy_elem) = match &parall_collec.ty.as_ref().unwrap().ty {
+    let (pindex, sync_stmt) = match &parall_collec.ty.as_ref().unwrap().ty {
         // TODO Refactor
         //  The same things exists in ty_check where only threadHierchyTy for elem types is returned
         desc::TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
             desc::ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
-                (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None, true)
+                (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
             }
             desc::ThreadHierchyTy::ThreadGrp(_, _, _) => (
                 desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
@@ -641,7 +631,6 @@ fn gen_par_for(
                     template_args: vec![],
                     args: vec![],
                 })),
-                false,
             ),
             desc::ThreadHierchyTy::WarpGrp(_) => (
                 desc::Nat::BinOp(
@@ -654,7 +643,6 @@ fn gen_par_for(
                     template_args: vec![],
                     args: vec![],
                 })),
-                true,
             ),
             desc::ThreadHierchyTy::Warp => (
                 desc::Nat::BinOp(
@@ -667,57 +655,23 @@ fn gen_par_for(
                     template_args: vec![],
                     args: vec![],
                 })),
-                false,
             ),
         },
         _ => panic!("Not a parallel collection type."),
     };
 
-    // FIXME this assumes that the only functions given are syntactically lambdas
-    let par_section = match &funs.ty.as_ref().unwrap().ty {
-        desc::TyKind::TupleView(_) => unimplemented!(),
-        desc::TyKind::Fn(_, _, _, _) => match &funs.expr {
-            desc::ExprKind::Lambda(params, _, _, body) => gen_parall_section(
-                has_th_hierchy_elem,
-                params,
-                body,
-                input,
-                &pid,
-                view_ctx,
-                comp_unit,
-            ),
-            desc::ExprKind::DepApp(fun, gen_args) => {
-                let ident = extract_ident(fun);
-                let fun_def = comp_unit
-                    .iter()
-                    .find(|fun_def| fun_def.name == ident.name)
-                    .expect("Cannot find function definition.");
-                if let desc::ExprKind::Lambda(params, _, _, body) =
-                    partial_app_gen_args(fun_def, gen_args).expr
-                {
-                    gen_parall_section(
-                        has_th_hierchy_elem,
-                        &params,
-                        body.as_ref(),
-                        input,
-                        &pid,
-                        view_ctx,
-                        comp_unit,
-                    )
-                } else {
-                    panic!("instatiate_gen_fun did not return a lambda expression")
-                }
-            }
-            _ => panic!("No function supplied."),
-        },
-        desc::TyKind::Data(_) => {
-            panic!("Cannot generate function body from expression of data type.")
-        }
-        _ => panic!("Expected Lambda or tuple view of Lambda."),
-    };
+    let par_section = gen_parall_section(
+        parall_ident,
+        input_idents,
+        inputs,
+        body,
+        &pindex,
+        view_ctx,
+        comp_unit,
+    );
 
     let p = ParallelityCollec::create_from(parall_collec, parall_ctx);
-    let body = if let Some((Some(parall_cond), _)) = gen_parall_cond(&pid, &p) {
+    let body = if let Some((Some(parall_cond), _)) = gen_parall_cond(&pindex, &p) {
         cu::Stmt::If {
             cond: parall_cond,
             body: Box::new(cu::Stmt::Block(Box::new(par_section))),
@@ -1048,7 +1002,7 @@ fn gen_expr(
         | While(_, _)
         | For(_, _, _)
         | ForNat(_, _, _)
-        | ParFor(_, _, _) => panic!(
+        | ParForWith(_, _, _, _, _) => panic!(
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),
@@ -1918,7 +1872,10 @@ impl ParallelityCollec {
             desc::PlaceExpr {
                 pl_expr: PlaceExprKind::Ident(ident),
                 ..
-            } => parall_ctx.get(&ident.name).unwrap().clone(),
+            } => parall_ctx
+                .get(&ident.name)
+                .unwrap_or_else(|| panic!("Did not find {}.", ident.name))
+                .clone(),
             desc::PlaceExpr {
                 pl_expr: PlaceExprKind::Proj(pp, i),
                 ..
@@ -2360,7 +2317,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
     impl Visitor for InlineParForFuns<'_> {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
-                ExprKind::ParFor(_, _, efs) => match &mut efs.expr {
+                ExprKind::ParForWith(_, _, _, _, body) => match &mut body.expr {
                     ExprKind::TupleView(t) => {
                         for f in t {
                             match &mut f.expr {
@@ -2375,8 +2332,8 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
                     ExprKind::PlaceExpr(PlaceExpr {
                         pl_expr: PlaceExprKind::Ident(x),
                         ..
-                    }) => efs.expr = self.create_lambda_from_fun_def(&x.name),
-                    _ => visit::walk_expr(self, efs),
+                    }) => body.expr = self.create_lambda_from_fun_def(&x.name),
+                    _ => visit::walk_expr(self, body),
                 },
                 _ => visit::walk_expr(self, expr),
             }

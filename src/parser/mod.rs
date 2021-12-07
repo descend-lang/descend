@@ -279,9 +279,11 @@ peg::parser! {
            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "for" __ parall_collec:expression() __ "with" __ input:expression() __
-                "do" __ funs:expression() {
-                Expr::new(ExprKind::ParFor(Box::new(parall_collec), Box::new(input), Box::new(funs)))
+            "for" __ par_ident:(i:ident() __ "in" __ { i })? parall_collec:expression() __
+            "with" __ input_elems:ident() **<1,> (_ "," _) __
+            "from" __ input:expression() **<1,> (_ "," _) __
+            "do" __ body:expression() {
+                Expr::new(ExprKind::ParForWith(par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
             }
             "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _

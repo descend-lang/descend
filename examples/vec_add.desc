@@ -1,10 +1,3 @@
-fn add<r: prv, s: prv>(
-    a: &r uniq gpu.global i32,
-    b: &s shrd gpu.global i32
-) -[gpu.thread]-> () <>{
-    *a = *a + *b
-}
-
 fn inplace_vector_add<n: nat, a: prv, b: prv>(
     ha_array: &a uniq cpu.stack [i32; n],
     hb_array: &b shrd cpu.stack [i32; n]
@@ -29,13 +22,13 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
         | grid: BlockGrp<64, ThreadGrp<1024>>,
           input: <&'r uniq gpu.global [[[[i32; 1024]]; 64]], &'s shrd gpu.global [[[[i32; 1024]]; 64]]>
         | -[gpu.grid]-> () <>{
-            for grid with input do
-                | block: ThreadGrp<1024>,
-                  a_group: &'r uniq gpu.global [[i32; 1024]],
-                  b_group: &'s shrd gpu.global [[i32; 1024]]
-                | -[gpu.block]-> () <>{
-                     for block with <a_group, b_group> do add::<'r, 's>
+            let in0 = input.0;
+            let in1 = input.1;
+            for block in grid with a_group, b_group from in0, in1 do <>{
+                for block with a, b from a_group, b_group do <>{
+                    *a = *a + *b
                 }
+            }
         }
     );
     copy_to_host::<'g, a, cpu.stack, [i32; n]>(&'g shrd a_array, ha_array)

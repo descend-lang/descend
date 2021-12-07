@@ -4,7 +4,7 @@ mod error;
 pub mod pre_decl;
 mod subty;
 
-use crate::ast::internal::{IdentTyped, Loan, Place, PrvMapping};
+use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::DataTy::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
@@ -156,8 +156,17 @@ impl TyChecker {
             ExprKind::IdxAssign(pl_expr, idx, e) => {
                 self.ty_check_idx_assign(kind_ctx, ty_ctx, exec, pl_expr, idx, e)?
             }
-            ExprKind::ParFor(parall_collec, input, funs) => {
-                self.ty_check_par_for(kind_ctx, ty_ctx, exec, parall_collec, input, funs)?
+            ExprKind::ParForWith(parall_ident, parall_collec, input_idents, input_exprs, body) => {
+                self.ty_check_par_for(
+                    kind_ctx,
+                    ty_ctx,
+                    exec,
+                    parall_ident,
+                    parall_collec,
+                    input_idents,
+                    input_exprs,
+                    body,
+                )?
             }
             ExprKind::ForNat(var, range, body) => {
                 self.ty_check_for_nat(kind_ctx, ty_ctx, exec, var, range, body)?
@@ -491,9 +500,11 @@ impl TyChecker {
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
+        parall_ident: &Option<Ident>,
         parall_collec: &mut Expr,
-        input: &mut Expr,
-        funs: &mut Expr,
+        input_idents: &[Ident],
+        input_exprs: &mut [Expr],
+        body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         fn to_exec_and_size(parall_collec: &Expr) -> Exec {
             match &parall_collec.ty.as_ref().unwrap().ty {
@@ -516,145 +527,122 @@ impl TyChecker {
                 parall_collec, exec
             )));
         }
-        let input_ty_ctx = self.ty_check_expr(kind_ctx, parall_collec_ty_ctx, exec, input)?;
+        let mut input_ty_ctx = parall_collec_ty_ctx;
+        for e in input_exprs.iter_mut() {
+            input_ty_ctx = self.ty_check_expr(kind_ctx, input_ty_ctx, exec, e)?;
+        }
+
+        let input_idents_typed = TyChecker::type_input_idents(input_idents, input_exprs)?;
+        let parall_ident_typed =
+            TyChecker::parall_ident_ty_from_parall_collec(parall_ident, parall_collec)?;
+        let body_exec = TyChecker::exec_for_parall_collec(&parall_ident_typed)?;
+        let mut frm_ty = input_idents_typed
+            .into_iter()
+            .map(FrameEntry::Var)
+            .collect::<Vec<_>>();
+        if parall_ident_typed.is_some() {
+            frm_ty.push(FrameEntry::Var(parall_ident_typed.unwrap()));
+        }
+        let ty_ctx_with_idents = input_ty_ctx.clone().append_frm_ty(frm_ty);
+
         // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
         // that is used for the par_for can safely be reused.
-        let _funs_ty_ctx = self.ty_check_expr(kind_ctx, input_ty_ctx.clone(), exec, funs)?;
-        self.executable_over_parall_collec_and_input(funs, parall_collec, input)?;
+        let _body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_idents, body_exec, body)?;
+
         Ok((
             input_ty_ctx,
             Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
         ))
     }
 
-    fn executable_over_parall_collec_and_input(
-        &self,
-        fun: &Expr,
-        parall_collec: &Expr,
-        input: &Expr,
-    ) -> TyResult<()> {
-        // TODO check that array size and group size fit
+    fn type_input_idents(
+        input_idents: &[Ident],
+        input_exprs: &[Expr],
+    ) -> TyResult<Vec<IdentTyped>> {
+        if input_idents.len() != input_exprs.len() {
+            return Err(TyError::String(
+                "Amount of input identifiers and input shapes do not match".to_string(),
+            ));
+        }
 
-        let in_param_tys: Vec<_> = match &input.ty.as_ref().unwrap().ty {
-            TyKind::TupleView(input_tys) => input_tys
-                .iter()
-                .map(|t| match &t.ty {
-                    TyKind::Data(DataTy::Ref(r, o, m, arr_view)) => {
-                        if let DataTy::ArrayShape(tty, n) = arr_view.as_ref() {
-                            Ty::new(TyKind::Data(DataTy::Ref(
-                                r.clone(),
-                                *o,
-                                m.clone(),
-                                tty.clone(),
-                            )))
-                        } else {
-                            t.clone()
-                        }
+        input_exprs
+            .iter()
+            .map(|e| {
+                if let TyKind::Data(DataTy::Ref(r, o, m, arr_view)) = &e.ty.as_ref().unwrap().ty {
+                    if let DataTy::ArrayShape(tty, n) = arr_view.as_ref() {
+                        Ok(Ty::new(TyKind::Data(DataTy::Ref(
+                            r.clone(),
+                            *o,
+                            m.clone(),
+                            tty.clone(),
+                        ))))
+                    } else {
+                        Err(TyError::UnexpectedType)
                     }
-                    _ => t.clone(),
-                })
-                .collect(),
+                } else {
+                    Err(TyError::UnexpectedType)
+                }
+            })
+            .zip(input_idents)
+            .map(|(ty, i)| Ok(IdentTyped::new(i.clone(), ty?, Mutability::Const)))
+            .collect::<TyResult<Vec<_>>>()
+    }
+
+    fn parall_ident_ty_from_parall_collec(
+        parall_ident: &Option<Ident>,
+        parall_collec: &Expr,
+    ) -> TyResult<Option<IdentTyped>> {
+        if parall_ident.is_none() {
+            return Ok(None);
+        }
+        let thread_hierchy_ty = match &parall_collec.ty.as_ref().unwrap().ty {
+            TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
+                ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
+                    ThreadHierchyTy::ThreadGrp(m1.clone(), m2.clone(), m3.clone())
+                }
+                ThreadHierchyTy::WarpGrp(_) => ThreadHierchyTy::Warp,
+                ThreadHierchyTy::Warp | ThreadHierchyTy::ThreadGrp(_, _, _) => {
+                    return Err(TyError::String(
+                        "Cannot explicitly refer to single threads.".to_string(),
+                    ))
+                }
+            },
             _ => {
                 return Err(TyError::String(
-                    "Provided input expression is not a tuple view.".to_string(),
-                ));
+                    "Provided expression is not a parallel collection.".to_string(),
+                ))
             }
         };
+        Ok(Some(IdentTyped::new(
+            parall_ident.as_ref().unwrap().clone(),
+            Ty::new(TyKind::ThreadHierchy(Box::new(thread_hierchy_ty))),
+            Mutability::Const,
+        )))
+    }
 
-        match &fun.ty.as_ref().unwrap().ty {
-            // FIXME unimplemented
-            TyKind::TupleView(funs) => {
-                if let TyKind::TupleView(pcs) = &parall_collec.ty.as_ref().unwrap().ty {
-                    if pcs.len() != funs.len() {
-                        return Err(TyError::String(
-                            "Branching in parallel collections is of different amount than \
-                            provided functions."
-                                .to_string(),
-                        ));
-                    }
-                    for (f, p) in funs.iter().zip(pcs) {
-                        //executable_over_parall_collec_and_input(f, p, input)?
-                        unimplemented!()
-                    }
-                }
-                Ok(())
-            }
-            TyKind::Fn(_, param_tys, fun_exec, ret_ty) => {
-                let parall_elem_ty = match &parall_collec.ty.as_ref().unwrap().ty {
-                    TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
-                        ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => Some(
-                            ThreadHierchyTy::ThreadGrp(m1.clone(), m2.clone(), m3.clone()),
-                        ),
-                        ThreadHierchyTy::ThreadGrp(_, _, _) => None,
-                        ThreadHierchyTy::WarpGrp(_) => Some(ThreadHierchyTy::Warp),
-                        ThreadHierchyTy::Warp => None,
-                    },
-                    _ => {
-                        return Err(TyError::String(
-                            "Provided expression is not a parallel collection.".to_string(),
-                        ))
-                    }
-                };
-                let param_offset = match parall_elem_ty {
-                    Some(_) => 1,
-                    None => 0,
-                };
-                let num_fun_params = in_param_tys.len() + param_offset;
-                if param_tys.len() != num_fun_params {
-                    return Err(TyError::String(format!(
-                        "Wrong amount of parameters in provided function. Expected {},\
-                    one for parallelism expression and one for input.",
-                        num_fun_params
-                    )));
-                }
-                let fun_parall_elem_ty = match &param_tys[0].ty {
-                    TyKind::ThreadHierchy(th_hierchy) => Some(th_hierchy.as_ref().clone()),
-                    _ => None,
-                };
-                let fun_input_elem_tys: Vec<_> = param_tys[param_offset..].to_vec();
-
-                if fun_parall_elem_ty != parall_elem_ty {
-                    return Err(TyError::String(format!(
-                        "Function does not fit the provided parallel collection. \
-                        Expected: {:?}, but found: {:?}",
-                        parall_elem_ty, fun_parall_elem_ty
-                    )));
-                }
-                if fun_input_elem_tys != in_param_tys {
-                    return Err(TyError::String(format!(
-                        "Function does not fit the provided input. \
-                        Expected: {:?},\n but found: {:?}",
-                        in_param_tys, fun_input_elem_tys
-                    )));
-                }
-                let f_exec = match parall_elem_ty {
-                    Some(ThreadHierchyTy::ThreadGrp(_, _, _)) => Exec::GpuBlock,
-                    Some(ThreadHierchyTy::WarpGrp(_)) => Exec::GpuBlock,
-                    Some(ThreadHierchyTy::Warp) => Exec::GpuWarp,
-                    None => Exec::GpuThread,
-                    Some(ThreadHierchyTy::BlockGrp(_, _, _, _, _, _)) => {
-                        return Err(TyError::String(
-                            "Cannot parallelize over multiple Grids.".to_string(),
-                        ))
-                    }
-                };
-                if fun_exec != &f_exec {
-                    return Err(TyError::String(
-                        "Execution resource does not fit.".to_string(),
-                    ));
-                }
-                if ret_ty.as_ref().ty != TyKind::Data(Scalar(ScalarTy::Unit)) {
-                    return Err(TyError::String(
-                        "Function has wrong return type. Expected ().".to_string(),
-                    ));
-                }
-
-                Ok(())
-            }
-            _ => Err(TyError::String(
-                "The provided expression is not a function or tuple view of functions.".to_string(),
-            )),
+    fn exec_for_parall_collec(parall_ident_typed: &Option<IdentTyped>) -> TyResult<Exec> {
+        if parall_ident_typed.is_none() {
+            return Ok(Exec::GpuThread);
         }
+        let body_exec = if let TyKind::ThreadHierchy(th_hierchy) =
+            &parall_ident_typed.as_ref().unwrap().ty.ty
+        {
+            match th_hierchy.as_ref() {
+                ThreadHierchyTy::WarpGrp(_) | ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
+                ThreadHierchyTy::Warp => Exec::GpuWarp,
+                ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => {
+                    return Err(TyError::String(
+                        "Cannot parallelize over multiple Grids.".to_string(),
+                    ))
+                }
+            }
+        } else {
+            panic!(
+                "Expected a thread hierarchy type but found {:?}.",
+                &parall_ident_typed.as_ref().unwrap().ty.ty
+            )
+        };
+        Ok(body_exec)
     }
 
     fn ty_check_lambda(

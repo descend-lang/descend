@@ -1,43 +1,34 @@
-// FIXME This should NOT type check
-//  r exists twice!
-//  Maybe it is ok here, but the arguments passed during application must NOT be equal!
-fn red_add<r1: prv, r2: prv>(
-  fst_half: &r1 uniq gpu.global i32,
-  snd_half: &r2 uniq gpu.global i32
-) -[gpu.thread]-> () <>{
-  *fst_half = *fst_half + *snd_half
-}
-
 fn reduce<n: nat, a: prv, b: prv>(
   ha_array: &a uniq cpu.heap [i32; n]
 ) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h>{
-  let mut gpu: Gpu = gpu_device(0);
+    let mut gpu: Gpu = gpu_device(0);
 
-  let mut a_array: [i32; n] @ gpu.global =
-    gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
-  let block_group = group_mut::<1024, 'r, gpu.global, n, i32>(
-    to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array));
+    let mut a_array: [i32; n] @ gpu.global =
+        gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+    let block_group = group_mut::<1024, 'r, gpu.global, n, i32>(
+        to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array));
 
-  exec::<64, 1024, 'h, cpu.stack, &'r uniq gpu.global [[[[i32; 1024]]; 64]]>(
-    &'h uniq gpu,
-    block_group,
-    | grid: BlockGrp<64, ThreadGrp<1024>>,
-      input: &'r uniq gpu.global [[[[i32; 1024]]; 64]]| -[gpu.grid]-> () <>{
+    exec::<64, 1024, 'h, cpu.stack, &'r uniq gpu.global [[[[i32; 1024]]; 64]]>(
+        &'h uniq gpu,
+        block_group,
+        | grid: BlockGrp<64, ThreadGrp<1024>>,
+          input: &'r uniq gpu.global [[[[i32; 1024]]; 64]]| -[gpu.grid]-> () <>{
+            for block in grid with ib from input do <'z>{
+                let ib_borrow: &'z uniq gpu.global [[i32; 1024]] = &'z uniq *ib;
+                for_nat k in halved_range(512) <'r1, 'r2, 's1, 's2>{
+                    let split_ib = (split 'r1 'r2 uniq 2*k ib_borrow).0;
+                    let active_halves = split 's1 's2 uniq k split_ib;
+                    let active_half0 = active_halves.0;
+                    let active_half1 = active_halves.1;
 
-      for grid with <input> do
-        | block: ThreadGrp<1024>,
-          ib: &'r uniq gpu.global [[i32; 1024]] | -[gpu.block]-> () <>{
-
-          for_nat k in halved_range(512) <'r1, 'r2, 's1, 's2>{
-              let split_ib = (split 'r1 'r2 uniq 2*k ib).0;
-              let active_halves = split 's1 's2 uniq k split_ib;
-              for split_thread_grp::<k, 1024, 1, 1>(block).0
-              with active_halves
-              do red_add::<'s1, 's2>
-          }
-      }
-    }
-  );
+                    for split_thread_grp::<k, 1024, 1, 1>(block).0
+                    with fst_half, snd_half from active_half0, active_half1 do <>{
+                        *fst_half = *fst_half + *snd_half
+                    }
+                }
+            }
+        }
+    );
 
   copy_to_host::<'g, a, cpu.heap, [i32; n]>(&'g shrd a_array, ha_array)
 }

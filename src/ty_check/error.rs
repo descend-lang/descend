@@ -39,6 +39,9 @@ pub enum TyError {
     BorrowingDeadView,
     // Trying to type an expression with dead type
     DeadTy,
+    // When a parallel collection consits of other parallel elements, a for-with requires an
+    // identifier for these elements.
+    MissingParallelCollectionIdent,
     UnexpectedType,
     // TODO remove as soon as possible
     String(String),

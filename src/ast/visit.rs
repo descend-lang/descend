@@ -245,10 +245,15 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
         }
-        ExprKind::ParFor(parall_collec, input, funs) => {
+        ExprKind::ParForWith(par_elem, parall_collec, input_elems, input, body) => {
+            match par_elem {
+                Some(ident) => visitor.visit_ident(ident),
+                None => {}
+            }
             visitor.visit_expr(parall_collec);
-            visitor.visit_expr(input);
-            visitor.visit_expr(funs)
+            walk_list!(visitor, visit_ident, input_elems);
+            walk_list!(visitor, visit_expr, input);
+            visitor.visit_expr(body)
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(ident);
