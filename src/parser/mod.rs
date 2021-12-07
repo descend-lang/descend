@@ -295,11 +295,14 @@ peg::parser! {
         }
 
         rule block() -> Expr =
-            "<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _
+            prov_values:("<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _ { prov_values })?
                 "{" _ body:expression_seq() _ "}"
             {
                 Expr::new(
-                    ExprKind::Block(prov_values, Box::new(body))
+                    ExprKind::Block(
+                        if prov_values.is_some() { prov_values.unwrap() }
+                        else { vec![] },
+                        Box::new(body))
                 )
             }
 

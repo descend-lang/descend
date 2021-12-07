@@ -21,22 +21,13 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
             let input = views.0;
             let output = views.1;
             let mut tmp: [i32; 1024] @ gpu.shared = shared_alloc::<[i32; 1024]>();
-            for grid with <input, output, tmp> do
-                | block: ThreadGrp<1024>,
-                  ib: &'r shrd gpu.global [[i32; 1024]],
-                  out_elem: &'m uniq gpu.global [[i32; 1]],
-                  mut tmpb: [i32; 1024] @ gpu.shared
-                | -[gpu.block]-> () <>{
+            for grid with ib, out_elem from input, output do <>{
                      let tmp_view: &'e uniq gpu.shared [[i32; 1024]] =
                         to_view_mut::<'e, gpu.shared, 1024, i32>(&'e uniq tmpb);
                      for block
-                     with <ib, tmp_view>
-                     do
-                        |
-                          inp: &'r shrd gpu.global i32 , tmp_in: &'e uniq gpu.shared i32
-                        | -[gpu.thread]-> () <>{
-                             *tmp_in = *inp
-                        };
+                     with inp, tmp_in from ib, tmp_view
+                     do <>{ *tmp_in = *inp };
+
                      for_nat k in halved_range(512) <'s, 'r1, 'r2, 's1, 's2>{
                         let tmpb_view = to_view_mut::<'s, gpu.shared, 1024, i32>(&'s uniq tmpb);
                         let split_tmpb_view = (split 'r1 'r2 uniq 2*k tmpb_view).0;
