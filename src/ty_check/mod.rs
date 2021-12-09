@@ -190,6 +190,7 @@ impl TyChecker {
             ExprKind::Split(r1, r2, own, s, view_ref) => {
                 self.ty_check_split(kind_ctx, ty_ctx, exec, r1, r2, *own, s, view_ref)?
             }
+            ExprKind::Range(l, u) => self.ty_check_range(kind_ctx, ty_ctx, exec, l, u)?,
             ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
             ExprKind::Idx(_, _) => {
                 unimplemented!("This is helper syntax to index into non-place expressions.")
@@ -205,6 +206,37 @@ impl TyChecker {
         }
         expr.ty = Some(ty);
         Ok(res_ty_ctx)
+    }
+
+    fn ty_check_range(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        l: &mut Expr,
+        u: &mut Expr,
+    ) -> TyResult<(TyCtx, Ty)> {
+        if exec != Exec::CpuThread && exec != Exec::GpuThread {
+            return Err(TyError::IllegalExec);
+        }
+
+        let ty_ctx_l = self.ty_check_expr(kind_ctx, ty_ctx, exec, l)?;
+        let ty_ctx_u = self.ty_check_expr(kind_ctx, ty_ctx_l, exec, u)?;
+
+        if !matches!(
+            &l.ty.as_ref().unwrap().ty,
+            TyKind::Data(DataTy::Scalar(ScalarTy::I32))
+        ) {
+            panic!("expected i32 for l in range")
+        }
+        if !matches!(
+            &u.ty.as_ref().unwrap().ty,
+            TyKind::Data(DataTy::Scalar(ScalarTy::I32))
+        ) {
+            panic!("expected i32 for u in range")
+        }
+
+        Ok((ty_ctx_u, Ty::new(TyKind::Data(DataTy::Range))))
     }
 
     fn ty_check_split(
@@ -363,6 +395,7 @@ impl TyChecker {
                     )))
                 }
             },
+            TyKind::Data(DataTy::Range) => DataTy::Scalar(ScalarTy::I32),
             _ => {
                 return Err(TyError::String(format!(
                     "Expected array data type or reference to array data type, but found {:?}",
@@ -1016,6 +1049,8 @@ impl TyChecker {
         lhs: &mut Expr,
         rhs: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
+        // FIXME certain operations should only be allowed for certain data types
+        //      true > false is currently valid
         let lhs_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, lhs)?;
         let rhs_ty_ctx = self.ty_check_expr(kind_ctx, lhs_ty_ctx, exec, rhs)?;
 
@@ -1041,6 +1076,10 @@ impl TyChecker {
             | (
                 TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
                 TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
+            )
+            | (
+                TyKind::Data(DataTy::Scalar(ScalarTy::Bool)),
+                TyKind::Data(DataTy::Scalar(ScalarTy::Bool)),
             ) => Ok((rhs_ty_ctx, ret)),
             _ => Err(TyError::String(format!(
             "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
@@ -1820,6 +1859,13 @@ impl TyChecker {
                 inner_mem,
                 passed_prvs,
             ))
+        } else if let TyKind::Data(DataTy::RawPtr(dty)) = &borr_expr.ty.as_ref().unwrap().ty {
+            // TODO is anything of this correct?
+            Ok((
+                Ty::new(TyKind::Data(dty.as_ref().clone())),
+                inner_mem,
+                passed_prvs,
+            ))
         } else {
             Err(TyError::String(
                 "Trying to dereference non reference type.".to_string(),
@@ -1867,7 +1913,11 @@ impl TyChecker {
             TyKind::Data(dty) => match dty {
                 // TODO variables of Dead types can be reassigned. So why do we not have to check
                 //  well-formedness of the type in Dead(ty)? (According paper).
-                DataTy::Scalar(_) | DataTy::Atomic(_) | DataTy::Dead(_) => {}
+                DataTy::Scalar(_)
+                | DataTy::Atomic(_)
+                | DataTy::Range
+                | DataTy::RawPtr(_)
+                | DataTy::Dead(_) => {}
                 DataTy::Ident(ident) => {
                     if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
                         Err(CtxError::KindedIdentNotFound(ident.clone()))?

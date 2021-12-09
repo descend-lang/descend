@@ -13,6 +13,9 @@ pub static LOAD_ATOMIC: &str = "load_atomic";
 pub static LOAD_ATOMIC_HOST: &str = "load_atomic_host";
 pub static STORE_ATOMIC: &str = "store_atomic";
 pub static STORE_ATOMIC_HOST: &str = "store_atomic_host";
+pub static TO_RAW_PTR: &str = "to_raw_ptr";
+pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
+pub static ATOMIC_SET: &str = "atomic_set";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -39,6 +42,9 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (LOAD_ATOMIC_HOST, load_atomic_host_ty()),
         (STORE_ATOMIC, store_atomic_ty()),
         (STORE_ATOMIC_HOST, store_atomic_host_ty()),
+        (TO_RAW_PTR, to_raw_ptr_ty()),
+        (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
+        (ATOMIC_SET, atomic_set_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -51,6 +57,102 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     ];
 
     decls.to_vec()
+}
+
+// to_raw_ptr:
+//  <r: prv, m: mem, t: ty> (
+//      &r uniq m t
+// ) -[gpu.thread]-> RawPtr<t>
+fn to_raw_ptr_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let t = Ident::new("t");
+
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+
+    Ty::new(TyKind::Fn(
+        vec![r_prv, m_mem, t_ty],
+        vec![Ty::new(TyKind::Data(DataTy::Ref(
+            Provenance::Ident(r),
+            Ownership::Uniq,
+            Memory::Ident(m),
+            Box::new(DataTy::Ident(t.clone())),
+        )))],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::RawPtr(Box::new(
+            DataTy::Ident(t),
+        ))))),
+    ))
+}
+
+// offset_raw_ptr:
+//  <m: mem, t: ty> (
+//      RawPtr<t>, i32
+// ) -[gpu.thread]-> RawPtr<t>
+fn offset_raw_ptr_ty() -> Ty {
+    let t = Ident::new("t");
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+
+    Ty::new(TyKind::Fn(
+        vec![t_ty],
+        vec![
+            Ty::new(TyKind::Data(DataTy::RawPtr(Box::new(DataTy::Ident(
+                t.clone(),
+            ))))),
+            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+        ],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::RawPtr(Box::new(
+            DataTy::Ident(t),
+        ))))),
+    ))
+}
+
+fn atomic_set_ty() -> Ty {
+    let p = Ident::new("p");
+    let m = Ident::new("m");
+    let t = Ident::new("t");
+
+    let p_prv = IdentKinded {
+        ident: p.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+    Ty::new(TyKind::Fn(
+        vec![p_prv, m_mem, t_ty],
+        vec![
+            Ty::new(TyKind::Data(DataTy::Ref(
+                Provenance::Ident(p),
+                Ownership::Uniq,
+                Memory::Ident(m),
+                Box::new(DataTy::Ident(t.clone())),
+            ))),
+            Ty::new(TyKind::Data(DataTy::Ident(t))),
+        ],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+    ))
 }
 
 // split_block_grp:

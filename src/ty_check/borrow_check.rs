@@ -54,10 +54,43 @@ pub(super) fn ownership_safe(
                     ref_own,
                 )
             }
+            TyKind::Data(DataTy::RawPtr(_)) => ownership_safe_deref_raw(
+                ty_checker,
+                kind_ctx,
+                ty_ctx,
+                exec,
+                reborrows,
+                own,
+                &pl_ctx_no_deref,
+                &most_spec_pl,
+            ),
             // TODO improve error message
             t => panic!("Is the type dead? `{:?}`", t),
         }
     }
+}
+
+// TODO remove!
+fn ownership_safe_deref_raw(
+    ty_checker: &TyChecker,
+    kind_ctx: &KindCtx,
+    ty_ctx: &TyCtx,
+    exec: Exec,
+    reborrows: &[internal::Place],
+    own: Ownership,
+    pl_ctx_no_deref: &PlaceCtx,
+    most_spec_pl: &internal::Place,
+) -> OwnResult<HashSet<Loan>> {
+    // TODO is anything here correct?
+    let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+        PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
+    ));
+    let mut passed_through_prvs = HashSet::new();
+    passed_through_prvs.insert(Loan {
+        place_expr: currently_checked_pl_expr,
+        own,
+    });
+    Ok(passed_through_prvs)
 }
 
 fn ownership_safe_place(

@@ -263,7 +263,7 @@ impl std::fmt::Display for BinOp {
             Self::Mod => "%",
             Self::And => "&&",
             Self::Or => "||",
-            Self::Eq => "=",
+            Self::Eq => "==",
             Self::Lt => "<",
             Self::Le => "<=",
             Self::Gt => ">",

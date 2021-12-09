@@ -37,6 +37,7 @@ pub enum TyError {
     ConstBorrow(PlaceExpr),
     // The borrowed view type is at least paritally dead
     BorrowingDeadView,
+    IllegalExec,
     // Trying to type an expression with dead type
     DeadTy,
     // When a parallel collection consits of other parallel elements, a for-with requires an

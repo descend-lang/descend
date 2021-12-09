@@ -295,6 +295,7 @@ pub enum ExprKind {
     ParForWith(Option<Ident>, Box<Expr>, Vec<Ident>, Vec<Expr>, Box<Expr>),
     TupleView(Vec<Expr>),
     Split(String, String, Ownership, Nat, Box<PlaceExpr>),
+    Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),
     // Index into an array; ONLY for codegen
@@ -774,6 +775,8 @@ pub enum DataTy {
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
+    RawPtr(Box<DataTy>),
+    Range,
     // Only for type checking purposes.
     Dead(Box<DataTy>),
 }
@@ -791,7 +794,9 @@ impl DataTy {
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Array(ty, _) => true,
+            Array(_, _) => false,
+            RawPtr(_) => true,
+            Range => true,
             Dead(_) => panic!(
                 "This case is not expected to mean anything.\
                 The type is dead. There is nothign we can do with it."
@@ -807,6 +812,8 @@ impl DataTy {
         use DataTy::*;
         match self {
             Scalar(_)
+            | RawPtr(_)
+            | Range
             | Atomic(_)
             | Ident(_)
             | Ref(_, _, _, _)
@@ -825,10 +832,11 @@ impl DataTy {
             return true;
         }
         match dty {
-            DataTy::Scalar(_) | DataTy::Ident(_) => false,
+            DataTy::Scalar(_) | DataTy::Ident(_) | DataTy::Range => false,
             DataTy::Dead(_) => panic!("unexpected"),
             DataTy::Atomic(sty) => self == &DataTy::Scalar(sty.clone()),
             DataTy::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
+            DataTy::RawPtr(elem_dty) => self.occurs_in(elem_dty),
             DataTy::Tuple(elem_dtys) => {
                 let mut found = false;
                 for elem_dty in elem_dtys {
@@ -845,7 +853,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Atomic(_) | Ident(_) | Dead(_) => false,
+            Scalar(_) | Atomic(_) | Ident(_) | Range | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -854,6 +862,7 @@ impl DataTy {
                 };
                 found_reference || ty.contains_ref_to_prv(prv_val_name)
             }
+            RawPtr(dty) => dty.contains_ref_to_prv(prv_val_name),
             At(dty, _) => dty.contains_ref_to_prv(prv_val_name),
             Array(dty, _) => dty.contains_ref_to_prv(prv_val_name),
             ArrayShape(dty, _) => dty.contains_ref_to_prv(prv_val_name),
@@ -866,8 +875,7 @@ impl DataTy {
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use DataTy::*;
         match self {
-            Scalar(_) => self.clone(),
-            Atomic(_) => self.clone(),
+            Scalar(_) | Atomic(_) | Range => self.clone(),
             Ident(id) => {
                 if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
                     match with {
@@ -890,7 +898,7 @@ impl DataTy {
                 mem.subst_ident_kinded(ident_kinded, with),
                 Box::new(ty.subst_ident_kinded(ident_kinded, with)),
             ),
-
+            RawPtr(dty) => RawPtr(Box::new(dty.subst_ident_kinded(ident_kinded, with))),
             At(dty, mem) => At(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 mem.subst_ident_kinded(ident_kinded, with),

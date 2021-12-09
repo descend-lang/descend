@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <atomic>
 
 #define CHECK_CUDA_ERR(err) { check_cuda_err((err), __FILE__, __LINE__); }
 inline void check_cuda_err(const cudaError_t err, const char * const file, const int line) {
@@ -182,9 +183,10 @@ public:
 };
 #endif
 
-extern const i32 NO_ERROR = -1;
+
 // TODO cuda::std::int32_t
 using i32 = std::int32_t;
+extern const i32 NO_ERROR = -1;
 using u32 = std::uint32_t;
 // FIXME there is no way to guarantee that float holds 32 bits
 using f32 = float;
@@ -415,12 +417,41 @@ auto exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
     descend::copy_to_host<int>(gpu->fail_code, &h_gl_fail);
     if (h_gl_fail != NO_ERROR) {
         std::cerr << "had indexing error nr: " << h_gl_fail << std::endl;
+        return;
     }
 }
 
-void __device__ atomic_set(int *adress, int value) {
-    atomicExch(adress, value);
+template <typename T>
+__device__ void atomic_set(bool *address, bool val)
+{
+    unsigned long long addr = (unsigned long long)address;
+    unsigned pos = addr & 3;  // byte position within the int
+    int *int_addr = (int *)(addr - pos);  // int-aligned address
+    int old = *int_addr, assumed, ival;
+    bool current_value;
+
+    do
+    {
+        current_value = (bool)(old & ((0xFFU) << (8 * pos)));
+
+        if(current_value == val)
+            break;
+
+        assumed = old;
+        if(val)
+            ival = old | (1 << (8 * pos));
+        else
+            ival = old & (~((0xFFU) << (8 * pos)));
+        old = atomicCAS(int_addr, assumed, ival);
+    } while(assumed != old);
 }
+
+template <typename T>
+__device__ void atomic_set(T *address, T val) {
+    atomicExch(address, val);
+}
+
+
 
 namespace detail
 {
@@ -438,6 +469,17 @@ constexpr descend::array<T, N> create_array(const T& value)
 {
     return detail::create_array(value, std::make_index_sequence<N>());
 }
+
+template <typename T>
+inline __device__ T* to_raw_ptr(T* ptr) {
+    return ptr - (blockIdx.x * blockDim.x + threadIdx.x);
+}
+
+template <typename T>
+inline __host__ __device__ T* offset_raw_ptr(T* ptr, i32 off) {
+    return ptr + off;
+}
+
 };
 
 

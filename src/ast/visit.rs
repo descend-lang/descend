@@ -127,6 +127,8 @@ pub fn walk_dty<V: Visitor>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_mem(mem);
             visitor.visit_dty(dty)
         }
+        DataTy::RawPtr(dty) => visitor.visit_dty(dty),
+        DataTy::Range => (),
         DataTy::Dead(dty) => visitor.visit_dty(dty),
     }
 }
@@ -286,6 +288,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_nat(i);
         }
         ExprKind::Deref(expr) => visitor.visit_expr(expr),
+        ExprKind::Range(_, _) => (),
     }
 }
 
