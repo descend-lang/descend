@@ -45,6 +45,7 @@ fn warp_reduce() -> Result<(), descend::error::ErrorReported> {
     ))
 }
 
+#[ignore]
 #[test]
 fn bfs() -> Result<(), descend::error::ErrorReported> {
     Ok(println!("{}", descend::compile("examples/bfs.desc")?))

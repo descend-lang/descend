@@ -143,14 +143,7 @@ peg::parser! {
                     Span::new(begin, end)
                 )
             }
-            / begin:position!() "let" __ "mut" __ ident:ident() _ ":"
-                _ ty:ty() end:position!()
-            {
-                Expr::with_span(
-                    ExprKind::LetUninit(ident, Box::new(ty)),
-                    Span::new(begin, end)
-                )
-            }
+            / let_uninit()
             / "for" __ ident:ident() __ "in" __ collection:expression()
                 _ body:block()
             {
@@ -282,11 +275,12 @@ peg::parser! {
            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
+            decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
             "for" __ par_ident:(i:ident() __ "in" __ { i })? parall_collec:expression() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
             "from" __ input:expression() **<1,> (_ "," _) __
-            "do" __ body:expression() {
-                Expr::new(ExprKind::ParForWith(par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
+            "do" _ body:block() {
+                Expr::new(ExprKind::ParForWith(decls, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
             }
             "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
@@ -306,6 +300,16 @@ peg::parser! {
                         if prov_values.is_some() { prov_values.unwrap() }
                         else { vec![] },
                         Box::new(body))
+                )
+            }
+
+        rule let_uninit() -> Expr =
+         begin:position!() "let" __ "mut" __ ident:ident() _ ":"
+                _ ty:ty() end:position!()
+            {
+                Expr::with_span(
+                    ExprKind::LetUninit(ident, Box::new(ty)),
+                    Span::new(begin, end)
                 )
             }
 
@@ -519,9 +523,9 @@ peg::parser! {
         }
 
         rule keyword() -> ()
-            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd"
+            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
                 / "f32" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "while" / "in" / "across" / "fn" / "Grid"
+                / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
                 / "Block" / "Warp" / "Thread" / "with" / "do")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )

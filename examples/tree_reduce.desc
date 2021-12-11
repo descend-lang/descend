@@ -13,7 +13,7 @@ fn reduce<n: nat, a: prv, b: prv>(
         block_group,
         | grid: BlockGrp<64, ThreadGrp<1024>>,
           input: &'r uniq gpu.global [[[[i32; 1024]]; 64]]| -[gpu.grid]-> () <>{
-            for block in grid with ib from input do <'z>{
+            for block in grid with ib from input do <'z>{addq
                 let ib_borrow: &'z uniq gpu.global [[i32; 1024]] = &'z uniq *ib;
                 for_nat k in halved_range(512) <'r1, 'r2, 's1, 's2>{
                     let split_ib = (split 'r1 'r2 uniq 2*k ib_borrow).0;

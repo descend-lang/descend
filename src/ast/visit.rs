@@ -190,10 +190,9 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Let(mutabl, ident, ty, e) => {
             visitor.visit_mutability(mutabl);
             visitor.visit_ident(ident);
-            match ty.as_mut() {
-                Some(ty) => visitor.visit_ty(ty),
-                None => {}
-            };
+            for ty in ty.as_mut() {
+                visitor.visit_ty(ty);
+            }
             visitor.visit_expr(e);
         }
         ExprKind::BorrowIndex(_, own, pl_expr, n) => {
@@ -247,10 +246,12 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
         }
-        ExprKind::ParForWith(par_elem, parall_collec, input_elems, input, body) => {
-            match par_elem {
-                Some(ident) => visitor.visit_ident(ident),
-                None => {}
+        ExprKind::ParForWith(decls, par_elem, parall_collec, input_elems, input, body) => {
+            for d in decls {
+                walk_list!(visitor, visit_expr, d)
+            }
+            for ident in par_elem {
+                visitor.visit_ident(ident)
             }
             visitor.visit_expr(parall_collec);
             walk_list!(visitor, visit_ident, input_elems);

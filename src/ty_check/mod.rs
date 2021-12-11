@@ -12,6 +12,7 @@ use crate::error::ErrorReported;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
+use std::convert::identity;
 use std::ops::Deref;
 
 type TyResult<T> = Result<T, TyError>;
@@ -156,18 +157,24 @@ impl TyChecker {
             ExprKind::IdxAssign(pl_expr, idx, e) => {
                 self.ty_check_idx_assign(kind_ctx, ty_ctx, exec, pl_expr, idx, e)?
             }
-            ExprKind::ParForWith(parall_ident, parall_collec, input_idents, input_exprs, body) => {
-                self.ty_check_par_for(
-                    kind_ctx,
-                    ty_ctx,
-                    exec,
-                    parall_ident,
-                    parall_collec,
-                    input_idents,
-                    input_exprs,
-                    body,
-                )?
-            }
+            ExprKind::ParForWith(
+                decls,
+                parall_ident,
+                parall_collec,
+                input_idents,
+                input_exprs,
+                body,
+            ) => self.ty_check_par_for(
+                kind_ctx,
+                ty_ctx,
+                exec,
+                decls,
+                parall_ident,
+                parall_collec,
+                input_idents,
+                input_exprs,
+                body,
+            )?,
             ExprKind::ForNat(var, range, body) => {
                 self.ty_check_for_nat(kind_ctx, ty_ctx, exec, var, range, body)?
             }
@@ -533,6 +540,7 @@ impl TyChecker {
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
+        decls: &mut Option<Vec<Expr>>,
         parall_ident: &Option<Ident>,
         parall_collec: &mut Expr,
         input_idents: &[Ident],
@@ -551,8 +559,36 @@ impl TyChecker {
             }
         }
 
+        // Add declarations to context
+        let mut decl_ty_ctx = ty_ctx;
+        for decls in decls {
+            for d in decls {
+                if !matches!(d.expr, ExprKind::LetUninit(_, _)) {
+                    return Err(TyError::String(
+                        "Only unitialized let declarations are allowed here.".to_string(),
+                    ));
+                }
+                decl_ty_ctx = self.ty_check_expr(kind_ctx, decl_ty_ctx, Exec::GpuThread, d)?;
+                // If the declaration is for shared memory, assume that it is assigned a value
+                // automatically, therefore making the type non-dead.
+                if let ExprKind::LetUninit(ident, t) = &d.expr {
+                    if matches!(&t.ty, TyKind::Data(DataTy::At(_, Memory::GpuShared))) {
+                        decl_ty_ctx = decl_ty_ctx.set_place_ty(
+                            &internal::Place {
+                                ident: ident.clone(),
+                                path: vec![],
+                            },
+                            t.as_ref().clone(),
+                        );
+                    }
+                } else {
+                    panic!("decl blocks allow only LetUninit. Something went wrong.");
+                }
+            }
+        }
+
         let parall_collec_ty_ctx =
-            self.ty_check_expr(kind_ctx, ty_ctx.clone(), exec, parall_collec)?;
+            self.ty_check_expr(kind_ctx, decl_ty_ctx, exec, parall_collec)?;
         let allowed_exec = to_exec_and_size(parall_collec);
         if allowed_exec != exec {
             return Err(TyError::String(format!(

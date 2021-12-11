@@ -39,25 +39,12 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
             let results_input = inputs.1;
             let data = inputs.2;
 
-            for grid with <indices_input, results_input, data> do
-
-                | block: ThreadGrp<16>,
-                  indices_inp: &'g shrd gpu.global [[u32; 16]],
-                  results_inp: &'h uniq gpu.global [[i32; 16]],
-                  dat: &'j shrd gpu.global [i32; m]
-                | -[gpu.block]-> () <>{
-
-                    for block with <indices_inp, results_inp, dat> do
-                        | ind: &'g shrd gpu.global u32,
-                          res: &'h uniq gpu.global i32,
-                          d: &'j shrd gpu.global [i32; m]
-                        | -[gpu.thread]-> () <>{
-                            let i = *ind;
-                            *res = d[i]
-                        }
-
+            for block in grid with indices_inp, results_inp from indices_input, results_input do {
+                for block with ind, res from indices_inp, results_inp do {
+                    let i = *ind;
+                    *res = data[i]
                 }
-
+            }
         }
     );
     copy_to_host::<'k, b, cpu.heap, [i32; n]>(&'k shrd results, h_results)
