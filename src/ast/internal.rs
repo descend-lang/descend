@@ -7,15 +7,8 @@ use super::{Ident, Ownership, PlaceExpr, Ty};
 use crate::ast::{Mutability, PlaceExprKind};
 use std::collections::HashSet;
 
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum FrameExpr {
-    FrTy(FrameTyping),
-    Ident(Ident),
-    Empty,
-}
-
-pub type FrameTyping = Vec<FrameEntry>;
-pub fn append_idents_typed(frm: &FrameTyping, idents_typed: Vec<IdentTyped>) -> FrameTyping {
+pub type Frame = Vec<FrameEntry>;
+pub fn append_idents_typed(frm: &Frame, idents_typed: Vec<IdentTyped>) -> Frame {
     let mut new_frm = frm.clone();
     new_frm.append(
         &mut idents_typed
@@ -72,7 +65,7 @@ impl Place {
         self.path.iter().fold(
             PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
             |pl_expr, path_entry| {
-                PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), path_entry.clone()))
+                PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), *path_entry))
             },
         )
     }

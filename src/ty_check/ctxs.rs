@@ -1,4 +1,4 @@
-use crate::ast::internal::{FrameEntry, FrameTyping, IdentTyped, Loan, PrvMapping};
+use crate::ast::internal::{Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
 use std::collections::{HashMap, HashSet};
@@ -8,42 +8,40 @@ pub(super) type TypedPlace = (internal::Place, Ty);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct TyCtx {
-    frame_tys: Vec<FrameTyping>,
+    frame: Vec<Frame>,
 }
 
 impl TyCtx {
     pub fn new() -> Self {
         TyCtx {
-            frame_tys: vec![vec![]],
+            frame: vec![vec![]],
         }
     }
 
-    pub fn from(fr_ty: FrameTyping) -> Self {
-        TyCtx {
-            frame_tys: vec![fr_ty],
-        }
+    pub fn from(fr_ty: Frame) -> Self {
+        TyCtx { frame: vec![fr_ty] }
     }
 
-    pub fn append_frm_ty(mut self, frm_ty: FrameTyping) -> Self {
-        self.frame_tys.append(&mut vec![frm_ty]);
+    pub fn append_frame(mut self, frm_ty: Frame) -> Self {
+        self.frame.append(&mut vec![frm_ty]);
         self
     }
 
-    pub fn drop_last_frm(mut self) -> Self {
-        self.frame_tys
+    pub fn drop_last_frame(mut self) -> Self {
+        self.frame
             .pop()
             .expect("It should never be the case that there is no frame typing.");
         self
     }
 
     pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
-        let frame_typing = self.frame_tys.iter_mut().last().unwrap();
+        let frame_typing = self.frame.iter_mut().last().unwrap();
         frame_typing.push(FrameEntry::Var(id_typed));
         self
     }
 
     pub fn drop_ident(mut self, ident: &Ident) -> Option<Self> {
-        for frame in self.frame_tys.iter_mut().rev() {
+        for frame in self.frame.iter_mut().rev() {
             let rev_pos_if_exists = frame.iter().rev().position(|ty_entry| match ty_entry {
                 FrameEntry::Var(ident_typed) => &ident_typed.ident == ident,
                 _ => false,
@@ -58,13 +56,13 @@ impl TyCtx {
     }
 
     pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
-        let frame_typing = self.frame_tys.iter_mut().last().unwrap();
+        let frame_typing = self.frame.iter_mut().last().unwrap();
         frame_typing.push(FrameEntry::PrvMapping(prv_mapping));
         self
     }
 
-    pub fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
-        self.frame_tys.iter().flatten().filter_map(|fe| {
+    fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
+        self.frame.iter().flatten().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
@@ -73,8 +71,8 @@ impl TyCtx {
         })
     }
 
-    pub fn idents_typed_mut(&mut self) -> impl Iterator<Item = &'_ mut IdentTyped> {
-        self.frame_tys.iter_mut().flatten().filter_map(|fe| {
+    fn idents_typed_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut IdentTyped> {
+        self.frame.iter_mut().flatten().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
@@ -83,8 +81,8 @@ impl TyCtx {
         })
     }
 
-    pub fn prv_mappings(&self) -> impl Iterator<Item = &'_ PrvMapping> {
-        self.frame_tys.iter().flatten().filter_map(|fe| {
+    pub(crate) fn prv_mappings(&self) -> impl DoubleEndedIterator<Item = &'_ PrvMapping> {
+        self.frame.iter().flatten().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
@@ -93,8 +91,8 @@ impl TyCtx {
         })
     }
 
-    pub fn prv_mappings_mut(&mut self) -> impl Iterator<Item = &'_ mut PrvMapping> {
-        self.frame_tys.iter_mut().flatten().filter_map(|fe| {
+    fn prv_mappings_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut PrvMapping> {
+        self.frame.iter_mut().flatten().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
@@ -108,15 +106,19 @@ impl TyCtx {
         prv_val_name: &str,
         loan_set: HashSet<Loan>,
     ) -> CtxResult<Self> {
-        for fe in self.frame_tys.iter_mut().flatten() {
-            if let FrameEntry::PrvMapping(prv_mapping) = fe {
-                if prv_mapping.prv == prv_val_name {
-                    prv_mapping.loans = loan_set;
-                    return Ok(self);
-                }
+        let mut found = false;
+        for prv_mapping in self.prv_mappings_mut().rev() {
+            if prv_mapping.prv == prv_val_name {
+                prv_mapping.loans = loan_set;
+                found = true;
+                break;
             }
         }
-        Err(CtxError::PrvValueNotFound(prv_val_name.to_string()))
+        if found {
+            Ok(self)
+        } else {
+            Err(CtxError::PrvValueNotFound(prv_val_name.to_string()))
+        }
     }
 
     pub fn extend_loans_for_prv<I>(mut self, base: &str, extension: I) -> CtxResult<TyCtx>
@@ -128,9 +130,10 @@ impl TyCtx {
         Ok(self)
     }
 
-    pub fn loans_for_prv(&self, prv_val_name: &str) -> CtxResult<&HashSet<Loan>> {
+    pub fn loans_in_prv(&self, prv_val_name: &str) -> CtxResult<&HashSet<Loan>> {
         match self
             .prv_mappings()
+            .rev()
             .find(|prv_mapping| prv_val_name == prv_mapping.prv)
         {
             Some(set) => Ok(&set.loans),
@@ -141,6 +144,7 @@ impl TyCtx {
     pub fn loans_for_prv_mut(&mut self, prv_val_name: &str) -> CtxResult<&mut HashSet<Loan>> {
         match self
             .prv_mappings_mut()
+            .rev()
             .find(|prv_mapping| prv_val_name == prv_mapping.prv)
         {
             Some(set) => Ok(&mut set.loans),
@@ -154,7 +158,7 @@ impl TyCtx {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.frame_tys.first().unwrap().is_empty()
+        self.frame.first().unwrap().is_empty()
     }
 
     // ∀π:τ ∈ Γ
@@ -292,6 +296,7 @@ impl TyCtx {
 
         let mut ident_typed = self
             .idents_typed_mut()
+            .rev()
             .find(|ident_typed| ident_typed.ident == pl.ident)
             .unwrap();
         let updated_ty = set_ty_for_path_in_ty(ident_typed.ty.clone(), pl.path.as_slice(), pl_ty);
@@ -304,8 +309,8 @@ impl TyCtx {
             self.set_place_ty(
                 pl,
                 match &pl_ty.ty {
-                    TyKind::Ident(_) => unimplemented!(),
-                    TyKind::Fn(_, _, _, _) => unimplemented!(),
+                    TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
+                    TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::TupleView(elem_tys) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty.clone())))),
                     TyKind::ThreadHierchy(_) => {
@@ -338,6 +343,7 @@ impl TyCtx {
     fn invalidate_prvs(self, prv_names: Vec<String>) -> Self {
         prv_names.iter().fold(self, |ty_ctx, prv| {
             ty_ctx
+                // TODO simply delete the provenance?1
                 .update_loan_set(prv.as_str(), HashSet::new())
                 .unwrap()
         })
@@ -346,7 +352,7 @@ impl TyCtx {
     // Γ ▷- p = Γ′
     pub(super) fn without_reborrow_loans(&self, pl_expr: &PlaceExpr) -> TyCtx {
         let res_frame_tys = self
-            .frame_tys
+            .frame
             .iter()
             .map(|frm_ty| {
                 frm_ty
@@ -378,7 +384,7 @@ impl TyCtx {
             })
             .collect::<Vec<_>>();
         TyCtx {
-            frame_tys: res_frame_tys,
+            frame: res_frame_tys,
         }
     }
 }
@@ -393,12 +399,12 @@ pub(super) type CtxResult<T> = Result<T, CtxError>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct KindCtx {
-    vec: Vec<KindingCtxEntry>,
+    ctx: Vec<KindingCtxEntry>,
 }
 
 impl KindCtx {
     pub fn new() -> Self {
-        KindCtx { vec: Vec::new() }
+        KindCtx { ctx: Vec::new() }
     }
 
     pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> CtxResult<Self> {
@@ -409,19 +415,19 @@ impl KindCtx {
 
     pub fn append_idents(mut self, idents: Vec<IdentKinded>) -> Self {
         let mut entries: Vec<_> = idents.into_iter().map(KindingCtxEntry::Ident).collect();
-        self.vec.append(&mut entries);
+        self.ctx.append(&mut entries);
         self
     }
 
     pub fn append_prv_rels(mut self, prv_rels: Vec<PrvRel>) -> Self {
         for prv_rel in prv_rels {
-            self.vec.push(KindingCtxEntry::PrvRel(prv_rel));
+            self.ctx.push(KindingCtxEntry::PrvRel(prv_rel));
         }
         self
     }
 
     pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
-        self.vec.iter().filter_map(move |entry| {
+        self.ctx.iter().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
                     Some(ident)
@@ -435,7 +441,7 @@ impl KindCtx {
     }
 
     pub fn get_kind(&self, ident: &Ident) -> CtxResult<&Kind> {
-        let res = self.vec.iter().find_map(|entry| {
+        let res = self.ctx.iter().find_map(|entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident: id, kind }) = entry {
                 if id == ident {
                     Some(kind)
@@ -471,7 +477,7 @@ impl KindCtx {
     }
 
     pub fn outlives(&self, l: &Ident, s: &Ident) -> CtxResult<()> {
-        if self.vec.iter().any(|entry| match entry {
+        if self.ctx.iter().any(|entry| match entry {
             KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
         }) {
@@ -494,7 +500,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn append_from_gl_fun_defs(mut self, gl_fun_defs: &[FunDef]) -> Self {
+    pub fn append_from_fun_defs(mut self, gl_fun_defs: &[FunDef]) -> Self {
         self.items.extend(
             gl_fun_defs
                 .iter()

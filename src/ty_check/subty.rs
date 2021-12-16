@@ -11,6 +11,7 @@ use std::collections::HashSet;
 
 type SubTyResult<T> = Result<T, SubTyError>;
 
+// FIXME respect memory alaways, somehow provenances can be different is this correct?
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
 pub(super) fn check(
@@ -37,8 +38,11 @@ pub(super) fn check(
         // Δ; Γ ⊢ &B ρ1 uniq τ1 ≲ &B ρ2 uniq τ2 ⇒ Γ''
         (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty)) => {
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            let res_forw = check(kind_ctx, res_outl_ty_ctx.clone(), &sub_ty, &sup_ty)?;
-            let res_back = check(kind_ctx, res_outl_ty_ctx, &sup_ty, &sub_ty)?;
+            let res_forw = check(kind_ctx, res_outl_ty_ctx.clone(), sub_ty, sup_ty)?;
+            let res_back = check(kind_ctx, res_outl_ty_ctx, sup_ty, sub_ty)?;
+            if sub_mem != sup_mem {
+                return Err(SubTyError::MemoryKindsNoMatch);
+            }
             // TODO find out why this is important (technically),
             //  and return a proper error if suitable
             assert_eq!(res_forw, res_back);
@@ -76,7 +80,7 @@ fn outlives(
     match (longer_prv, shorter_prv) {
         // Δ; Γ ⊢ ρ :> ρ ⇒ Γ
         // OL-Refl
-        (longer, shorter) if longer == shorter => Ok(ty_ctx.clone()),
+        (longer, shorter) if longer == shorter => Ok(ty_ctx),
         // TODO transitivity missing
         // OL-Trans
 
@@ -89,7 +93,7 @@ fn outlives(
             kind_ctx
                 .outlives(longer, shorter)
                 .map_err(|err| SubTyError::CtxError(err))?;
-            Ok(ty_ctx.clone())
+            Ok(ty_ctx)
         }
         // OL-LocalProvenances
         (Value(longer), Value(shorter)) => outl_check_val_prvs(ty_ctx, longer, shorter),
@@ -126,7 +130,7 @@ fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> SubTyResul
     }
 
     // Create output Ctx
-    let longer_loans = ty_ctx.loans_for_prv(longer)?.clone();
+    let longer_loans = ty_ctx.loans_in_prv(longer)?.clone();
     let res_ty_ctx = ty_ctx.extend_loans_for_prv(shorter, longer_loans)?;
     Ok(res_ty_ctx)
 }
@@ -182,7 +186,7 @@ fn outl_check_val_ident_prv(
     shorter_ident: &Ident,
 ) -> SubTyResult<TyCtx> {
     // TODO how could the set ever be empty?
-    let loan_set = ty_ctx.loans_for_prv(longer_val)?;
+    let loan_set = ty_ctx.loans_in_prv(longer_val)?;
     if loan_set.is_empty() {
         return Err(SubTyError::PrvNotUsedInBorrow(longer_val.to_string()));
     }

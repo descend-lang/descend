@@ -1,4 +1,5 @@
 fn inplace_vector_add<n: nat, a: prv, b: prv>(
+    // TODO global fun params into same frame as top level declaration in body
     ha_array: &a uniq cpu.stack [i32; n],
     hb_array: &b shrd cpu.stack [i32; n]
 ) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h>{

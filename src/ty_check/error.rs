@@ -196,6 +196,8 @@ pub enum SubTyError {
     NotOutliving(String, String),
     // format!("No loans bound to provenance.")
     PrvNotUsedInBorrow(String),
+    // Subtyping checks fail if the memory kinds are not equal
+    MemoryKindsNoMatch,
     // TODO remove asap
     Dummy,
 }

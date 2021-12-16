@@ -3,6 +3,14 @@
 extern crate descend;
 
 #[test]
+fn split_test() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/split_test.desc")?
+    ))
+}
+
+#[test]
 fn scan() -> Result<(), descend::error::ErrorReported> {
     Ok(println!("{}", descend::compile("examples/scan.desc")?))
 }

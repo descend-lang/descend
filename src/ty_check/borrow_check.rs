@@ -39,6 +39,7 @@ pub(super) fn ownership_safe(
                     &most_spec_pl,
                     prv_val_name.as_str(),
                     ref_own,
+                    &p.split_tag_path,
                 )
             }
             TyKind::Data(DataTy::Ref(Provenance::Ident(_), ref_own, _, _)) => {
@@ -52,6 +53,7 @@ pub(super) fn ownership_safe(
                     &pl_ctx_no_deref,
                     &most_spec_pl,
                     ref_own,
+                    &p.split_tag_path,
                 )
             }
             TyKind::Data(DataTy::RawPtr(_)) => ownership_safe_deref_raw(
@@ -117,15 +119,16 @@ fn ownership_safe_deref(
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
-    ref_prv_val_name: &str,
+    prv_val_name: &str,
     ref_own: Ownership,
+    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
     // Γ(r) = { ω′pi }
-    let loans_for_ref_prv = ty_ctx.loans_for_prv(ref_prv_val_name)?;
+    let loans_in_prv = ty_ctx.loans_in_prv(prv_val_name)?;
     // ω ≲ ωπ
     new_own_weaker_equal(own, ref_own)?;
     // List<pi = pi□ [πi]>
-    let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_from_loans(loans_for_ref_prv);
+    let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_in_loans(loans_in_prv);
     // List<πe>, List<πi>, π
     // TODO Refactor into own function
     let mut extended_reborrows = Vec::from(reborrows);
@@ -141,12 +144,14 @@ fn ownership_safe_deref(
         &extended_reborrows,
         own,
         pl_ctx_no_deref,
-        loans_for_ref_prv,
+        loans_in_prv,
+        split_tag_path,
     )?;
 
-    let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+    let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
+    currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
     ownership_safe_under_existing_loans(
         ty_ctx,
         &extended_reborrows,
@@ -168,28 +173,27 @@ fn subst_pl_with_potential_prvs_ownership_safe(
     reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
-    loans_for_ref_prv: &HashSet<Loan>,
+    loans_in_prv: &HashSet<Loan>,
+    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
-    loans_for_ref_prv
-        .iter()
-        .map(|loan| &loan.place_expr)
-        .try_fold(
-            HashSet::<Loan>::new(),
-            |mut loans, pl_expr| -> OwnResult<HashSet<Loan>> {
-                let insert_dereferenced_pl_expr = &pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
-                let loans_for_possible_prv_pl_expr = ownership_safe(
-                    ty_checker,
-                    kind_ctx,
-                    ty_ctx,
-                    exec,
-                    reborrows,
-                    own,
-                    insert_dereferenced_pl_expr,
-                )?;
-                loans.extend(loans_for_possible_prv_pl_expr);
-                Ok(loans)
-            },
-        )
+    let mut loans: HashSet<Loan> = HashSet::new();
+    for pl_expr in loans_in_prv.iter().map(|loan| &loan.place_expr) {
+        let mut insert_dereferenced_pl_expr = pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
+        insert_dereferenced_pl_expr
+            .split_tag_path
+            .append(&mut split_tag_path.to_vec());
+        let loans_for_possible_prv_pl_expr = ownership_safe(
+            ty_checker,
+            kind_ctx,
+            ty_ctx,
+            exec,
+            reborrows,
+            own,
+            &insert_dereferenced_pl_expr,
+        )?;
+        loans.extend(loans_for_possible_prv_pl_expr);
+    }
+    Ok(loans)
 }
 
 fn ownership_safe_deref_abs(
@@ -202,10 +206,12 @@ fn ownership_safe_deref_abs(
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
     ref_own: Ownership,
+    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
     let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
+    currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
     ty_checker.place_expr_ty_under_exec_own(
         kind_ctx,
         ty_ctx,
@@ -223,7 +229,7 @@ fn ownership_safe_deref_abs(
     Ok(passed_through_prvs)
 }
 
-fn pl_ctxs_and_places_from_loans(
+fn pl_ctxs_and_places_in_loans(
     loans: &HashSet<Loan>,
 ) -> impl Iterator<Item = (PlaceCtx, internal::Place)> + '_ {
     loans
@@ -246,21 +252,26 @@ fn ownership_safe_under_existing_loans(
     own: Ownership,
     pl_expr: &PlaceExpr,
 ) -> OwnResult<()> {
-    ty_ctx.prv_mappings().try_for_each(|prv_mapping| {
+    for prv_mapping in ty_ctx.prv_mappings() {
         let PrvMapping { prv, loans } = prv_mapping;
         let no_uniq_overlap = no_uniq_loan_overlap(own, pl_expr, loans);
         if !no_uniq_overlap {
             at_least_one_borrowing_place_and_all_in_reborrow(ty_ctx, prv, reborrows)?;
         }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 fn no_uniq_loan_overlap(own: Ownership, pl_expr: &PlaceExpr, loans: &HashSet<Loan>) -> bool {
     loans.iter().all(|loan| {
-        let (_, most_spec_pl) = loan.place_expr.to_pl_ctx_and_most_specif_pl();
+        let comp_pl_expr = if pl_expr.is_place() {
+            let (_, most_spec_pl) = loan.place_expr.to_pl_ctx_and_most_specif_pl();
+            most_spec_pl.to_place_expr()
+        } else {
+            loan.place_expr.clone()
+        };
         !((own == Ownership::Uniq || loan.own == Ownership::Uniq)
-            && overlap(&most_spec_pl.to_place_expr(), pl_expr))
+            && overlap(&comp_pl_expr, pl_expr))
     })
 }
 
@@ -284,12 +295,12 @@ fn at_least_one_borrowing_place_and_all_in_reborrow(
     }
     // If there exists a place that is borrowing via provenance, then check that it is in the
     // reborrow exclusion list.
-    all_places.iter().try_for_each(|(place, ty)| {
+    for (place, ty) in &all_places {
         if ty.contains_ref_to_prv(prv_name) && !reborrows.iter().any(|reb_pl| reb_pl == place) {
             return Err(BorrowingError::BorrowNotInReborrowList(place.clone()));
         }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {

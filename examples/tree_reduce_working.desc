@@ -13,27 +13,3 @@ fn red_block<r: prv>(
     do { *fst = *fst + *snd }
   }
 }
-
-fn reduce<n: nat, a: prv, b: prv>(
-  ha_array: &a uniq cpu.heap [i32; n]
-) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h>{
-    let mut gpu: Gpu = gpu_device(0);
-
-    let mut a_array: [i32; n] @ gpu.global =
-      gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
-    let block_group = group_mut::<1024, 'r, gpu.global, n, i32>(
-      to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array));
-
-    exec::<64, 1024, 'h, cpu.stack, &'r uniq gpu.global [[[[i32; 1024]]; 64]]>(
-      &'h uniq gpu,
-      block_group,
-      | grid: BlockGrp<64, ThreadGrp<1024>>,
-        input: &'r uniq gpu.global [[[[i32; 1024]]; 64]]| -[gpu.grid]-> () {
-        for block in grid with ib from input do {
-            red_block::<'r>(block, ib)
-        }
-      }
-    );
-
-    copy_to_host::<'g, a, cpu.heap, [i32; n]>(&'g shrd a_array, ha_array)
-}

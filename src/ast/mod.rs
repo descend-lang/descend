@@ -494,13 +494,13 @@ pub struct PlaceExpr {
     pub pl_expr: PlaceExprKind,
     pub ty: Option<Ty>,
     // for borrow checking
-    pub split_tag_path: Vec<ViewSplitTag>,
+    pub split_tag_path: Vec<SplitTag>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub enum ViewSplitTag {
+pub enum SplitTag {
     Fst,
     Snd,
 }

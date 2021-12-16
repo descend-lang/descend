@@ -36,7 +36,7 @@ struct TyChecker {
 impl TyChecker {
     pub fn new(compil_unit: &CompilUnit) -> Self {
         let gl_ctx = GlobalCtx::new()
-            .append_from_gl_fun_defs(&compil_unit.fun_defs)
+            .append_from_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
         TyChecker { gl_ctx }
     }
@@ -257,7 +257,7 @@ impl TyChecker {
         s: &Nat,
         view: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
-        fn tag_loans(loans: &HashSet<Loan>, tag: ViewSplitTag) -> HashSet<Loan> {
+        fn tag_loans(loans: &HashSet<Loan>, tag: SplitTag) -> HashSet<Loan> {
             loans
                 .iter()
                 .cloned()
@@ -268,8 +268,8 @@ impl TyChecker {
                 .collect()
         }
         fn split_loans(loans: HashSet<Loan>) -> (HashSet<Loan>, HashSet<Loan>) {
-            let fst = tag_loans(&loans, ViewSplitTag::Fst);
-            let snd = tag_loans(&loans, ViewSplitTag::Snd);
+            let fst = tag_loans(&loans, SplitTag::Fst);
+            let snd = tag_loans(&loans, SplitTag::Snd);
             (fst, snd)
         }
 
@@ -307,10 +307,10 @@ impl TyChecker {
             return Err(TyError::UnexpectedType);
         };
 
-        if !(ty_ctx.loans_for_prv(r1)?.is_empty()) {
+        if !(ty_ctx.loans_in_prv(r1)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(r1.to_string()));
         }
-        if !(ty_ctx.loans_for_prv(r2)?.is_empty()) {
+        if !(ty_ctx.loans_in_prv(r2)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(r2.to_string()));
         }
         let loans = borrow_check::ownership_safe(
@@ -354,11 +354,11 @@ impl TyChecker {
         }]);
         let ty_ctx_1 = self.ty_check_expr(
             &scoped_kind_ctx,
-            ty_ctx.clone().append_frm_ty(vec![]),
+            ty_ctx.clone().append_frame(vec![]),
             exec,
             body,
         )?;
-        let ty_ctx_1_no_body = ty_ctx_1.drop_last_frm();
+        let ty_ctx_1_no_body = ty_ctx_1.drop_last_frame();
         if ty_ctx != ty_ctx_1_no_body {
             let diff: Vec<_> = ty_ctx_1_no_body
                 .prv_mappings()
@@ -413,13 +413,13 @@ impl TyChecker {
         let collec_ty_ctx_with_ident =
             collec_ty_ctx
                 .clone()
-                .append_frm_ty(vec![internal::FrameEntry::Var(IdentTyped::new(
+                .append_frame(vec![internal::FrameEntry::Var(IdentTyped::new(
                     ident.clone(),
                     Ty::new(TyKind::Data(ident_dty)),
                     Mutability::Const,
                 ))]);
         let iter_ty_ctx = self.ty_check_expr(kind_ctx, collec_ty_ctx_with_ident, exec, body)?;
-        let ty_ctx_no_body = iter_ty_ctx.drop_last_frm();
+        let ty_ctx_no_body = iter_ty_ctx.drop_last_frame();
         if collec_ty_ctx != ty_ctx_no_body {
             return Err(TyError::String(
                 "Using a data type in loop that can only be used once.".to_string(),
@@ -441,9 +441,9 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let cond_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, cond)?;
         let body_ty_ctx =
-            self.ty_check_expr(kind_ctx, cond_ty_ctx.append_frm_ty(vec![]), exec, body)?;
+            self.ty_check_expr(kind_ctx, cond_ty_ctx.append_frame(vec![]), exec, body)?;
 
-        let body_outer_ty_ctx = body_ty_ctx.drop_last_frm();
+        let body_outer_ty_ctx = body_ty_ctx.drop_last_frame();
         let cond_temp_ty_ctx =
             self.ty_check_expr(kind_ctx, body_outer_ty_ctx.clone(), exec, cond)?;
         if body_outer_ty_ctx != cond_temp_ty_ctx {
@@ -453,11 +453,11 @@ impl TyChecker {
         }
         let body_temp_ty_ctx = self.ty_check_expr(
             kind_ctx,
-            body_outer_ty_ctx.clone().append_frm_ty(vec![]),
+            body_outer_ty_ctx.clone().append_frame(vec![]),
             exec,
             body,
         )?;
-        if body_outer_ty_ctx != body_temp_ty_ctx.drop_last_frm() {
+        if body_outer_ty_ctx != body_temp_ty_ctx.drop_last_frame() {
             return Err(TyError::String(
                 "Context should have stayed the same".to_string(),
             ));
@@ -612,7 +612,7 @@ impl TyChecker {
         if parall_ident_typed.is_some() {
             frm_ty.push(FrameEntry::Var(parall_ident_typed.unwrap()));
         }
-        let ty_ctx_with_idents = input_ty_ctx.clone().append_frm_ty(frm_ty);
+        let ty_ctx_with_idents = input_ty_ctx.clone().append_frame(frm_ty);
 
         // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
         // that is used for the par_for can safely be reused.
@@ -737,7 +737,7 @@ impl TyChecker {
         );
         // Copy porvenance mappings into scope and append scope frame.
         // FIXME check that no variables are captured.
-        let fun_ty_ctx = ty_ctx.clone().append_frm_ty(fun_frame);
+        let fun_ty_ctx = ty_ctx.clone().append_frame(fun_frame);
 
         self.ty_check_expr(kind_ctx, fun_ty_ctx, exec, body)?;
 
@@ -773,7 +773,7 @@ impl TyChecker {
         prvs: &[String],
         body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let mut ty_ctx_with_prvs = ty_ctx.append_frm_ty(vec![]);
+        let mut ty_ctx_with_prvs = ty_ctx.append_frame(vec![]);
         for prv in prvs {
             ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping {
                 prv: prv.clone(),
@@ -782,7 +782,7 @@ impl TyChecker {
         }
         // TODO do we have to check that the prvs in res_ty_ctx have loans now?
         let body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_prvs, exec, body)?;
-        let res_ty_ctx = body_ty_ctx.drop_last_frm();
+        let res_ty_ctx = body_ty_ctx.drop_last_frame();
         Ok((res_ty_ctx, body.ty.as_ref().unwrap().clone()))
     }
 
@@ -1619,7 +1619,7 @@ impl TyChecker {
             }
         }
 
-        if !ty_ctx.loans_for_prv(prv_val_name)?.is_empty() {
+        if !ty_ctx.loans_in_prv(prv_val_name)?.is_empty() {
             return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
         }
         let loans = borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], own, pl_expr)
@@ -1964,7 +1964,7 @@ impl TyChecker {
                     if !elem_ty.is_fully_alive() {
                         return Err(TyError::ReferenceToDeadTy);
                     }
-                    let loans = ty_ctx.loans_for_prv(prv)?;
+                    let loans = ty_ctx.loans_in_prv(prv)?;
                     if !loans.is_empty() {
                         let mut exists = false;
                         for loan in loans {

@@ -27,10 +27,6 @@ pub trait Visitor: Sized {
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
     fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
-
-    // internal
-    // TODO
-    fn visit_frm_expr(&mut self, frm_expr: &mut FrameExpr) {}
 }
 
 // Taken from the Rust compiler
