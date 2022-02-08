@@ -2,12 +2,13 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
+use crate::ast::visit_mut::VisitMut;
 use crate::ast::{CompilUnit, Ident, PlaceExprKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::iter;
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -2497,12 +2498,12 @@ impl ShapeExpr {
 
 fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
     use crate::ast::visit;
-    use crate::ast::visit::Visitor;
+    use crate::ast::visit::Visit;
     use desc::*;
     struct ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap<String, Kind>,
     }
-    impl Visitor for ReplaceArgKindedIdents {
+    impl VisitMut for ReplaceArgKindedIdents {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
                 ExprKind::Block(prvs, body) => {
@@ -2542,7 +2543,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
                         .extend(iter::once((ident.name.clone(), Kind::Nat)));
                     self.visit_expr(body)
                 }
-                _ => visit::walk_expr(self, expr),
+                _ => visit_mut::walk_expr(self, expr),
             }
         }
 
@@ -2552,7 +2553,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
                 .iter()
                 .map(|desc::IdentKinded { ident, kind }| (ident.name.clone(), *kind))
                 .collect();
-            visit::walk_fun_def(self, fun_def)
+            visit_mut::walk_fun_def(self, fun_def)
         }
     }
     let mut replace = ReplaceArgKindedIdents {
@@ -2565,7 +2566,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
 // Precondition: Views are inlined in every function definition.
 fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) -> desc::FunDef {
     use crate::ast::visit;
-    use crate::ast::visit::Visitor;
+    use crate::ast::visit::Visit;
     use desc::*;
 
     struct InlineParForFuns<'a> {
@@ -2597,7 +2598,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
         }
     }
 
-    impl Visitor for InlineParForFuns<'_> {
+    impl VisitMut for InlineParForFuns<'_> {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
                 ExprKind::ParForWith(_, _, _, _, _, body) => match &mut body.expr {
@@ -2608,7 +2609,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
                                     pl_expr: PlaceExprKind::Ident(x),
                                     ..
                                 }) => f.expr = self.create_lambda_from_fun_def(&x.name),
-                                _ => visit::walk_expr(self, f),
+                                _ => visit_mut::walk_expr(self, f),
                             }
                         }
                     }
@@ -2616,9 +2617,9 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
                         pl_expr: PlaceExprKind::Ident(x),
                         ..
                     }) => body.expr = self.create_lambda_from_fun_def(&x.name),
-                    _ => visit::walk_expr(self, body),
+                    _ => visit_mut::walk_expr(self, body),
                 },
-                _ => visit::walk_expr(self, expr),
+                _ => visit_mut::walk_expr(self, expr),
             }
         }
     }

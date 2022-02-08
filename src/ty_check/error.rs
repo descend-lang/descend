@@ -38,6 +38,10 @@ pub enum TyError {
     // The borrowed view type is at least paritally dead
     BorrowingDeadView,
     IllegalExec,
+    // A type variable has to be equal to a term that is referring to the same type variable
+    InfiniteType,
+    // Cannot unify the two terms
+    CannotUnify,
     // Trying to type an expression with dead type
     DeadTy,
     // When a parallel collection consits of other parallel elements, a for-with requires an

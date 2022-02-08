@@ -3,6 +3,7 @@ pub mod internal;
 mod span;
 #[macro_use]
 pub mod visit;
+pub mod visit_mut;
 
 use crate::parser::SourceCode;
 pub use span::*;
@@ -107,7 +108,7 @@ impl Expr {
         struct SubstIdents<'a> {
             subst_map: &'a HashMap<&'a str, &'a Expr>,
         }
-        impl Visitor for SubstIdents<'_> {
+        impl VisitMut for SubstIdents<'_> {
             fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
                 if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
                     match &pl_expr.pl_expr {
@@ -121,7 +122,7 @@ impl Expr {
                                 panic!("How did this happen?")
                             }
                         }
-                        _ => visit::walk_pl_expr(self, pl_expr),
+                        _ => visit_mut::walk_pl_expr(self, pl_expr),
                     }
                 }
             }
@@ -153,7 +154,7 @@ impl Expr {
                             }
                         }
                     }
-                    _ => visit::walk_expr(self, expr),
+                    _ => visit_mut::walk_expr(self, expr),
                 }
             }
         }
@@ -173,7 +174,7 @@ impl Expr {
         }
         // FIXME currently not able to deal with identifiers for which the kind is not known,
         //  i.e., pre codegneration, there still exist ArgKinded::Ident(_)
-        impl Visitor for SubstKindedIdents<'_> {
+        impl VisitMut for SubstKindedIdents<'_> {
             fn visit_nat(&mut self, nat: &mut Nat) {
                 match nat {
                     Nat::Ident(ident) => {
@@ -183,7 +184,7 @@ impl Expr {
                             *nat = nat_arg.clone()
                         }
                     }
-                    _ => visit::walk_nat(self, nat),
+                    _ => visit_mut::walk_nat(self, nat),
                 }
             }
 
@@ -196,7 +197,7 @@ impl Expr {
                             *mem = mem_arg.clone()
                         }
                     }
-                    _ => visit::walk_mem(self, mem),
+                    _ => visit_mut::walk_mem(self, mem),
                 }
             }
 
@@ -209,7 +210,7 @@ impl Expr {
                             *prv = prv_arg.clone()
                         }
                     }
-                    _ => visit::walk_prv(self, prv),
+                    _ => visit_mut::walk_prv(self, prv),
                 }
             }
 
@@ -224,7 +225,7 @@ impl Expr {
                             *dty = dty_arg.clone()
                         }
                     }
-                    _ => visit::walk_dty(self, dty),
+                    _ => visit_mut::walk_dty(self, dty),
                 }
             }
 
@@ -237,7 +238,7 @@ impl Expr {
                             *ty = ty_arg.clone();
                         }
                     }
-                    _ => visit::walk_ty(self, ty),
+                    _ => visit_mut::walk_ty(self, ty),
                 }
             }
         }
@@ -281,6 +282,7 @@ pub enum ExprKind {
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
+    // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     // For-each loop.
@@ -464,6 +466,7 @@ pub enum Kind {
     Nat,
     Memory,
     Ty,
+    DataTy,
     Provenance,
 }
 
@@ -473,6 +476,7 @@ impl fmt::Display for Kind {
             Kind::Nat => "nat",
             Kind::Memory => "mem",
             Kind::Ty => "type",
+            Kind::DataTy => "dty",
             Kind::Provenance => "prv",
         };
         write!(f, "{}", str)
@@ -1140,7 +1144,8 @@ impl PartialEq for Nat {
     }
 }
 
-use crate::ast::visit::Visitor;
+use crate::ast::visit::Visit;
+use crate::ast::visit_mut::VisitMut;
 use std::cmp::Ordering;
 
 impl PartialOrd for Nat {

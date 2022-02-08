@@ -3,12 +3,14 @@ mod ctxs;
 mod error;
 pub mod pre_decl;
 mod subty;
+mod constrain;
+mod coalesce;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
-use crate::ast::DataTy::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
+use crate::utils;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
@@ -121,7 +123,7 @@ impl TyChecker {
                 }
             }
             ExprKind::Block(prvs, body) => {
-                self.ty_check_letprov(kind_ctx, ty_ctx, exec, prvs, body)?
+                self.ty_check_block(kind_ctx, ty_ctx, exec, prvs, body)?
             }
             ExprKind::Let(mutbl, ident, ty, e) => {
                 self.ty_check_let(kind_ctx, ty_ctx, exec, *mutbl, ident, ty, e)?
@@ -138,6 +140,7 @@ impl TyChecker {
             ExprKind::App(ef, k_args, args) => {
                 self.ty_check_app(kind_ctx, ty_ctx, exec, ef, k_args, args)?
             }
+            // TODO remove
             ExprKind::DepApp(ef, k_args) => {
                 self.ty_check_dep_app(kind_ctx, ty_ctx, exec, ef, k_args)?
             }
@@ -765,7 +768,7 @@ impl TyChecker {
         Ok((ty_ctx, fun_ty))
     }
 
-    fn ty_check_letprov(
+    fn ty_check_block(
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
@@ -839,6 +842,9 @@ impl TyChecker {
             // }
         }
 
+        unifier.unify(place_ty.ty, e.ty)
+        // Context substitution?
+        // TODO integrate into unification
         let after_subty_ctx = subty::check(
             kind_ctx,
             assigned_val_ty_ctx,
@@ -1397,14 +1403,13 @@ impl TyChecker {
     fn ty_check_array(
         &self,
         kind_ctx: &KindCtx,
-        ty_ctx: TyCtx,
+        mut ty_ctx: TyCtx,
         exec: Exec,
         elems: &mut Vec<Expr>,
     ) -> TyResult<(TyCtx, Ty)> {
         assert!(!elems.is_empty());
-        let mut tmp_ty_ctx = ty_ctx;
         for elem in elems.iter_mut() {
-            tmp_ty_ctx = self.ty_check_expr(kind_ctx, tmp_ty_ctx, exec, elem)?;
+            ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, elem)?;
         }
         let ty = elems.first().unwrap().ty.as_ref();
         if !matches!(&ty.unwrap().ty, TyKind::Data(_)) {
@@ -1418,7 +1423,7 @@ impl TyChecker {
             ))
         } else {
             Ok((
-                tmp_ty_ctx,
+                ty_ctx,
                 Ty::new(TyKind::Data(DataTy::Array(
                     Box::new(ty.as_ref().unwrap().dty().clone()),
                     Nat::Lit(elems.len()),
@@ -1445,20 +1450,22 @@ impl TyChecker {
         exec: Exec,
         mutbl: Mutability,
         ident: &mut Ident,
-        ty: &Option<Ty>,
+        ty: &Ty,
         expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
-        let e1_ty = expr.ty.as_ref().unwrap();
-        let ty = if let Some(tty) = ty { tty } else { e1_ty };
+        let mut ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
+        let e_ty = expr.ty.as_ref().unwrap();
+        let ty = unifier::unify(ty, e_ty)?;
+        unifier.subst.apply(&mut ty_ctx_e);
 
-        let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
+        // TODO integrate this into unification/biunification
+        let ty_ctx_sub = match (&ty.ty, &e_ty.ty) {
             (TyKind::TupleView(_), TyKind::TupleView(_)) => {
                 // TODO use subtyping
-                if ty != e1_ty {
+                if ty != e_ty {
                     return Err(TyError::String(format!(
                         "Trying to bind view expression of type {:?} to identifier of type {:?}",
-                        e1_ty, ty
+                        e_ty, ty
                     )));
                 }
                 ty_ctx_e
@@ -1469,7 +1476,7 @@ impl TyChecker {
             _ => {
                 return Err(TyError::String(format!(
                     "Trying to bind expression of type {:?} to identifier of type {:?}",
-                    e1_ty, ty
+                    e_ty, ty
                 )))
             }
         };

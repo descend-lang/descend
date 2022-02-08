@@ -1,30 +1,30 @@
 use crate::ast::*;
 
 #[rustfmt::skip]
-pub trait Visit: Sized {
-    fn visit_binary_op_nat(&mut self, _op: &BinOpNat) {}
-    fn visit_nat(&mut self, n: &Nat) { walk_nat(self, n) }
-    fn visit_ident_kinded(&mut self, id_kind: &IdentKinded) { walk_ident_kinded(self, id_kind)}
-    fn visit_prv_rel(&mut self, prv_rel: &PrvRel) { walk_prv_rel(self, prv_rel) }
-    fn visit_exec(&mut self, _exec: &Exec) {}
-    fn visit_mem(&mut self, mem: &Memory) { walk_mem(self, mem) }
-    fn visit_prv(&mut self, prv: &Provenance) { walk_prv(self, prv) }
-    fn visit_scalar_ty(&mut self, _sty: &ScalarTy) {}
-    fn visit_th_hierchy(&mut self, th_hierchy: &ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
-    fn visit_dty(&mut self, dty: &DataTy) { walk_dty(self, dty) }
-    fn visit_ty(&mut self, ty: &Ty) { walk_ty(self, ty) }
-    fn visit_pl_expr(&mut self, pl_expr: &PlaceExpr) { walk_pl_expr(self, pl_expr) }
-    fn visit_arg_kinded(&mut self, arg_kinded: &ArgKinded) { walk_arg_kinded(self, arg_kinded) }
-    fn visit_kind(&mut self, _kind: &Kind) {}
-    fn visit_binary_op(&mut self, _op: &BinOp) {}
-    fn visit_unary_op(&mut self, _op: &UnOp) {}
-    fn visit_own(&mut self, _own: &Ownership) {}
-    fn visit_mutability(&mut self, _mutbl: &Mutability) {}
-    fn visit_lit(&mut self, _lit: &Lit) {}
-    fn visit_ident(&mut self, _ident: &Ident) {}
-    fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
-    fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
-    fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
+pub trait VisitMut: Sized {
+    fn visit_binary_op_nat(&mut self, _op: &mut BinOpNat) {}
+    fn visit_nat(&mut self, n: &mut Nat) { walk_nat(self, n) }
+    fn visit_ident_kinded(&mut self, id_kind: &mut IdentKinded) { walk_ident_kinded(self, id_kind)}
+    fn visit_prv_rel(&mut self, prv_rel: &mut PrvRel) { walk_prv_rel(self, prv_rel) }
+    fn visit_exec(&mut self, _exec: &mut Exec) {}
+    fn visit_mem(&mut self, mem: &mut Memory) { walk_mem(self, mem) }
+    fn visit_prv(&mut self, prv: &mut Provenance) { walk_prv(self, prv) }
+    fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
+    fn visit_th_hierchy(&mut self, th_hierchy: &mut ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
+    fn visit_dty(&mut self, dty: &mut DataTy) { walk_dty(self, dty) }
+    fn visit_ty(&mut self, ty: &mut Ty) { walk_ty(self, ty) }
+    fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) { walk_pl_expr(self, pl_expr) }
+    fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) { walk_arg_kinded(self, arg_kinded) }
+    fn visit_kind(&mut self, _kind: &mut Kind) {}
+    fn visit_binary_op(&mut self, _op: &mut BinOp) {}
+    fn visit_unary_op(&mut self, _op: &mut UnOp) {}
+    fn visit_own(&mut self, _own: &mut Ownership) {}
+    fn visit_mutability(&mut self, _mutbl: &mut Mutability) {}
+    fn visit_lit(&mut self, _lit: &mut Lit) {}
+    fn visit_ident(&mut self, _ident: &mut Ident) {}
+    fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
+    fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
+    fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
 }
 
 // Taken from the Rust compiler
@@ -36,7 +36,7 @@ macro_rules! walk_list {
     };
 }
 
-pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
+pub fn walk_nat<V: VisitMut>(visitor: &mut V, n: &mut Nat) {
     match n {
         Nat::Ident(ident) => visitor.visit_ident(ident),
         Nat::BinOp(op, l, r) => {
@@ -52,32 +52,32 @@ pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
     }
 }
 
-pub fn walk_ident_kinded<V: Visit>(visitor: &mut V, id_kind: &IdentKinded) {
+pub fn walk_ident_kinded<V: VisitMut>(visitor: &mut V, id_kind: &mut IdentKinded) {
     let IdentKinded { ident, kind } = id_kind;
     visitor.visit_ident(ident);
     visitor.visit_kind(kind)
 }
 
-pub fn walk_prv_rel<V: Visit>(visitor: &mut V, prv_rel: &PrvRel) {
+pub fn walk_prv_rel<V: VisitMut>(visitor: &mut V, prv_rel: &mut PrvRel) {
     let PrvRel { longer, shorter } = prv_rel;
     visitor.visit_ident(longer);
     visitor.visit_ident(shorter)
 }
 
-pub fn walk_mem<V: Visit>(visitor: &mut V, mem: &Memory) {
+pub fn walk_mem<V: VisitMut>(visitor: &mut V, mem: &mut Memory) {
     if let Memory::Ident(ident) = mem {
         visitor.visit_ident(ident)
     }
 }
 
-pub fn walk_prv<V: Visit>(visitor: &mut V, prv: &Provenance) {
+pub fn walk_prv<V: VisitMut>(visitor: &mut V, prv: &mut Provenance) {
     match prv {
         Provenance::Ident(ident) => visitor.visit_ident(ident),
         Provenance::Value(_) => {}
     }
 }
 
-pub fn walk_th_hierchy<V: Visit>(visitor: &mut V, th_hierchy: &ThreadHierchyTy) {
+pub fn walk_th_hierchy<V: VisitMut>(visitor: &mut V, th_hierchy: &mut ThreadHierchyTy) {
     match th_hierchy {
         ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3) => {
             visitor.visit_nat(n1);
@@ -97,7 +97,7 @@ pub fn walk_th_hierchy<V: Visit>(visitor: &mut V, th_hierchy: &ThreadHierchyTy) 
     }
 }
 
-pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
+pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
     match dty {
         DataTy::Ident(ident) => visitor.visit_ident(ident),
         DataTy::Scalar(sty) => visitor.visit_scalar_ty(sty),
@@ -127,8 +127,8 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
     }
 }
 
-pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
-    match &ty.ty {
+pub fn walk_ty<V: VisitMut>(visitor: &mut V, ty: &mut Ty) {
+    match &mut ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
         TyKind::TupleView(elem_tys) => walk_list!(visitor, visit_ty, elem_tys),
         TyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
@@ -143,8 +143,8 @@ pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
     }
 }
 
-pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
-    match &pl_expr.pl_expr {
+pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
+    match &mut pl_expr.pl_expr {
         PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
         PlaceExprKind::Proj(pl_expr, _) => {
@@ -153,7 +153,7 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
     }
 }
 
-pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
+pub fn walk_arg_kinded<V: VisitMut>(visitor: &mut V, arg_kinded: &mut ArgKinded) {
     match arg_kinded {
         ArgKinded::Ident(ident) => visitor.visit_ident(ident),
         ArgKinded::Nat(n) => visitor.visit_nat(n),
@@ -163,9 +163,9 @@ pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
     }
 }
 
-pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
+pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
     // For now, only visit ExprKind
-    match &expr.expr {
+    match &mut expr.expr {
         ExprKind::Lit(l) => visitor.visit_lit(l),
         ExprKind::PlaceExpr(pl_expr) => visitor.visit_pl_expr(pl_expr),
         ExprKind::Index(pl_expr, n) => {
@@ -184,7 +184,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
         ExprKind::Let(mutabl, ident, ty, e) => {
             visitor.visit_mutability(mutabl);
             visitor.visit_ident(ident);
-            for ty in ty.as_ref() {
+            for ty in ty.as_mut() {
                 visitor.visit_ty(ty);
             }
             visitor.visit_expr(e);
@@ -287,14 +287,14 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
     }
 }
 
-pub fn walk_param_decl<V: Visit>(visitor: &mut V, param_decl: &ParamDecl) {
+pub fn walk_param_decl<V: VisitMut>(visitor: &mut V, param_decl: &mut ParamDecl) {
     let ParamDecl { ident, ty, mutbl } = param_decl;
     visitor.visit_ident(ident);
     visitor.visit_ty(ty);
     visitor.visit_mutability(mutbl)
 }
 
-pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
+pub fn walk_fun_def<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDef) {
     let FunDef {
         name: _,
         generic_params,
