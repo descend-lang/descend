@@ -1,20 +1,19 @@
 mod borrow_check;
+mod coalesce;
+mod constrain;
 mod ctxs;
 mod error;
 pub mod pre_decl;
 mod subty;
-mod constrain;
-mod coalesce;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
-use crate::utils;
+use constrain::TermConstrainer;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
-use std::convert::identity;
 use std::ops::Deref;
 
 type TyResult<T> = Result<T, TyError>;
@@ -24,7 +23,7 @@ type TyResult<T> = Result<T, TyError>;
 //      ⊢ Σ
 pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
     let compil_unit_clone = compil_unit.clone();
-    let ty_checker = TyChecker::new(&compil_unit_clone);
+    let mut ty_checker = TyChecker::new(&compil_unit_clone);
     ty_checker.ty_check(compil_unit).map_err(|err| {
         err.emit(compil_unit.source);
         ErrorReported
@@ -33,6 +32,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
 
 struct TyChecker {
     gl_ctx: GlobalCtx,
+    term_constr: TermConstrainer,
 }
 
 impl TyChecker {
@@ -40,10 +40,14 @@ impl TyChecker {
         let gl_ctx = GlobalCtx::new()
             .append_from_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
-        TyChecker { gl_ctx }
+        let term_constr = TermConstrainer::new();
+        TyChecker {
+            gl_ctx,
+            term_constr,
+        }
     }
 
-    fn ty_check(&self, compil_unit: &mut CompilUnit) -> TyResult<()> {
+    fn ty_check(&mut self, compil_unit: &mut CompilUnit) -> TyResult<()> {
         let errs = compil_unit.fun_defs.iter_mut().fold(
             Vec::<TyError>::new(),
             |mut errors, fun| match self.ty_check_global_fun_def(fun) {
@@ -62,7 +66,7 @@ impl TyChecker {
     }
 
     // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
-    fn ty_check_global_fun_def(&self, gf: &mut FunDef) -> TyResult<()> {
+    fn ty_check_global_fun_def(&mut self, gf: &mut FunDef) -> TyResult<()> {
         let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())?;
 
         // TODO check that every prv_rel only uses provenance variables bound in generic_params
@@ -106,7 +110,7 @@ impl TyChecker {
     // Σ; Δ; Γ ⊢ e :^exec τ ⇒ Γ′, side conditions:  ⊢ Σ;Δ;Γ and Σ;Δ;Γ′ ⊢ τ
     // This never returns a dead type, because typing an expression with a dead type is not possible.
     fn ty_check_expr(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -128,7 +132,7 @@ impl TyChecker {
             ExprKind::Let(mutbl, ident, ty, e) => {
                 self.ty_check_let(kind_ctx, ty_ctx, exec, *mutbl, ident, ty, e)?
             }
-            ExprKind::LetUninit(ident, ty) => self.ty_check_let_uninit(ty_ctx, exec, ident, ty)?,
+            ExprKind::LetUninit(ident, ty) => Self::ty_check_let_uninit(ty_ctx, exec, ident, ty)?,
             ExprKind::Seq(es) => self.ty_check_seq(kind_ctx, ty_ctx, exec, es)?,
             ExprKind::Lit(l) => Self::ty_check_literal(ty_ctx, l),
             ExprKind::Array(elems) => self.ty_check_array(kind_ctx, ty_ctx, exec, elems)?,
@@ -219,7 +223,7 @@ impl TyChecker {
     }
 
     fn ty_check_range(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -343,7 +347,7 @@ impl TyChecker {
     }
 
     fn ty_check_for_nat(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -379,7 +383,7 @@ impl TyChecker {
     }
 
     fn ty_check_for(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -435,7 +439,7 @@ impl TyChecker {
     }
 
     fn ty_check_while(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -488,7 +492,7 @@ impl TyChecker {
     }
 
     fn ty_check_if_else(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -539,7 +543,7 @@ impl TyChecker {
 
     // TODO split up groupings, i.e., deal with TupleViews and require enough functions.
     fn ty_check_par_for(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -718,7 +722,7 @@ impl TyChecker {
     }
 
     fn ty_check_lambda(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -769,7 +773,7 @@ impl TyChecker {
     }
 
     fn ty_check_block(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -798,7 +802,7 @@ impl TyChecker {
     }
 
     fn ty_check_assign_place(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -842,7 +846,8 @@ impl TyChecker {
             // }
         }
 
-        unifier.unify(place_ty.ty, e.ty)
+        self.term_constr
+            .constrain(&place_ty, e.ty.as_ref().unwrap())?;
         // Context substitution?
         // TODO integrate into unification
         let after_subty_ctx = subty::check(
@@ -859,7 +864,7 @@ impl TyChecker {
     }
 
     fn ty_check_assign_deref(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -914,7 +919,7 @@ impl TyChecker {
     }
 
     fn ty_check_idx_assign(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1015,7 +1020,7 @@ impl TyChecker {
     }
 
     fn ty_check_index_copy(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1083,7 +1088,7 @@ impl TyChecker {
     // FIXME currently assumes that binary operators exist only for f32 and i32 and that both
     //  arguments have to be of the same type
     fn ty_check_binary_op(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1132,7 +1137,7 @@ impl TyChecker {
 
     // FIXME currently assumes that binary operators exist only for f32 and i32
     fn ty_check_unary_op(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1153,7 +1158,7 @@ impl TyChecker {
 
     // TODO base implementation on ty_check_dep_app
     fn ty_check_app(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1179,7 +1184,7 @@ impl TyChecker {
                 )));
             }
             for (gp, kv) in gen_params.iter().zip(&*k_args) {
-                self.check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
+                Self::check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
             }
             if args.len() != param_tys.len() {
                 return Err(TyError::String(format!(
@@ -1227,7 +1232,7 @@ impl TyChecker {
     }
 
     fn ty_check_dep_app(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1244,7 +1249,7 @@ impl TyChecker {
                 )));
             }
             for (gp, kv) in gen_params.iter().zip(&*k_args) {
-                self.check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
+                Self::check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
             }
             let subst_param_tys: Vec<_> = param_tys
                 .iter()
@@ -1279,7 +1284,6 @@ impl TyChecker {
     }
 
     fn check_arg_has_correct_kind(
-        &self,
         kind_ctx: &KindCtx,
         expected: &Kind,
         kv: &ArgKinded,
@@ -1300,7 +1304,7 @@ impl TyChecker {
     }
 
     fn ty_check_tuple(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1339,7 +1343,7 @@ impl TyChecker {
     }
 
     fn ty_check_proj(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1383,7 +1387,7 @@ impl TyChecker {
     }
 
     fn ty_check_tuple_view(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1401,7 +1405,7 @@ impl TyChecker {
     }
 
     fn ty_check_array(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         mut ty_ctx: TyCtx,
         exec: Exec,
@@ -1444,28 +1448,26 @@ impl TyChecker {
     }
 
     fn ty_check_let(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
         mutbl: Mutability,
         ident: &mut Ident,
-        ty: &Ty,
+        ty: &Option<Ty>,
         expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let mut ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
-        let e_ty = expr.ty.as_ref().unwrap();
-        let ty = unifier::unify(ty, e_ty)?;
-        unifier.subst.apply(&mut ty_ctx_e);
+        let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
+        let e1_ty = expr.ty.as_ref().unwrap();
+        let ty = if let Some(tty) = ty { tty } else { e1_ty };
 
-        // TODO integrate this into unification/biunification
-        let ty_ctx_sub = match (&ty.ty, &e_ty.ty) {
+        let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
             (TyKind::TupleView(_), TyKind::TupleView(_)) => {
                 // TODO use subtyping
-                if ty != e_ty {
+                if ty != e1_ty {
                     return Err(TyError::String(format!(
                         "Trying to bind view expression of type {:?} to identifier of type {:?}",
-                        e_ty, ty
+                        e1_ty, ty
                     )));
                 }
                 ty_ctx_e
@@ -1476,7 +1478,7 @@ impl TyChecker {
             _ => {
                 return Err(TyError::String(format!(
                     "Trying to bind expression of type {:?} to identifier of type {:?}",
-                    e_ty, ty
+                    e1_ty, ty
                 )))
             }
         };
@@ -1490,7 +1492,6 @@ impl TyChecker {
 
     // TODO repsect exec?
     fn ty_check_let_uninit(
-        &self,
         ty_ctx: TyCtx,
         exec: Exec,
         ident: &Ident,
@@ -1513,7 +1514,7 @@ impl TyChecker {
     }
 
     fn ty_check_seq(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
