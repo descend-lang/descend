@@ -121,8 +121,14 @@ peg::parser! {
         rule fun_parameter() -> ParamDecl
             = mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                ParamDecl { ident, ty, mutbl }
+                ParamDecl { ident, ty:Some(ty), mutbl }
             }
+
+        rule lambda_parameter() -> ParamDecl
+            = mutbl:(m:mutability() __ {m})? ident:ident() ty:(_ ":" _ tty:ty() { tty })? {
+                let mutbl = mutbl.unwrap_or(Mutability::Const);
+                ParamDecl { ident, ty, mutbl }
+        }
 
         /// Parse a sequence of expressions (might also just be one)
         pub(crate) rule expression_seq() -> Expr
@@ -282,7 +288,7 @@ peg::parser! {
             "do" _ body:block() {
                 Expr::new(ExprKind::ParForWith(decls, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
             }
-            "|" _ params:(fun_parameter() ** (_ "," _)) _ "|" _
+            "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
               body_expr:block() {
                 Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
@@ -322,7 +328,7 @@ peg::parser! {
             = !identifier() result:(
                 n:nat() { ArgKinded::Nat(n) }
                 / mem:memory_kind() { ArgKinded::Memory(mem) }
-                / ty:ty() { ArgKinded::Ty(ty) }
+                / ty:ty() { match ty.ty { TyKind::Data(dty) => ArgKinded::DataTy(dty), _ => ArgKinded::Ty(ty) } }
                 / prov:provenance() { ArgKinded::Provenance(prov) }
             ) { result }
             / ident:ident() { ArgKinded::Ident(ident)}
@@ -409,10 +415,7 @@ peg::parser! {
 
 
         pub(crate) rule ty() -> Ty
-            = begin:position!() th_hy:th_hy() end:position!() {
-                Ty::with_span(TyKind::ThreadHierchy(Box::new(th_hy)), Span::new(begin, end))
-            }
-            / begin:position!() dty:dty() end:position!() {
+            = begin:position!() dty:dty() end:position!() {
                 Ty::with_span(TyKind::Data(dty), Span::new(begin, end))
             }
             / begin:position!() "<" _ tys:ty() **<1,> (_ "," _) _ ">" end:position!() {
@@ -435,6 +438,7 @@ peg::parser! {
             / "Gpu" { DataTy::Scalar(ScalarTy::Gpu) }
             / "Atomic<i32>" { DataTy::Atomic(ScalarTy::I32) }
             / "Atomic<bool>" {DataTy::Atomic(ScalarTy::Bool)}
+            / th_hy:th_hy() { DataTy::ThreadHierchy(Box::new(th_hy)) }
             / name:ident() { DataTy::Ident(name) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTy::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTy::Array(Box::new(t), n) }
@@ -1424,7 +1428,7 @@ mod tests {
                     )),
                 )))
             };
-        };
+        }
         assert_eq!(
             descend::expression_seq("if 7<8 <>{7+8} else <>{7*8}"),
             Ok(Expr::new(ExprKind::IfElse(
@@ -1666,7 +1670,7 @@ mod tests {
         ];
         let params = vec![ParamDecl {
             ident: Ident::new("ha_array"),
-            ty: Ty::new(TyKind::Data(DataTy::Ref(
+            ty: Some(Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(Ident::new("a")),
                 Ownership::Uniq,
                 Memory::CpuHeap,
@@ -1674,7 +1678,7 @@ mod tests {
                     Box::new(DataTy::Scalar(ScalarTy::I32)),
                     Nat::Ident(Ident::new("n")),
                 )),
-            ))),
+            )))),
             mutbl: Mutability::Const,
         }];
         let ret_dty = DataTy::Scalar(ScalarTy::Unit);

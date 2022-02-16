@@ -182,6 +182,7 @@ impl TyCtx {
                 | TyKind::Fn(_, _, _, _)
                 | TyKind::Data(d::Range)
                 | TyKind::Data(d::Atomic(_))
+                | TyKind::Data(d::ThreadHierchy(_))
                 | TyKind::Data(d::Scalar(_))
                 | TyKind::Data(d::Array(_, _))
                 | TyKind::Data(d::ArrayShape(_, _))
@@ -190,7 +191,6 @@ impl TyCtx {
                 | TyKind::Data(d::RawPtr(_))
                 | TyKind::Data(d::Ident(_))
                 | TyKind::Data(d::Dead(_))
-                | TyKind::ThreadHierchy(_)
                 | TyKind::Dead(_) => vec![(pl, ty.clone())],
                 TyKind::Data(d::Tuple(tys)) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
@@ -313,9 +313,6 @@ impl TyCtx {
                     TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::TupleView(elem_tys) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty.clone())))),
-                    TyKind::ThreadHierchy(_) => {
-                        panic!("Thread hierarchy types are always copyable.")
-                    }
                     TyKind::Dead(_) => {
                         panic!("Cannot kill dead type.")
                     }

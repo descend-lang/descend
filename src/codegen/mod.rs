@@ -3,12 +3,12 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{CompilUnit, Ident, PlaceExprKind};
+use crate::ast::{CompilUnit, DataTy, Ident, PlaceExprKind, TyKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::iter;
-use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -25,9 +25,13 @@ pub fn gen(compil_unit: &CompilUnit, idx_checks: bool) -> String {
     let fun_defs_to_be_generated = preproc_fun_defs
         .iter()
         .filter(|f| {
-            f.param_decls
-                .iter()
-                .all(|p| !is_shape_ty(&p.ty) && !matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_)))
+            f.param_decls.iter().all(|p| {
+                !is_shape_ty(p.ty.as_ref().unwrap())
+                    && !matches!(
+                        &p.ty.as_ref().unwrap().ty,
+                        desc::TyKind::Data(DataTy::ThreadHierchy(_))
+                    )
+            })
         })
         .cloned()
         .collect::<Vec<desc::FunDef>>();
@@ -802,7 +806,7 @@ fn gen_par_for(
     let (pindex, sync_stmt) = match &parall_collec.ty.as_ref().unwrap().ty {
         // TODO Refactor
         //  The same things exists in ty_check where only threadHierchyTy for elem types is returned
-        desc::TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
+        desc::TyKind::Data(DataTy::ThreadHierchy(th_hy)) => match th_hy.as_ref() {
             desc::ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
                 (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
             }
@@ -1518,9 +1522,13 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
 }
 
 fn contains_shape_or_th_hierchy_params(param_decls: &[desc::ParamDecl]) -> bool {
-    param_decls
-        .iter()
-        .any(|p| is_shape_ty(&p.ty) || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_)))
+    param_decls.iter().any(|p| {
+        is_shape_ty(p.ty.as_ref().unwrap())
+            || matches!(
+                p.ty.as_ref().unwrap().ty,
+                desc::TyKind::Data(DataTy::ThreadHierchy(_))
+            )
+    })
 }
 
 fn filter_and_map_shape_th_hierchy_params<'a>(
@@ -1530,12 +1538,16 @@ fn filter_and_map_shape_th_hierchy_params<'a>(
 ) -> Vec<(&'a desc::ParamDecl, &'a desc::Expr)> {
     let (reducable_parms_with_args, data_params_with_args): (Vec<_>, Vec<_>) =
         param_decls.iter().zip(args.iter()).partition(|&(p, _)| {
-            is_shape_ty(&p.ty) || matches!(&p.ty.ty, desc::TyKind::ThreadHierchy(_))
+            is_shape_ty(p.ty.as_ref().unwrap())
+                || matches!(
+                    &p.ty.as_ref().unwrap().ty,
+                    desc::TyKind::Data(DataTy::ThreadHierchy(_))
+                )
         });
     let (shape_params_with_args, th_hierchy_params_with_args): (Vec<_>, Vec<_>) =
         reducable_parms_with_args
             .iter()
-            .partition(|&(p, _)| is_shape_ty(&p.ty));
+            .partition(|&(p, _)| is_shape_ty(p.ty.as_ref().unwrap()));
     for (p, arg) in shape_params_with_args {
         codegen_ctx.shape_ctx.insert(
             &p.ident.name,
@@ -1899,7 +1911,7 @@ fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
     let desc::ParamDecl { ident, ty, mutbl } = param_decl;
     cu::ParamDecl {
         name: ident.name.clone(),
-        ty: gen_ty(&ty.ty, *mutbl),
+        ty: gen_ty(&ty.as_ref().unwrap().ty, *mutbl),
     }
 }
 
@@ -1923,16 +1935,17 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ..
         }) => None,
         desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::ThreadHierchy(_),
+            ty: desc::TyKind::Data(DataTy::ThreadHierchy(_)),
             ..
         }) => None,
         desc::ArgKinded::Ty(desc::Ty {
             ty: desc::TyKind::Fn(_, _, _, _),
             ..
         }) => unimplemented!("needed?"),
-        desc::ArgKinded::Memory(_) | desc::ArgKinded::Provenance(_) | desc::ArgKinded::Ident(_) => {
-            None
-        }
+        desc::ArgKinded::DataTy(_)
+        | desc::ArgKinded::Memory(_)
+        | desc::ArgKinded::Provenance(_)
+        | desc::ArgKinded::Ident(_) => None,
         desc::ArgKinded::Ty(desc::Ty {
             ty: desc::TyKind::Dead(_),
             ..
@@ -2037,10 +2050,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         TupleView(_) => panic!(
             "Cannot generate tuple shape types.\
             Anything with this type should have been compiled away."
-        ),
-        ThreadHierchy(t) => panic!(
-            "Cannot generate thread hierarchy types. \
-        Anything with this type should ave been compiled away."
         ),
         Range => panic!("Range types cannot be generated."),
         Dead(_) => panic!("Dead types cannot be generated."),
@@ -2174,7 +2183,7 @@ impl ParallelityCollec {
 }
 
 fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
-    matches!(ty.ty, desc::TyKind::ThreadHierchy(_))
+    matches!(ty.ty, desc::TyKind::Data(DataTy::ThreadHierchy(_)))
 }
 
 #[derive(Debug, Clone)]
@@ -2255,7 +2264,7 @@ impl ShapeExpr {
                     } else if ident.name == crate::ty_check::pre_decl::GROUP
                         || ident.name == crate::ty_check::pre_decl::GROUP_MUT
                     {
-                        ShapeExpr::create_group_shape(gen_args, args, shape_ctx)
+                        ShapeExpr::create_group_shape(args, &f.ty.as_ref().unwrap().ty, shape_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::JOIN {
                         ShapeExpr::create_join_shape(gen_args, args, shape_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::ZIP {
@@ -2351,19 +2360,25 @@ impl ShapeExpr {
         }
     }
 
-    fn create_group_shape(
-        gen_args: &[desc::ArgKinded],
-        args: &[desc::Expr],
-        shape_ctx: &ShapeCtx,
-    ) -> ShapeExpr {
-        if let (desc::ArgKinded::Nat(s), desc::ArgKinded::Nat(n), Some(v)) =
-            (&gen_args[0], &gen_args[3], args.first())
-        {
-            return ShapeExpr::Group {
-                size: s.clone(),
-                n: n.clone(),
-                shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
-            };
+    fn create_group_shape(args: &[desc::Expr], f_ty: &TyKind, shape_ctx: &ShapeCtx) -> ShapeExpr {
+        if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, args.first()) {
+            if let (
+                TyKind::Data(DataTy::Ref(_, _, _, arr_ty)),
+                TyKind::Data(DataTy::Ref(_, _, _, arg_arr_ty)),
+            ) = (&ret_ty.ty, &v.ty.as_ref().unwrap().ty)
+            {
+                if let (DataTy::ArrayShape(inner_ty, _), DataTy::ArrayShape(_, n)) =
+                    (arr_ty.as_ref(), arg_arr_ty.as_ref())
+                {
+                    if let DataTy::ArrayShape(_, s) = inner_ty.as_ref() {
+                        return ShapeExpr::Group {
+                            size: s.clone(),
+                            n: n.clone(),
+                            shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
+                        };
+                    }
+                }
+            }
         }
         panic!("Cannot create `group` from the provided arguments.");
     }
@@ -2497,8 +2512,6 @@ impl ShapeExpr {
 }
 
 fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
-    use crate::ast::visit;
-    use crate::ast::visit::Visit;
     use desc::*;
     struct ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap<String, Kind>,
@@ -2565,8 +2578,6 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
 
 // Precondition: Views are inlined in every function definition.
 fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) -> desc::FunDef {
-    use crate::ast::visit;
-    use crate::ast::visit::Visit;
     use desc::*;
 
     struct InlineParForFuns<'a> {

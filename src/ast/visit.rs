@@ -102,6 +102,7 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         DataTy::Ident(ident) => visitor.visit_ident(ident),
         DataTy::Scalar(sty) => visitor.visit_scalar_ty(sty),
         DataTy::Atomic(aty) => visitor.visit_scalar_ty(aty),
+        DataTy::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         DataTy::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTy::Array(dty, n) => {
             visitor.visit_dty(dty);
@@ -131,7 +132,6 @@ pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
     match &ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
         TyKind::TupleView(elem_tys) => walk_list!(visitor, visit_ty, elem_tys),
-        TyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         TyKind::Fn(gen_params, params, exec, ret_ty) => {
             walk_list!(visitor, visit_ident_kinded, gen_params);
             walk_list!(visitor, visit_ty, params);
@@ -159,6 +159,7 @@ pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
         ArgKinded::Nat(n) => visitor.visit_nat(n),
         ArgKinded::Memory(mem) => visitor.visit_mem(mem),
         ArgKinded::Ty(ty) => visitor.visit_ty(ty),
+        ArgKinded::DataTy(dty) => visitor.visit_dty(dty),
         ArgKinded::Provenance(prv) => visitor.visit_prv(prv),
     }
 }
@@ -290,7 +291,9 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
 pub fn walk_param_decl<V: Visit>(visitor: &mut V, param_decl: &ParamDecl) {
     let ParamDecl { ident, ty, mutbl } = param_decl;
     visitor.visit_ident(ident);
-    visitor.visit_ty(ty);
+    if let Some(tty) = ty {
+        visitor.visit_ty(tty);
+    }
     visitor.visit_mutability(mutbl)
 }
 

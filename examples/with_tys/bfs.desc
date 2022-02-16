@@ -1,0 +1,132 @@
+fn prepare_iteration<i: prv, a8: prv>(
+    change3: &i uniq gpu.global (bool, bool, bool, i32),
+    stop3: &a8 uniq gpu.global bool
+) -[gpu.thread]-> () <'a9, 'b5>{
+    // let mut c = *change3;
+    if (*change3).1 { // updating mask
+        (*change3).0 = true; // mask
+        (*change3).2 = true; // visited
+        atomic_set::<a8, gpu.global, bool>(stop3, true);
+        (*change3).1 = false //updating mask
+    } else {
+        ()
+    }
+}
+
+fn iteration<r1: prv, j: prv , k: prv>(
+    nod2: &r1 shrd gpu.global (i32, i32),
+    chgn2: &j uniq gpu.global (bool, bool, bool, i32), // mask, updating mask, visited, cost
+    ed2: &k shrd gpu.global [i32; m]
+) -[gpu.thread]-> () <'c1, 'c2, 'c3>{
+    // let mut change = *chgn2;
+    let nodes2 = *nod2;
+    if (*chgn2).0 {
+
+        (*chgn2).0 = false;
+        let node_start = nodes2.0;
+        let no_of_edges = nodes2.1;
+        let upper_range = node_start+no_of_edges;
+        for i in node_start..upper_range <'c3>{
+            let index = ed2[i];
+
+            let change_ptr = to_raw_ptr::<'c3, gpu.global, (bool, bool, bool, i32)>(&'c3 uniq *chgn2);
+            let ch_ptr_i = offset_raw_ptr::<(bool, bool, bool, i32)>(change_ptr, index);
+            // let mut child = *ch_ptr_i;
+
+            let was_visited = (*ch_ptr_i).2;
+            if (was_visited == false) {
+                // atomic_set::<'c3 , gpu.global, i32>( &'c3 uniq (*ch_ptr_i).3 ,(*chgn2).3 + 1);
+                (*ch_ptr_i).3 = (*chgn2).3 + 1; // cost
+                (*ch_ptr_i).1 = true // updating mask
+            } else {
+                ()
+            }
+        }
+    } else {
+        ()
+    }
+}
+
+fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
+    h_nodes: &a shrd cpu.heap [(i32, i32); n],
+    h_edges: &b shrd cpu.heap [i32; m],
+    h_changes: &k uniq cpu.heap [(bool, bool, bool, i32); n],
+    h_stop: &a1 uniq cpu.heap bool
+) -[cpu.thread]-> () <'c, 'd, 'e, 'f, 'g, 'h, 'a2, 'a3, 'a4>{
+    let mut gpu: Gpu = gpu_device(0);
+    let mut stop: bool @ gpu.global =
+        gpu_alloc::<'a2, 'a3, cpu.stack, cpu.heap, bool>(&'a2 uniq gpu, &'a3 shrd *h_stop);
+    let nodes: [(i32, i32); n] @ gpu.global =
+        gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [(i32, i32); n]>(&'c uniq gpu, &'d shrd *h_nodes);
+    let edges: [i32; m] @ gpu.global =
+        gpu_alloc::<'e, 'f, cpu.stack, cpu.heap, [i32; m]>(&'e uniq gpu, &'f shrd *h_edges);
+    let mut d_changes: [(bool, bool, bool, i32); n] @ gpu.global =
+        gpu_alloc::<'g, 'h, cpu.stack, cpu.heap, [(bool, bool, bool, i32); n]>(&'g uniq gpu, &'h shrd *h_changes);
+    // let stop_t = load_atomic_host::<'a4, cpu.heap>(&'a4 shrd *h_stop);
+    while *h_stop <'r1, 'i, 'o, 'p, 't, 'q, 'j, 'k, 'v, 'm, 'n, 'o, 'u, 'x, 'a5, 'a6, 'a7, 'a8>{ // *h_stop
+        *h_stop = false;
+        // store_atomic_host::<'a5, cpu.heap>(&'a5 shrd *h_stop, 0);
+        copy_to_gpu::<'a6, 'a7, bool>(&'a6 uniq stop, &'a7 shrd *h_stop);
+
+        let nodes_view: &'r1 shrd gpu.global [[(i32, i32); n]] =
+            to_view::<'r1, gpu.global, n, (i32, i32)>(&'r1 shrd nodes);
+
+        let view_changes: &'i uniq gpu.global [[(bool, bool, bool, i32); n]] =
+            to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
+
+        let grouped_nodes = group::<16, 'r1, gpu.global, n, (i32,i32)>(nodes_view);
+        let grouped_changes = group_mut::<16, 'i, gpu.global, n, (bool, bool, bool, i32)>(view_changes);
+
+        //kernel 1
+        exec::<4, 16, 'j, cpu.stack,
+                <&'r1 shrd gpu.global [[[[(i32, i32); 16]]; 4]],
+                &'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]],
+                &'k shrd gpu.global [i32; m]>>(
+            &'j uniq gpu,
+            <grouped_nodes, grouped_changes, &'k shrd edges>,
+            | grid: BlockGrp<4, ThreadGrp<16>>,  //  Grid<Block<Thread, 16>, 4>,
+              input: <&'r1 shrd gpu.global [[[[(i32, i32); 16]]; 4]],
+                      &'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]],
+                      &'k shrd gpu.global [i32; m]>
+            | -[gpu.grid]-> () {
+
+                let nod_view = input.0;
+                let chgn_view = input.1;
+                let edg = input.2;
+
+                  for block in grid with nod, chgn from nod_view, chgn_view do {
+                    for block with nod2, chgn2 from nod, chgn do {
+                        iteration::< 'r1, 'i, 'k >(nod2, chgn2, edg)
+                    }
+                  }
+            }
+        );
+
+        let view_changes2: &'i uniq gpu.global [[(bool, bool, bool, i32); n]] =
+            to_view_mut::<'i, gpu.global, n, (bool, bool, bool, i32)>(&'i uniq d_changes);
+
+        let grouped_changes2 = group_mut::<16, 'i, gpu.global, n, (bool, bool, bool, i32)>(view_changes2);
+
+        // kernel 2
+        exec::<4, 16, 'j, cpu.stack,
+               <&'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]],
+                &'a8 uniq gpu.global bool>>(
+            &'j uniq gpu,
+            <grouped_changes2, &'a8 uniq stop>,
+            | grid:  BlockGrp<4, ThreadGrp<16>>,
+              input2: <&'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]], &'a8 uniq gpu.global bool>
+            | -[gpu.grid]-> () {
+                    let changes = input2.0;
+                    // FIXME using stop_temp in parallel cannot work, because the reference is uniq
+                    //  instead use atomics
+                    let stop_temp = input2.1;
+                    for block in grid with change2, stop2 from changes, stop_temp do {
+                        for block with change3, stop3 from change2, stop2
+                        do { prepare_iteration::<'i, 'a8>(change2, stop2) }
+                    }
+                }
+            );
+        // copy_to_host::<'u, 'x, cpu.heap, bool>(&'u shrd d_stop,&'x uniq *h_stop);
+        copy_to_host::<'u, 'x, cpu.heap, bool>(&'u shrd stop, &'x uniq *h_stop)
+    }
+}

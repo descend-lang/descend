@@ -182,28 +182,32 @@ fn split_thread_grp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat, n1_nat, n2_nat, n3_nat],
-        vec![Ty::new(TyKind::ThreadHierchy(Box::new(
+        vec![Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
             ThreadHierchyTy::ThreadGrp(
                 Nat::Ident(n1.clone()),
                 Nat::Ident(n2.clone()),
                 Nat::Ident(n3.clone()),
             ),
-        )))],
+        ))))],
         Exec::View,
         Box::new(Ty::new(TyKind::TupleView(vec![
-            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
-                Nat::Ident(k.clone()),
-                Nat::Ident(n2.clone()),
-                Nat::Ident(n3.clone()),
-            )))),
-            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
-                Nat::BinOp(
-                    BinOpNat::Sub,
-                    Box::new(Nat::Ident(n1)),
-                    Box::new(Nat::Ident(k)),
+            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
+                ThreadHierchyTy::ThreadGrp(
+                    Nat::Ident(k.clone()),
+                    Nat::Ident(n2.clone()),
+                    Nat::Ident(n3.clone()),
                 ),
-                Nat::Ident(n2.clone()),
-                Nat::Ident(n3.clone()),
+            )))),
+            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
+                ThreadHierchyTy::ThreadGrp(
+                    Nat::BinOp(
+                        BinOpNat::Sub,
+                        Box::new(Nat::Ident(n1)),
+                        Box::new(Nat::Ident(k)),
+                    ),
+                    Nat::Ident(n2.clone()),
+                    Nat::Ident(n3.clone()),
+                ),
             )))),
         ]))),
     ))
@@ -217,24 +221,24 @@ fn split_warp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat],
-        vec![Ty::new(TyKind::ThreadHierchy(Box::new(
+        vec![Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
             ThreadHierchyTy::Warp,
-        )))],
+        ))))],
         Exec::View,
         Box::new(Ty::new(TyKind::TupleView(vec![
-            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
-                Nat::Ident(k.clone()),
-                Nat::Lit(1),
-                Nat::Lit(1),
+            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
+                ThreadHierchyTy::ThreadGrp(Nat::Ident(k.clone()), Nat::Lit(1), Nat::Lit(1)),
             )))),
-            Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
-                Nat::BinOp(
-                    BinOpNat::Sub,
-                    Box::new(Nat::Lit(32)),
-                    Box::new(Nat::Ident(k)),
+            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
+                ThreadHierchyTy::ThreadGrp(
+                    Nat::BinOp(
+                        BinOpNat::Sub,
+                        Box::new(Nat::Lit(32)),
+                        Box::new(Nat::Ident(k)),
+                    ),
+                    Nat::Lit(1),
+                    Nat::Lit(1),
                 ),
-                Nat::Lit(1),
-                Nat::Lit(1),
             )))),
         ]))),
     ))
@@ -357,7 +361,7 @@ fn store_atomic_host_ty() -> Ty {
 }
 
 // gpu_alloc:
-//   <r1: prv, r2: prv, m1: mem, m2: mem, t: ty>(
+//   <r1: prv, r2: prv, m1: mem, m2: mem, d: dty>(
 //      &r1 uniq m1 Gpu, &r2 shrd m2 t
 //   ) -[cpu.thread]-> t @ gpu.global
 fn gpu_alloc_ty() -> Ty {
@@ -365,7 +369,7 @@ fn gpu_alloc_ty() -> Ty {
     let r2 = Ident::new("r2");
     let m1 = Ident::new("m1");
     let m2 = Ident::new("m2");
-    let t = Ident::new("t");
+    let d = Ident::new("d");
     let r1_prv = IdentKinded {
         ident: r1.clone(),
         kind: Kind::Provenance,
@@ -382,12 +386,12 @@ fn gpu_alloc_ty() -> Ty {
         ident: m2.clone(),
         kind: Kind::Memory,
     };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![r1_prv, r2_prv, m1_mem, m2_mem, t_ty],
+        vec![r1_prv, r2_prv, m1_mem, m2_mem, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r1),
@@ -399,25 +403,25 @@ fn gpu_alloc_ty() -> Ty {
                 Provenance::Ident(r2),
                 Ownership::Shrd,
                 Memory::Ident(m2),
-                Box::new(DataTy::Ident(t.clone())),
+                Box::new(DataTy::Ident(d.clone())),
             ))),
         ],
         Exec::CpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::At(
-            Box::new(DataTy::Ident(t)),
+            Box::new(DataTy::Ident(d)),
             Memory::GpuGlobal,
         )))),
     ))
 }
 
 // copy_to_host:
-//   <r1: prv, r2: prv, m: mem, t: ty>(&r1 shrd gpu.global ty, &r2 uniq m ty)
+//   <r1: prv, r2: prv, m: mem, d: dty>(&r1 shrd gpu.global d, &r2 uniq m d)
 //      -[cpu.thread]-> ()
 fn copy_to_host_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
     let m = Ident::new("m");
-    let t = Ident::new("t");
+    let d = Ident::new("d");
     let r1_prv = IdentKinded {
         ident: r1.clone(),
         kind: Kind::Provenance,
@@ -430,24 +434,24 @@ fn copy_to_host_ty() -> Ty {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![r1_prv, r2_prv, m_mem, t_ty],
+        vec![r1_prv, r2_prv, m_mem, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r1),
                 Ownership::Shrd,
                 Memory::GpuGlobal,
-                Box::new(DataTy::Ident(t.clone())),
+                Box::new(DataTy::Ident(d.clone())),
             ))),
             Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r2),
                 Ownership::Uniq,
                 Memory::Ident(m),
-                Box::new(DataTy::Ident(t)),
+                Box::new(DataTy::Ident(d)),
             ))),
         ],
         Exec::CpuThread,
@@ -456,12 +460,12 @@ fn copy_to_host_ty() -> Ty {
 }
 
 // copy_to_gpu:
-//  <r1: prv, r2: prv, t: ty>(& r1 uniq gpu.global t,
-//      & r2 shrd cpu.heap t) -[cpu.thread]-> ()
+//  <r1: prv, r2: prv, d: dty>(& r1 uniq gpu.global d,
+//      & r2 shrd cpu.heap d) -[cpu.thread]-> ()
 fn copy_to_gpu_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
-    let t = Ident::new("t");
+    let d = Ident::new("d");
     let r1_prv = IdentKinded {
         ident: r1.clone(),
         kind: Kind::Provenance,
@@ -470,24 +474,24 @@ fn copy_to_gpu_ty() -> Ty {
         ident: r2.clone(),
         kind: Kind::Provenance,
     };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![r1_prv, r2_prv, t_ty],
+        vec![r1_prv, r2_prv, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r1),
                 Ownership::Uniq,
                 Memory::GpuGlobal,
-                Box::new(DataTy::Ident(t.clone())),
+                Box::new(DataTy::Ident(d.clone())),
             ))),
             Ty::new(TyKind::Data(DataTy::Ref(
                 Provenance::Ident(r2),
                 Ownership::Shrd,
                 Memory::CpuHeap,
-                Box::new(DataTy::Ident(t)),
+                Box::new(DataTy::Ident(d)),
             ))),
         ],
         Exec::CpuThread,
@@ -546,13 +550,15 @@ fn exec_ty() -> Ty {
                     //     ))),
                     //     Nat::Ident(blocks),
                     // )),
-                    Ty::new(TyKind::ThreadHierchy(Box::new(ThreadHierchyTy::BlockGrp(
-                        Nat::Ident(blocks),
-                        Nat::Lit(1),
-                        Nat::Lit(1),
-                        Nat::Ident(threads),
-                        Nat::Lit(1),
-                        Nat::Lit(1),
+                    Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
+                        ThreadHierchyTy::BlockGrp(
+                            Nat::Ident(blocks),
+                            Nat::Lit(1),
+                            Nat::Lit(1),
+                            Nat::Ident(threads),
+                            Nat::Lit(1),
+                            Nat::Lit(1),
+                        ),
                     )))),
                     Ty::new(TyKind::Ident(t)),
                 ],
@@ -587,14 +593,14 @@ fn shared_alloc_ty() -> Ty {
 // TODO FIX Error: t: ty is too general this means it could contain functions
 //  (which is not well-kinded).
 // to_view:
-//  <r: prv, m: mem, n: nat, t: dty>(&r shrd m [t; n]) -[view]-> &r shrd m [[t; n]]
+//  <r: prv, m: mem, n: nat, d: dty>(&r shrd m [d; n]) -[view]-> &r shrd m [[d; n]]
 // to_view_mut:
-//  <r: prv, m: mem, n: nat, t: ty>(&r uniq m [t; n]) -[view]-> &r uniq m [[t; n]]
+//  <r: prv, m: mem, n: nat, d: dty>(&r uniq m [d; n]) -[view]-> &r uniq m [[d; n]]
 fn to_view_ty(own: Ownership) -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let n = Ident::new("n");
-    let t = Ident::new("t");
+    let d = Ident::new("d");
     let r_prv = IdentKinded {
         ident: r.clone(),
         kind: Kind::Provenance,
@@ -607,18 +613,18 @@ fn to_view_ty(own: Ownership) -> Ty {
         ident: n.clone(),
         kind: Kind::Nat,
     };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![r_prv, m_mem, n_nat, t_ty],
+        vec![r_prv, m_mem, n_nat, d_dty],
         vec![Ty::new(TyKind::Data(DataTy::Ref(
             Provenance::Ident(r.clone()),
             own,
             Memory::Ident(m.clone()),
             Box::new(DataTy::Array(
-                Box::new(DataTy::Ident(t.clone())),
+                Box::new(DataTy::Ident(d.clone())),
                 Nat::Ident(n.clone()),
             )),
         )))],
@@ -628,7 +634,7 @@ fn to_view_ty(own: Ownership) -> Ty {
             own,
             Memory::Ident(m),
             Box::new(DataTy::ArrayShape(
-                Box::new(DataTy::Ident(t)),
+                Box::new(DataTy::Ident(d)),
                 Nat::Ident(n),
             )),
         )))),
@@ -636,13 +642,13 @@ fn to_view_ty(own: Ownership) -> Ty {
 }
 
 // group/group_mut:
-//  <size: nat, r: prv, m: mem, n: nat, t: ty>(&r W m [[t; n]]) -> &r W m [[ [[t; size]]; n/size ]]
+//  <size: nat, r: prv, m: mem, n: nat, d: dty>(&r W m [[d; n]]) -> &r W m [[ [[d; size]]; n/size ]]
 fn group_ty(own: Ownership) -> Ty {
     let s = Ident::new("s");
     let r = Ident::new("r");
     let m = Ident::new("m");
     let n = Ident::new("n");
-    let t = Ident::new("t");
+    let d = Ident::new("d");
     let s_nat = IdentKinded {
         ident: s.clone(),
         kind: Kind::Nat,
@@ -659,18 +665,18 @@ fn group_ty(own: Ownership) -> Ty {
         ident: n.clone(),
         kind: Kind::Nat,
     };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d_ty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![s_nat, r_prv, m_mem, n_nat, t_ty],
+        vec![s_nat, r_prv, m_mem, n_nat, d_ty],
         vec![Ty::new(TyKind::Data(DataTy::Ref(
             Provenance::Ident(r.clone()),
             own,
             Memory::Ident(m.clone()),
             Box::new(DataTy::ArrayShape(
-                Box::new(DataTy::Ident(t.clone())),
+                Box::new(DataTy::Ident(d.clone())),
                 Nat::Ident(n.clone()),
             )),
         )))],
@@ -681,7 +687,7 @@ fn group_ty(own: Ownership) -> Ty {
             Memory::Ident(m),
             Box::new(DataTy::ArrayShape(
                 Box::new(DataTy::ArrayShape(
-                    Box::new(DataTy::Ident(t)),
+                    Box::new(DataTy::Ident(d)),
                     Nat::Ident(s.clone()),
                 )),
                 Nat::BinOp(

@@ -41,7 +41,7 @@ impl FunDef {
         let param_tys: Vec<_> = self
             .param_decls
             .iter()
-            .map(|p_decl| p_decl.ty.clone())
+            .map(|p_decl| p_decl.ty.as_ref().unwrap().clone())
             .collect();
         Ty::new(TyKind::Fn(
             self.generic_params.clone(),
@@ -55,7 +55,7 @@ impl FunDef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamDecl {
     pub ident: Ident,
-    pub ty: Ty,
+    pub ty: Option<Ty>,
     pub mutbl: Mutability,
 }
 
@@ -489,6 +489,7 @@ pub enum ArgKinded {
     Nat(Nat),
     Memory(Memory),
     Ty(Ty),
+    DataTy(DataTy),
     Provenance(Provenance),
 }
 
@@ -612,6 +613,7 @@ impl fmt::Display for PlaceExpr {
 #[derive(Debug, Clone)]
 pub struct Ty {
     pub ty: TyKind,
+    pub constraints: Vec<Constraint>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
@@ -620,20 +622,31 @@ pub struct Ty {
 pub enum TyKind {
     Data(DataTy),
     TupleView(Vec<Ty>),
-    ThreadHierchy(Box<ThreadHierchyTy>),
     Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
     Ident(Ident),
     Dead(Box<Ty>),
 }
 
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub enum Constraint {
+    Copyable,
+    NonCopyable,
+    Dead,
+}
+
 impl Ty {
     pub fn new(ty: TyKind) -> Self {
-        Ty { ty, span: None }
+        Ty {
+            ty,
+            constraints: vec![],
+            span: None,
+        }
     }
 
     pub fn with_span(ty: TyKind, span: Span) -> Ty {
         Ty {
             ty,
+            constraints: vec![],
             span: Some(span),
         }
     }
@@ -653,7 +666,6 @@ impl Ty {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
             TyKind::TupleView(elem_tys) => elem_tys.iter().all(|ty| ty.copyable()),
-            TyKind::ThreadHierchy(_) => true,
             TyKind::Fn(_, _, _, _) => true,
             TyKind::Ident(_) => false,
             TyKind::Dead(_) => panic!(
@@ -667,7 +679,7 @@ impl Ty {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
             TyKind::TupleView(elem_tys) => elem_tys.iter().all(|ty| ty.is_fully_alive()),
-            TyKind::ThreadHierchy(_) | TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
+            TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
             TyKind::Dead(_) => false,
         }
     }
@@ -684,13 +696,13 @@ impl Ty {
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
                     || ret_ty.contains_ref_to_prv(prv_val_name)
             }
-            TyKind::ThreadHierchy(_) | TyKind::Ident(_) | TyKind::Dead(_) => false,
+            TyKind::Ident(_) | TyKind::Dead(_) => false,
         }
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match &self.ty {
-            // FIXME mutate and do not create a new type (also this drops the span).
+            // TODO mutate and do not create a new type (also this drops the span).
             TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
             TyKind::TupleView(elem_tys) => Ty::new(TyKind::TupleView(
                 elem_tys
@@ -698,9 +710,6 @@ impl Ty {
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
             )),
-            TyKind::ThreadHierchy(th_hy) => Ty::new(TyKind::ThreadHierchy(Box::new(
-                th_hy.subst_ident_kinded(ident_kinded, with),
-            ))),
             TyKind::Fn(gen_params, params, exec, ret) => Ty::new(TyKind::Fn(
                 gen_params.clone(),
                 params
@@ -786,6 +795,7 @@ pub enum DataTy {
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
+    ThreadHierchy(Box<ThreadHierchyTy>),
     RawPtr(Box<DataTy>),
     Range,
     // Only for type checking purposes.
@@ -802,6 +812,7 @@ impl DataTy {
             Ident(_) => true,
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
+            ThreadHierchy(_) => false,
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
@@ -828,6 +839,7 @@ impl DataTy {
             | Atomic(_)
             | Ident(_)
             | Ref(_, _, _, _)
+            | ThreadHierchy(_)
             | At(_, _)
             | Array(_, _)
             | ArrayShape(_, _) => true,
@@ -843,7 +855,9 @@ impl DataTy {
             return true;
         }
         match dty {
-            DataTy::Scalar(_) | DataTy::Ident(_) | DataTy::Range => false,
+            DataTy::Scalar(_) | DataTy::Ident(_) | DataTy::ThreadHierchy(_) | DataTy::Range => {
+                false
+            }
             DataTy::Dead(_) => panic!("unexpected"),
             DataTy::Atomic(sty) => self == &DataTy::Scalar(sty.clone()),
             DataTy::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
@@ -864,7 +878,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTy::*;
         match self {
-            Scalar(_) | Atomic(_) | Ident(_) | Range | Dead(_) => false,
+            Scalar(_) | Atomic(_) | Ident(_) | Range | ThreadHierchy(_) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -888,13 +902,10 @@ impl DataTy {
         match self {
             Scalar(_) | Atomic(_) | Range => self.clone(),
             Ident(id) => {
-                if &ident_kinded.ident == id && ident_kinded.kind == Kind::Ty {
+                if &ident_kinded.ident == id && ident_kinded.kind == Kind::DataTy {
                     match with {
                         ArgKinded::Ident(idk) => Ident(idk.clone()),
-                        ArgKinded::Ty(Ty {
-                            ty: TyKind::Data(dty),
-                            ..
-                        }) => dty.clone(),
+                        ArgKinded::DataTy(dty) => dty.clone(),
                         _ => {
                             panic!("Trying to substitute data type identifier with non-type value.")
                         }
@@ -903,11 +914,14 @@ impl DataTy {
                     self.clone()
                 }
             }
-            Ref(prv, own, mem, ty) => Ref(
+            ThreadHierchy(th_hy) => {
+                ThreadHierchy(Box::new(th_hy.subst_ident_kinded(ident_kinded, with)))
+            }
+            Ref(prv, own, mem, dty) => Ref(
                 prv.subst_ident_kinded(ident_kinded, with),
                 *own,
                 mem.subst_ident_kinded(ident_kinded, with),
-                Box::new(ty.subst_ident_kinded(ident_kinded, with)),
+                Box::new(dty.subst_ident_kinded(ident_kinded, with)),
             ),
             RawPtr(dty) => RawPtr(Box::new(dty.subst_ident_kinded(ident_kinded, with))),
             At(dty, mem) => At(
@@ -1124,7 +1138,7 @@ impl PartialEq for Nat {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Nat::Lit(l), Nat::Lit(o)) => l == o,
-            (Nat::Ident(i), Nat::Ident(o)) => i == o,
+            (Nat::Ident(i), Nat::Ident(o)) if i == o => true,
             (Nat::BinOp(op, lhs, rhs), Nat::BinOp(oop, olhs, orhs))
                 if op == oop && lhs == olhs && rhs == orhs =>
             {
@@ -1144,7 +1158,6 @@ impl PartialEq for Nat {
     }
 }
 
-use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use std::cmp::Ordering;
 

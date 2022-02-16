@@ -78,28 +78,33 @@ impl TyChecker {
                 .iter()
                 .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
                     ident: ident.clone(),
-                    ty: ty.clone(),
+                    ty: ty.as_ref().unwrap().clone(),
                     mutbl: *mutbl,
                 })
                 .collect(),
         );
         let ty_ctx = TyCtx::from(glf_frame);
 
-        self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
+        let mut body_ctx = self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
 
         // t <= t_f
-        let empty_ty_ctx = subty::check(
-            &kind_ctx,
-            TyCtx::new(),
-            gf.body_expr.ty.as_ref().unwrap().dty(),
-            &gf.ret_dty,
+        self.term_constr.constrain(
+            &mut body_ctx,
+            gf.body_expr.ty.as_ref().unwrap(),
+            &Ty::new(TyKind::Data(gf.ret_dty.clone())),
         )?;
+        // let empty_ty_ctx = subty::check(
+        //     &kind_ctx,
+        //     TyCtx::new(),
+        //     gf.body_expr.ty.as_ref().unwrap().dty(),
+        //     &gf.ret_dty,
+        // )?;
         //TODO why is this the case?
-        assert!(
-            empty_ty_ctx.is_empty(),
-            "Expected typing context to be empty. But TyCtx:\n {:?}",
-            empty_ty_ctx
-        );
+        // assert!(
+        //     empty_ty_ctx.is_empty(),
+        //     "Expected typing context to be empty. But TyCtx:\n {:?}",
+        //     empty_ty_ctx
+        // );
         Ok(())
     }
 
@@ -215,9 +220,10 @@ impl TyChecker {
             ),
         };
 
-        if let Err(err) = self.ty_well_formed(kind_ctx, &res_ty_ctx, exec, &ty) {
-            panic!("{:?}", err);
-        }
+        // TODO reintroduce!!!!
+        //if let Err(err) = self.ty_well_formed(kind_ctx, &res_ty_ctx, exec, &ty) {
+        //    panic!("{:?}", err);
+        //}
         expr.ty = Some(ty);
         Ok(res_ty_ctx)
     }
@@ -556,7 +562,7 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         fn to_exec_and_size(parall_collec: &Expr) -> Exec {
             match &parall_collec.ty.as_ref().unwrap().ty {
-                TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
+                TyKind::Data(DataTy::ThreadHierchy(th_hy)) => match th_hy.as_ref() {
                     ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => Exec::GpuGrid,
                     ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
                     ThreadHierchyTy::WarpGrp(_) => Exec::GpuBlock,
@@ -672,7 +678,7 @@ impl TyChecker {
             return Ok(None);
         }
         let thread_hierchy_ty = match &parall_collec.ty.as_ref().unwrap().ty {
-            TyKind::ThreadHierchy(th_hy) => match th_hy.as_ref() {
+            TyKind::Data(DataTy::ThreadHierchy(th_hy)) => match th_hy.as_ref() {
                 ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
                     ThreadHierchyTy::ThreadGrp(m1.clone(), m2.clone(), m3.clone())
                 }
@@ -691,7 +697,9 @@ impl TyChecker {
         };
         Ok(Some(IdentTyped::new(
             parall_ident.as_ref().unwrap().clone(),
-            Ty::new(TyKind::ThreadHierchy(Box::new(thread_hierchy_ty))),
+            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
+                thread_hierchy_ty,
+            )))),
             Mutability::Const,
         )))
     }
@@ -700,7 +708,7 @@ impl TyChecker {
         if parall_ident_typed.is_none() {
             return Ok(Exec::GpuThread);
         }
-        let body_exec = if let TyKind::ThreadHierchy(th_hierchy) =
+        let body_exec = if let TyKind::Data(DataTy::ThreadHierchy(th_hierchy)) =
             &parall_ident_typed.as_ref().unwrap().ty.ty
         {
             match th_hierchy.as_ref() {
@@ -737,8 +745,11 @@ impl TyChecker {
                 .iter()
                 .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
                     ident: ident.clone(),
-                    ty: ty.clone(),
-                    mutbl: mutbl.clone(),
+                    ty: match ty {
+                        Some(tty) => tty.clone(),
+                        None => Ty::new(constrain::fresh_ident("param_ty", TyKind::Ident)),
+                    },
+                    mutbl: *mutbl,
                 })
                 .collect(),
         );
@@ -764,7 +775,10 @@ impl TyChecker {
 
         let fun_ty = Ty::new(TyKind::Fn(
             vec![],
-            params.iter().map(|decl| decl.ty.clone()).collect(),
+            params
+                .iter()
+                .map(|decl| decl.ty.as_ref().unwrap().clone())
+                .collect(),
             exec,
             Box::new(Ty::new(TyKind::Data(ret_dty.clone()))),
         ));
@@ -809,7 +823,7 @@ impl TyChecker {
         pl_expr: &PlaceExpr,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let mut assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let pl = pl_expr.to_place().unwrap();
         let place_ty = assigned_val_ty_ctx.place_ty(&pl)?;
         // FIXME this should be checked for ArrayViews as well
@@ -847,7 +861,7 @@ impl TyChecker {
         }
 
         self.term_constr
-            .constrain(&place_ty, e.ty.as_ref().unwrap())?;
+            .constrain(&mut assigned_val_ty_ctx, &place_ty, e.ty.as_ref().unwrap())?;
         // Context substitution?
         // TODO integrate into unification
         let after_subty_ctx = subty::check(
@@ -871,7 +885,7 @@ impl TyChecker {
         deref_expr: &mut PlaceExpr,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let mut assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         self.place_expr_ty_under_exec_own(
             kind_ctx,
             &assigned_val_ty_ctx,
@@ -901,14 +915,19 @@ impl TyChecker {
                 TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
             })?;
 
-            let after_subty_ctx = subty::check(
-                kind_ctx,
-                assigned_val_ty_ctx,
+            self.term_constr.constrain(
+                &mut assigned_val_ty_ctx,
                 e.ty.as_ref().unwrap().dty(),
                 deref_dty,
             )?;
+            // let after_subty_ctx = subty::check(
+            //     kind_ctx,
+            //     assigned_val_ty_ctx,
+            //     e.ty.as_ref().unwrap().dty(),
+            //     deref_dty,
+            // )?;
             Ok((
-                after_subty_ctx.without_reborrow_loans(deref_expr),
+                assigned_val_ty_ctx.without_reborrow_loans(deref_expr),
                 Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
             ))
         } else {
@@ -1167,8 +1186,9 @@ impl TyChecker {
         args: &mut [Expr],
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO check well-kinded: FrameTyping, Prv, Ty
-        let mut res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, ef)?;
-        if let TyKind::Fn(gen_params, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
+        let (mut res_ty_ctx, f_ty) = self.ty_check_dep_app(kind_ctx, ty_ctx, exec, ef, k_args)?;
+        ef.ty = Some(f_ty);
+        if let TyKind::Fn(_, _, exec_f, ret_ty_f) = &ef.ty.as_ref().unwrap().ty {
             if !exec_f.callable_in(exec) {
                 return Err(TyError::String(format!(
                     "Trying to apply function for execution resource `{}` \
@@ -1176,53 +1196,25 @@ impl TyChecker {
                     exec_f, exec
                 )));
             }
-            if gen_params.len() != k_args.len() {
-                return Err(TyError::String(format!(
-                    "Wrong amount of generic arguments. Expected {}, found {}",
-                    gen_params.len(),
-                    k_args.len()
-                )));
-            }
-            for (gp, kv) in gen_params.iter().zip(&*k_args) {
-                Self::check_arg_has_correct_kind(kind_ctx, &gp.kind, kv)?;
-            }
-            if args.len() != param_tys.len() {
-                return Err(TyError::String(format!(
-                    "Wrong amount of arguments. Expected {}, found {}",
-                    param_tys.len(),
-                    args.len()
-                )));
-            }
-            let subst_param_tys: Vec<_> = param_tys
-                .iter()
-                .map(|ty| {
-                    let mut subst_ty = ty.clone();
-                    for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
-                        subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
-                    }
-                    subst_ty
-                })
-                .collect();
-
-            for (arg, param_ty) in args.iter_mut().zip(subst_param_tys) {
+            for arg in args.iter_mut() {
                 res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, exec, arg)?;
-                if arg.ty.as_ref().unwrap() != &param_ty {
-                    return Err(TyError::String(format!(
-                        "Argument types do not match.\n Expected {:?}, but found {:?}.",
-                        param_ty,
-                        arg.ty.as_ref().unwrap()
-                    )));
-                }
             }
+            let ret_ty = Ty::new(constrain::fresh_ident("ret_ty", TyKind::Ident));
+            self.term_constr.constrain(
+                &mut res_ty_ctx,
+                ef.ty.as_ref().unwrap(),
+                &Ty::new(TyKind::Fn(
+                    vec![],
+                    args.iter()
+                        .map(|arg| arg.ty.as_ref().unwrap().clone())
+                        .collect(),
+                    *exec_f,
+                    Box::new(ret_ty.clone()),
+                )),
+            )?;
+
             // TODO check provenance relations
-            let subst_out_ty = {
-                let mut subst_ty = out_ty.as_ref().clone();
-                for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
-                    subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
-                }
-                subst_ty
-            };
-            Ok((res_ty_ctx, subst_out_ty))
+            Ok((res_ty_ctx, *ret_ty_f.clone()))
         } else {
             Err(TyError::String(format!(
                 "The provided function expression\n {:?}\n does not have a function type.",
@@ -1239,9 +1231,9 @@ impl TyChecker {
         ef: &mut Expr,
         k_args: &mut [ArgKinded],
     ) -> TyResult<(TyCtx, Ty)> {
-        let mut res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, ef)?;
+        let res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, ef)?;
         if let TyKind::Fn(gen_params, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
-            if gen_params.len() != k_args.len() {
+            if gen_params.len() < k_args.len() {
                 return Err(TyError::String(format!(
                     "Wrong amount of generic arguments. Expected {}, found {}",
                     gen_params.len(),
@@ -1253,34 +1245,34 @@ impl TyChecker {
             }
             let subst_param_tys: Vec<_> = param_tys
                 .iter()
-                .map(|ty| {
-                    let mut subst_ty = ty.clone();
-                    for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
-                        subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
-                    }
-                    subst_ty
-                })
+                .map(|ty| TyChecker::subst_ident_kinded(gen_params, k_args, ty))
                 .collect();
-            let subst_out_ty = {
-                let mut subst_ty = out_ty.as_ref().clone();
-                for (gen_param, k_arg) in gen_params.iter().zip(&*k_args) {
-                    subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
-                }
-                subst_ty
-            };
-            let subst_fun_ty = Ty::new(TyKind::Fn(
-                vec![],
-                subst_param_tys,
+            let subst_out_ty = TyChecker::subst_ident_kinded(gen_params, k_args, out_ty);
+            let mono_fun_ty = constrain::inst_fn_ty_scheme(
+                &gen_params[k_args.len()..],
+                &subst_param_tys,
                 *exec_f,
-                Box::new(subst_out_ty),
-            ));
-            Ok((res_ty_ctx, subst_fun_ty))
+                &subst_out_ty,
+            )?;
+            Ok((res_ty_ctx, mono_fun_ty))
         } else {
             Err(TyError::String(format!(
                 "The provided function expression\n {:?}\n does not have a function type.",
                 ef
             )))
         }
+    }
+
+    pub(super) fn subst_ident_kinded(
+        gen_params: &[IdentKinded],
+        k_args: &[ArgKinded],
+        ty: &Ty,
+    ) -> Ty {
+        let mut subst_ty = ty.clone();
+        for (gen_param, k_arg) in gen_params.iter().zip(k_args) {
+            subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
+        }
+        subst_ty
     }
 
     fn check_arg_has_correct_kind(
@@ -1293,6 +1285,7 @@ impl TyChecker {
             ArgKinded::Ty(_) if expected == &Kind::Ty => Ok(()),
             ArgKinded::Nat(_) if expected == &Kind::Nat => Ok(()),
             ArgKinded::Memory(_) if expected == &Kind::Memory => Ok(()),
+            ArgKinded::DataTy(_) if expected == &Kind::DataTy => Ok(()),
             // TODO?
             //  KindedArg::Frame(_) if expected == &Kind::Frame => Ok(()),
             ArgKinded::Ident(k_ident) if expected == kind_ctx.get_kind(k_ident)? => Ok(()),
@@ -1320,9 +1313,6 @@ impl TyChecker {
                 TyKind::Data(dty) => Ok(dty.clone()),
                 TyKind::TupleView(_) => Err(TyError::String(
                     "Tuple elements cannot be tuple views.".to_string(),
-                )),
-                TyKind::ThreadHierchy(_) => Err(TyError::String(
-                    "Tuple elements must be data types, but found thread hierarchy.".to_string(),
                 )),
                 TyKind::Ident(_) => Err(TyError::String(
                     "Tuple elements must be data types, but found general type identifier."
@@ -1457,33 +1447,36 @@ impl TyChecker {
         ty: &Option<Ty>,
         expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
+        let mut ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
         let e1_ty = expr.ty.as_ref().unwrap();
         let ty = if let Some(tty) = ty { tty } else { e1_ty };
 
-        let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
-            (TyKind::TupleView(_), TyKind::TupleView(_)) => {
-                // TODO use subtyping
-                if ty != e1_ty {
-                    return Err(TyError::String(format!(
-                        "Trying to bind view expression of type {:?} to identifier of type {:?}",
-                        e1_ty, ty
-                    )));
-                }
-                ty_ctx_e
-            }
-            (TyKind::Data(dty), TyKind::Data(e1_dty)) => {
-                subty::check(kind_ctx, ty_ctx_e, e1_dty, dty)?
-            }
-            _ => {
-                return Err(TyError::String(format!(
-                    "Trying to bind expression of type {:?} to identifier of type {:?}",
-                    e1_ty, ty
-                )))
-            }
-        };
+        // let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
+        //     (TyKind::TupleView(_), TyKind::TupleView(_)) => {
+        //         // TODO use subtyping
+        //         if ty != e1_ty {
+        //             return Err(TyError::String(format!(
+        //                 "Trying to bind view expression of type {:?} to identifier of type {:?}",
+        //                 e1_ty, ty
+        //             )));
+        //         }
+        //         ty_ctx_e
+        //     }
+        //     (TyKind::Data(dty), TyKind::Data(e1_dty)) => {
+        //         subty::check(kind_ctx, ty_ctx_e, e1_dty, dty)?
+        //     }
+        //     _ => {
+        //         return Err(TyError::String(format!(
+        //             "Trying to bind expression of type {:?} to identifier of type {:?}",
+        //             e1_ty, ty
+        //         )))
+        //     }
+        // };
+        self.term_constr.constrain(&mut ty_ctx_e, e1_ty, ty)?;
         let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone(), mutbl);
-        let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
+        // FIXME track context after subtyping
+        //let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
+        let ty_ctx_with_ident = ty_ctx_e.append_ident_typed(ident_with_annotated_ty);
         Ok((
             ty_ctx_with_ident,
             Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
@@ -1530,7 +1523,7 @@ impl TyChecker {
     }
 
     fn ty_check_pl_expr_with_deref(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1647,6 +1640,11 @@ impl TyChecker {
             TyKind::Data(DataTy::Dead(_)) | TyKind::Dead(_) => {
                 panic!("Cannot happen because of the alive check.")
             }
+            TyKind::Data(DataTy::ThreadHierchy(_)) => {
+                return Err(TyError::String(
+                    "Trying to borrow thread hierarchy.".to_string(),
+                ))
+            }
             TyKind::Data(DataTy::At(inner_ty, m)) => (inner_ty.deref().clone(), m.clone()),
             TyKind::Data(dty) => (
                 dty.clone(),
@@ -1664,11 +1662,6 @@ impl TyChecker {
             TyKind::TupleView(_) => {
                 return Err(TyError::String(
                     "Trying to borrow a tuple view.".to_string(),
-                ))
-            }
-            TyKind::ThreadHierchy(_) => {
-                return Err(TyError::String(
-                    "Trying to borrow thread hierarchy.".to_string(),
                 ))
             }
             TyKind::Fn(_, _, _, _) => {
@@ -1794,7 +1787,6 @@ impl TyChecker {
                 }
                 Ok((ty.clone(), vec![], vec![]))
             }
-            TyKind::ThreadHierchy(_) => Ok((ty.clone(), vec![], vec![])),
             TyKind::Fn(_, _, _, _) => {
                 if !ty.is_fully_alive() {
                     panic!("This should never happen.")
@@ -1963,8 +1955,10 @@ impl TyChecker {
                 | DataTy::RawPtr(_)
                 | DataTy::Dead(_) => {}
                 DataTy::Ident(ident) => {
-                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
-                        Err(CtxError::KindedIdentNotFound(ident.clone()))?
+                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty)
+                        && !matches!(ident.name.chars().next(), Some('$'))
+                    {
+                        return Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())));
                     }
                 }
                 DataTy::Ref(Provenance::Value(prv), own, mem, dty) => {
@@ -2018,6 +2012,8 @@ impl TyChecker {
                     }
                     self.ty_well_formed(kind_ctx, ty_ctx, exec, &elem_ty)?;
                 }
+                //FIXME check well-formedness of nats
+                DataTy::ThreadHierchy(th_hy) => {}
                 DataTy::Tuple(elem_dtys) => {
                     for elem_dty in elem_dtys {
                         self.ty_well_formed(
@@ -2073,7 +2069,6 @@ impl TyChecker {
                     Err(CtxError::KindedIdentNotFound(ident.clone()))?
                 }
             }
-            TyKind::ThreadHierchy(th_hierchy) => {} // TODO check well-formedness of Nats
             TyKind::TupleView(elem_tys) =>
             // TODO check well-formedness of Nats
             {

@@ -1,0 +1,30 @@
+fn inplace_vector_add<n: nat, a: prv, b: prv>(
+    // TODO global fun params into same frame as top level declaration in body
+    ha_array: &a uniq cpu.stack [i32; n],
+    hb_array: &b shrd cpu.stack [i32; n]
+) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h>{
+    let mut gpu = gpu_device(0);
+
+    let mut a_array = gpu_alloc(&'c uniq gpu, &'d shrd *ha_array);
+    let b_array = gpu_alloc(&'f uniq gpu, &'i shrd *hb_array);
+    let view_a = to_view_mut(&'r uniq a_array);
+    let view_b = to_view(&'s shrd b_array);
+    let grouped_a = group_mut::<1024>(view_a);
+    let grouped_b = group::<1024>(view_b);
+    exec::<64, 1024>(
+        &'h uniq gpu,
+        <grouped_a, grouped_b>,
+        | grid: BlockGrp<64, ThreadGrp<1024>>,
+          input: <&'r uniq gpu.global [[[[i32; 1024]]; 64]], &'s shrd gpu.global [[[[i32; 1024]]; 64]]>
+        | -[gpu.grid]-> () {
+            let in0 = input.0;
+            let in1 = input.1;
+            for block in grid with a_group, b_group from in0, in1 do {
+                for block with a, b from a_group, b_group do {
+                    *a = *a + *b
+                }
+            }
+        }
+    );
+    copy_to_host(&'g shrd a_array, ha_array)
+}

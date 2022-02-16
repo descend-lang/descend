@@ -6,7 +6,7 @@ extern crate descend;
 fn split_test() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/split_test.desc")?
+        descend::compile("examples/infer/split_test.desc")?
     ))
 }
 
@@ -14,7 +14,7 @@ fn split_test() -> Result<(), descend::error::ErrorReported> {
 fn scan() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/scan.desc")?
+        descend::compile("examples/infer/scan.desc")?
     ))
 }
 
@@ -22,7 +22,7 @@ fn scan() -> Result<(), descend::error::ErrorReported> {
 fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/shared_mem_red.desc")?
+        descend::compile("examples/infer/shared_mem_red.desc")?
     ))
 }
 
@@ -30,7 +30,7 @@ fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
 fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/tree_reduce_working.desc")?
+        descend::compile("examples/infer/tree_reduce_working.desc")?
     ))
 }
 
@@ -38,7 +38,7 @@ fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
 fn tree_reduce_sequencing_fail() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/tree_reduce.desc")?
+        descend::compile("examples/infer/tree_reduce.desc")?
     ))
 }
 
@@ -46,7 +46,7 @@ fn tree_reduce_sequencing_fail() -> Result<(), descend::error::ErrorReported> {
 fn vector_add() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/vec_add.desc")?
+        descend::compile("examples/infer/vec_add.desc")?
     ))
 }
 
@@ -55,23 +55,20 @@ fn vector_add() -> Result<(), descend::error::ErrorReported> {
 fn warp_reduce() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/warp_reduce.desc")?
+        descend::compile("examples/infer/warp_reduce.desc")?
     ))
 }
 
 #[ignore]
 #[test]
 fn bfs() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/with_tys/bfs.desc")?
-    ))
+    Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
 }
 
 #[test]
 fn computed_indexing() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/computed_indexing.desc")?
+        descend::compile("examples/infer/computed_indexing.desc")?
     ))
 }

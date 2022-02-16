@@ -5,7 +5,6 @@ mod ast;
 #[macro_use]
 mod codegen;
 pub mod error;
-mod nat;
 mod parser;
 mod ty_check;
 mod utils;
