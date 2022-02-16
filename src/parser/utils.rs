@@ -1,15 +1,15 @@
 //! Helper functions for parsing
 
-use crate::ast::{BinOp, BinOpNat, DataTy, Expr, ExprKind, Lit, Nat, ScalarTy, UnOp};
+use crate::ast::{BinOp, BinOpNat, DataTy, DataTyKind, Expr, ExprKind, Lit, Nat, ScalarTy, UnOp};
 
 pub fn type_from_lit(lit: &Lit) -> DataTy {
-    DataTy::Scalar(match lit {
+    DataTy::new(DataTyKind::Scalar(match lit {
         Lit::Bool(_) => ScalarTy::Bool,
         Lit::Unit => ScalarTy::Unit,
         Lit::I32(_) => ScalarTy::I32,
         Lit::U32(_) => ScalarTy::U32,
         Lit::F32(_) => ScalarTy::F32,
-    })
+    }))
 }
 
 pub fn make_binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {

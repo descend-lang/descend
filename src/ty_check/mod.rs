@@ -245,18 +245,27 @@ impl TyChecker {
 
         if !matches!(
             &l.ty.as_ref().unwrap().ty,
-            TyKind::Data(DataTy::Scalar(ScalarTy::I32))
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::I32),
+                ..
+            })
         ) {
             panic!("expected i32 for l in range")
         }
         if !matches!(
             &u.ty.as_ref().unwrap().ty,
-            TyKind::Data(DataTy::Scalar(ScalarTy::I32))
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::I32),
+                ..
+            })
         ) {
             panic!("expected i32 for u in range")
         }
 
-        Ok((ty_ctx_u, Ty::new(TyKind::Data(DataTy::Range))))
+        Ok((
+            ty_ctx_u,
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Range))),
+        ))
     }
 
     fn ty_check_split(
@@ -287,31 +296,40 @@ impl TyChecker {
         }
 
         self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, own, view)?;
-        let split_ty = if let TyKind::Data(DataTy::Ref(_, _, m, arr_view_ty)) =
-            &view.ty.as_ref().unwrap().ty
+        let split_ty = if let TyKind::Data(DataTy {
+            dty: DataTyKind::Ref(_, _, m, arr_view_ty),
+            ..
+        }) = &view.ty.as_ref().unwrap().ty
         {
-            if let DataTy::ArrayShape(elem_dty, n) = arr_view_ty.as_ref() {
+            if let DataTy {
+                dty: DataTyKind::ArrayShape(elem_dty, n),
+                ..
+            } = arr_view_ty.as_ref()
+            {
                 if s > n {
                     return Err(TyError::String(
                         "Trying to access array out-of-bounds.".to_string(),
                     ));
                 }
                 Ty::new(TyKind::TupleView(vec![
-                    Ty::new(TyKind::Data(DataTy::Ref(
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                         Provenance::Value(r1.to_string()),
                         own,
                         m.clone(),
-                        Box::new(DataTy::ArrayShape(elem_dty.clone(), s.clone())),
-                    ))),
-                    Ty::new(TyKind::Data(DataTy::Ref(
+                        Box::new(DataTy::new(DataTyKind::ArrayShape(
+                            elem_dty.clone(),
+                            s.clone(),
+                        ))),
+                    )))),
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                         Provenance::Value(r2.to_string()),
                         own,
                         m.clone(),
-                        Box::new(DataTy::ArrayShape(
+                        Box::new(DataTy::new(DataTyKind::ArrayShape(
                             elem_dty.clone(),
                             Nat::BinOp(BinOpNat::Sub, Box::new(n.clone()), Box::new(s.clone())),
-                        )),
-                    ))),
+                        ))),
+                    )))),
                 ]))
             } else {
                 return Err(TyError::UnexpectedType);
@@ -384,7 +402,9 @@ impl TyChecker {
         }
         Ok((
             ty_ctx,
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -400,13 +420,19 @@ impl TyChecker {
         let collec_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, collec)?;
         let ident_dty = match &collec.ty.as_ref().unwrap().ty {
             // TODO
-            TyKind::Data(DataTy::Array(elem_dty, n)) => unimplemented!(),
-            TyKind::Data(DataTy::Ref(prv, own, mem, arr_dty)) => match arr_dty.as_ref() {
-                DataTy::Array(elem_dty, _) => {
-                    DataTy::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Array(elem_dty, n),
+                ..
+            }) => unimplemented!(),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Ref(prv, own, mem, arr_dty),
+                ..
+            }) => match &arr_dty.as_ref().dty {
+                DataTyKind::Array(elem_dty, _) => {
+                    DataTyKind::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
                 }
-                DataTy::ArrayShape(elem_dty, _) => {
-                    DataTy::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
+                DataTyKind::ArrayShape(elem_dty, _) => {
+                    DataTyKind::Ref(prv.clone(), *own, mem.clone(), elem_dty.clone())
                 }
                 _ => {
                     return Err(TyError::String(format!(
@@ -415,7 +441,10 @@ impl TyChecker {
                     )))
                 }
             },
-            TyKind::Data(DataTy::Range) => DataTy::Scalar(ScalarTy::I32),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Range,
+                ..
+            }) => DataTyKind::Scalar(ScalarTy::I32),
             _ => {
                 return Err(TyError::String(format!(
                     "Expected array data type or reference to array data type, but found {:?}",
@@ -428,7 +457,7 @@ impl TyChecker {
                 .clone()
                 .append_frame(vec![internal::FrameEntry::Var(IdentTyped::new(
                     ident.clone(),
-                    Ty::new(TyKind::Data(ident_dty)),
+                    Ty::new(TyKind::Data(DataTy::new(ident_dty))),
                     Mutability::Const,
                 ))]);
         let iter_ty_ctx = self.ty_check_expr(kind_ctx, collec_ty_ctx_with_ident, exec, body)?;
@@ -440,7 +469,9 @@ impl TyChecker {
         }
         Ok((
             collec_ty_ctx,
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -479,13 +510,25 @@ impl TyChecker {
         let cond_ty = cond.ty.as_ref().unwrap();
         let body_ty = body.ty.as_ref().unwrap();
 
-        if !matches!(&cond_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Bool))) {
+        if !matches!(
+            &cond_ty.ty,
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Bool),
+                ..
+            })
+        ) {
             return Err(TyError::String(format!(
                 "Expected condition in while loop, instead got {:?}",
                 cond_ty
             )));
         }
-        if !matches!(&body_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Unit))) {
+        if !matches!(
+            &body_ty.ty,
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Unit),
+                ..
+            })
+        ) {
             return Err(TyError::String(format!(
                 "Body of while loop is not of unit type, instead got {:?}",
                 body_ty
@@ -493,7 +536,9 @@ impl TyChecker {
         }
         Ok((
             body_outer_ty_ctx,
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -516,7 +561,13 @@ impl TyChecker {
         let case_true_ty = case_true.ty.as_ref().unwrap();
         let case_false_ty = case_false.ty.as_ref().unwrap();
 
-        if !matches!(&cond_ty.ty, TyKind::Data(DataTy::Scalar(ScalarTy::Bool))) {
+        if !matches!(
+            &cond_ty.ty,
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Bool),
+                ..
+            })
+        ) {
             return Err(TyError::String(format!(
                 "Expected condition in if case, instead got {:?}",
                 cond_ty
@@ -524,7 +575,10 @@ impl TyChecker {
         }
         if !matches!(
             &case_true_ty.ty,
-            TyKind::Data(DataTy::Scalar(ScalarTy::Unit))
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Unit),
+                ..
+            })
         ) {
             return Err(TyError::String(format!(
                 "Body of the true case is not of unit type, instead got {:?}",
@@ -533,7 +587,10 @@ impl TyChecker {
         }
         if !matches!(
             &case_false_ty.ty,
-            TyKind::Data(DataTy::Scalar(ScalarTy::Unit))
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Unit),
+                ..
+            })
         ) {
             return Err(TyError::String(format!(
                 "Body of the false case is not of unit type, instead got {:?}",
@@ -543,7 +600,9 @@ impl TyChecker {
 
         Ok((
             case_false_ty_ctx,
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -562,7 +621,10 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         fn to_exec_and_size(parall_collec: &Expr) -> Exec {
             match &parall_collec.ty.as_ref().unwrap().ty {
-                TyKind::Data(DataTy::ThreadHierchy(th_hy)) => match th_hy.as_ref() {
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::ThreadHierchy(th_hy),
+                    ..
+                }) => match th_hy.as_ref() {
                     ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => Exec::GpuGrid,
                     ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
                     ThreadHierchyTy::WarpGrp(_) => Exec::GpuBlock,
@@ -585,7 +647,13 @@ impl TyChecker {
                 // If the declaration is for shared memory, assume that it is assigned a value
                 // automatically, therefore making the type non-dead.
                 if let ExprKind::LetUninit(ident, t) = &d.expr {
-                    if matches!(&t.ty, TyKind::Data(DataTy::At(_, Memory::GpuShared))) {
+                    if matches!(
+                        &t.ty,
+                        TyKind::Data(DataTy {
+                            dty: DataTyKind::At(_, Memory::GpuShared),
+                            ..
+                        })
+                    ) {
                         decl_ty_ctx = decl_ty_ctx.set_place_ty(
                             &internal::Place {
                                 ident: ident.clone(),
@@ -633,7 +701,9 @@ impl TyChecker {
 
         Ok((
             input_ty_ctx,
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -650,14 +720,22 @@ impl TyChecker {
         input_exprs
             .iter()
             .map(|e| {
-                if let TyKind::Data(DataTy::Ref(r, o, m, arr_view)) = &e.ty.as_ref().unwrap().ty {
-                    if let DataTy::ArrayShape(tty, n) = arr_view.as_ref() {
-                        Ok(Ty::new(TyKind::Data(DataTy::Ref(
+                if let TyKind::Data(DataTy {
+                    dty: DataTyKind::Ref(r, o, m, arr_view),
+                    ..
+                }) = &e.ty.as_ref().unwrap().ty
+                {
+                    if let DataTy {
+                        dty: DataTyKind::ArrayShape(tty, n),
+                        ..
+                    } = arr_view.as_ref()
+                    {
+                        Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                             r.clone(),
                             *o,
                             m.clone(),
                             tty.clone(),
-                        ))))
+                        )))))
                     } else {
                         Err(TyError::UnexpectedType)
                     }
@@ -678,7 +756,10 @@ impl TyChecker {
             return Ok(None);
         }
         let thread_hierchy_ty = match &parall_collec.ty.as_ref().unwrap().ty {
-            TyKind::Data(DataTy::ThreadHierchy(th_hy)) => match th_hy.as_ref() {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::ThreadHierchy(th_hy),
+                ..
+            }) => match th_hy.as_ref() {
                 ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
                     ThreadHierchyTy::ThreadGrp(m1.clone(), m2.clone(), m3.clone())
                 }
@@ -697,8 +778,8 @@ impl TyChecker {
         };
         Ok(Some(IdentTyped::new(
             parall_ident.as_ref().unwrap().clone(),
-            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-                thread_hierchy_ty,
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(thread_hierchy_ty),
             )))),
             Mutability::Const,
         )))
@@ -708,8 +789,10 @@ impl TyChecker {
         if parall_ident_typed.is_none() {
             return Ok(Exec::GpuThread);
         }
-        let body_exec = if let TyKind::Data(DataTy::ThreadHierchy(th_hierchy)) =
-            &parall_ident_typed.as_ref().unwrap().ty.ty
+        let body_exec = if let TyKind::Data(DataTy {
+            dty: DataTyKind::ThreadHierchy(th_hierchy),
+            ..
+        }) = &parall_ident_typed.as_ref().unwrap().ty.ty
         {
             match th_hierchy.as_ref() {
                 ThreadHierchyTy::WarpGrp(_) | ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
@@ -836,7 +919,13 @@ impl TyChecker {
         Self::check_mutable(&assigned_val_ty_ctx, &pl)?;
 
         // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
-        if !matches!(&place_ty.ty, TyKind::Data(DataTy::Dead(_))) {
+        if !matches!(
+            &place_ty.ty,
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Dead(_),
+                ..
+            })
+        ) {
             let pl_uniq_loans = borrow_check::ownership_safe(
                 self,
                 kind_ctx,
@@ -873,7 +962,9 @@ impl TyChecker {
         let adjust_place_ty_ctx = after_subty_ctx.set_place_ty(&pl, e.ty.as_ref().unwrap().clone());
         Ok((
             adjust_place_ty_ctx.without_reborrow_loans(pl_expr),
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -928,7 +1019,9 @@ impl TyChecker {
             // )?;
             Ok((
                 assigned_val_ty_ctx.without_reborrow_loans(deref_expr),
-                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::Unit,
+                )))),
             ))
         } else {
             Err(TyError::String(
@@ -962,9 +1055,19 @@ impl TyChecker {
             pl_expr,
         )?;
         let (n, own, mem, dty) = match &pl_expr.ty.as_ref().unwrap().ty {
-            TyKind::Data(DataTy::Array(elem_dty, n)) => unimplemented!(), //(Ty::Data(*elem_ty), n),
-            TyKind::Data(DataTy::At(arr_dty, mem)) => {
-                if let DataTy::Array(elem_dty, n) = arr_dty.as_ref() {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Array(elem_dty, n),
+                ..
+            }) => unimplemented!(), //(Ty::Data(*elem_ty), n),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::At(arr_dty, mem),
+                ..
+            }) => {
+                if let DataTy {
+                    dty: DataTyKind::Array(elem_dty, n),
+                    ..
+                } = arr_dty.as_ref()
+                {
                     unimplemented!() //(Ty::Data(*elem_ty), n)
                 } else {
                     return Err(TyError::String(
@@ -974,11 +1077,14 @@ impl TyChecker {
             }
             // FIXME is this allowed? There is no reborrow but this leaks the lifetime and does not
             //  consume the array view.
-            TyKind::Data(DataTy::Ref(prv, own, mem, arr_view)) => match arr_view.as_ref() {
-                DataTy::ArrayShape(sdty, n) if matches!(sdty.as_ref(), DataTy::Scalar(_)) => {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Ref(prv, own, mem, arr_view),
+                ..
+            }) => match &arr_view.dty {
+                DataTyKind::ArrayShape(sdty, n) if matches!(&sdty.dty, DataTyKind::Scalar(_)) => {
                     (n, own, mem, sdty.as_ref())
                 }
-                DataTy::ArrayShape(_, _) => return Err(TyError::AssignToView),
+                DataTyKind::ArrayShape(_, _) => return Err(TyError::AssignToView),
                 _ => {
                     return Err(TyError::String(
                         "Expected a reference to array view.".to_string(),
@@ -1034,7 +1140,9 @@ impl TyChecker {
 
         Ok((
             after_subty_ctx,
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -1053,27 +1161,39 @@ impl TyChecker {
             })?;
         self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
         let (elem_dty, n) = match pl_expr.ty.as_ref().unwrap().ty.clone() {
-            TyKind::Data(DataTy::Array(elem_dty, n)) => (*elem_dty, n),
-            TyKind::Data(DataTy::At(arr_dty, _)) => {
-                if let DataTy::Array(elem_ty, n) = *arr_dty {
-                    (*elem_ty, n)
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Array(elem_dty, n),
+                ..
+            }) => (*elem_dty, n),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::At(arr_dty, _),
+                ..
+            }) => {
+                if let DataTyKind::Array(elem_ty, n) = &arr_dty.dty {
+                    (elem_ty.as_ref().clone(), n.clone())
                 } else {
                     return Err(TyError::String(
                         "Trying to index into non array type.".to_string(),
                     ));
                 }
             }
-            TyKind::Data(DataTy::Ref(prv, own, mem, dty)) => {
-                match dty.as_ref() {
-                    DataTy::ArrayShape(sty, n) if matches!(sty.as_ref(), DataTy::Scalar(_)) => {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Ref(prv, own, mem, dty),
+                ..
+            }) => {
+                match &dty.dty {
+                    DataTyKind::ArrayShape(sty, n) if matches!(&sty.dty, DataTyKind::Scalar(_)) => {
                         (sty.as_ref().clone(), n.clone())
                     }
-                    DataTy::ArrayShape(view_ty, n) => {
+                    DataTyKind::ArrayShape(view_ty, n) => {
                         Self::accessible_memory(exec, &mem)?;
                         // TODO is ownership checking necessary here?
-                        (DataTy::Ref(prv, own, mem, view_ty.clone()), n.clone())
+                        (
+                            DataTy::new(DataTyKind::Ref(prv, own, mem, view_ty.clone())),
+                            n.clone(),
+                        )
                     }
-                    DataTy::Array(elem_ty, n) => (elem_ty.as_ref().clone(), n.clone()),
+                    DataTyKind::Array(elem_ty, n) => (elem_ty.as_ref().clone(), n.clone()),
                     _ => {
                         return Err(TyError::String(
                             "Expected a reference as element type of array view.".to_string(),
@@ -1130,23 +1250,27 @@ impl TyChecker {
             | BinOp::Mod
             | BinOp::And
             | BinOp::Or => lhs_ty.clone(),
-            BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Neq => {
-                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))
-            }
+            BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Neq => Ty::new(
+                TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::Bool))),
+            ),
         };
         match (&lhs_ty.ty, &rhs_ty.ty) {
-            (
-                TyKind::Data(DataTy::Scalar(ScalarTy::F32)),
-                TyKind::Data(DataTy::Scalar(ScalarTy::F32)),
-            )
-            | (
-                TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
-                TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
-            )
-            | (
-                TyKind::Data(DataTy::Scalar(ScalarTy::Bool)),
-                TyKind::Data(DataTy::Scalar(ScalarTy::Bool)),
-            ) => Ok((rhs_ty_ctx, ret)),
+            (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
+                (
+                    DataTyKind::Scalar(ScalarTy::F32),
+                    DataTyKind::Scalar(ScalarTy::F32),
+                ) |
+                (   DataTyKind::Scalar(ScalarTy::I32),
+                    DataTyKind::Scalar(ScalarTy::I32),
+                ) |
+                (    DataTyKind::Scalar(ScalarTy::Bool),
+                    DataTyKind::Scalar(ScalarTy::Bool),
+                ) => Ok((rhs_ty_ctx, ret)),
+                _ =>  Err(TyError::String(format!(
+                    "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                    bin_op, lhs, rhs
+                )))
+            }
             _ => Err(TyError::String(format!(
             "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
             bin_op, lhs, rhs
@@ -1166,8 +1290,14 @@ impl TyChecker {
         let res_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let e_ty = e.ty.as_ref().unwrap();
         match &e_ty.ty {
-            TyKind::Data(DataTy::Scalar(ScalarTy::F32))
-            | TyKind::Data(DataTy::Scalar(ScalarTy::I32)) => Ok((res_ctx, e_ty.clone())),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::F32),
+                ..
+            })
+            | TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::I32),
+                ..
+            }) => Ok((res_ctx, e_ty.clone())),
             _ => Err(TyError::String(format!(
                 "Exected a number type (i.e., f32 or i32), but found {:?}",
                 e_ty
@@ -1329,7 +1459,10 @@ impl TyChecker {
                 }
             })
             .collect();
-        Ok((tmp_ty_ctx, Ty::new(TyKind::Data(DataTy::Tuple(elem_tys?)))))
+        Ok((
+            tmp_ty_ctx,
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys?)))),
+        ))
     }
 
     fn ty_check_proj(
@@ -1346,7 +1479,10 @@ impl TyChecker {
 
         let tuple_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let elem_ty = match &e.ty.as_ref().unwrap().ty {
-            TyKind::Data(DataTy::Tuple(dtys)) => match dtys.get(i) {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Tuple(dtys),
+                ..
+            }) => match dtys.get(i) {
                 Some(dty) => Ty::new(TyKind::Data(dty.clone())),
                 None => {
                     return Err(TyError::String(format!(
@@ -1418,10 +1554,10 @@ impl TyChecker {
         } else {
             Ok((
                 ty_ctx,
-                Ty::new(TyKind::Data(DataTy::Array(
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Array(
                     Box::new(ty.as_ref().unwrap().dty().clone()),
                     Nat::Lit(elems.len()),
-                ))),
+                )))),
             ))
         }
     }
@@ -1434,7 +1570,10 @@ impl TyChecker {
             Lit::U32(_) => ScalarTy::U32,
             Lit::F32(_) => ScalarTy::F32,
         };
-        (ty_ctx, Ty::new(TyKind::Data(DataTy::Scalar(scalar_data))))
+        (
+            ty_ctx,
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(scalar_data)))),
+        )
     }
 
     fn ty_check_let(
@@ -1479,7 +1618,9 @@ impl TyChecker {
         let ty_ctx_with_ident = ty_ctx_e.append_ident_typed(ident_with_annotated_ty);
         Ok((
             ty_ctx_with_ident,
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
         ))
     }
 
@@ -1493,13 +1634,17 @@ impl TyChecker {
         if let TyKind::Data(dty) = &ty.ty {
             let ident_with_ty = IdentTyped::new(
                 ident.clone(),
-                Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty.clone())))),
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(Box::new(
+                    dty.clone(),
+                ))))),
                 Mutability::Mut,
             );
             let ty_ctx_with_ident = ty_ctx.append_ident_typed(ident_with_ty);
             Ok((
                 ty_ctx_with_ident,
-                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit))),
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::Unit,
+                )))),
             ))
         } else {
             Err(TyError::MutabilityNotAllowed(ty.clone()))
@@ -1637,15 +1782,25 @@ impl TyChecker {
             ));
         }
         let (reffed_ty, rmem) = match &pl_expr_ty.ty {
-            TyKind::Data(DataTy::Dead(_)) | TyKind::Dead(_) => {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Dead(_),
+                ..
+            })
+            | TyKind::Dead(_) => {
                 panic!("Cannot happen because of the alive check.")
             }
-            TyKind::Data(DataTy::ThreadHierchy(_)) => {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::ThreadHierchy(_),
+                ..
+            }) => {
                 return Err(TyError::String(
                     "Trying to borrow thread hierarchy.".to_string(),
                 ))
             }
-            TyKind::Data(DataTy::At(inner_ty, m)) => (inner_ty.deref().clone(), m.clone()),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::At(inner_ty, m),
+                ..
+            }) => (inner_ty.deref().clone(), m.clone()),
             TyKind::Data(dty) => (
                 dty.clone(),
                 if !mems.is_empty() {
@@ -1680,14 +1835,14 @@ impl TyChecker {
                 "Trying to take reference of unaddressable gpu.local memory.".to_string(),
             ));
         }
-        let res_ty = DataTy::Ref(
+        let res_dty = DataTy::new(DataTyKind::Ref(
             Provenance::Value(prv_val_name.to_string()),
             own,
             rmem,
             Box::new(reffed_ty),
-        );
+        ));
         let res_ty_ctx = ty_ctx.extend_loans_for_prv(prv_val_name, loans)?;
-        Ok((res_ty_ctx, Ty::new(TyKind::Data(res_ty))))
+        Ok((res_ty_ctx, Ty::new(TyKind::Data(res_dty))))
     }
 
     // Δ; Γ ⊢ω p:τ
@@ -1827,7 +1982,10 @@ impl TyChecker {
             kind_ctx, ty_ctx, exec, own, tuple_expr,
         )?;
         match &tuple_expr.ty.as_ref().unwrap().ty {
-            TyKind::Data(DataTy::Tuple(elem_dtys)) => {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Tuple(elem_dtys),
+                ..
+            }) => {
                 if let Some(ty) = elem_dtys.get(n) {
                     Ok((Ty::new(TyKind::Data(ty.clone())), mem, passed_prvs))
                 } else {
@@ -1878,8 +2036,10 @@ impl TyChecker {
     ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
         let (mut inner_mem, mut passed_prvs) = self
             .place_expr_ty_mem_passed_prvs_under_exec_own(kind_ctx, ty_ctx, exec, own, borr_expr)?;
-        if let TyKind::Data(DataTy::Ref(prv, ref_own, mem, dty)) =
-            &borr_expr.ty.as_ref().unwrap().ty
+        if let TyKind::Data(DataTy {
+            dty: DataTyKind::Ref(prv, ref_own, mem, dty),
+            ..
+        }) = &borr_expr.ty.as_ref().unwrap().ty
         {
             if ref_own < &own {
                 return Err(TyError::String(
@@ -1895,7 +2055,11 @@ impl TyChecker {
                 inner_mem,
                 passed_prvs,
             ))
-        } else if let TyKind::Data(DataTy::RawPtr(dty)) = &borr_expr.ty.as_ref().unwrap().ty {
+        } else if let TyKind::Data(DataTy {
+            dty: DataTyKind::RawPtr(dty),
+            ..
+        }) = &borr_expr.ty.as_ref().unwrap().ty
+        {
             // TODO is anything of this correct?
             Ok((
                 Ty::new(TyKind::Data(dty.as_ref().clone())),
@@ -1946,22 +2110,22 @@ impl TyChecker {
         ty: &Ty,
     ) -> TyResult<()> {
         match &ty.ty {
-            TyKind::Data(dty) => match dty {
+            TyKind::Data(dty) => match &dty.dty {
                 // TODO variables of Dead types can be reassigned. So why do we not have to check
                 //  well-formedness of the type in Dead(ty)? (According paper).
-                DataTy::Scalar(_)
-                | DataTy::Atomic(_)
-                | DataTy::Range
-                | DataTy::RawPtr(_)
-                | DataTy::Dead(_) => {}
-                DataTy::Ident(ident) => {
+                DataTyKind::Scalar(_)
+                | DataTyKind::Atomic(_)
+                | DataTyKind::Range
+                | DataTyKind::RawPtr(_)
+                | DataTyKind::Dead(_) => {}
+                DataTyKind::Ident(ident) => {
                     if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty)
                         && !matches!(ident.name.chars().next(), Some('$'))
                     {
                         return Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())));
                     }
                 }
-                DataTy::Ref(Provenance::Value(prv), own, mem, dty) => {
+                DataTyKind::Ref(Provenance::Value(prv), own, mem, dty) => {
                     let elem_ty = Ty::new(TyKind::Data(dty.as_ref().clone()));
                     if !elem_ty.is_fully_alive() {
                         return Err(TyError::ReferenceToDeadTy);
@@ -1996,7 +2160,7 @@ impl TyChecker {
                             }
                         }
                         if !exists {
-                            if let DataTy::ArrayShape(_, _) = dty.as_ref() {
+                            if let DataTyKind::ArrayShape(_, _) = &dty.dty {
                                 eprintln!("WARNING: Did not check well-formedness of view type reference.")
                             } else {
                                 return Err(TyError::ReferenceToIncompatibleType);
@@ -2005,7 +2169,7 @@ impl TyChecker {
                     }
                     self.ty_well_formed(kind_ctx, ty_ctx, exec, &elem_ty)?;
                 }
-                DataTy::Ref(Provenance::Ident(ident), _, mem, dty) => {
+                DataTyKind::Ref(Provenance::Ident(ident), _, mem, dty) => {
                     let elem_ty = Ty::new(TyKind::Data(dty.as_ref().clone()));
                     if !kind_ctx.ident_of_kind_exists(ident, Kind::Provenance) {
                         Err(CtxError::KindedIdentNotFound(ident.clone()))?
@@ -2013,8 +2177,8 @@ impl TyChecker {
                     self.ty_well_formed(kind_ctx, ty_ctx, exec, &elem_ty)?;
                 }
                 //FIXME check well-formedness of nats
-                DataTy::ThreadHierchy(th_hy) => {}
-                DataTy::Tuple(elem_dtys) => {
+                DataTyKind::ThreadHierchy(th_hy) => {}
+                DataTyKind::Tuple(elem_dtys) => {
                     for elem_dty in elem_dtys {
                         self.ty_well_formed(
                             kind_ctx,
@@ -2024,7 +2188,7 @@ impl TyChecker {
                         )?;
                     }
                 }
-                DataTy::Array(elem_dty, n) => {
+                DataTyKind::Array(elem_dty, n) => {
                     self.ty_well_formed(
                         kind_ctx,
                         ty_ctx,
@@ -2033,7 +2197,7 @@ impl TyChecker {
                     )?;
                     // TODO well-formed nat
                 }
-                DataTy::ArrayShape(elem_dty, n) => {
+                DataTyKind::ArrayShape(elem_dty, n) => {
                     self.ty_well_formed(
                         kind_ctx,
                         ty_ctx,
@@ -2042,7 +2206,7 @@ impl TyChecker {
                     )?
                     // TODO well-formed nat
                 }
-                DataTy::At(elem_dty, Memory::Ident(ident)) => {
+                DataTyKind::At(elem_dty, Memory::Ident(ident)) => {
                     if !kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
                         Err(TyError::CtxError(CtxError::KindedIdentNotFound(
                             ident.clone(),
@@ -2055,7 +2219,7 @@ impl TyChecker {
                         &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
                     )?;
                 }
-                DataTy::At(elem_dty, _) => {
+                DataTyKind::At(elem_dty, _) => {
                     self.ty_well_formed(
                         kind_ctx,
                         ty_ctx,

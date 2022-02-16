@@ -17,13 +17,13 @@ type SubTyResult<T> = Result<T, SubTyError>;
 pub(super) fn check(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
-    sub_ty: &DataTy,
-    super_ty: &DataTy,
+    sub_dty: &DataTy,
+    super_dty: &DataTy,
 ) -> SubTyResult<TyCtx> {
     use super::Ownership::*;
-    use DataTy::*;
+    use DataTyKind::*;
 
-    match (sub_ty, super_ty) {
+    match (&sub_dty.dty, &super_dty.dty) {
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
         (sub, sup) if sub == sup => Ok(ty_ctx),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
@@ -49,7 +49,7 @@ pub(super) fn check(
             Ok(res_back)
         }
         // Δ; Γ ⊢ (τ1, ..., τn) ≲ (τ1′, ..., τn′) ⇒ Γn
-        (DataTy::Tuple(sub_elems), DataTy::Tuple(sup_elems)) => {
+        (DataTyKind::Tuple(sub_elems), DataTyKind::Tuple(sup_elems)) => {
             let mut res_ctx = ty_ctx;
             for (sub, sup) in sub_elems.iter().zip(sup_elems) {
                 res_ctx = check(kind_ctx, res_ctx, sub, sup)?;
@@ -57,7 +57,7 @@ pub(super) fn check(
             Ok(res_ctx)
         }
         // Δ; Γ ⊢ \delta1 ≲ †\delta2 ⇒ Γ
-        (sub, Dead(sup)) => check(kind_ctx, ty_ctx, sub, sup),
+        (_, Dead(sup)) => check(kind_ctx, ty_ctx, sub_dty, sup),
         //TODO add case for Transitiviy?
         // Δ; Γ ⊢ τ1 ≲ τ3 ⇒ Γ''
         (sub, sup) => panic!(
@@ -162,7 +162,11 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         .into_iter()
         .filter(|(_, ty)| match ty {
             Ty {
-                ty: TyKind::Data(DataTy::Ref(Provenance::Value(prv_name), _, _, _)),
+                ty:
+                    TyKind::Data(DataTy {
+                        dty: DataTyKind::Ref(Provenance::Value(prv_name), _, _, _),
+                        ..
+                    }),
                 ..
             } if prv_name == prv => true,
             _ => false,

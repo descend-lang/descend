@@ -1,7 +1,7 @@
 use super::constrain::ConstrainMap;
 use super::error::TyError;
 use super::TyResult;
-use crate::ast::{DataTy, Nat, Provenance, ThreadHierchyTy, Ty, TyKind};
+use crate::ast::{DataTy, DataTyKind, Nat, Provenance, ThreadHierchyTy, Ty, TyKind};
 use crate::ty_check::ctxs::TyCtx;
 
 #[derive(Clone, Copy, Debug)]
@@ -89,8 +89,8 @@ fn coalesce_dty(
         dty: &DataTy,
         bound: Bound,
     ) -> TyResult<DataTy> {
-        let dtty = match dty {
-            DataTy::Ident(ident) => {
+        let dtty = match &dty.dty {
+            DataTyKind::Ident(ident) => {
                 let bounds = match bound {
                     Bound::GreatestLower => &mut constr_map.dty_lower_bound,
                     Bound::LeastUpper => &mut constr_map.dty_upper_bound,
@@ -101,7 +101,7 @@ fn coalesce_dty(
                         .iter()
                         .map(|dty| go(constr_map, ty_ctx, dty, bound))
                         .collect::<TyResult<Vec<_>>>()?;
-                    let init_dty = DataTy::Ident(ident.clone());
+                    let init_dty = DataTy::new(DataTyKind::Ident(ident.clone()));
                     coalesced_bounds
                         .iter()
                         .try_fold(init_dty, |acc, dty| acc.bound_for_dty(ty_ctx, dty, bound))?
@@ -109,10 +109,10 @@ fn coalesce_dty(
                     panic!("Identifier not in constrain map: `{}`", ident.name)
                 }
             }
-            DataTy::Scalar(sty) => DataTy::Scalar(sty.clone()),
-            DataTy::Atomic(sty) => DataTy::Atomic(sty.clone()),
-            DataTy::ThreadHierchy(th_hierchy) => {
-                DataTy::ThreadHierchy(Box::new(match th_hierchy.as_ref() {
+            DataTyKind::Scalar(sty) => DataTy::new(DataTyKind::Scalar(sty.clone())),
+            DataTyKind::Atomic(sty) => DataTy::new(DataTyKind::Atomic(sty.clone())),
+            DataTyKind::ThreadHierchy(th_hierchy) => DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(match th_hierchy.as_ref() {
                     ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3) => ThreadHierchyTy::BlockGrp(
                         coalesce_nat(constr_map, n1),
                         coalesce_nat(constr_map, n2),
@@ -130,33 +130,39 @@ fn coalesce_dty(
                         ThreadHierchyTy::WarpGrp(coalesce_nat(constr_map, n))
                     }
                     ThreadHierchyTy::Warp => ThreadHierchyTy::Warp,
-                }))
-            }
-            DataTy::Tuple(elem_dtys) => DataTy::Tuple(
+                }),
+            )),
+            DataTyKind::Tuple(elem_dtys) => DataTy::new(DataTyKind::Tuple(
                 elem_dtys
                     .iter()
                     .map(|dty| coalesce_dty(constr_map, ty_ctx, dty))
                     .collect::<TyResult<Vec<_>>>()?,
-            ),
-            DataTy::Array(dty, n) => {
-                DataTy::Array(Box::new(coalesce_dty(constr_map, ty_ctx, dty)?), n.clone())
-            }
-            DataTy::ArrayShape(dty, n) => {
-                DataTy::ArrayShape(Box::new(coalesce_dty(constr_map, ty_ctx, dty)?), n.clone())
-            }
-            DataTy::At(dty, mem) => DataTy::At(
+            )),
+            DataTyKind::Array(dty, n) => DataTy::new(DataTyKind::Array(
+                Box::new(coalesce_dty(constr_map, ty_ctx, dty)?),
+                n.clone(),
+            )),
+            DataTyKind::ArrayShape(dty, n) => DataTy::new(DataTyKind::ArrayShape(
+                Box::new(coalesce_dty(constr_map, ty_ctx, dty)?),
+                n.clone(),
+            )),
+            DataTyKind::At(dty, mem) => DataTy::new(DataTyKind::At(
                 Box::new(coalesce_dty(constr_map, ty_ctx, dty)?),
                 mem.clone(),
-            ),
-            DataTy::Ref(prv, own, mem, dty) => DataTy::Ref(
+            )),
+            DataTyKind::Ref(prv, own, mem, dty) => DataTy::new(DataTyKind::Ref(
                 coalesce_prv(constr_map, ty_ctx, prv)?,
                 *own,
                 mem.clone(),
                 Box::new(coalesce_dty(constr_map, ty_ctx, dty)?),
-            ),
-            DataTy::RawPtr(dty) => DataTy::RawPtr(Box::new(coalesce_dty(constr_map, ty_ctx, dty)?)),
-            DataTy::Range => DataTy::Range,
-            DataTy::Dead(dty) => DataTy::Dead(Box::new(coalesce_dty(constr_map, ty_ctx, dty)?)),
+            )),
+            DataTyKind::RawPtr(dty) => DataTy::new(DataTyKind::RawPtr(Box::new(coalesce_dty(
+                constr_map, ty_ctx, dty,
+            )?))),
+            DataTyKind::Range => DataTy::new(DataTyKind::Range),
+            DataTyKind::Dead(dty) => DataTy::new(DataTyKind::Dead(Box::new(coalesce_dty(
+                constr_map, ty_ctx, dty,
+            )?))),
         };
         Ok(dtty)
     }
@@ -198,54 +204,51 @@ impl Ty {
 
 impl DataTy {
     fn bound_for_dty(&self, ty_ctx: &mut TyCtx, dty: &DataTy, bound: Bound) -> TyResult<DataTy> {
-        let dty = match (self, dty) {
-            (DataTy::Ident(i1), DataTy::Ident(i2)) if i1 == i2 => DataTy::Ident(i1.clone()),
-            (DataTy::Ident(i1), DataTy::Ident(i2)) if i1 != i2 => return Err(TyError::CannotUnify),
-            (DataTy::Ident(_), _) => dty.clone(),
-            (_, DataTy::Ident(_)) => self.clone(),
-            (DataTy::Tuple(dty_es1), DataTy::Tuple(dty_es2)) => DataTy::Tuple(
+        use DataTyKind::*;
+        let dty = match (&self.dty, &dty.dty) {
+            (Ident(i1), Ident(i2)) if i1 == i2 => DataTy::new(Ident(i1.clone())),
+            (Ident(i1), Ident(i2)) if i1 != i2 => return Err(TyError::CannotUnify),
+            (Ident(_), _) => dty.clone(),
+            (_, Ident(_)) => self.clone(),
+            (Tuple(dty_es1), Tuple(dty_es2)) => DataTy::new(Tuple(
                 dty_es1
                     .iter()
                     .zip(dty_es2)
                     .map(|(d1, d2)| d1.bound_for_dty(ty_ctx, d2, bound))
                     .collect::<TyResult<Vec<_>>>()?,
-            ),
-            (DataTy::At(dty1, mem1), DataTy::At(dty2, mem2)) if mem1 == mem2 => DataTy::At(
+            )),
+            (At(dty1, mem1), At(dty2, mem2)) if mem1 == mem2 => DataTy::new(At(
                 Box::new(dty1.bound_for_dty(ty_ctx, dty2, bound)?),
                 mem1.clone(),
-            ),
-            (DataTy::Array(dty1, n1), DataTy::Array(dty2, n2)) if n1 == n2 => DataTy::Array(
+            )),
+            (Array(dty1, n1), Array(dty2, n2)) if n1 == n2 => DataTy::new(Array(
                 Box::new(dty1.bound_for_dty(ty_ctx, dty2, bound)?),
                 n1.clone(),
-            ),
-            (DataTy::ArrayShape(dty1, n1), DataTy::ArrayShape(dty2, n2)) if n1 == n2 => {
-                DataTy::ArrayShape(
-                    Box::new(dty1.bound_for_dty(ty_ctx, dty2, bound)?),
-                    n1.clone(),
-                )
-            }
-            (DataTy::Scalar(sty1), DataTy::Scalar(sty2)) if sty1 == sty2 => {
-                DataTy::Scalar(sty1.clone())
-            }
-            (DataTy::Ref(prv1, own1, mem1, dty1), DataTy::Ref(prv2, own2, mem2, dty2))
+            )),
+            (ArrayShape(dty1, n1), ArrayShape(dty2, n2)) if n1 == n2 => DataTy::new(ArrayShape(
+                Box::new(dty1.bound_for_dty(ty_ctx, dty2, bound)?),
+                n1.clone(),
+            )),
+            (Scalar(sty1), Scalar(sty2)) if sty1 == sty2 => DataTy::new(Scalar(sty1.clone())),
+            (Ref(prv1, own1, mem1, dty1), Ref(prv2, own2, mem2, dty2))
                 if own1 == own2 && mem1 == mem2 =>
             {
-                DataTy::Ref(
+                DataTy::new(Ref(
                     prv1.bound_for_prv(ty_ctx, prv2, bound)?,
                     *own1,
                     mem1.clone(),
                     Box::new(dty1.bound_for_dty(ty_ctx, dty2, bound)?),
-                )
+                ))
             }
-            (DataTy::RawPtr(dty1), DataTy::RawPtr(dty2)) => {
-                DataTy::RawPtr(Box::new(dty1.bound_for_dty(ty_ctx, dty2, bound)?))
+            (RawPtr(dty1), RawPtr(dty2)) => {
+                DataTy::new(RawPtr(Box::new(dty1.bound_for_dty(ty_ctx, dty2, bound)?)))
             }
-            (DataTy::Atomic(sty1), DataTy::Atomic(sty2)) if sty1 == sty2 => DataTy::Atomic(*sty1),
-            (DataTy::ThreadHierchy(th_h1), DataTy::ThreadHierchy(th_h2)) if th_h1 == th_h2 => {
-                DataTy::ThreadHierchy(th_h1.clone())
+            (Atomic(sty1), Atomic(sty2)) if sty1 == sty2 => DataTy::new(Atomic(*sty1)),
+            (ThreadHierchy(th_h1), ThreadHierchy(th_h2)) if th_h1 == th_h2 => {
+                DataTy::new(ThreadHierchy(th_h1.clone()))
             }
-            (DataTy::Range, DataTy::Range) => DataTy::Range,
-            (DataTy::Dead(_), DataTy::Dead(_)) => {
+            (Range, Range) => DataTy::new(Range),
+            (Dead(_), Dead(_)) => {
                 unimplemented!()
             }
             _ => return Err(TyError::CannotUnify),

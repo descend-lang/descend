@@ -1,6 +1,7 @@
+use crate::ast::TyKind::Data;
 use crate::ast::{
-    BinOpNat, DataTy, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, ScalarTy,
-    ThreadHierchyTy, Ty, TyKind,
+    BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
+    Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -83,15 +84,15 @@ fn to_raw_ptr_ty() -> Ty {
 
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem, t_ty],
-        vec![Ty::new(TyKind::Data(DataTy::Ref(
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             Ownership::Uniq,
             Memory::Ident(m),
-            Box::new(DataTy::Ident(t.clone())),
-        )))],
+            Box::new(DataTy::new(DataTyKind::Ident(t.clone()))),
+        ))))],
         Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::RawPtr(Box::new(
-            DataTy::Ident(t),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::RawPtr(
+            Box::new(DataTy::new(DataTyKind::Ident(t))),
         ))))),
     ))
 }
@@ -110,14 +111,14 @@ fn offset_raw_ptr_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![t_ty],
         vec![
-            Ty::new(TyKind::Data(DataTy::RawPtr(Box::new(DataTy::Ident(
-                t.clone(),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::RawPtr(Box::new(
+                DataTy::new(DataTyKind::Ident(t.clone())),
             ))))),
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
         ],
         Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::RawPtr(Box::new(
-            DataTy::Ident(t),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::RawPtr(
+            Box::new(DataTy::new(DataTyKind::Ident(t))),
         ))))),
     ))
 }
@@ -142,16 +143,18 @@ fn atomic_set_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![p_prv, m_mem, t_ty],
         vec![
-            Ty::new(TyKind::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(p),
                 Ownership::Uniq,
                 Memory::Ident(m),
-                Box::new(DataTy::Ident(t.clone())),
-            ))),
-            Ty::new(TyKind::Data(DataTy::Ident(t))),
+                Box::new(DataTy::new(DataTyKind::Ident(t.clone()))),
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t)))),
         ],
         Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Unit,
+        ))))),
     ))
 }
 
@@ -182,24 +185,24 @@ fn split_thread_grp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat, n1_nat, n2_nat, n3_nat],
-        vec![Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-            ThreadHierchyTy::ThreadGrp(
+        vec![Ty::new(TyKind::Data(DataTy::new(
+            DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
                 Nat::Ident(n1.clone()),
                 Nat::Ident(n2.clone()),
                 Nat::Ident(n3.clone()),
-            ),
-        ))))],
+            ))),
+        )))],
         Exec::View,
         Box::new(Ty::new(TyKind::TupleView(vec![
-            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-                ThreadHierchyTy::ThreadGrp(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(ThreadHierchyTy::ThreadGrp(
                     Nat::Ident(k.clone()),
                     Nat::Ident(n2.clone()),
                     Nat::Ident(n3.clone()),
-                ),
+                )),
             )))),
-            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-                ThreadHierchyTy::ThreadGrp(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(ThreadHierchyTy::ThreadGrp(
                     Nat::BinOp(
                         BinOpNat::Sub,
                         Box::new(Nat::Ident(n1)),
@@ -207,7 +210,7 @@ fn split_thread_grp_ty() -> Ty {
                     ),
                     Nat::Ident(n2.clone()),
                     Nat::Ident(n3.clone()),
-                ),
+                )),
             )))),
         ]))),
     ))
@@ -221,16 +224,20 @@ fn split_warp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat],
-        vec![Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-            ThreadHierchyTy::Warp,
-        ))))],
+        vec![Ty::new(TyKind::Data(DataTy::new(
+            DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::Warp)),
+        )))],
         Exec::View,
         Box::new(Ty::new(TyKind::TupleView(vec![
-            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-                ThreadHierchyTy::ThreadGrp(Nat::Ident(k.clone()), Nat::Lit(1), Nat::Lit(1)),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(ThreadHierchyTy::ThreadGrp(
+                    Nat::Ident(k.clone()),
+                    Nat::Lit(1),
+                    Nat::Lit(1),
+                )),
             )))),
-            Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-                ThreadHierchyTy::ThreadGrp(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(ThreadHierchyTy::ThreadGrp(
                     Nat::BinOp(
                         BinOpNat::Sub,
                         Box::new(Nat::Lit(32)),
@@ -238,7 +245,7 @@ fn split_warp_ty() -> Ty {
                     ),
                     Nat::Lit(1),
                     Nat::Lit(1),
-                ),
+                )),
             )))),
         ]))),
     ))
@@ -249,9 +256,13 @@ fn split_warp_ty() -> Ty {
 fn gpu_device_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![],
-        vec![Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))],
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32,
+        ))))],
         Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Gpu)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Gpu,
+        ))))),
     ))
 }
 
@@ -269,14 +280,16 @@ fn load_atomic_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
-        vec![Ty::new(TyKind::Data(DataTy::Ref(
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             Ownership::Shrd,
             Memory::Ident(m),
-            Box::new(DataTy::Atomic(ScalarTy::I32)),
-        )))],
+            Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
+        ))))],
         Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32,
+        ))))),
     ))
 }
 
@@ -293,14 +306,16 @@ fn load_atomic_host_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
-        vec![Ty::new(TyKind::Data(DataTy::Ref(
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             Ownership::Shrd,
             Memory::Ident(m),
-            Box::new(DataTy::Atomic(ScalarTy::I32)),
-        )))],
+            Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
+        ))))],
         Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32,
+        ))))),
     ))
 }
 
@@ -319,16 +334,18 @@ fn store_atomic_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
         vec![
-            Ty::new(TyKind::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r),
                 Ownership::Shrd,
                 Memory::Ident(m),
-                Box::new(DataTy::Atomic(ScalarTy::I32)),
-            ))),
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+                Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
         ],
         Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Unit,
+        ))))),
     ))
 }
 
@@ -347,16 +364,18 @@ fn store_atomic_host_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
         vec![
-            Ty::new(TyKind::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r),
                 Ownership::Shrd,
                 Memory::Ident(m),
-                Box::new(DataTy::Atomic(ScalarTy::I32)),
-            ))),
-            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+                Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
         ],
         Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Unit,
+        ))))),
     ))
 }
 
@@ -393,24 +412,24 @@ fn gpu_alloc_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, m1_mem, m2_mem, d_dty],
         vec![
-            Ty::new(TyKind::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
                 Ownership::Uniq,
                 Memory::Ident(m1),
-                Box::new(DataTy::Scalar(ScalarTy::Gpu)),
-            ))),
-            Ty::new(TyKind::Data(DataTy::Ref(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu))),
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r2),
                 Ownership::Shrd,
                 Memory::Ident(m2),
-                Box::new(DataTy::Ident(d.clone())),
-            ))),
+                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+            )))),
         ],
         Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::At(
-            Box::new(DataTy::Ident(d)),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::At(
+            Box::new(DataTy::new(DataTyKind::Ident(d))),
             Memory::GpuGlobal,
-        )))),
+        ))))),
     ))
 }
 
@@ -441,21 +460,23 @@ fn copy_to_host_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, m_mem, d_dty],
         vec![
-            Ty::new(TyKind::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
                 Ownership::Shrd,
                 Memory::GpuGlobal,
-                Box::new(DataTy::Ident(d.clone())),
-            ))),
-            Ty::new(TyKind::Data(DataTy::Ref(
+                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r2),
                 Ownership::Uniq,
                 Memory::Ident(m),
-                Box::new(DataTy::Ident(d)),
-            ))),
+                Box::new(DataTy::new(DataTyKind::Ident(d))),
+            )))),
         ],
         Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Unit,
+        ))))),
     ))
 }
 
@@ -481,21 +502,23 @@ fn copy_to_gpu_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, d_dty],
         vec![
-            Ty::new(TyKind::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
                 Ownership::Uniq,
                 Memory::GpuGlobal,
-                Box::new(DataTy::Ident(d.clone())),
-            ))),
-            Ty::new(TyKind::Data(DataTy::Ref(
+                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r2),
                 Ownership::Shrd,
                 Memory::CpuHeap,
-                Box::new(DataTy::Ident(d)),
-            ))),
+                Box::new(DataTy::new(DataTyKind::Ident(d))),
+            )))),
         ],
         Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Unit,
+        ))))),
     ))
 }
 
@@ -533,12 +556,12 @@ fn exec_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![blocks_nat, threads_nat, r_prv, m_mem, t_ty],
         vec![
-            Ty::new(TyKind::Data(DataTy::Ref(
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r),
                 Ownership::Uniq,
                 Memory::Ident(m),
-                Box::new(DataTy::Scalar(ScalarTy::Gpu)),
-            ))),
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu))),
+            )))),
             Ty::new(TyKind::Ident(t.clone())),
             Ty::new(TyKind::Fn(
                 vec![],
@@ -550,24 +573,28 @@ fn exec_ty() -> Ty {
                     //     ))),
                     //     Nat::Ident(blocks),
                     // )),
-                    Ty::new(TyKind::Data(DataTy::ThreadHierchy(Box::new(
-                        ThreadHierchyTy::BlockGrp(
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                        Box::new(ThreadHierchyTy::BlockGrp(
                             Nat::Ident(blocks),
                             Nat::Lit(1),
                             Nat::Lit(1),
                             Nat::Ident(threads),
                             Nat::Lit(1),
                             Nat::Lit(1),
-                        ),
+                        )),
                     )))),
                     Ty::new(TyKind::Ident(t)),
                 ],
                 Exec::GpuGrid,
-                Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+                Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::Unit,
+                ))))),
             )),
         ],
         Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Unit,
+        ))))),
     ))
 }
 
@@ -583,10 +610,10 @@ fn shared_alloc_ty() -> Ty {
         vec![t_ty],
         vec![],
         Exec::GpuGrid,
-        Box::new(Ty::new(TyKind::Data(DataTy::At(
-            Box::new(DataTy::Ident(t)),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::At(
+            Box::new(DataTy::new(DataTyKind::Ident(t))),
             Memory::GpuShared,
-        )))),
+        ))))),
     ))
 }
 
@@ -619,25 +646,25 @@ fn to_view_ty(own: Ownership) -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem, n_nat, d_dty],
-        vec![Ty::new(TyKind::Data(DataTy::Ref(
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
             own,
             Memory::Ident(m.clone()),
-            Box::new(DataTy::Array(
-                Box::new(DataTy::Ident(d.clone())),
+            Box::new(DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                 Nat::Ident(n.clone()),
-            )),
-        )))],
+            ))),
+        ))))],
         Exec::View,
-        Box::new(Ty::new(TyKind::Data(DataTy::Ref(
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             own,
             Memory::Ident(m),
-            Box::new(DataTy::ArrayShape(
-                Box::new(DataTy::Ident(d)),
+            Box::new(DataTy::new(DataTyKind::ArrayShape(
+                Box::new(DataTy::new(DataTyKind::Ident(d))),
                 Nat::Ident(n),
-            )),
-        )))),
+            ))),
+        ))))),
     ))
 }
 
@@ -671,32 +698,32 @@ fn group_ty(own: Ownership) -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![s_nat, r_prv, m_mem, n_nat, d_ty],
-        vec![Ty::new(TyKind::Data(DataTy::Ref(
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
             own,
             Memory::Ident(m.clone()),
-            Box::new(DataTy::ArrayShape(
-                Box::new(DataTy::Ident(d.clone())),
+            Box::new(DataTy::new(DataTyKind::ArrayShape(
+                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                 Nat::Ident(n.clone()),
-            )),
-        )))],
+            ))),
+        ))))],
         Exec::View,
-        Box::new(Ty::new(TyKind::Data(DataTy::Ref(
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             own,
             Memory::Ident(m),
-            Box::new(DataTy::ArrayShape(
-                Box::new(DataTy::ArrayShape(
-                    Box::new(DataTy::Ident(d)),
+            Box::new(DataTy::new(DataTyKind::ArrayShape(
+                Box::new(DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d))),
                     Nat::Ident(s.clone()),
-                )),
+                ))),
                 Nat::BinOp(
                     BinOpNat::Div,
                     Box::new(Nat::Ident(n)),
                     Box::new(Nat::Ident(s)),
                 ),
-            )),
-        )))),
+            ))),
+        ))))),
     ))
 }
 

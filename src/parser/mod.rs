@@ -425,28 +425,28 @@ peg::parser! {
         /// Parse a type token
         pub(crate) rule dty() -> DataTy
             = first:dty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
-                mems.into_iter().fold(first, |prev,mem| DataTy::At(Box::new(prev), mem))
+                mems.into_iter().fold(DataTy::new(first), |prev,mem| DataTy::new(DataTyKind::At(Box::new(prev), mem)))
             }
 
         /// Helper for "type @ memory" left-recursion
-        rule dty_term() -> DataTy
-            = "f32" { DataTy::Scalar(ScalarTy::F32) }
-            / "i32" { DataTy::Scalar(ScalarTy::I32) }
-            / "u32" { DataTy::Scalar(ScalarTy::U32) }
-            / "bool" { DataTy::Scalar(ScalarTy::Bool) }
-            / "()" { DataTy::Scalar(ScalarTy::Unit) }
-            / "Gpu" { DataTy::Scalar(ScalarTy::Gpu) }
-            / "Atomic<i32>" { DataTy::Atomic(ScalarTy::I32) }
-            / "Atomic<bool>" {DataTy::Atomic(ScalarTy::Bool)}
-            / th_hy:th_hy() { DataTy::ThreadHierchy(Box::new(th_hy)) }
-            / name:ident() { DataTy::Ident(name) }
-            / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTy::Tuple(types) }
-            / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTy::Array(Box::new(t), n) }
+        rule dty_term() -> DataTyKind
+            = "f32" { DataTyKind::Scalar(ScalarTy::F32) }
+            / "i32" { DataTyKind::Scalar(ScalarTy::I32) }
+            / "u32" { DataTyKind::Scalar(ScalarTy::U32) }
+            / "bool" { DataTyKind::Scalar(ScalarTy::Bool) }
+            / "()" { DataTyKind::Scalar(ScalarTy::Unit) }
+            / "Gpu" { DataTyKind::Scalar(ScalarTy::Gpu) }
+            / "Atomic<i32>" { DataTyKind::Atomic(ScalarTy::I32) }
+            / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
+            / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
+            / name:ident() { DataTyKind::Ident(name) }
+            / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
+            / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTyKind::Array(Box::new(t), n) }
             / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
-                DataTy::ArrayShape(Box::new(dty), n)
+                DataTyKind::ArrayShape(Box::new(dty), n)
             }
             / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ dty:dty() {
-                DataTy::Ref(prov, own, mem, Box::new(dty))
+                DataTyKind::Ref(prov, own, mem, Box::new(dty))
             }
 
         pub(crate) rule th_hy() -> ThreadHierchyTy =
@@ -692,27 +692,37 @@ mod tests {
     fn ty_scalar() {
         assert_eq!(
             descend::ty("f32"),
-            Ok(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32)))),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::F32
+            ))))),
             "does not recognize f32 type"
         );
         assert_eq!(
             descend::ty("i32"),
-            Ok(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::I32
+            ))))),
             "does not recognize i32 type"
         );
         assert_eq!(
             descend::ty("u32"),
-            Ok(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::U32)))),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::U32
+            ))))),
             "does not recognize u32 type"
         );
         assert_eq!(
             descend::ty("()"),
-            Ok(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Unit)))),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit
+            ))))),
             "does not recognize unit type"
         );
         assert_eq!(
             descend::ty("bool"),
-            Ok(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Bool
+            ))))),
             "does not recognize Boolean type"
         );
     }
@@ -721,39 +731,41 @@ mod tests {
     fn ty_gpu() {
         assert_eq!(
             descend::ty("Gpu"),
-            Ok(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Gpu)))),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Gpu
+            ))))),
             "does not recognize GPU type"
         );
     }
 
     #[test]
     fn dty_tuple() {
-        let ty_f32 = DataTy::Scalar(ScalarTy::F32);
-        let ty_i32 = DataTy::Scalar(ScalarTy::I32);
-        let ty_u32 = DataTy::Scalar(ScalarTy::U32);
-        let ty_unit = DataTy::Scalar(ScalarTy::Unit);
+        let ty_f32 = DataTy::new(DataTyKind::Scalar(ScalarTy::F32));
+        let ty_i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
+        let ty_u32 = DataTy::new(DataTyKind::Scalar(ScalarTy::U32));
+        let ty_unit = DataTy::new(DataTyKind::Scalar(ScalarTy::Unit));
         assert_eq!(
             descend::dty("(f32)"),
-            Ok(DataTy::Tuple(vec![ty_f32])),
+            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_f32]))),
             "does not recognize (f32) tuple type"
         );
         assert_eq!(
             descend::dty("(i32,i32)"),
-            Ok(DataTy::Tuple(vec![ty_i32.clone(), ty_i32])),
+            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_i32.clone(), ty_i32]))),
             "does not recognize (i32) tuple type"
         );
         assert_eq!(
             descend::dty("(u32,u32)"),
-            Ok(DataTy::Tuple(vec![ty_u32.clone(), ty_u32])),
+            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u32.clone(), ty_u32]))),
             "does not recognize (u32, u32) tuple type"
         );
         assert_eq!(
             descend::dty("((),(),())"),
-            Ok(DataTy::Tuple(vec![
+            Ok(DataTy::new(DataTyKind::Tuple(vec![
                 ty_unit.clone(),
                 ty_unit.clone(),
                 ty_unit.clone()
-            ])),
+            ]))),
             "does not recognize (unit,unit,unit) tuple type"
         );
     }
@@ -762,18 +774,18 @@ mod tests {
     fn ty_array_and_array_view() {
         assert_eq!(
             descend::ty("[f32;42]"),
-            Ok(Ty::new(TyKind::Data(DataTy::Array(
-                Box::new(DataTy::Scalar(ScalarTy::F32)),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))),
                 Nat::Lit(42)
-            )))),
+            ))))),
             "does not recognize [f32;42] type"
         );
         assert_eq!(
             descend::ty("[u32;43]"),
-            Ok(Ty::new(TyKind::Data(DataTy::Array(
-                Box::new(DataTy::Scalar(ScalarTy::U32)),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U32))),
                 Nat::Lit(43)
-            )))),
+            ))),)),
             "does not recognize [u32;43] type"
         );
         // TODO: Implement identifer parsing in nat
@@ -783,10 +795,10 @@ mod tests {
         // ), "does not recognize [();N] type");
         assert_eq!(
             descend::ty("[[i32;24]]"),
-            Ok(Ty::new(TyKind::Data(DataTy::ArrayShape(
-                Box::new(DataTy::Scalar(ScalarTy::I32)),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::ArrayShape(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                 Nat::Lit(24)
-            )))),
+            ))),)),
             "does not recognize [[f32;24]] type"
         );
     }
@@ -795,7 +807,9 @@ mod tests {
     fn ty_identifier() {
         assert_eq!(
             descend::ty("T"),
-            Ok(Ty::new(TyKind::Data(DataTy::Ident(Ident::new("T"))))),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
+                Ident::new("T")
+            ))))),
             "does not recognize T type"
         );
     }
@@ -804,44 +818,45 @@ mod tests {
     fn ty_reference() {
         assert_eq!(
             descend::ty("&'a uniq cpu.heap i32"),
-            Ok(Ty::new(TyKind::Data(DataTy::Ref(
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Value("'a".into()),
                 Ownership::Uniq,
                 Memory::CpuHeap,
-                Box::new(DataTy::Scalar(ScalarTy::I32))
-            )))),
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))
+            ))),)),
             "does not recognize type of unique i32 reference in cpu heap with provenance 'a"
         );
-        assert_eq!(descend::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::new(TyKind::Data(DataTy::Ref(
-                Provenance::Ident(Ident::new("b")),
-                Ownership::Shrd,
-                Memory::GpuGlobal,
-                Box::new(DataTy::Array(
-                    Box::new(DataTy::Scalar(ScalarTy::F32)),
-                    Nat::Ident(Ident::new("N"))
-                ))
-            )))), "does not recognize type of shared [f32] reference in gpu global memory with provenance b");
+        assert_eq!(descend::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                        Provenance::Ident(Ident::new("b")),
+                        Ownership::Shrd,
+                        Memory::GpuGlobal,
+                        Box::new(DataTy::new(DataTyKind::Array(
+                            Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))),
+                            Nat::Ident(Ident::new("N"))
+                        )))
+                    ))),
+        )), "does not recognize type of shared [f32] reference in gpu global memory with provenance b");
     }
 
     #[test]
     fn ty_memory_kind() {
         assert_eq!(
             descend::ty("i32 @ cpu.stack"),
-            Ok(Ty::new(TyKind::Data(DataTy::At(
-                Box::new(DataTy::Scalar(ScalarTy::I32)),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::At(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                 Memory::CpuStack
-            )))),
+            ))),)),
             "does not recognize f32 @ cpu.stack type"
         );
         assert_eq!(
             descend::ty("[f32;42] @ gpu.global"),
-            Ok(Ty::new(TyKind::Data(DataTy::At(
-                Box::new(DataTy::Array(
-                    Box::new(DataTy::Scalar(ScalarTy::F32)),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::At(
+                Box::new(DataTy::new(DataTyKind::Array(
+                    Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))),
                     Nat::Lit(42)
-                )),
+                ))),
                 Memory::GpuGlobal
-            )))),
+            ))),)),
             "does not recognize [f32;42] @ gpu.global type"
         );
     }
@@ -1171,7 +1186,7 @@ mod tests {
             descend::expression("7"),
             Ok(Expr::with_type(
                 ExprKind::Lit(Lit::I32(7)),
-                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
             ))
         );
         dbg!(descend::expression("7").unwrap());
@@ -1185,11 +1200,11 @@ mod tests {
                 BinOp::Add,
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::I32(7)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                 )),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::I32(8)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                 ))
             ),))
         );
@@ -1205,16 +1220,16 @@ mod tests {
                     BinOp::Add,
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(5)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     )),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(6)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ))
                 ),)),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::I32(7)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                 ))
             ),))
         );
@@ -1280,7 +1295,7 @@ mod tests {
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var_token"))),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::F32(730.0)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))))
                 ))
             )))
         );
@@ -1294,11 +1309,11 @@ mod tests {
                     BinOp::Add,
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(3)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     )),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(4)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ))
                 )))
             )))
@@ -1344,7 +1359,7 @@ mod tests {
             Ok(Expr::new(ExprKind::Array(vec![
                 Expr::with_type(
                     ExprKind::Lit(Lit::I32(12)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                 ),
                 Expr::new(ExprKind::Index(
                     PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))),
@@ -1352,7 +1367,9 @@ mod tests {
                 )),
                 Expr::with_type(
                     ExprKind::Lit(Lit::Bool(true)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                        ScalarTy::Bool
+                    ))))
                 )
             ])))
         );
@@ -1377,7 +1394,7 @@ mod tests {
             Ok(Expr::new(ExprKind::Tuple(vec![
                 Expr::with_type(
                     ExprKind::Lit(Lit::I32(12)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                 ),
                 Expr::new(ExprKind::Index(
                     PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))),
@@ -1385,7 +1402,9 @@ mod tests {
                 )),
                 Expr::with_type(
                     ExprKind::Lit(Lit::Bool(true)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                        ScalarTy::Bool
+                    ))))
                 )
             ])))
         );
@@ -1398,7 +1417,7 @@ mod tests {
             Ok(Expr::new(ExprKind::TupleView(vec![
                 Expr::with_type(
                     ExprKind::Lit(Lit::I32(12)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                 ),
                 Expr::new(ExprKind::Index(
                     PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))),
@@ -1406,7 +1425,9 @@ mod tests {
                 )),
                 Expr::with_type(
                     ExprKind::Lit(Lit::Bool(true)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::Bool)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                        ScalarTy::Bool
+                    ))))
                 )
             ])))
         );
@@ -1420,11 +1441,11 @@ mod tests {
                     $binop,
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
                     )),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(8)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
                     )),
                 )))
             };
@@ -1449,15 +1470,15 @@ mod tests {
                 Box::new(Expr::new(ExprKind::Array(vec![
                     Expr::with_type(
                         ExprKind::Lit(Lit::I32(1)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ),
                     Expr::with_type(
                         ExprKind::Lit(Lit::I32(2)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ),
                     Expr::with_type(
                         ExprKind::Lit(Lit::I32(3)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     )
                 ]))),
                 Box::new(Expr::new(ExprKind::Block(
@@ -1471,7 +1492,9 @@ mod tests {
                             )))),
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(1)),
-                                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                    ScalarTy::I32
+                                ))))
                             ))
                         ),))
                     ),))
@@ -1493,10 +1516,12 @@ mod tests {
             Ok(Expr::new(ExprKind::Let(
                 Mutability::Mut,
                 Ident::new("x"),
-                Box::new(Some(Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32))))),
+                Box::new(Some(Ty::new(TyKind::Data(DataTy::new(
+                    DataTyKind::Scalar(ScalarTy::F32)
+                ))))),
                 Box::new(Expr::with_type(
                     ExprKind::Lit(Lit::F32(17.123)),
-                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::F32)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))))
                 ))
             ),))
         );
@@ -1552,24 +1577,30 @@ mod tests {
                             UnOp::Neg,
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(1)),
-                                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                    ScalarTy::I32
+                                ))))
                             ))
                         ))),
                         Box::new(Expr::new(ExprKind::BinOp(
                             BinOp::Mul,
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(2)),
-                                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                    ScalarTy::I32
+                                ))))
                             )),
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(3)),
-                                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                    ScalarTy::I32
+                                ))))
                             ))
                         )))
                     ))),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(4)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ))
                 ))),
                 Box::new(Expr::new(ExprKind::BinOp(
@@ -1578,16 +1609,16 @@ mod tests {
                         BinOp::Mul,
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(5)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                         )),
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(6)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                         ))
                     ))),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ))
                 )))
             ),))
@@ -1604,11 +1635,11 @@ mod tests {
                         BinOp::Add,
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(1)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                         )),
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(2)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                         ))
                     ),))
                 ),)),
@@ -1618,7 +1649,7 @@ mod tests {
                         BinOp::Add,
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(3)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                         )),
                         Box::new(Expr::new(ExprKind::BinOp(
                             BinOp::Mul,
@@ -1626,22 +1657,28 @@ mod tests {
                                 BinOp::Add,
                                 Box::new(Expr::with_type(
                                     ExprKind::Lit(Lit::I32(4)),
-                                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                        ScalarTy::I32
+                                    ))))
                                 )),
                                 Box::new(Expr::with_type(
                                     ExprKind::Lit(Lit::I32(5)),
-                                    Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                        ScalarTy::I32
+                                    ))))
                                 ))
                             ))),
                             Box::new(Expr::with_type(
                                 ExprKind::Lit(Lit::I32(6)),
-                                Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                    ScalarTy::I32
+                                ))))
                             ))
                         )))
                     ))),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ))
                 )))
             ),))
@@ -1670,18 +1707,18 @@ mod tests {
         ];
         let params = vec![ParamDecl {
             ident: Ident::new("ha_array"),
-            ty: Some(Ty::new(TyKind::Data(DataTy::Ref(
+            ty: Some(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(Ident::new("a")),
                 Ownership::Uniq,
                 Memory::CpuHeap,
-                Box::new(DataTy::Array(
-                    Box::new(DataTy::Scalar(ScalarTy::I32)),
+                Box::new(DataTy::new(DataTyKind::Array(
+                    Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                     Nat::Ident(Ident::new("n")),
-                )),
-            )))),
+                ))),
+            ))))),
             mutbl: Mutability::Const,
         }];
-        let ret_dty = DataTy::Scalar(ScalarTy::Unit);
+        let ret_dty = DataTy::new(DataTyKind::Scalar(ScalarTy::Unit));
         let exec = Exec::CpuThread;
         let prv_rels = vec![];
 
@@ -1821,11 +1858,11 @@ mod tests {
                     BinOp::Le,
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(1)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     )),
                     Box::new(Expr::with_type(
                         ExprKind::Lit(Lit::I32(2)),
-                        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                     ))
                 ))),
                 Box::new(Expr::new(ExprKind::Block(
@@ -1836,7 +1873,7 @@ mod tests {
                         Box::new(None),
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(5)),
-                            Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32)))
+                            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
                         ))
                     )))
                 )))

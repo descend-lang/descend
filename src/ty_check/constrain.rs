@@ -39,7 +39,9 @@ pub(super) fn inst_fn_ty_scheme(
         .iter()
         .map(|i| match i.kind {
             Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
-            Kind::DataTy => ArgKinded::DataTy(fresh_ident(&i.ident.name, DataTy::Ident)),
+            Kind::DataTy => {
+                ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
+            }
             Kind::Nat => ArgKinded::Nat(fresh_ident(&i.ident.name, Nat::Ident)),
             Kind::Memory => ArgKinded::Memory(fresh_ident(&i.ident.name, Memory::Ident)),
             Kind::Provenance => {
@@ -256,17 +258,21 @@ impl Constrainable for DataTy {
         other: &Self,
         constr_map: &mut ConstrainMap,
     ) -> TyResult<()> {
-        match (self, other) {
-            (DataTy::Ident(i), _) => other.bind_to_ident(ty_ctx, i, constr_map, BoundKind::Upper),
-            (_, DataTy::Ident(i)) => self.bind_to_ident(ty_ctx, i, constr_map, BoundKind::Lower),
-            (DataTy::Scalar(sty1), DataTy::Scalar(sty2)) => {
+        match (&self.dty, &other.dty) {
+            (DataTyKind::Ident(i), _) => {
+                other.bind_to_ident(ty_ctx, i, constr_map, BoundKind::Upper)
+            }
+            (_, DataTyKind::Ident(i)) => {
+                self.bind_to_ident(ty_ctx, i, constr_map, BoundKind::Lower)
+            }
+            (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
                 if sty1 != sty2 {
                     Err(TyError::CannotUnify)
                 } else {
                     Ok(())
                 }
             }
-            (DataTy::Ref(prv1, own1, mem1, dty1), DataTy::Ref(prv2, own2, mem2, dty2)) => {
+            (DataTyKind::Ref(prv1, own1, mem1, dty1), DataTyKind::Ref(prv2, own2, mem2, dty2)) => {
                 if own1 != own2 {
                     return Err(TyError::CannotUnify);
                 }
@@ -274,30 +280,30 @@ impl Constrainable for DataTy {
                 mem1.constrain(ty_ctx, mem2, constr_map)?;
                 dty1.constrain(ty_ctx, dty2, constr_map)
             }
-            (DataTy::Tuple(elem_dtys1), DataTy::Tuple(elem_dtys2)) => elem_dtys1
+            (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => elem_dtys1
                 .iter()
                 .zip(elem_dtys2)
                 .try_for_each(|(dty1, dty2)| dty1.constrain(ty_ctx, dty2, constr_map)),
-            (DataTy::Array(dty1, n1), DataTy::Array(dty2, n2)) => {
+            (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
                 dty1.constrain(ty_ctx, dty2, constr_map)?;
                 n1.constrain(ty_ctx, n2, constr_map)
             }
-            (DataTy::ArrayShape(dty1, n1), DataTy::ArrayShape(dty2, n2)) => {
+            (DataTyKind::ArrayShape(dty1, n1), DataTyKind::ArrayShape(dty2, n2)) => {
                 dty1.constrain(ty_ctx, dty2, constr_map)?;
                 n1.constrain(ty_ctx, n2, constr_map)
             }
-            (DataTy::At(dty1, mem1), DataTy::At(dty2, mem2)) => {
+            (DataTyKind::At(dty1, mem1), DataTyKind::At(dty2, mem2)) => {
                 dty1.constrain(ty_ctx, dty2, constr_map)?;
                 mem1.constrain(ty_ctx, mem2, constr_map)
             }
-            (DataTy::Atomic(sty1), DataTy::Atomic(sty2)) => {
+            (DataTyKind::Atomic(sty1), DataTyKind::Atomic(sty2)) => {
                 if sty1 != sty2 {
                     Err(TyError::CannotUnify)
                 } else {
                     Ok(())
                 }
             }
-            (DataTy::ThreadHierchy(th1), DataTy::ThreadHierchy(th2)) => {
+            (DataTyKind::ThreadHierchy(th1), DataTyKind::ThreadHierchy(th2)) => {
                 match (th1.as_ref(), th2.as_ref()) {
                     (
                         ThreadHierchyTy::BlockGrp(n1, n2, n3, n4, n5, n6),
@@ -325,11 +331,11 @@ impl Constrainable for DataTy {
                     _ => Err(TyError::CannotUnify),
                 }
             }
-            (DataTy::Range, DataTy::Range) => Ok(()), // FIXME/ REMOVE
-            (DataTy::RawPtr(_), DataTy::RawPtr(_)) => {
+            (DataTyKind::Range, DataTyKind::Range) => Ok(()), // FIXME/ REMOVE
+            (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
                 unimplemented!()
             }
-            (DataTy::Dead(_), _) => {
+            (DataTyKind::Dead(_), _) => {
                 panic!()
             }
             _ => Err(TyError::CannotUnify),
@@ -587,8 +593,8 @@ impl<'a> VisitMut for ApplySubst<'a> {
     }
 
     fn visit_dty(&mut self, dty: &mut DataTy) {
-        match dty {
-            DataTy::Ident(ident) if self.subst.dty_map.contains_key(&ident.name) => {
+        match &mut dty.dty {
+            DataTyKind::Ident(ident) if self.subst.dty_map.contains_key(&ident.name) => {
                 *dty = self.subst.dty_map.get(&ident.name).unwrap().clone()
             }
             _ => visit_mut::walk_dty(self, dty),
@@ -654,8 +660,8 @@ impl<'a> VisitMut for SubstIdent<'a, Ty> {
 
 impl<'a> VisitMut for SubstIdent<'a, DataTy> {
     fn visit_dty(&mut self, dty: &mut DataTy) {
-        match dty {
-            DataTy::Ident(ident) if ident.name == self.ident.name => *dty = self.term.clone(),
+        match &mut dty.dty {
+            DataTyKind::Ident(ident) if ident.name == self.ident.name => *dty = self.term.clone(),
             _ => visit_mut::walk_dty(self, dty),
         }
     }

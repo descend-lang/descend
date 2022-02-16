@@ -27,36 +27,41 @@ pub(super) fn ownership_safe(
         let pl_ctx_no_deref = pl_ctx.without_innermost_deref();
         // Γ(π) = &r ωπ τπ
         match ty_ctx.place_ty(&most_spec_pl)?.ty {
-            TyKind::Data(DataTy::Ref(Provenance::Value(prv_val_name), ref_own, _, _)) => {
-                ownership_safe_deref(
-                    ty_checker,
-                    kind_ctx,
-                    ty_ctx,
-                    exec,
-                    reborrows,
-                    own,
-                    &pl_ctx_no_deref,
-                    &most_spec_pl,
-                    prv_val_name.as_str(),
-                    ref_own,
-                    &p.split_tag_path,
-                )
-            }
-            TyKind::Data(DataTy::Ref(Provenance::Ident(_), ref_own, _, _)) => {
-                ownership_safe_deref_abs(
-                    ty_checker,
-                    kind_ctx,
-                    ty_ctx,
-                    exec,
-                    reborrows,
-                    own,
-                    &pl_ctx_no_deref,
-                    &most_spec_pl,
-                    ref_own,
-                    &p.split_tag_path,
-                )
-            }
-            TyKind::Data(DataTy::RawPtr(_)) => ownership_safe_deref_raw(
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Ref(Provenance::Value(prv_val_name), ref_own, _, _),
+                ..
+            }) => ownership_safe_deref(
+                ty_checker,
+                kind_ctx,
+                ty_ctx,
+                exec,
+                reborrows,
+                own,
+                &pl_ctx_no_deref,
+                &most_spec_pl,
+                prv_val_name.as_str(),
+                ref_own,
+                &p.split_tag_path,
+            ),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Ref(Provenance::Ident(_), ref_own, _, _),
+                ..
+            }) => ownership_safe_deref_abs(
+                ty_checker,
+                kind_ctx,
+                ty_ctx,
+                exec,
+                reborrows,
+                own,
+                &pl_ctx_no_deref,
+                &most_spec_pl,
+                ref_own,
+                &p.split_tag_path,
+            ),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::RawPtr(_),
+                ..
+            }) => ownership_safe_deref_raw(
                 ty_checker,
                 kind_ctx,
                 ty_ctx,

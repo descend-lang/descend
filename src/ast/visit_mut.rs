@@ -98,33 +98,33 @@ pub fn walk_th_hierchy<V: VisitMut>(visitor: &mut V, th_hierchy: &mut ThreadHier
 }
 
 pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
-    match dty {
-        DataTy::Ident(ident) => visitor.visit_ident(ident),
-        DataTy::Scalar(sty) => visitor.visit_scalar_ty(sty),
-        DataTy::Atomic(aty) => visitor.visit_scalar_ty(aty),
-        DataTy::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
-        DataTy::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
-        DataTy::Array(dty, n) => {
+    match &mut dty.dty {
+        DataTyKind::Ident(ident) => visitor.visit_ident(ident),
+        DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
+        DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
+        DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
+        DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
+        DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
         }
-        DataTy::ArrayShape(dty, n) => {
+        DataTyKind::ArrayShape(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n);
         }
-        DataTy::At(dty, mem) => {
+        DataTyKind::At(dty, mem) => {
             visitor.visit_dty(dty);
             visitor.visit_mem(mem)
         }
-        DataTy::Ref(prv, own, mem, dty) => {
+        DataTyKind::Ref(prv, own, mem, dty) => {
             visitor.visit_prv(prv);
             visitor.visit_own(own);
             visitor.visit_mem(mem);
             visitor.visit_dty(dty)
         }
-        DataTy::RawPtr(dty) => visitor.visit_dty(dty),
-        DataTy::Range => (),
-        DataTy::Dead(dty) => visitor.visit_dty(dty),
+        DataTyKind::RawPtr(dty) => visitor.visit_dty(dty),
+        DataTyKind::Range => (),
+        DataTyKind::Dead(dty) => visitor.visit_dty(dty),
     }
 }
 

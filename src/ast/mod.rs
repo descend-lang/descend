@@ -215,8 +215,8 @@ impl Expr {
             }
 
             fn visit_dty(&mut self, dty: &mut DataTy) {
-                match dty {
-                    DataTy::Ident(ident) => {
+                match &mut dty.dty {
+                    DataTyKind::Ident(ident) => {
                         if let Some(ArgKinded::Ty(Ty {
                             ty: TyKind::Data(dty_arg),
                             ..
@@ -784,8 +784,17 @@ impl ThreadHierchyTy {
     }
 }
 
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
+pub struct DataTy {
+    pub dty: DataTyKind,
+    pub constraints: Vec<Constraint>,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum DataTy {
+pub enum DataTyKind {
     Ident(Ident),
     Scalar(ScalarTy),
     Atomic(ScalarTy),
@@ -803,10 +812,26 @@ pub enum DataTy {
 }
 
 impl DataTy {
-    pub fn non_copyable(&self) -> bool {
-        use DataTy::*;
+    pub fn new(dty: DataTyKind) -> Self {
+        DataTy {
+            dty,
+            constraints: vec![],
+            span: None,
+        }
+    }
 
-        match self {
+    pub fn with_span(dty: DataTyKind, span: Span) -> Self {
+        DataTy {
+            dty,
+            constraints: vec![],
+            span: Some(span),
+        }
+    }
+
+    pub fn non_copyable(&self) -> bool {
+        use DataTyKind::*;
+
+        match &self.dty {
             Scalar(_) => false,
             Atomic(_) => false,
             Ident(_) => true,
@@ -831,8 +856,8 @@ impl DataTy {
     }
 
     pub fn is_fully_alive(&self) -> bool {
-        use DataTy::*;
-        match self {
+        use DataTyKind::*;
+        match &self.dty {
             Scalar(_)
             | RawPtr(_)
             | Range
@@ -854,30 +879,31 @@ impl DataTy {
         if self == dty {
             return true;
         }
-        match dty {
-            DataTy::Scalar(_) | DataTy::Ident(_) | DataTy::ThreadHierchy(_) | DataTy::Range => {
-                false
-            }
-            DataTy::Dead(_) => panic!("unexpected"),
-            DataTy::Atomic(sty) => self == &DataTy::Scalar(sty.clone()),
-            DataTy::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
-            DataTy::RawPtr(elem_dty) => self.occurs_in(elem_dty),
-            DataTy::Tuple(elem_dtys) => {
+        match &dty.dty {
+            DataTyKind::Scalar(_)
+            | DataTyKind::Ident(_)
+            | DataTyKind::ThreadHierchy(_)
+            | DataTyKind::Range => false,
+            DataTyKind::Dead(_) => panic!("unexpected"),
+            DataTyKind::Atomic(sty) => &self.dty == &DataTyKind::Scalar(sty.clone()),
+            DataTyKind::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
+            DataTyKind::RawPtr(elem_dty) => self.occurs_in(elem_dty),
+            DataTyKind::Tuple(elem_dtys) => {
                 let mut found = false;
                 for elem_dty in elem_dtys {
                     found = self.occurs_in(elem_dty);
                 }
                 found
             }
-            DataTy::Array(elem_dty, _) => self.occurs_in(elem_dty),
-            DataTy::ArrayShape(elem_dty, _) => self.occurs_in(elem_dty),
-            DataTy::At(elem_dty, _) => self.occurs_in(elem_dty),
+            DataTyKind::Array(elem_dty, _) => self.occurs_in(elem_dty),
+            DataTyKind::ArrayShape(elem_dty, _) => self.occurs_in(elem_dty),
+            DataTyKind::At(elem_dty, _) => self.occurs_in(elem_dty),
         }
     }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
-        use DataTy::*;
-        match self {
+        use DataTyKind::*;
+        match &self.dty {
             Scalar(_) | Atomic(_) | Ident(_) | Range | ThreadHierchy(_) | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
@@ -898,13 +924,13 @@ impl DataTy {
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
-        use DataTy::*;
-        match self {
+        use DataTyKind::*;
+        match &self.dty {
             Scalar(_) | Atomic(_) | Range => self.clone(),
             Ident(id) => {
                 if &ident_kinded.ident == id && ident_kinded.kind == Kind::DataTy {
                     match with {
-                        ArgKinded::Ident(idk) => Ident(idk.clone()),
+                        ArgKinded::Ident(idk) => DataTy::new(Ident(idk.clone())),
                         ArgKinded::DataTy(dty) => dty.clone(),
                         _ => {
                             panic!("Trying to substitute data type identifier with non-type value.")
@@ -914,35 +940,37 @@ impl DataTy {
                     self.clone()
                 }
             }
-            ThreadHierchy(th_hy) => {
-                ThreadHierchy(Box::new(th_hy.subst_ident_kinded(ident_kinded, with)))
-            }
-            Ref(prv, own, mem, dty) => Ref(
+            ThreadHierchy(th_hy) => DataTy::new(ThreadHierchy(Box::new(
+                th_hy.subst_ident_kinded(ident_kinded, with),
+            ))),
+            Ref(prv, own, mem, dty) => DataTy::new(Ref(
                 prv.subst_ident_kinded(ident_kinded, with),
                 *own,
                 mem.subst_ident_kinded(ident_kinded, with),
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
-            ),
-            RawPtr(dty) => RawPtr(Box::new(dty.subst_ident_kinded(ident_kinded, with))),
-            At(dty, mem) => At(
+            )),
+            RawPtr(dty) => {
+                DataTy::new(RawPtr(Box::new(dty.subst_ident_kinded(ident_kinded, with))))
+            }
+            At(dty, mem) => DataTy::new(At(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 mem.subst_ident_kinded(ident_kinded, with),
-            ),
-            Tuple(elem_tys) => Tuple(
+            )),
+            Tuple(elem_tys) => DataTy::new(Tuple(
                 elem_tys
                     .iter()
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
-            ),
-            Array(dty, n) => Array(
+            )),
+            Array(dty, n) => DataTy::new(Array(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
-            ),
-            ArrayShape(dty, n) => ArrayShape(
+            )),
+            ArrayShape(dty, n) => DataTy::new(ArrayShape(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
-            ),
-            Dead(dty) => dty.subst_ident_kinded(ident_kinded, with),
+            )),
+            Dead(dty) => DataTy::new(Dead(Box::new(dty.subst_ident_kinded(ident_kinded, with)))),
         }
     }
 }

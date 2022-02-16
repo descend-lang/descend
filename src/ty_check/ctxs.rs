@@ -175,24 +175,50 @@ impl TyCtx {
         }
 
         fn explode(pl: internal::Place, ty: Ty) -> Vec<TypedPlace> {
-            use DataTy as d;
+            use DataTyKind as d;
 
             match &ty.ty {
                 TyKind::Ident(_)
                 | TyKind::Fn(_, _, _, _)
-                | TyKind::Data(d::Range)
-                | TyKind::Data(d::Atomic(_))
-                | TyKind::Data(d::ThreadHierchy(_))
-                | TyKind::Data(d::Scalar(_))
-                | TyKind::Data(d::Array(_, _))
-                | TyKind::Data(d::ArrayShape(_, _))
-                | TyKind::Data(d::At(_, _))
-                | TyKind::Data(d::Ref(_, _, _, _))
-                | TyKind::Data(d::RawPtr(_))
-                | TyKind::Data(d::Ident(_))
-                | TyKind::Data(d::Dead(_))
+                | TyKind::Data(DataTy { dty: d::Range, .. })
+                | TyKind::Data(DataTy {
+                    dty: d::Atomic(_), ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::ThreadHierchy(_),
+                    ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::Scalar(_), ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::Array(_, _),
+                    ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::ArrayShape(_, _),
+                    ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::At(_, _), ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::Ref(_, _, _, _),
+                    ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::RawPtr(_), ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::Ident(_), ..
+                })
+                | TyKind::Data(DataTy {
+                    dty: d::Dead(_), ..
+                })
                 | TyKind::Dead(_) => vec![(pl, ty.clone())],
-                TyKind::Data(d::Tuple(tys)) => {
+                TyKind::Data(DataTy {
+                    dty: d::Tuple(tys), ..
+                }) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index = explode(
@@ -237,7 +263,10 @@ impl TyCtx {
             let mut res_ty = ty;
             for n in path {
                 match &res_ty.ty {
-                    TyKind::Data(DataTy::Tuple(elem_tys)) => {
+                    TyKind::Data(DataTy {
+                        dty: DataTyKind::Tuple(elem_tys),
+                        ..
+                    }) => {
                         if elem_tys.len() <= *n {
                             return Err(CtxError::IllegalProjection);
                         }
@@ -271,7 +300,10 @@ impl TyCtx {
 
             let idx = path.first().unwrap();
             match orig_ty.ty {
-                TyKind::Data(DataTy::Tuple(mut elem_tys)) => {
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Tuple(mut elem_tys),
+                    ..
+                }) => {
                     elem_tys[*idx] = if let TyKind::Data(dty) = set_ty_for_path_in_ty(
                         Ty::new(TyKind::Data(elem_tys[*idx].clone())),
                         &path[1..],
@@ -283,7 +315,7 @@ impl TyCtx {
                     } else {
                         panic!("Trying create non-data type as part of data type.")
                     };
-                    Ty::new(TyKind::Data(DataTy::Tuple(elem_tys)))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys))))
                 }
                 TyKind::TupleView(mut elem_tys) => {
                     elem_tys[*idx] =
@@ -312,7 +344,9 @@ impl TyCtx {
                     TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::TupleView(elem_tys) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
-                    TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::Dead(Box::new(dty.clone())))),
+                    TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(
+                        Box::new(dty.clone()),
+                    )))),
                     TyKind::Dead(_) => {
                         panic!("Cannot kill dead type.")
                     }
@@ -528,7 +562,7 @@ fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
     let x = IdentTyped::new(
         Ident::new("x"),
-        Ty::new(TyKind::Data(DataTy::Scalar(ScalarTy::I32))),
+        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
         Mutability::Const,
     );
     let place = internal::Place::new(x.ident.clone(), vec![]);
@@ -536,6 +570,9 @@ fn test_kill_place_ident() {
     ty_ctx = ty_ctx.kill_place(&place);
     assert!(matches!(
         ty_ctx.idents_typed().next().unwrap().ty.ty,
-        TyKind::Data(DataTy::Dead(_))
+        TyKind::Data(DataTy {
+            dty: DataTyKind::Dead(_),
+            ..
+        })
     ));
 }

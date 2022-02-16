@@ -3,7 +3,7 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{CompilUnit, DataTy, Ident, PlaceExprKind, TyKind};
+use crate::ast::{CompilUnit, DataTy, DataTyKind, Ident, PlaceExprKind, TyKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -29,7 +29,10 @@ pub fn gen(compil_unit: &CompilUnit, idx_checks: bool) -> String {
                 !is_shape_ty(p.ty.as_ref().unwrap())
                     && !matches!(
                         &p.ty.as_ref().unwrap().ty,
-                        desc::TyKind::Data(DataTy::ThreadHierchy(_))
+                        desc::TyKind::Data(DataTy {
+                            dty: DataTyKind::ThreadHierchy(_),
+                            ..
+                        })
                     )
             })
         })
@@ -167,7 +170,13 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bo
         ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut),
         body: gen_stmt(
             body_expr,
-            !matches!(ret_ty, desc::DataTy::Scalar(desc::ScalarTy::Unit)),
+            !matches!(
+                ret_ty,
+                desc::DataTy {
+                    dty: DataTyKind::Scalar(desc::ScalarTy::Unit),
+                    ..
+                }
+            ),
             &mut CodegenCtx::new(),
             comp_unit,
             false,
@@ -186,6 +195,7 @@ fn gen_stmt(
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
+    use desc::DataTyKind::*;
     use desc::ExprKind::*;
     match &expr.expr {
         Let(mutbl, ident, _, e) => {
@@ -203,10 +213,16 @@ fn gen_stmt(
                     ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
                 );
                 cu::Stmt::Skip
-            } else if let desc::TyKind::Data(desc::DataTy::At(dty, desc::Memory::GpuShared)) =
-                &e.ty.as_ref().unwrap().ty
+            } else if let desc::TyKind::Data(desc::DataTy {
+                dty: At(dty, desc::Memory::GpuShared),
+                ..
+            }) = &e.ty.as_ref().unwrap().ty
             {
-                let cu_ty = if let desc::DataTy::Array(elem_dty, n) = dty.as_ref() {
+                let cu_ty = if let desc::DataTy {
+                    dty: DataTyKind::Array(elem_dty, n),
+                    ..
+                } = dty.as_ref()
+                {
                     cu::Ty::CArray(
                         Box::new(gen_ty(
                             &desc::TyKind::Data(elem_dty.as_ref().clone()),
@@ -394,7 +410,10 @@ fn gen_stmt(
         For(ident, coll_expr, body) => {
             if matches!(
                 coll_expr.ty.as_ref().unwrap().ty,
-                desc::TyKind::Data(desc::DataTy::Range)
+                desc::TyKind::Data(desc::DataTy {
+                    dty: DataTyKind::Range,
+                    ..
+                })
             ) {
                 gen_for_range(
                     ident,
@@ -806,7 +825,10 @@ fn gen_par_for(
     let (pindex, sync_stmt) = match &parall_collec.ty.as_ref().unwrap().ty {
         // TODO Refactor
         //  The same things exists in ty_check where only threadHierchyTy for elem types is returned
-        desc::TyKind::Data(DataTy::ThreadHierchy(th_hy)) => match th_hy.as_ref() {
+        desc::TyKind::Data(DataTy {
+            dty: DataTyKind::ThreadHierchy(th_hy),
+            ..
+        }) => match th_hy.as_ref() {
             desc::ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
                 (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
             }
@@ -914,14 +936,27 @@ fn gen_check_idx_stmt(
     is_dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
+    use desc::DataTyKind::*;
     use desc::ExprKind::*;
     if let Index(pl_expr, i) = &expr.expr {
         if idx_checks && is_dev_fun {
             let n = match &pl_expr.ty.as_ref().expect(&format!("{:?}", pl_expr)).ty {
-                TyKind::Data(DataTy::Array(_, m)) => m,
-                TyKind::Data(DataTy::Ref(_, _, _, a)) => match a.as_ref() {
-                    DataTy::Array(_, m) => m,
-                    DataTy::ArrayShape(_, m) => m,
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Array(_, m),
+                    ..
+                }) => m,
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Ref(_, _, _, a),
+                    ..
+                }) => match a.as_ref() {
+                    DataTy {
+                        dty: DataTyKind::Array(_, m),
+                        ..
+                    } => m,
+                    DataTy {
+                        dty: ArrayShape(_, m),
+                        ..
+                    } => m,
                     _ => panic!("cannot index into non array type!"),
                 },
                 t => panic!("cannot index into non array type! {:?}", t),
@@ -937,7 +972,7 @@ fn gen_check_idx_stmt(
                     cu::Stmt::Expr(cu::Expr::FunCall {
                         fun: Box::new(cu::Expr::Ident("descend::atomic_set".to_string())),
                         template_args: gen_args_kinded(&vec![ArgKinded::Ty(Ty::new(
-                            TyKind::Data(DataTy::Scalar(ScalarTy::I32)),
+                            TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                         ))]),
                         args: vec![
                             cu::Expr::Ident("global_failure".to_string()),
@@ -1008,14 +1043,15 @@ fn gen_expr(
             })
         }
         Ref(_, _, pl_expr) => match &expr.ty.as_ref().unwrap().ty {
-            desc::TyKind::Data(desc::DataTy::Ref(_, _, desc::Memory::GpuShared, _)) => {
-                CheckedExpr::Expr(gen_pl_expr(
-                    pl_expr,
-                    &codegen_ctx.shape_ctx,
-                    comp_unit,
-                    idx_checks,
-                ))
-            }
+            desc::TyKind::Data(desc::DataTy {
+                dty: DataTyKind::Ref(_, _, desc::Memory::GpuShared, _),
+                ..
+            }) => CheckedExpr::Expr(gen_pl_expr(
+                pl_expr,
+                &codegen_ctx.shape_ctx,
+                comp_unit,
+                idx_checks,
+            )),
             _ => CheckedExpr::Expr(cu::Expr::Ref(Box::new(gen_pl_expr(
                 pl_expr,
                 &codegen_ctx.shape_ctx,
@@ -1092,7 +1128,13 @@ fn gen_expr(
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
                 expr,
-                !matches!(ty.as_ref(), desc::DataTy::Scalar(desc::ScalarTy::Unit)),
+                !matches!(
+                    ty.as_ref(),
+                    desc::DataTy {
+                        dty: DataTyKind::Scalar(desc::ScalarTy::Unit),
+                        ..
+                    }
+                ),
                 codegen_ctx,
                 comp_unit,
                 dev_fun,
@@ -1526,7 +1568,10 @@ fn contains_shape_or_th_hierchy_params(param_decls: &[desc::ParamDecl]) -> bool 
         is_shape_ty(p.ty.as_ref().unwrap())
             || matches!(
                 p.ty.as_ref().unwrap().ty,
-                desc::TyKind::Data(DataTy::ThreadHierchy(_))
+                desc::TyKind::Data(DataTy {
+                    dty: DataTyKind::ThreadHierchy(_),
+                    ..
+                })
             )
     })
 }
@@ -1541,7 +1586,10 @@ fn filter_and_map_shape_th_hierchy_params<'a>(
             is_shape_ty(p.ty.as_ref().unwrap())
                 || matches!(
                     &p.ty.as_ref().unwrap().ty,
-                    desc::TyKind::Data(DataTy::ThreadHierchy(_))
+                    desc::TyKind::Data(DataTy {
+                        dty: DataTyKind::ThreadHierchy(_),
+                        ..
+                    })
                 )
         });
     let (shape_params_with_args, th_hierchy_params_with_args): (Vec<_>, Vec<_>) =
@@ -1935,7 +1983,11 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ..
         }) => None,
         desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::Data(DataTy::ThreadHierchy(_)),
+            ty:
+                desc::TyKind::Data(DataTy {
+                    dty: DataTyKind::ThreadHierchy(_),
+                    ..
+                }),
             ..
         }) => None,
         desc::ArgKinded::Ty(desc::Ty {
@@ -1958,13 +2010,15 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
 // as opposed to a Cuda-AST and there, the order of the const is different
 // when it comes to pointers (C things).
 fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
-    use desc::DataTy as d;
+    use desc::DataTyKind as d;
     use desc::TyKind::*;
 
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
         Ident(ident) => cu::Ty::Ident(ident.name.clone()),
-        Data(d::Atomic(a)) => match a {
+        Data(DataTy {
+            dty: d::Atomic(a), ..
+        }) => match a {
             desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
             desc::ScalarTy::U32 => cu::Ty::Atomic(cu::ScalarTy::U32),
@@ -1972,7 +2026,9 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             desc::ScalarTy::Bool => cu::Ty::Atomic(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Atomic(cu::ScalarTy::Gpu),
         },
-        Data(d::Scalar(s)) => match s {
+        Data(DataTy {
+            dty: d::Scalar(s), ..
+        }) => match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
             desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
             desc::ScalarTy::U32 => cu::Ty::Scalar(cu::ScalarTy::U32),
@@ -1980,16 +2036,23 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
         },
-        Data(d::Tuple(tys)) => {
-            cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect())
-        }
-        Data(d::Array(ty, n)) => {
-            cu::Ty::Array(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), n.clone())
-        }
-        Data(d::At(ty, mem)) => {
+        Data(DataTy {
+            dty: d::Tuple(tys), ..
+        }) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect()),
+        Data(DataTy {
+            dty: d::Array(ty, n),
+            ..
+        }) => cu::Ty::Array(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), n.clone()),
+        Data(DataTy {
+            dty: d::At(ty, mem),
+            ..
+        }) => {
             if let desc::Memory::GpuShared = mem {
                 let dty = match ty.as_ref() {
-                    d::Array(dty, _) => dty.as_ref().clone(),
+                    DataTy {
+                        dty: d::Array(dty, _),
+                        ..
+                    } => dty.as_ref().clone(),
                     _ => ty.as_ref().clone(),
                 };
                 cu::Ty::Ptr(
@@ -2012,11 +2075,17 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 cu::Ty::Buffer(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), buff_kind)
             }
         }
-        Data(d::Ref(_, own, _, ty)) => {
+        Data(DataTy {
+            dty: d::Ref(_, own, _, ty),
+            ..
+        }) => {
             let tty = Box::new(gen_ty(
                 &Data(match ty.as_ref() {
                     // Pointers to arrays point to the element type.
-                    desc::DataTy::Array(elem_ty, _) => elem_ty.as_ref().clone(),
+                    desc::DataTy {
+                        dty: d::Array(elem_ty, _),
+                        ..
+                    } => elem_ty.as_ref().clone(),
                     _ => ty.as_ref().clone(),
                 }),
                 m,
@@ -2027,10 +2096,15 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 cu::Ty::PtrConst(tty, None)
             }
         }
-        Data(d::RawPtr(ty)) => {
+        Data(DataTy {
+            dty: d::RawPtr(ty), ..
+        }) => {
             let tty = Box::new(gen_ty(
                 &Data(match ty.as_ref() {
-                    desc::DataTy::Array(elem_ty, _) => panic!("should never happen"),
+                    desc::DataTy {
+                        dty: d::Array(elem_ty, _),
+                        ..
+                    } => panic!("should never happen"),
                     _ => ty.as_ref().clone(),
                 }),
                 desc::Mutability::Mut,
@@ -2038,12 +2112,20 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             cu::Ty::Ptr(tty, None)
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
-        Data(d::Ident(ident)) => cu::Ty::Ident(ident.name.clone()),
-        Data(d::ArrayShape(_, _)) => panic!(
+        Data(DataTy {
+            dty: d::Ident(ident),
+            ..
+        }) => cu::Ty::Ident(ident.name.clone()),
+        Data(DataTy {
+            dty: d::ArrayShape(_, _),
+            ..
+        }) => panic!(
             "Cannot generate array shape types.\
             Anything with this type should have been compiled away."
         ),
-        Data(d::Dead(_)) => {
+        Data(DataTy {
+            dty: d::Dead(_), ..
+        }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
         Fn(_, _, _, _) => unimplemented!("needed?"),
@@ -2074,10 +2156,22 @@ fn is_dev_fun(exec: desc::Exec) -> bool {
 
 fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
     match &ty.ty {
-        desc::TyKind::Data(desc::DataTy::Array(_, n)) => Some(n.clone()),
-        desc::TyKind::Data(desc::DataTy::Ref(_, _, _, arr)) => match arr.as_ref() {
-            desc::DataTy::Array(_, n) => Some(n.clone()),
-            desc::DataTy::ArrayShape(_, n) => Some(n.clone()),
+        desc::TyKind::Data(desc::DataTy {
+            dty: DataTyKind::Array(_, n),
+            ..
+        }) => Some(n.clone()),
+        desc::TyKind::Data(desc::DataTy {
+            dty: DataTyKind::Ref(_, _, _, arr),
+            ..
+        }) => match arr.as_ref() {
+            desc::DataTy {
+                dty: DataTyKind::Array(_, n),
+                ..
+            } => Some(n.clone()),
+            desc::DataTy {
+                dty: DataTyKind::ArrayShape(_, n),
+                ..
+            } => Some(n.clone()),
             _ => None,
         },
         _ => None,
@@ -2183,7 +2277,13 @@ impl ParallelityCollec {
 }
 
 fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
-    matches!(ty.ty, desc::TyKind::Data(DataTy::ThreadHierchy(_)))
+    matches!(
+        ty.ty,
+        desc::TyKind::Data(DataTy {
+            dty: DataTyKind::ThreadHierchy(_),
+            ..
+        })
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -2363,14 +2463,32 @@ impl ShapeExpr {
     fn create_group_shape(args: &[desc::Expr], f_ty: &TyKind, shape_ctx: &ShapeCtx) -> ShapeExpr {
         if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, args.first()) {
             if let (
-                TyKind::Data(DataTy::Ref(_, _, _, arr_ty)),
-                TyKind::Data(DataTy::Ref(_, _, _, arg_arr_ty)),
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Ref(_, _, _, arr_ty),
+                    ..
+                }),
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Ref(_, _, _, arg_arr_ty),
+                    ..
+                }),
             ) = (&ret_ty.ty, &v.ty.as_ref().unwrap().ty)
             {
-                if let (DataTy::ArrayShape(inner_ty, _), DataTy::ArrayShape(_, n)) =
-                    (arr_ty.as_ref(), arg_arr_ty.as_ref())
+                if let (
+                    DataTy {
+                        dty: DataTyKind::ArrayShape(inner_ty, _),
+                        ..
+                    },
+                    DataTy {
+                        dty: DataTyKind::ArrayShape(_, n),
+                        ..
+                    },
+                ) = (arr_ty.as_ref(), arg_arr_ty.as_ref())
                 {
-                    if let DataTy::ArrayShape(_, s) = inner_ty.as_ref() {
+                    if let DataTy {
+                        dty: DataTyKind::ArrayShape(_, s),
+                        ..
+                    } = inner_ty.as_ref()
+                    {
                         return ShapeExpr::Group {
                             size: s.clone(),
                             n: n.clone(),
@@ -2542,7 +2660,7 @@ fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
                                     // TODO how to deal with View??!! This is a problem!
                                     //  Ident only for Ty but not for DataTy or ViewTy?
                                     *gen_arg = ArgKinded::Ty(Ty::new(desc::TyKind::Data(
-                                        DataTy::Ident(to_be_kinded),
+                                        DataTy::new(DataTyKind::Ident(to_be_kinded)),
                                     )))
                                 }
                                 _ => panic!("This kind can not be referred to with an identifier."),
@@ -2642,8 +2760,17 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
 
 fn is_shape_ty(ty: &desc::Ty) -> bool {
     match &ty.ty {
-        desc::TyKind::Data(desc::DataTy::Ref(_, _, _, arr_vty)) => {
-            matches!(arr_vty.as_ref(), desc::DataTy::ArrayShape(_, _))
+        desc::TyKind::Data(desc::DataTy {
+            dty: DataTyKind::Ref(_, _, _, arr_vty),
+            ..
+        }) => {
+            matches!(
+                arr_vty.as_ref(),
+                desc::DataTy {
+                    dty: DataTyKind::ArrayShape(_, _),
+                    ..
+                }
+            )
         }
         desc::TyKind::TupleView(_) => true,
         _ => false,
