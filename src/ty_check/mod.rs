@@ -5,12 +5,14 @@ mod ctxs;
 mod error;
 pub mod pre_decl;
 mod subty;
+mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
-use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
+use crate::ast::{PrvRel, ThreadHierchyTy};
 use crate::error::ErrorReported;
-use constrain::TermConstrainer;
+use crate::ty_check::subty::multiple_outlives;
+use crate::ty_check::unify::{Constrainable, PrvConstr};
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
@@ -32,7 +34,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
 
 struct TyChecker {
     gl_ctx: GlobalCtx,
-    term_constr: TermConstrainer,
+    // term_constr: TermConstrainer,
 }
 
 impl TyChecker {
@@ -40,10 +42,10 @@ impl TyChecker {
         let gl_ctx = GlobalCtx::new()
             .append_from_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
-        let term_constr = TermConstrainer::new();
+        // let term_constr = TermConstrainer::new();
         TyChecker {
             gl_ctx,
-            term_constr,
+            // term_constr,
         }
     }
 
@@ -85,26 +87,27 @@ impl TyChecker {
         );
         let ty_ctx = TyCtx::from(glf_frame);
 
-        let mut body_ctx = self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
+        self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
 
         // t <= t_f
-        self.term_constr.constrain(
-            &mut body_ctx,
-            gf.body_expr.ty.as_ref().unwrap(),
-            &Ty::new(TyKind::Data(gf.ret_dty.clone())),
-        )?;
-        // let empty_ty_ctx = subty::check(
-        //     &kind_ctx,
-        //     TyCtx::new(),
-        //     gf.body_expr.ty.as_ref().unwrap().dty(),
-        //     &gf.ret_dty,
+        // unify::constrain(
+        //     gf.body_expr.ty.as_ref().unwrap(),
+        //     &Ty::new(TyKind::Data(gf.ret_dty.clone())),
         // )?;
+
+        //coalesce::coalesce_ty(&mut self.term_constr.constr_map, &mut body_ctx, )
+        let empty_ty_ctx = subty::check(
+            &kind_ctx,
+            TyCtx::new(),
+            gf.body_expr.ty.as_ref().unwrap().dty(),
+            &gf.ret_dty,
+        )?;
         //TODO why is this the case?
-        // assert!(
-        //     empty_ty_ctx.is_empty(),
-        //     "Expected typing context to be empty. But TyCtx:\n {:?}",
-        //     empty_ty_ctx
-        // );
+        assert!(
+            empty_ty_ctx.is_empty(),
+            "Expected typing context to be empty. But TyCtx:\n {:?}",
+            empty_ty_ctx
+        );
         Ok(())
     }
 
@@ -830,7 +833,7 @@ impl TyChecker {
                     ident: ident.clone(),
                     ty: match ty {
                         Some(tty) => tty.clone(),
-                        None => Ty::new(constrain::fresh_ident("param_ty", TyKind::Ident)),
+                        None => Ty::new(utils::fresh_ident("param_ty", TyKind::Ident)),
                     },
                     mutbl: *mutbl,
                 })
@@ -879,10 +882,7 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let mut ty_ctx_with_prvs = ty_ctx.append_frame(vec![]);
         for prv in prvs {
-            ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping {
-                prv: prv.clone(),
-                loans: std::collections::HashSet::new(),
-            })
+            ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping::new(prv))
         }
         // TODO do we have to check that the prvs in res_ty_ctx have loans now?
         let body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_prvs, exec, body)?;
@@ -906,9 +906,9 @@ impl TyChecker {
         pl_expr: &PlaceExpr,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let mut assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let pl = pl_expr.to_place().unwrap();
-        let place_ty = assigned_val_ty_ctx.place_ty(&pl)?;
+        let mut place_ty = assigned_val_ty_ctx.place_ty(&pl)?;
         // FIXME this should be checked for ArrayViews as well
         if matches!(&place_ty.ty, TyKind::TupleView(_)) {
             return Err(TyError::String(format!(
@@ -949,15 +949,11 @@ impl TyChecker {
             // }
         }
 
-        self.term_constr
-            .constrain(&mut assigned_val_ty_ctx, &place_ty, e.ty.as_ref().unwrap())?;
-        // Context substitution?
-        // TODO integrate into unification
-        let after_subty_ctx = subty::check(
+        let after_subty_ctx = TyChecker::sub_unify(
             kind_ctx,
             assigned_val_ty_ctx,
-            e.ty.as_ref().unwrap().dty(),
-            place_ty.dty(),
+            e.ty.as_mut().unwrap(),
+            &mut place_ty,
         )?;
         let adjust_place_ty_ctx = after_subty_ctx.set_place_ty(&pl, e.ty.as_ref().unwrap().clone());
         Ok((
@@ -976,7 +972,7 @@ impl TyChecker {
         deref_expr: &mut PlaceExpr,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let mut assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         self.place_expr_ty_under_exec_own(
             kind_ctx,
             &assigned_val_ty_ctx,
@@ -985,40 +981,37 @@ impl TyChecker {
             deref_expr,
         )?;
 
-        if !deref_expr.ty.as_ref().unwrap().is_fully_alive() {
+        borrow_check::ownership_safe(
+            self,
+            kind_ctx,
+            &assigned_val_ty_ctx,
+            exec,
+            &[],
+            Ownership::Uniq,
+            &deref_expr,
+        )
+        .map_err(|err| {
+            TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
+        })?;
+
+        let deref_ty = &mut deref_expr.ty.as_mut().unwrap();
+        let after_subty_ctx = TyChecker::sub_unify(
+            kind_ctx,
+            assigned_val_ty_ctx,
+            e.ty.as_mut().unwrap(),
+            deref_ty,
+        )?;
+
+        if !deref_ty.is_fully_alive() {
             return Err(TyError::String(
                 "Trying to assign through reference, to a type which is not fully alive."
                     .to_string(),
             ));
         }
 
-        if let TyKind::Data(deref_dty) = &deref_expr.ty.as_ref().unwrap().ty {
-            borrow_check::ownership_safe(
-                self,
-                kind_ctx,
-                &assigned_val_ty_ctx,
-                exec,
-                &[],
-                Ownership::Uniq,
-                deref_expr,
-            )
-            .map_err(|err| {
-                TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
-            })?;
-
-            self.term_constr.constrain(
-                &mut assigned_val_ty_ctx,
-                e.ty.as_ref().unwrap().dty(),
-                deref_dty,
-            )?;
-            // let after_subty_ctx = subty::check(
-            //     kind_ctx,
-            //     assigned_val_ty_ctx,
-            //     e.ty.as_ref().unwrap().dty(),
-            //     deref_dty,
-            // )?;
+        if let TyKind::Data(_) = &deref_ty.ty {
             Ok((
-                assigned_val_ty_ctx.without_reborrow_loans(deref_expr),
+                after_subty_ctx.without_reborrow_loans(deref_expr),
                 Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                     ScalarTy::Unit,
                 )))),
@@ -1254,6 +1247,12 @@ impl TyChecker {
                 TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::Bool))),
             ),
         };
+        // let fresh_id = constrain::fresh_ident("p_bin_op", DataTyKind::Ident);
+        // let operand_ty = Ty::new(TyKind::Data(DataTy::new(fresh_id)));
+        // self.term_constr
+        //     .constrain(&mut rhs_ty_ctx, lhs_ty, &operand_ty)?;
+        // self.term_constr
+        //     .constrain(&mut rhs_ty_ctx, rhs_ty, &operand_ty)?;
         match (&lhs_ty.ty, &rhs_ty.ty) {
             (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
                 (
@@ -1276,6 +1275,7 @@ impl TyChecker {
             bin_op, lhs, rhs
         ))),
         }
+        // Ok((rhs_ty_ctx, operand_ty))
     }
 
     // FIXME currently assumes that binary operators exist only for f32 and i32
@@ -1305,7 +1305,6 @@ impl TyChecker {
         }
     }
 
-    // TODO base implementation on ty_check_dep_app
     fn ty_check_app(
         &mut self,
         kind_ctx: &KindCtx,
@@ -1318,7 +1317,7 @@ impl TyChecker {
         // TODO check well-kinded: FrameTyping, Prv, Ty
         let (mut res_ty_ctx, f_ty) = self.ty_check_dep_app(kind_ctx, ty_ctx, exec, ef, k_args)?;
         ef.ty = Some(f_ty);
-        if let TyKind::Fn(_, _, exec_f, ret_ty_f) = &ef.ty.as_ref().unwrap().ty {
+        let exec_f = if let TyKind::Fn(_, _, exec_f, _) = &ef.ty.as_ref().unwrap().ty {
             if !exec_f.callable_in(exec) {
                 return Err(TyError::String(format!(
                     "Trying to apply function for execution resource `{}` \
@@ -1326,31 +1325,38 @@ impl TyChecker {
                     exec_f, exec
                 )));
             }
-            for arg in args.iter_mut() {
-                res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, exec, arg)?;
-            }
-            let ret_ty = Ty::new(constrain::fresh_ident("ret_ty", TyKind::Ident));
-            self.term_constr.constrain(
-                &mut res_ty_ctx,
-                ef.ty.as_ref().unwrap(),
-                &Ty::new(TyKind::Fn(
-                    vec![],
-                    args.iter()
-                        .map(|arg| arg.ty.as_ref().unwrap().clone())
-                        .collect(),
-                    *exec_f,
-                    Box::new(ret_ty.clone()),
-                )),
-            )?;
-
-            // TODO check provenance relations
-            Ok((res_ty_ctx, *ret_ty_f.clone()))
+            exec_f.clone()
         } else {
-            Err(TyError::String(format!(
+            return Err(TyError::String(format!(
                 "The provided function expression\n {:?}\n does not have a function type.",
                 ef
-            )))
+            )));
+        };
+
+        for arg in args.iter_mut() {
+            res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, exec, arg)?;
         }
+        let ret_ty = Ty::new(utils::fresh_ident("ret_ty", TyKind::Ident));
+        let (subst, _) = unify::constrain(
+            ef.ty.as_mut().unwrap(),
+            &mut Ty::new(TyKind::Fn(
+                vec![],
+                args.iter()
+                    .map(|arg| arg.ty.as_ref().unwrap().clone())
+                    .collect(),
+                exec_f,
+                Box::new(ret_ty),
+            )),
+        )?;
+
+        unify::substitute(&subst, ef.ty.as_mut().unwrap());
+
+        if let TyKind::Fn(_, _, _, ret_ty_f) = &ef.ty.as_ref().unwrap().ty {
+            // TODO check provenance relations
+            return Ok((res_ty_ctx, *ret_ty_f.clone()));
+        }
+
+        panic!("Expected function type but found something else.")
     }
 
     fn ty_check_dep_app(
@@ -1378,7 +1384,7 @@ impl TyChecker {
                 .map(|ty| TyChecker::subst_ident_kinded(gen_params, k_args, ty))
                 .collect();
             let subst_out_ty = TyChecker::subst_ident_kinded(gen_params, k_args, out_ty);
-            let mono_fun_ty = constrain::inst_fn_ty_scheme(
+            let mono_fun_ty = unify::inst_fn_ty_scheme(
                 &gen_params[k_args.len()..],
                 &subst_param_tys,
                 *exec_f,
@@ -1583,45 +1589,43 @@ impl TyChecker {
         exec: Exec,
         mutbl: Mutability,
         ident: &mut Ident,
-        ty: &Option<Ty>,
+        ty: &mut Option<Ty>,
         expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let mut ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
-        let e1_ty = expr.ty.as_ref().unwrap();
-        let ty = if let Some(tty) = ty { tty } else { e1_ty };
+        let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
+        let e_ty = expr.ty.as_mut().unwrap();
+        let (ty_ctx_sub, ident_ty) = if let Some(tty) = ty {
+            (
+                TyChecker::sub_unify(kind_ctx, ty_ctx_e, e_ty, tty)?,
+                tty.clone(),
+            )
+        } else {
+            (ty_ctx_e, e_ty.clone())
+        };
 
-        // let ty_ctx_sub = match (&ty.ty, &e1_ty.ty) {
-        //     (TyKind::TupleView(_), TyKind::TupleView(_)) => {
-        //         // TODO use subtyping
-        //         if ty != e1_ty {
-        //             return Err(TyError::String(format!(
-        //                 "Trying to bind view expression of type {:?} to identifier of type {:?}",
-        //                 e1_ty, ty
-        //             )));
-        //         }
-        //         ty_ctx_e
-        //     }
-        //     (TyKind::Data(dty), TyKind::Data(e1_dty)) => {
-        //         subty::check(kind_ctx, ty_ctx_e, e1_dty, dty)?
-        //     }
-        //     _ => {
-        //         return Err(TyError::String(format!(
-        //             "Trying to bind expression of type {:?} to identifier of type {:?}",
-        //             e1_ty, ty
-        //         )))
-        //     }
-        // };
-        self.term_constr.constrain(&mut ty_ctx_e, e1_ty, ty)?;
-        let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ty.clone(), mutbl);
-        // FIXME track context after subtyping
-        //let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
-        let ty_ctx_with_ident = ty_ctx_e.append_ident_typed(ident_with_annotated_ty);
+        let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ident_ty, mutbl);
+        let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
         Ok((
             ty_ctx_with_ident,
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::Unit,
             )))),
         ))
+    }
+
+    fn sub_unify<C: Constrainable>(
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        sub: &mut C,
+        sup: &mut C,
+    ) -> TyResult<TyCtx> {
+        let (subst, prv_rels) = unify::constrain(sub, sup)?;
+        let outlives_ctx = multiple_outlives(
+            kind_ctx,
+            ty_ctx,
+            prv_rels.iter().map(|PrvConstr(p1, p2)| (p1, p2)),
+        )?;
+        Ok(outlives_ctx)
     }
 
     // TODO repsect exec?
@@ -1670,7 +1674,7 @@ impl TyChecker {
     fn ty_check_pl_expr_with_deref(
         &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: TyCtx,
+        mut ty_ctx: TyCtx,
         exec: Exec,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
@@ -1686,11 +1690,14 @@ impl TyChecker {
                 pl_expr
             )));
         }
-        if pl_expr.ty.as_ref().unwrap().copyable() {
-            Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
-        } else {
-            Err(TyError::String("Data type is not copyable.".to_string()))
-        }
+        unify::constrain(
+            pl_expr.ty.as_mut().unwrap(),
+            &mut Ty::new(TyKind::Data(DataTy::with_constr(
+                utils::fresh_ident("pl_deref", DataTyKind::Ident),
+                vec![Constraint::Copyable],
+            ))),
+        )?;
+        Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
     }
 
     fn ty_check_pl_expr_without_deref(
@@ -1754,7 +1761,7 @@ impl TyChecker {
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
-        prv_val_name: &str,
+        prv_val_name: &Option<String>,
         own: Ownership,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
@@ -1765,13 +1772,22 @@ impl TyChecker {
             }
         }
 
-        if !ty_ctx.loans_in_prv(prv_val_name)?.is_empty() {
+        let (impl_ctx, prv_val_name) = if let Some(prv) = prv_val_name.as_ref() {
+            (ty_ctx, prv.clone())
+        } else {
+            let name = utils::fresh_name("r");
+            (ty_ctx.append_prv_mapping(PrvMapping::new(&name)), name)
+        };
+
+        if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
             return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
         }
-        let loans = borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], own, pl_expr)
-            .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
+        let loans =
+            borrow_check::ownership_safe(self, kind_ctx, &impl_ctx, exec, &[], own, pl_expr)
+                .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
 
-        let mems = self.place_expr_ty_mems_under_exec_own(kind_ctx, &ty_ctx, exec, own, pl_expr)?;
+        let mems =
+            self.place_expr_ty_mems_under_exec_own(kind_ctx, &impl_ctx, exec, own, pl_expr)?;
         mems.iter()
             .try_for_each(|mem| Self::accessible_memory(exec, mem))?;
 
@@ -1841,7 +1857,7 @@ impl TyChecker {
             rmem,
             Box::new(reffed_ty),
         ));
-        let res_ty_ctx = ty_ctx.extend_loans_for_prv(prv_val_name, loans)?;
+        let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
         Ok((res_ty_ctx, Ty::new(TyKind::Data(res_dty))))
     }
 
@@ -2119,10 +2135,8 @@ impl TyChecker {
                 | DataTyKind::RawPtr(_)
                 | DataTyKind::Dead(_) => {}
                 DataTyKind::Ident(ident) => {
-                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty)
-                        && !matches!(ident.name.chars().next(), Some('$'))
-                    {
-                        return Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())));
+                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
+                        Err(CtxError::KindedIdentNotFound(ident.clone()))?
                     }
                 }
                 DataTyKind::Ref(Provenance::Value(prv), own, mem, dty) => {

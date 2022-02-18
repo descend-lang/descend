@@ -105,6 +105,9 @@ fn outlives(
         (Ident(longer_ident), Value(shorter_val)) => {
             outl_check_ident_val_prv(kind_ctx, ty_ctx, longer_ident, shorter_val)
         }
+        (PlaceHolder, _) | (_, PlaceHolder) => {
+            panic!("Did not expect provenance place holder which should have been substituted.")
+        }
     }
 }
 

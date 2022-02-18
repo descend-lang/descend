@@ -3,7 +3,7 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{CompilUnit, DataTy, DataTyKind, Ident, PlaceExprKind, TyKind};
+use crate::ast::{CompilUnit, DataTy, DataTyKind, Ident, PlaceExprKind, ThreadHierchyTy, TyKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -527,7 +527,7 @@ fn gen_for_each(
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
-    let i_name = crate::utils::fresh_name("i__");
+    let i_name = crate::ast::utils::fresh_name("i__");
     let i_decl = cu::Stmt::VarDecl {
         name: i_name.clone(),
         ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
@@ -2202,19 +2202,40 @@ impl ParallelityCollec {
                 }) = &f.expr
                 {
                     if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP {
-                        if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
-                            (&gen_args[0], &gen_args[1], args.first())
+                        if let (TyKind::Fn(_, _, _, ret_ty), Some(p)) =
+                            (&f.ty.as_ref().unwrap().ty, args.first())
                         {
-                            return ParallelityCollec::Split {
-                                pos: k.clone(),
-                                coll_size: n.clone(),
-                                parall_expr: Box::new(ParallelityCollec::create_from(
-                                    p, parall_ctx,
-                                )),
-                            };
+                            if let (
+                                TyKind::TupleView(elem_tys),
+                                TyKind::Data(DataTy {
+                                    dty: DataTyKind::ThreadHierchy(th_hierchy),
+                                    ..
+                                }),
+                            ) = (&ret_ty.as_ref().ty, &p.ty.as_ref().unwrap().ty)
+                            {
+                                if let (
+                                    TyKind::Data(DataTy {
+                                        dty: DataTyKind::ThreadHierchy(th_hrchy),
+                                        ..
+                                    }),
+                                    ThreadHierchyTy::ThreadGrp(n1, n2, n3),
+                                ) = (&elem_tys.first().unwrap().ty, th_hierchy.as_ref())
+                                {
+                                    if let ThreadHierchyTy::ThreadGrp(k, _, _) = th_hrchy.as_ref() {
+                                        return ParallelityCollec::Split {
+                                            pos: k.clone(),
+                                            coll_size: n1.clone(),
+                                            parall_expr: Box::new(ParallelityCollec::create_from(
+                                                p, parall_ctx,
+                                            )),
+                                        };
+                                    }
+                                }
+                            }
                         }
                         panic!("Cannot create `split` from the provided arguments.");
                     } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
+                        unimplemented!("Needs to take generic arguments from function type.");
                         if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
                             return ParallelityCollec::Split {
                                 pos: k.clone(),
@@ -2357,6 +2378,7 @@ impl ShapeExpr {
                     ..
                 }) = &f.expr
                 {
+                    let f_ty = &f.ty.as_ref().unwrap().ty;
                     if ident.name == crate::ty_check::pre_decl::TO_VIEW
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {
@@ -2364,13 +2386,13 @@ impl ShapeExpr {
                     } else if ident.name == crate::ty_check::pre_decl::GROUP
                         || ident.name == crate::ty_check::pre_decl::GROUP_MUT
                     {
-                        ShapeExpr::create_group_shape(args, &f.ty.as_ref().unwrap().ty, shape_ctx)
-                    } else if ident.name == crate::ty_check::pre_decl::JOIN {
-                        ShapeExpr::create_join_shape(gen_args, args, shape_ctx)
-                    } else if ident.name == crate::ty_check::pre_decl::ZIP {
-                        ShapeExpr::create_zip_shape(gen_args, args, shape_ctx)
-                    } else if ident.name == crate::ty_check::pre_decl::TRANSPOSE {
-                        ShapeExpr::create_transpose_shape(gen_args, args, shape_ctx)
+                        ShapeExpr::create_group_shape(args, f_ty, shape_ctx)
+                    // } else if ident.name == crate::ty_check::pre_decl::JOIN {
+                    //     ShapeExpr::create_join_shape(args, f_ty, shape_ctx)
+                    // } else if ident.name == crate::ty_check::pre_decl::ZIP {
+                    //     ShapeExpr::create_zip_shape(args, f_ty, shape_ctx)
+                    // } else if ident.name == crate::ty_check::pre_decl::TRANSPOSE {
+                    //     ShapeExpr::create_transpose_shape(args, f_ty, shape_ctx)
                     } else {
                         unimplemented!()
                     }
@@ -2500,66 +2522,60 @@ impl ShapeExpr {
         }
         panic!("Cannot create `group` from the provided arguments.");
     }
+    //
+    // fn create_join_shape(args: &[desc::Expr], f_ty: &TyKind, shape_ctx: &ShapeCtx) -> ShapeExpr {
+    //     if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, args.first()) {
+    //     if let (desc::ArgKinded::Nat(m), desc::ArgKinded::Nat(n), Some(v)) =
+    //         (&gen_args[0], &gen_args[1], args.first())
+    //     {
+    //         return ShapeExpr::Join {
+    //             m: m.clone(),
+    //             n: n.clone(),
+    //             shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
+    //         };
+    //     }
+    //     panic!("Cannot create `to_shape` from the provided arguments.");
+    // }
 
-    fn create_join_shape(
-        gen_args: &[desc::ArgKinded],
-        args: &[desc::Expr],
-        shape_ctx: &ShapeCtx,
-    ) -> ShapeExpr {
-        if let (desc::ArgKinded::Nat(m), desc::ArgKinded::Nat(n), Some(v)) =
-            (&gen_args[0], &gen_args[1], args.first())
-        {
-            return ShapeExpr::Join {
-                m: m.clone(),
-                n: n.clone(),
-                shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
-            };
-        }
-        panic!("Cannot create `to_shape` from the provided arguments.");
-    }
+    // fn create_zip_shape(args: &[desc::Expr], f_ty: &TyKind, shape_ctx: &ShapeCtx) -> ShapeExpr {
+    //     if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, &args[0], args[1]) {
+    //     if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(t1), desc::ArgKinded::Ty(t2), v1, v2) =
+    //         (&gen_args[0], &gen_args[1], &gen_args[2], &args[0], &args[1])
+    //     {
+    //         return ShapeExpr::Zip {
+    //             n: n.clone(),
+    //             shapes: vec![
+    //                 ShapeExpr::create_from(v1, shape_ctx),
+    //                 ShapeExpr::create_from(v2, shape_ctx),
+    //             ],
+    //         };
+    //     }
+    //     panic!(
+    //         "Cannot create `zip` from the provided arguments:\n{:?},\n{:?},\n{:?}",
+    //         &gen_args[0], &gen_args[1], &gen_args[2]
+    //     );
+    // }
 
-    fn create_zip_shape(
-        gen_args: &[desc::ArgKinded],
-        args: &[desc::Expr],
-        shape_ctx: &ShapeCtx,
-    ) -> ShapeExpr {
-        if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(t1), desc::ArgKinded::Ty(t2), v1, v2) =
-            (&gen_args[0], &gen_args[1], &gen_args[2], &args[0], &args[1])
-        {
-            return ShapeExpr::Zip {
-                n: n.clone(),
-                shapes: vec![
-                    ShapeExpr::create_from(v1, shape_ctx),
-                    ShapeExpr::create_from(v2, shape_ctx),
-                ],
-            };
-        }
-        panic!(
-            "Cannot create `zip` from the provided arguments:\n{:?},\n{:?},\n{:?}",
-            &gen_args[0], &gen_args[1], &gen_args[2]
-        );
-    }
-
-    fn create_transpose_shape(
-        gen_args: &[desc::ArgKinded],
-        args: &[desc::Expr],
-        shape_ctx: &ShapeCtx,
-    ) -> ShapeExpr {
-        if let (
-            desc::ArgKinded::Nat(m),
-            desc::ArgKinded::Nat(n),
-            desc::ArgKinded::Ty(ty),
-            Some(v),
-        ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
-        {
-            return ShapeExpr::Transpose {
-                m: m.clone(),
-                n: n.clone(),
-                shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
-            };
-        }
-        panic!("Cannot create `to_shape` from the provided arguments.");
-    }
+    // fn create_transpose_shape(
+    //     args: &[desc::Expr],
+    //     f_ty: &TyKind,
+    //     shape_ctx: &ShapeCtx,
+    // ) -> ShapeExpr {
+    //     if let (
+    //         desc::ArgKinded::Nat(m),
+    //         desc::ArgKinded::Nat(n),
+    //         desc::ArgKinded::Ty(ty),
+    //         Some(v),
+    //     ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
+    //     {
+    //         return ShapeExpr::Transpose {
+    //             m: m.clone(),
+    //             n: n.clone(),
+    //             shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
+    //         };
+    //     }
+    //     panic!("Cannot create `to_shape` from the provided arguments.");
+    // }
 
     fn collect_and_rename_input_exprs(&mut self) -> Vec<(String, desc::Expr)> {
         fn collect_and_rename_input_exprs_rec(

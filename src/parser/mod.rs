@@ -8,6 +8,8 @@ use error::ParseError;
 use crate::error::ErrorReported;
 pub use source::*;
 
+use crate::ast::utils::fresh_ident;
+
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
     Ok(CompilUnit::new(
@@ -251,7 +253,7 @@ peg::parser! {
                     }
                 }
             }
-            "&" _ prov:prov_value() __ own:ownership() __ p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? {
+            "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? {
                 match idx {
                     None => Expr::new(ExprKind::Ref(prov, own, p)),
                     Some(idx) => Expr::new(ExprKind::BorrowIndex(prov, own, p,idx))
@@ -445,8 +447,11 @@ peg::parser! {
             / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
                 DataTyKind::ArrayShape(Box::new(dty), n)
             }
-            / "&" _ prov:provenance() _ own:ownership() _ mem:memory_kind() _ dty:dty() {
-                DataTyKind::Ref(prov, own, mem, Box::new(dty))
+            / "&" _ prov:(prv:provenance() __ { prv })? own:ownership() __ mem:memory_kind() __ dty:dty() {
+                DataTyKind::Ref(match prov {
+                    Some(prv) => prv,
+                    None => fresh_ident("r", Provenance::Ident)
+                }, own, mem, Box::new(dty))
             }
 
         pub(crate) rule th_hy() -> ThreadHierchyTy =
@@ -1325,7 +1330,7 @@ mod tests {
         assert_eq!(
             descend::expression_seq("&'prov uniq variable"),
             Ok(Expr::new(ExprKind::Ref(
-                String::from("'prov"),
+                Some(String::from("'prov")),
                 Ownership::Uniq,
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("variable")))
             )))
@@ -1333,7 +1338,7 @@ mod tests {
         assert_eq!(
             descend::expression_seq("&'prov uniq var[7]"),
             Ok(Expr::new(ExprKind::BorrowIndex(
-                String::from("'prov"),
+                Some(String::from("'prov")),
                 Ownership::Uniq,
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var"))),
                 Nat::Lit(7)
@@ -1342,7 +1347,7 @@ mod tests {
         assert_eq!(
             descend::expression_seq("&'prov uniq var[token]"),
             Ok(Expr::new(ExprKind::BorrowIndex(
-                String::from("'prov"),
+                Some(String::from("'prov")),
                 Ownership::Uniq,
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var"))),
                 Nat::Ident(Ident::new("token"))

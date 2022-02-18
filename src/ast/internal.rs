@@ -44,6 +44,15 @@ pub struct PrvMapping {
     pub loans: HashSet<Loan>,
 }
 
+impl PrvMapping {
+    pub fn new(name: &str) -> Self {
+        PrvMapping {
+            prv: name.to_string(),
+            loans: HashSet::new(),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Loan {
     pub place_expr: PlaceExpr,

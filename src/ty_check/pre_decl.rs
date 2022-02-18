@@ -1,6 +1,6 @@
 use crate::ast::TyKind::Data;
 use crate::ast::{
-    BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
+    BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
     Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
 };
 
@@ -29,6 +29,8 @@ pub static TRANSPOSE: &str = "transpose";
 
 pub static SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub static SPLIT_WARP: &str = "split_warp";
+
+pub static ADD: &str = "+";
 
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
@@ -724,6 +726,23 @@ fn group_ty(own: Ownership) -> Ty {
                 ),
             ))),
         ))))),
+    ))
+}
+
+// +: <t: ty>(t, t) -> t
+fn bin_op(op: BinOp) -> Ty {
+    let t = Ident::new("t");
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::Ty,
+    };
+    Ty::new(TyKind::Fn(
+        vec![t_ty],
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
+            t.clone(),
+        ))))],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t))))),
     ))
 }
 

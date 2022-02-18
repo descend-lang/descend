@@ -7,7 +7,6 @@ mod codegen;
 pub mod error;
 mod parser;
 mod ty_check;
-mod utils;
 
 pub fn compile(file_path: &str) -> Result<String, ErrorReported> {
     let source = parser::SourceCode::from_file(file_path)?;

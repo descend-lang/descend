@@ -1,17 +1,21 @@
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::fmt;
+use std::fmt::Formatter;
+
+use descend_derive::span_derive;
+pub use span::*;
+
+use crate::ast::visit_mut::VisitMut;
+use crate::parser::SourceCode;
+
 pub mod internal;
 
 mod span;
 #[macro_use]
 pub mod visit;
+pub mod utils;
 pub mod visit_mut;
-
-use crate::parser::SourceCode;
-pub use span::*;
-use std::fmt;
-
-use descend_derive::span_derive;
-use std::collections::HashMap;
-use std::fmt::Formatter;
 
 #[derive(Clone, Debug)]
 pub struct CompilUnit<'a> {
@@ -261,8 +265,8 @@ pub enum ExprKind {
     // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
     Proj(Box<Expr>, usize),
     // Borrow Expressions
-    Ref(String, Ownership, PlaceExpr),
-    BorrowIndex(String, Ownership, PlaceExpr, Nat),
+    Ref(Option<String>, Ownership, PlaceExpr),
+    BorrowIndex(Option<String>, Ownership, PlaceExpr, Nat),
     Block(Vec<String>, Box<Expr>),
     // Variable declaration
     // let mut x: ty;
@@ -643,6 +647,14 @@ impl Ty {
         }
     }
 
+    pub fn with_constr(ty: TyKind, constraints: Vec<Constraint>) -> Ty {
+        Ty {
+            ty,
+            constraints,
+            span: None,
+        }
+    }
+
     pub fn with_span(ty: TyKind, span: Span) -> Ty {
         Ty {
             ty,
@@ -655,6 +667,17 @@ impl Ty {
         match &self.ty {
             TyKind::Data(dty) => dty,
             _ => panic!("Expected data type but found {:?}", self),
+        }
+    }
+
+    pub fn dty_mut(&mut self) -> &mut DataTy {
+        if !matches!(&mut self.ty, TyKind::Data(_)) {
+            panic!("Expected data type but found {:?}", self)
+        }
+        if let TyKind::Data(dty) = &mut self.ty {
+            dty
+        } else {
+            panic!("cannot reach")
         }
     }
 
@@ -816,6 +839,14 @@ impl DataTy {
         DataTy {
             dty,
             constraints: vec![],
+            span: None,
+        }
+    }
+
+    pub fn with_constr(dty: DataTyKind, constraints: Vec<Constraint>) -> Self {
+        DataTy {
+            dty,
+            constraints,
             span: None,
         }
     }
@@ -987,7 +1018,6 @@ pub enum ScalarTy {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Provenance {
-    // TODO Value should be Ident too
     Value(String),
     Ident(Ident),
 }
@@ -1185,9 +1215,6 @@ impl PartialEq for Nat {
         }
     }
 }
-
-use crate::ast::visit_mut::VisitMut;
-use std::cmp::Ordering;
 
 impl PartialOrd for Nat {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {

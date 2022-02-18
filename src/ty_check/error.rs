@@ -47,6 +47,8 @@ pub enum TyError {
     // When a parallel collection consits of other parallel elements, a for-with requires an
     // identifier for these elements.
     MissingParallelCollectionIdent,
+    // If a provenance place holder is not substituted for a real provenance
+    CouldNotInferProvenance,
     UnexpectedType,
     // TODO remove as soon as possible
     String(String),
