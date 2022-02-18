@@ -1697,7 +1697,11 @@ impl TyChecker {
                 vec![Constraint::Copyable],
             ))),
         )?;
-        Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
+        if pl_expr.ty.as_ref().unwrap().copyable() {
+            Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
+        } else {
+            Err(TyError::String("Data type is not copyable.".to_string()))
+        }
     }
 
     fn ty_check_pl_expr_without_deref(
