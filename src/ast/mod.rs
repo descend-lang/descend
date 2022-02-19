@@ -307,7 +307,13 @@ pub enum ExprKind {
         Box<Expr>,
     ),
     TupleView(Vec<Expr>),
-    Split(String, String, Ownership, Nat, Box<PlaceExpr>),
+    Split(
+        Option<String>,
+        Option<String>,
+        Ownership,
+        Nat,
+        Box<PlaceExpr>,
+    ),
     Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),

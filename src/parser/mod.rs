@@ -204,8 +204,9 @@ peg::parser! {
                     |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
                 )
             }
-            begin:position!() "split" _ r1:prov_value() _ r2:prov_value() _ o:ownership() _
-                    s:nat() _ view:place_expression() end:position!() {
+            begin:position!() "split" __ r1:(prv:prov_value() __ { prv })?
+                    r2:(prv:prov_value()  __ { prv })? o:ownership() __
+                    s:nat() __ view:place_expression() end:position!() {
                 Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
             }
             begin:position!() func:ident() place_end:position!() _

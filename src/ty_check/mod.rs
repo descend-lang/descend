@@ -276,8 +276,8 @@ impl TyChecker {
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
-        r1: &str,
-        r2: &str,
+        r1: &Option<String>,
+        r2: &Option<String>,
         own: Ownership,
         s: &Nat,
         view: &mut PlaceExpr,
@@ -298,7 +298,10 @@ impl TyChecker {
             (fst, snd)
         }
 
-        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, own, view)?;
+        let (ty_ctx_prv1, prv1) = TyChecker::infer_prv(ty_ctx, r1);
+        let (ty_ctx_prv1_prv2, prv2) = TyChecker::infer_prv(ty_ctx_prv1, r2);
+
+        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx_prv1_prv2, exec, own, view)?;
         let split_ty = if let TyKind::Data(DataTy {
             dty: DataTyKind::Ref(_, _, m, arr_view_ty),
             ..
@@ -316,7 +319,7 @@ impl TyChecker {
                 }
                 Ty::new(TyKind::TupleView(vec![
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-                        Provenance::Value(r1.to_string()),
+                        Provenance::Value(prv1.clone()),
                         own,
                         m.clone(),
                         Box::new(DataTy::new(DataTyKind::ArrayShape(
@@ -325,7 +328,7 @@ impl TyChecker {
                         ))),
                     )))),
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-                        Provenance::Value(r2.to_string()),
+                        Provenance::Value(prv2.clone()),
                         own,
                         m.clone(),
                         Box::new(DataTy::new(DataTyKind::ArrayShape(
@@ -341,16 +344,16 @@ impl TyChecker {
             return Err(TyError::UnexpectedType);
         };
 
-        if !(ty_ctx.loans_in_prv(r1)?.is_empty()) {
-            return Err(TyError::PrvValueAlreadyInUse(r1.to_string()));
+        if !(ty_ctx_prv1_prv2.loans_in_prv(&prv1)?.is_empty()) {
+            return Err(TyError::PrvValueAlreadyInUse(prv1));
         }
-        if !(ty_ctx.loans_in_prv(r2)?.is_empty()) {
-            return Err(TyError::PrvValueAlreadyInUse(r2.to_string()));
+        if !(ty_ctx_prv1_prv2.loans_in_prv(&prv2)?.is_empty()) {
+            return Err(TyError::PrvValueAlreadyInUse(prv2));
         }
         let loans = borrow_check::ownership_safe(
             self,
             kind_ctx,
-            &ty_ctx,
+            &ty_ctx_prv1_prv2,
             exec,
             &[],
             own,
@@ -358,19 +361,29 @@ impl TyChecker {
         )
         .map_err(|err| TyError::ConflictingBorrow(Box::new(view.clone()), Ownership::Uniq, err))?;
         let (fst_loans, snd_loans) = split_loans(loans);
-        let r1_to_loans = PrvMapping {
-            prv: r1.to_string(),
+        let prv1_to_loans = PrvMapping {
+            prv: prv1,
             loans: fst_loans,
         };
-        let r2_to_loans = PrvMapping {
-            prv: r2.to_string(),
+        let prv2_to_loans = PrvMapping {
+            prv: prv2,
             loans: snd_loans,
         };
-        let split_ty_ctx = ty_ctx
-            .append_prv_mapping(r1_to_loans)
-            .append_prv_mapping(r2_to_loans);
+        let split_ty_ctx = ty_ctx_prv1_prv2
+            .append_prv_mapping(prv1_to_loans)
+            .append_prv_mapping(prv2_to_loans);
 
         Ok((split_ty_ctx, split_ty))
+    }
+
+    fn infer_prv(ty_ctx: TyCtx, prv_name: &Option<String>) -> (TyCtx, String) {
+        let (ty_ctx_r1, r1) = if let Some(prv) = prv_name.as_ref() {
+            (ty_ctx, prv.clone())
+        } else {
+            let name = utils::fresh_name("r");
+            (ty_ctx.append_prv_mapping(PrvMapping::new(&name)), name)
+        };
+        (ty_ctx_r1, r1)
     }
 
     fn ty_check_for_nat(
@@ -1775,13 +1788,7 @@ impl TyChecker {
                 return Err(TyError::ConstBorrow(pl_expr.clone()));
             }
         }
-
-        let (impl_ctx, prv_val_name) = if let Some(prv) = prv_val_name.as_ref() {
-            (ty_ctx, prv.clone())
-        } else {
-            let name = utils::fresh_name("r");
-            (ty_ctx.append_prv_mapping(PrvMapping::new(&name)), name)
-        };
+        let (impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx, prv_val_name);
 
         if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
             return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
