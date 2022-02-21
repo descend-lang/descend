@@ -2,6 +2,12 @@
 
 extern crate descend;
 
+type Res = Result<(), descend::error::ErrorReported>;
+#[test]
+fn scalar_mult() -> Res{
+   Ok(println!("{}", descend::compile("examples/with_tys/scalar_mult.desc")?))
+}
+
 #[test]
 fn split_test() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
