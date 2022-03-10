@@ -18,9 +18,6 @@ pub fn gen(compil_unit: &CompilUnit, idx_checks: bool) -> String {
         .to_vec()
         .into_iter()
         .map(replace_arg_kinded_idents)
-        .map(|f| inline_par_for_funs(f, &compil_unit.fun_defs))
-        // preprocessed fun defs must be collected before filtering, otherwise the lazy evaluation
-        //  will not apply replace_arg_kinded_idents to the filtered out fun defs
         .collect::<Vec<desc::FunDef>>();
     let fun_defs_to_be_generated = preproc_fun_defs
         .iter()

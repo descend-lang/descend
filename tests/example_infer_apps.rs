@@ -3,6 +3,14 @@
 extern crate descend;
 
 #[test]
+fn scale_vec_test() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/vec_scale.desc")?
+    ))
+}
+
+#[test]
 fn split_test() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
