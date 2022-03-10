@@ -6,9 +6,9 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
     let mut gpu: Gpu = gpu_device(0);
 
     let mut a_array: [i32; n] @ gpu.global =
-        gpu_alloc::<'c, 'd, cpu.stack, cpu.stack, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+        gpu_alloc_copy::<'c, 'd, cpu.stack, cpu.stack, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
     let b_array: [i32; n] @ gpu.global =
-        gpu_alloc::<'f, 'i, cpu.stack, cpu.stack, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
+        gpu_alloc_copy::<'f, 'i, cpu.stack, cpu.stack, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
     let view_a: &'r uniq gpu.global [[i32; n]] =
         to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
     let view_b: &'s shrd gpu.global [[i32; n]] =
@@ -25,8 +25,8 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
         | -[gpu.grid]-> () {
             let in0 = input.0;
             let in1 = input.1;
-            for block in grid with a_group, b_group from in0, in1 do {
-                for block with a, b from a_group, b_group do {
+            parfor block in grid with a_group, b_group from in0, in1 {
+                parfor block with a, b from a_group, b_group {
                     *a = *a + *b
                 }
             }

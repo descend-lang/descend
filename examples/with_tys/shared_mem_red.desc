@@ -4,8 +4,8 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
 ) -[cpu.thread]-> () <'r, 'c, 'd, 'e, 'f, 'g, 'h, 'm, 'u1, 'u2>{
     let mut gpu: Gpu = gpu_device(0);
 
-    let a_array = gpu_alloc::<'c, a, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, ha_array);
-    let mut out_array = gpu_alloc::<'c, 'm, cpu.stack, cpu.heap, [i32; 64]>(&'c uniq gpu, &'m shrd *h_output);
+    let a_array = gpu_alloc_copy::<'c, a, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, ha_array);
+    let mut out_array = gpu_alloc_copy::<'c, 'm, cpu.stack, cpu.heap, [i32; 64]>(&'c uniq gpu, &'m shrd *h_output);
     let view_a = to_view::<'r, gpu.global, n, i32>(&'r shrd a_array);
     let block_group = group::<1024, 'r, gpu.global, n, i32>(view_a);
     let view_out = group_mut::<1, 'm, gpu.global, 64, i32>(to_view_mut::<'m, gpu.global, 64, i32>(&'m uniq out_array));
@@ -20,11 +20,10 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
             // TODO remove decl and move out tmp declaration
             decl {
                 let mut tmp: [i32; 1024] @ gpu.shared
-            } for block in grid with ib, out_elem from block_group, view_out do {
+            } parfor block in grid with ib, out_elem from block_group, view_out {
                  let tmp_view = to_view_mut::<'e, gpu.shared, 1024, i32>(&'e uniq tmp);
-                 for block
-                 with inp, tmp_in from ib, tmp_view
-                 do { *tmp_in = *inp };
+                 parfor block
+                 with inp, tmp_in from ib, tmp_view { *tmp_in = *inp };
 
                  for_nat k in halved_range(512) <'s, 'r1, 'r2, 's1, 's2>{
                     let tmp_view = to_view_mut::<'s, gpu.shared, 1024, i32>(&'s uniq tmp);
@@ -35,17 +34,15 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
                     let active_half1 = active_halves.1;
 
                     // Fixme: At thies point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
-                    for split_thread_grp::<k, 1024, 1, 1>(block).0
-                    with a, b from active_half0, active_half1
-                    do {
+                    parfor split_thread_grp::<k, 1024, 1, 1>(block).0
+                    with a, b from active_half0, active_half1 {
                         *a = *a + *b
                     }
                  };
                  let tmp_view2 = to_view_mut::<'f, gpu.shared, 1024, i32>(&'f uniq tmp);
                  let tmp_res = (split 'u1 'u2 uniq 1 tmp_view2).0;
-                 for split_thread_grp::<1, 1024, 1, 1>(block).0
-                 with out, tmp_val from out_elem, tmp_res
-                 do {
+                 parfor split_thread_grp::<1, 1024, 1, 1>(block).0
+                 with out, tmp_val from out_elem, tmp_res {
                     *out = *tmp_val
                  }
              }

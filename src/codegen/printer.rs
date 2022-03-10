@@ -215,7 +215,21 @@ impl std::fmt::Display for Lit {
             Lit::Bool(b) => write!(f, "{}", b),
             Lit::I32(i) => write!(f, "{}", i),
             Lit::U32(u) => write!(f, "{}", u),
-            Lit::F32(fl) => write!(f, "{}", fl),
+            Lit::F32(fl) => {
+                // This is supposed to be a strict comparison. It is equal if fl is an integer.
+                if &fl.ceil() == fl {
+                    write!(f, "{}.0f", fl)
+                } else {
+                    write!(f, "{}", fl)
+                }
+            }
+            Lit::F64(d) => {
+                if &d.ceil() == d {
+                    write!(f, "{}.0", d)
+                } else {
+                    write!(f, "{}", d)
+                }
+            }
         }
     }
 }
@@ -328,6 +342,7 @@ impl std::fmt::Display for ScalarTy {
             I32 => write!(f, "descend::i32"),
             U32 => write!(f, "descend::u32"),
             F32 => write!(f, "descend::f32"),
+            F64 => write!(f, "descend::f64"),
             SizeT => write!(f, "std::size_t"),
             Bool => write!(f, "bool"),
             Memory => write!(f, "descend::Memory"),

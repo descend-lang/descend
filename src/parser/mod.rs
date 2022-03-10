@@ -285,10 +285,9 @@ peg::parser! {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
             decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
-            "for" __ par_ident:(i:ident() __ "in" __ { i })? parall_collec:expression() __
+            "parfor" __ par_ident:(i:ident() __ "in" __ { i })? parall_collec:expression() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
-            "from" __ input:expression() **<1,> (_ "," _) __
-            "do" _ body:block() {
+            "from" __ input:expression() **<1,> (_ "," _) _ body:block() {
                 Expr::new(ExprKind::ParForWith(decls, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
@@ -434,6 +433,7 @@ peg::parser! {
         /// Helper for "type @ memory" left-recursion
         rule dty_term() -> DataTyKind
             = "f32" { DataTyKind::Scalar(ScalarTy::F32) }
+            / "f64" { DataTyKind::Scalar(ScalarTy::F64) }
             / "i32" { DataTyKind::Scalar(ScalarTy::I32) }
             / "u32" { DataTyKind::Scalar(ScalarTy::U32) }
             / "bool" { DataTyKind::Scalar(ScalarTy::Bool) }
@@ -534,9 +534,9 @@ peg::parser! {
 
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
-                / "f32" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
-                / "Block" / "Warp" / "Thread" / "with" / "do")
+                / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
+                / "let"("prov")? / "if" / "else" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
+                / "Block" / "Warp" / "Thread" / "with")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.stack" / "cpu.heap" / "gpu.global" / "gpu.shared"
@@ -554,10 +554,16 @@ peg::parser! {
                 }
             }
             / l:$( ("-"? ((['1'..='9']['0'..='9']*) / "0") "." ['0'..='9']*)  (['e'|'E'] "-"?  ['0'..='9']*)? "f32"? ) { ?
-                let literal = if (l.ends_with("f32")) {&l[0..l.len()-3]} else {l};
-                match literal.parse::<f32>() {
-                    Ok(val) => Ok(Lit::F32(val)),
-                    Err(_) => Err("Error while parsing f32 literal")
+                if (l.ends_with("f32")) {
+                    match l[0..l.len()-3].parse::<f32>() {
+                        Ok(val) => Ok(Lit::F32(val)),
+                        Err(_) => Err("Error while parsing f32 literal")
+                    }
+                } else {
+                    match l.parse::<f64>() {
+                        Ok(val) => Ok(Lit::F64(val)),
+                        Err(_) => Err("Error while parsing f64 literal")
+                    }
                 }
             }
             / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") ("i32" / "u32" / "f32")?  ) { ?
@@ -978,7 +984,7 @@ mod tests {
         );
         // TODO: Do proper float comparison (test error against threshold)
         assert_eq!(
-            descend::literal("1.0"),
+            descend::literal("1.0f32"),
             Ok(Lit::F32(1.0)),
             "does not parse f32 correctly"
         );
@@ -998,12 +1004,12 @@ mod tests {
             "does not parse f32 correctly"
         );
         assert_eq!(
-            descend::literal("1.0e2"),
+            descend::literal("1.0e2f32"),
             Ok(Lit::F32(100.0)),
             "does not parse f32 in scientific notation correctly"
         );
         assert_eq!(
-            descend::literal("1.0e-2"),
+            descend::literal("1.0e-2f32"),
             Ok(Lit::F32(0.01)),
             "does not parse f32 in scientific notation correctly"
         );
@@ -1013,17 +1019,17 @@ mod tests {
             "does not parse f32 correctly"
         );
         assert_eq!(
-            descend::literal("3.75e3"),
+            descend::literal("3.75e3f32"),
             Ok(Lit::F32(3750.0)),
             "does not parse scientific notation f32 correctly"
         );
         assert_eq!(
-            descend::literal("-1234.5e-0005"),
+            descend::literal("-1234.5e-0005f32"),
             Ok(Lit::F32(-0.012345)),
             "does not parse negative scientific notation f32 correctly"
         );
         assert_eq!(
-            descend::literal("3.14159265358979323846264338327950288"), // std::f64::consts::PI
+            descend::literal("3.14159265358979323846264338327950288f32"), // std::f64::consts::PI
             Ok(Lit::F32(3.1415927)),
             "not parsing f32 float as expected"
         );
@@ -1296,7 +1302,7 @@ mod tests {
     #[test]
     fn expression_assignment() {
         assert_eq!(
-            descend::expression_seq("var_token = 7.3e2"),
+            descend::expression_seq("var_token = 7.3e2f32"),
             Ok(Expr::new(ExprKind::Assign(
                 PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var_token"))),
                 Box::new(Expr::with_type(

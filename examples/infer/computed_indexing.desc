@@ -6,14 +6,14 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
     let mut gpu: Gpu = gpu_device(0);
 
     let indices: [u32; n] @ gpu.global =
-        gpu_alloc::<'c, a, cpu.stack, cpu.heap, [u32; n]>(&'c uniq gpu, h_indices);
+        gpu_alloc_copy::<'c, a, cpu.stack, cpu.heap, [u32; n]>(&'c uniq gpu, h_indices);
     let indices_view: &'g shrd gpu.global [[u32; n]] =
         to_view::<'g, gpu.global, n, u32>(&'g shrd indices);
     let grouped_indices: &'g shrd gpu.global [[[[u32; 16]]; 4]] =
         group::<16, 'g, gpu.global, n, u32>(indices_view);
 
     let mut results: [i32; n] @ gpu.global =
-        gpu_alloc::<'d, 'e, cpu.stack, cpu.heap, [i32; n]>(&'d uniq gpu, &'e shrd *h_results);
+        gpu_alloc_copy::<'d, 'e, cpu.stack, cpu.heap, [i32; n]>(&'d uniq gpu, &'e shrd *h_results);
     let results_view: &'h uniq gpu.global [[i32; n]] =
         to_view_mut::<'h, gpu.global, n, i32>(&'h uniq results);
     let grouped_results: &'h uniq gpu.global [[[[i32; 16]]; 4]] =
@@ -21,7 +21,7 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
 
 
     let d_data: [i32; m] @ gpu.global =
-        gpu_alloc::<'f, c, cpu.stack, cpu.heap, [i32; m]>(&'f uniq gpu, h_data);
+        gpu_alloc_copy::<'f, c, cpu.stack, cpu.heap, [i32; m]>(&'f uniq gpu, h_data);
 
     exec::<4, 16, 'i, cpu.stack,
             <&'g shrd gpu.global [[[[u32; 16]]; 4]],
@@ -39,8 +39,8 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
             let results_input = inputs.1;
             let data = inputs.2;
 
-            for block in grid with indices_inp, results_inp from indices_input, results_input do {
-                for block with ind, res from indices_inp, results_inp do {
+            parfor block in grid with indices_inp, results_inp from indices_input, results_input {
+                parfor block with ind, res from indices_inp, results_inp {
                     let i = *ind;
                     *res = data[i]
                 }

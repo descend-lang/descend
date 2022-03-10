@@ -5,7 +5,7 @@ use crate::ast::{
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
-pub static GPU_ALLOC: &str = "gpu_alloc";
+pub static GPU_ALLOC: &str = "gpu_alloc_copy";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
 pub static SHARED_ALLOC: &str = "shared_alloc";
@@ -36,7 +36,7 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
         // Built-in functions
         (GPU_DEVICE, gpu_device_ty()),
-        (GPU_ALLOC, gpu_alloc_ty()),
+        (GPU_ALLOC, gpu_alloc_copy_ty()),
         (COPY_TO_HOST, copy_to_host_ty()),
         (EXEC, exec_ty()),
         (SHARED_ALLOC, shared_alloc_ty()),
@@ -385,7 +385,7 @@ fn store_atomic_host_ty() -> Ty {
 //   <r1: prv, r2: prv, m1: mem, m2: mem, d: dty>(
 //      &r1 uniq m1 Gpu, &r2 shrd m2 t
 //   ) -[cpu.thread]-> t @ gpu.global
-fn gpu_alloc_ty() -> Ty {
+fn gpu_alloc_copy_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
     let m1 = Ident::new("m1");

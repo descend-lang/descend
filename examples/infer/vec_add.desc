@@ -5,8 +5,8 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
-    let mut a_array = gpu_alloc(&uniq gpu, &shrd *ha_array);
-    let b_array = gpu_alloc(&uniq gpu, &shrd *hb_array);
+    let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
+    let b_array = gpu_alloc_copy(&uniq gpu, &shrd *hb_array);
     let view_a = group_mut::<1024>(to_view_mut(&uniq a_array));
     let view_b = group::<1024>(to_view(&shrd b_array));
     exec::<64, 1024>(
@@ -17,8 +17,8 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
         | -[gpu.grid]-> () {
             let in0 = input.0;
             let in1 = input.1;
-            for block in grid with a_group, b_group from in0, in1 do {
-                for block with a, b from a_group, b_group do {
+            parfor block in grid with a_group, b_group from in0, in1 {
+                parfor block with a, b from a_group, b_group {
                     *a = *a + *b
                 }
             }

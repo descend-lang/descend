@@ -111,6 +111,7 @@ pub(super) enum Lit {
     I32(i32),
     U32(u32),
     F32(f32),
+    F64(f64),
 }
 
 #[derive(Clone, Debug)]
@@ -200,6 +201,7 @@ pub(super) enum ScalarTy {
     I32,
     U32,
     F32,
+    F64,
     Bool,
     SizeT,
     Memory,
