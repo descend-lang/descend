@@ -1062,8 +1062,7 @@ impl fmt::Display for Provenance {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Memory {
-    CpuHeap,
-    CpuStack,
+    CpuMem,
     GpuGlobal,
     GpuShared,
     GpuLocal,
@@ -1090,8 +1089,7 @@ impl Memory {
 impl fmt::Display for Memory {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Memory::CpuStack => write!(f, "cpu.stack"),
-            Memory::CpuHeap => write!(f, "cpu.heap"),
+            Memory::CpuMem => write!(f, "cpu.mem"),
             Memory::GpuGlobal => write!(f, "gpu.global"),
             Memory::GpuShared => write!(f, "gpu.shared"),
             Memory::GpuLocal => write!(f, "gpu.local"),

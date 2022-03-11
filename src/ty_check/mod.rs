@@ -1989,7 +1989,7 @@ impl TyChecker {
 
     fn default_mem_by_exec(exec: Exec) -> Option<Memory> {
         match exec {
-            Exec::CpuThread => Some(Memory::CpuStack),
+            Exec::CpuThread => Some(Memory::CpuMem),
             Exec::GpuThread => Some(Memory::GpuLocal),
             Exec::GpuGrid => Some(Memory::GpuLocal),
             Exec::GpuBlock => Some(Memory::GpuLocal),
@@ -2104,8 +2104,7 @@ impl TyChecker {
 
     fn accessible_memory(exec: Exec, mem: &Memory) -> TyResult<()> {
         let gpu_exec_to_mem = vec![
-            (Exec::CpuThread, Memory::CpuStack),
-            (Exec::CpuThread, Memory::CpuHeap),
+            (Exec::CpuThread, Memory::CpuMem),
             (Exec::GpuThread, Memory::GpuGlobal),
             (Exec::GpuThread, Memory::GpuShared),
             (Exec::GpuThread, Memory::GpuLocal),

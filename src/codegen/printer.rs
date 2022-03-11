@@ -322,7 +322,7 @@ impl std::fmt::Display for Ty {
                 write!(f, ">")
             }
             Buffer(ty, buff_kind) => match buff_kind {
-                BufferKind::CpuHeap => write!(f, "HeapBuffer<{}>", ty),
+                BufferKind::CpuMem => write!(f, "HeapBuffer<{}>", ty),
                 BufferKind::GpuGlobal => write!(f, "GpuBuffer<{}>", ty),
                 BufferKind::Ident(name) => write!(f, "{}", name),
             },

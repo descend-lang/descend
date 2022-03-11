@@ -1,14 +1,14 @@
 fn reduce<n: nat, a: prv, b: prv>(
-  ha_array: &a uniq cpu.heap [i32; n]
+  ha_array: &a uniq cpu.mem [i32; n]
 ) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h>{
     let mut gpu: Gpu = gpu_device(0);
 
     let mut a_array: [i32; n] @ gpu.global =
-        gpu_alloc_copy::<'c, 'd, cpu.stack, cpu.heap, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
+        gpu_alloc_copy::<'c, 'd, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
     let block_group = group_mut::<1024, 'r, gpu.global, n, i32>(
         to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array));
 
-    exec::<64, 1024, 'h, cpu.stack, &'r uniq gpu.global [[[[i32; 1024]]; 64]]>(
+    exec::<64, 1024, 'h, &'r uniq gpu.global [[[[i32; 1024]]; 64]]>(
         &'h uniq gpu,
         block_group,
         | grid: BlockGrp<64, ThreadGrp<1024>>,
@@ -30,5 +30,5 @@ fn reduce<n: nat, a: prv, b: prv>(
         }
     );
 
-  copy_to_host::<'g, a, cpu.heap, [i32; n]>(&'g shrd a_array, ha_array)
+  copy_to_host::<'g, a, [i32; n]>(&'g shrd a_array, ha_array)
 }

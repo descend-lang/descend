@@ -382,48 +382,38 @@ fn store_atomic_host_ty() -> Ty {
 }
 
 // gpu_alloc:
-//   <r1: prv, r2: prv, m1: mem, m2: mem, d: dty>(
-//      &r1 uniq m1 Gpu, &r2 shrd m2 t
+//   <r1: prv, r2: prv, d: dty>(
+//      &r1 uniq cpu.mem Gpu, &r2 shrd cpu.mem t
 //   ) -[cpu.thread]-> t @ gpu.global
 fn gpu_alloc_copy_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
-    let m1 = Ident::new("m1");
-    let m2 = Ident::new("m2");
     let d = Ident::new("d");
     let r1_prv = IdentKinded {
         ident: r1.clone(),
         kind: Kind::Provenance,
     };
-    let m1_mem = IdentKinded {
-        ident: m1.clone(),
-        kind: Kind::Memory,
-    };
     let r2_prv = IdentKinded {
         ident: r2.clone(),
         kind: Kind::Provenance,
-    };
-    let m2_mem = IdentKinded {
-        ident: m2.clone(),
-        kind: Kind::Memory,
     };
     let d_dty = IdentKinded {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![r1_prv, r2_prv, m1_mem, m2_mem, d_dty],
+        vec![r1_prv, r2_prv, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
                 Ownership::Uniq,
-                Memory::Ident(m1),
+                Memory::CpuMem,
                 Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu))),
             )))),
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r2),
                 Ownership::Shrd,
-                Memory::Ident(m2),
+                Memory::CpuMem,
                 Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
             )))),
         ],
@@ -436,12 +426,11 @@ fn gpu_alloc_copy_ty() -> Ty {
 }
 
 // copy_to_host:
-//   <r1: prv, r2: prv, m: mem, d: dty>(&r1 shrd gpu.global d, &r2 uniq m d)
+//   <r1: prv, r2: prv, d: dty>(&r1 shrd gpu.global d, &r2 uniq cpu.mem d)
 //      -[cpu.thread]-> ()
 fn copy_to_host_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
-    let m = Ident::new("m");
     let d = Ident::new("d");
     let r1_prv = IdentKinded {
         ident: r1.clone(),
@@ -451,16 +440,12 @@ fn copy_to_host_ty() -> Ty {
         ident: r2.clone(),
         kind: Kind::Provenance,
     };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
     let d_dty = IdentKinded {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![r1_prv, r2_prv, m_mem, d_dty],
+        vec![r1_prv, r2_prv, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
@@ -471,7 +456,7 @@ fn copy_to_host_ty() -> Ty {
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r2),
                 Ownership::Uniq,
-                Memory::Ident(m),
+                Memory::CpuMem,
                 Box::new(DataTy::new(DataTyKind::Ident(d))),
             )))),
         ],
@@ -484,7 +469,7 @@ fn copy_to_host_ty() -> Ty {
 
 // copy_to_gpu:
 //  <r1: prv, r2: prv, d: dty>(& r1 uniq gpu.global d,
-//      & r2 shrd cpu.heap d) -[cpu.thread]-> ()
+//      & r2 shrd cpu.mem d) -[cpu.thread]-> ()
 fn copy_to_gpu_ty() -> Ty {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
@@ -513,7 +498,7 @@ fn copy_to_gpu_ty() -> Ty {
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r2),
                 Ownership::Shrd,
-                Memory::CpuHeap,
+                Memory::CpuMem,
                 Box::new(DataTy::new(DataTyKind::Ident(d))),
             )))),
         ],
@@ -524,8 +509,8 @@ fn copy_to_gpu_ty() -> Ty {
     ))
 }
 
-// exec: <blocks: nat, threads: nat, r: prv, m: mem, t: ty>(
-//        &r uniq m Gpu,
+// exec: <blocks: nat, threads: nat, r: prv, t: ty>(
+//        &r uniq cpu.mem Gpu,
 //        input: t,
 //        (BlockGrp<blocks, 1, 1, ThreadGrp<Thread, threads, 1, 1>>, t) -[gpu.grid]-> ())
 // -> ()
@@ -533,7 +518,6 @@ fn exec_ty() -> Ty {
     let blocks = Ident::new("blocks");
     let threads = Ident::new("threads");
     let r = Ident::new("r");
-    let m = Ident::new("m");
     let t = Ident::new("t");
     let blocks_nat = IdentKinded {
         ident: blocks.clone(),
@@ -547,21 +531,17 @@ fn exec_ty() -> Ty {
         ident: r.clone(),
         kind: Kind::Provenance,
     };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
     let t_ty = IdentKinded {
         ident: t.clone(),
         kind: Kind::Ty,
     };
     Ty::new(TyKind::Fn(
-        vec![blocks_nat, threads_nat, r_prv, m_mem, t_ty],
+        vec![blocks_nat, threads_nat, r_prv, t_ty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r),
                 Ownership::Uniq,
-                Memory::Ident(m),
+                Memory::CpuMem,
                 Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu))),
             )))),
             Ty::new(TyKind::Ident(t.clone())),

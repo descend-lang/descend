@@ -1,5 +1,5 @@
 fn scan_inplace<a: prv, m: nat>(
-    data: &a uniq cpu.heap [i32; m]
+    data: &a uniq cpu.mem [i32; m]
 ) -[cpu.thread]-> () <>{
     let mut accum = 0;
     for d in data <>{
@@ -48,9 +48,9 @@ fn downsweep<a: prv>(
 // n == 256 * blockDim.x * 2
 // gridDim.x == n / (blockDim.x * 2) == 256
 fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
-    ha_array: &a shrd cpu.heap [i32; n],
-    h_output: &b uniq cpu.heap [i32; n],
-    h_block_sums: &c uniq cpu.heap [i32; n/64]
+    ha_array: &a shrd cpu.mem [i32; n],
+    h_output: &b uniq cpu.mem [i32; n],
+    h_block_sums: &c uniq cpu.mem [i32; n/64]
 ) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'f, 'g, 'h, 'm, 'k, 'l, 'z, 'y, 'x, 'l1, 'l2, 'm1, 'm2>{
     let mut gpu: Gpu = gpu_device(0);
 
@@ -131,7 +131,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
         }
     );
 
-    copy_to_host::<'g, 'x, cpu.heap, [i32; gridDim]>(&'g shrd block_sums, &'x uniq *h_block_sums);
+    copy_to_host::<'g, 'x,[i32; gridDim]>(&'g shrd block_sums, &'x uniq *h_block_sums);
     scan_inplace::<'x, gridDim>(&'x uniq *h_block_sums);
     copy_to_gpu::<'g, 'x, [i32; gridDim]>(&'g uniq block_sums, &'x shrd *h_block_sums);
 
@@ -142,7 +142,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
     let block_sums_view = group::<1, 'k, gpu.global, gridDim, i32>(
         to_view::<'k, gpu.global, gridDim, i32>(&'k shrd block_sums));
 
-    exec::<gridDim, 64, 'h, cpu.stack,
+    exec::<gridDim, 64, 'h,
             <&'m uniq gpu.global [[[[i32; 64]]; gridDim]],
              &'k shrd gpu.global [[[[i32; gridDim]]; 1]]>>(
         &'h uniq gpu,
@@ -165,5 +165,5 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
             }
         });
 
-    copy_to_host::<'g, 'x, cpu.heap, [i32; n]>(&'g shrd out_array, &'x uniq *h_output)
+    copy_to_host::<'g, 'x, [i32; n]>(&'g shrd out_array, &'x uniq *h_output)
 }

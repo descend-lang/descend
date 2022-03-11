@@ -2061,15 +2061,12 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 )
             } else {
                 let buff_kind = match mem {
-                    desc::Memory::CpuHeap => cu::BufferKind::CpuHeap,
+                    desc::Memory::CpuMem => cu::BufferKind::CpuMem,
                     desc::Memory::GpuGlobal => cu::BufferKind::GpuGlobal,
                     desc::Memory::Ident(ident) => cu::BufferKind::Ident(ident.name.clone()),
                     desc::Memory::GpuShared => unimplemented!(),
                     desc::Memory::GpuLocal => {
                         panic!("GpuLocal is not valid for At types. Should never appear here.")
-                    }
-                    desc::Memory::CpuStack => {
-                        panic!("CpuStack is not valid for At types. Should never appear here.")
                     }
                 };
                 cu::Ty::Buffer(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), buff_kind)

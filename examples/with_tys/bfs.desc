@@ -55,13 +55,13 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
 ) -[cpu.thread]-> () <'c, 'd, 'e, 'f, 'g, 'h, 'a2, 'a3, 'a4>{
     let mut gpu: Gpu = gpu_device(0);
     let mut stop: bool @ gpu.global =
-        gpu_alloc::<'a2, 'a3, cpu.stack, cpu.heap, bool>(&'a2 uniq gpu, &'a3 shrd *h_stop);
+        gpu_alloc::<'a2, 'a3, bool>(&'a2 uniq gpu, &'a3 shrd *h_stop);
     let nodes: [(i32, i32); n] @ gpu.global =
-        gpu_alloc::<'c, 'd, cpu.stack, cpu.heap, [(i32, i32); n]>(&'c uniq gpu, &'d shrd *h_nodes);
+        gpu_alloc::<'c, 'd, [(i32, i32); n]>(&'c uniq gpu, &'d shrd *h_nodes);
     let edges: [i32; m] @ gpu.global =
-        gpu_alloc::<'e, 'f, cpu.stack, cpu.heap, [i32; m]>(&'e uniq gpu, &'f shrd *h_edges);
+        gpu_alloc::<'e, 'f, [i32; m]>(&'e uniq gpu, &'f shrd *h_edges);
     let mut d_changes: [(bool, bool, bool, i32); n] @ gpu.global =
-        gpu_alloc::<'g, 'h, cpu.stack, cpu.heap, [(bool, bool, bool, i32); n]>(&'g uniq gpu, &'h shrd *h_changes);
+        gpu_alloc::<'g, 'h, [(bool, bool, bool, i32); n]>(&'g uniq gpu, &'h shrd *h_changes);
     // let stop_t = load_atomic_host::<'a4, cpu.heap>(&'a4 shrd *h_stop);
     while *h_stop <'r1, 'i, 'o, 'p, 't, 'q, 'j, 'k, 'v, 'm, 'n, 'o, 'u, 'x, 'a5, 'a6, 'a7, 'a8>{ // *h_stop
         *h_stop = false;

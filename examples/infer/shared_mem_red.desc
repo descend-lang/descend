@@ -1,6 +1,6 @@
 fn reduce_shared_mem<n: nat, a: prv, b: prv>(
-    ha_array: &a shrd cpu.heap [i32; n],
-    h_output: &b uniq cpu.heap [i32; 64]
+    ha_array: &a shrd cpu.mem [i32; n],
+    h_output: &b uniq cpu.mem [i32; 64]
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 

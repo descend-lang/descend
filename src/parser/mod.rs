@@ -488,8 +488,7 @@ peg::parser! {
         / "mut" { Mutability::Mut }
 
         pub(crate) rule memory_kind() -> Memory
-            = "cpu.stack" { Memory::CpuStack }
-            / "cpu.heap" { Memory::CpuHeap }
+            = "cpu.mem" { Memory::CpuMem }
             / "gpu.global" { Memory::GpuGlobal }
             / "gpu.shared" { Memory::GpuShared }
             / name:ident() { Memory::Ident(name) }
@@ -539,7 +538,7 @@ peg::parser! {
                 / "Block" / "Warp" / "Thread" / "with")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
-            / "cpu.stack" / "cpu.heap" / "gpu.global" / "gpu.shared"
+            / "cpu.mem" / "gpu.global" / "gpu.shared"
             / "cpu.thread" / "gpu.group" / "gpu.thread"
 
         // Literal may be one of Unit, bool, i32, u32, f32
@@ -829,11 +828,11 @@ mod tests {
     #[test]
     fn ty_reference() {
         assert_eq!(
-            descend::ty("&'a uniq cpu.heap i32"),
+            descend::ty("&'a uniq cpu.mem i32"),
             Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Value("'a".into()),
                 Ownership::Uniq,
-                Memory::CpuHeap,
+                Memory::CpuMem,
                 Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))
             ))),)),
             "does not recognize type of unique i32 reference in cpu heap with provenance 'a"
@@ -853,10 +852,10 @@ mod tests {
     #[test]
     fn ty_memory_kind() {
         assert_eq!(
-            descend::ty("i32 @ cpu.stack"),
+            descend::ty("i32 @ cpu.mem"),
             Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::At(
                 Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                Memory::CpuStack
+                Memory::CpuMem
             ))),)),
             "does not recognize f32 @ cpu.stack type"
         );
@@ -904,13 +903,13 @@ mod tests {
     #[test]
     fn memory_kind() {
         assert_eq!(
-            descend::memory_kind("cpu.stack"),
-            Ok(Memory::CpuStack),
+            descend::memory_kind("cpu.mem"),
+            Ok(Memory::CpuMem),
             "does not recognize cpu.stack memory kind"
         );
         assert_eq!(
-            descend::memory_kind("cpu.heap"),
-            Ok(Memory::CpuHeap),
+            descend::memory_kind("cpu.mem"),
+            Ok(Memory::CpuMem),
             "does not recognize cpu.heap memory kind"
         );
         assert_eq!(
@@ -1701,7 +1700,7 @@ mod tests {
     fn global_fun_def_all_function_kinds() {
         // all currently available kinds are tested
         let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem>(
-            ha_array: &a uniq cpu.heap [i32; n]
+            ha_array: &a uniq cpu.mem [i32; n]
         ) -[cpu.thread]-> () <>{
             42
         }"#;
@@ -1722,7 +1721,7 @@ mod tests {
             ty: Some(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(Ident::new("a")),
                 Ownership::Uniq,
-                Memory::CpuHeap,
+                Memory::CpuMem,
                 Box::new(DataTy::new(DataTyKind::Array(
                     Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                     Nat::Ident(Ident::new("n")),
@@ -1761,15 +1760,15 @@ mod tests {
     fn global_fun_def_kind_parameters_optional() {
         // test both versions with and without <> pointy brackets
         let src_1 = r#"fn no_kinds(
-            ha_array: &'a uniq cpu.heap [i32; n],
-            hb_array: &'b shrd cpu.heap [i32; n]
+            ha_array: &'a uniq cpu.mem [i32; n],
+            hb_array: &'b shrd cpu.mem [i32; n]
         ) -[cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
         let src_2 = r#"fn no_kinds<>(
-            ha_array: &'a uniq cpu.heap [i32; n],
-            hb_array: &'b shrd cpu.heap [i32; n]
+            ha_array: &'a uniq cpu.mem [i32; n],
+            hb_array: &'b shrd cpu.mem [i32; n]
         ) -[cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything

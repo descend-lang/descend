@@ -189,7 +189,7 @@ pub(super) enum Ty {
 // TODO this is not really a Cuda type and should maybe be represented by a generic type construct
 #[derive(Clone, Debug)]
 pub(super) enum BufferKind {
-    CpuHeap,
+    CpuMem,
     GpuGlobal,
     Ident(String),
 }
