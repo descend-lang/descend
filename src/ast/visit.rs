@@ -22,6 +22,7 @@ pub trait Visit: Sized {
     fn visit_mutability(&mut self, _mutbl: &Mutability) {}
     fn visit_lit(&mut self, _lit: &Lit) {}
     fn visit_ident(&mut self, _ident: &Ident) {}
+    fn visit_pattern(&mut self, pattern: &Pattern) { walk_pattern(self, pattern) }
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
     fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
@@ -164,6 +165,18 @@ pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
     }
 }
 
+pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
+    match pattern {
+        Pattern::Ident(mutab, ident) => {
+            visitor.visit_mutability(mutab);
+            visitor.visit_ident(ident);
+        }
+        Pattern::Tuple(patterns) => {
+            walk_list!(visitor, visit_pattern, patterns)
+        }
+    }
+}
+
 pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
     // For now, only visit ExprKind
     match &expr.expr {
@@ -182,9 +195,8 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_ident(ident);
             visitor.visit_ty(ty);
         }
-        ExprKind::Let(mutabl, ident, ty, e) => {
-            visitor.visit_mutability(mutabl);
-            visitor.visit_ident(ident);
+        ExprKind::Let(pattern, ty, e) => {
+            visitor.visit_pattern(pattern);
             for ty in ty.as_ref() {
                 visitor.visit_ty(ty);
             }

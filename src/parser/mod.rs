@@ -139,15 +139,22 @@ peg::parser! {
             }
             / expr:expression() { expr }
 
+        pub(crate) rule pattern() -> Pattern =
+            mutbl:(m:mutability() __ {m})? ident:ident() {
+                let mutbl = mutbl.unwrap_or(Mutability::Const);
+                Pattern::Ident(mutbl, ident) }
+            / tuple_pattern: "(" _ elems_pattern:pattern() ** (_ "," _) _ ")" {
+                Pattern::Tuple(elems_pattern)
+            }
+
         // These rules lead to stackoverflows when integrated in rule expression
         // FIXME: How to integrate this properly into the precedence parser?
         pub(crate) rule expr_helper() -> Expr =
-            begin:position!() "let" __ m:(m:mutability() __ {m})? ident:ident()
+            begin:position!() "let" __ pattern:pattern()
                 typ:(_ ":" _ ty:ty() { ty })? _ "=" _ expr:expression() end:position!()
             {
                 Expr::with_span(
-                    ExprKind::Let(m.unwrap_or(Mutability::Const), ident,
-                        Box::new(typ), Box::new(expr)),
+                    ExprKind::Let(pattern, Box::new(typ), Box::new(expr)),
                     Span::new(begin, end)
                 )
             }
@@ -1525,8 +1532,7 @@ mod tests {
         assert_eq!(
             descend::expression_seq("let mut x : f32 = 17.123f32"),
             Ok(Expr::new(ExprKind::Let(
-                Mutability::Mut,
-                Ident::new("x"),
+                Pattern::Ident(Mutability::Mut, Ident::new("x")),
                 Box::new(Some(Ty::new(TyKind::Data(DataTy::new(
                     DataTyKind::Scalar(ScalarTy::F32)
                 ))))),
@@ -1820,7 +1826,7 @@ mod tests {
             descend::expression_seq("let mut result : i32 = true");
         let result = match no_syntax_error_but_semantics_error {
             Ok(Expr {
-                expr: ExprKind::Let(_, _, _, expr),
+                expr: ExprKind::Let(_, _, expr),
                 ..
             }) => expr
                 .span
@@ -1838,7 +1844,7 @@ mod tests {
             descend::expression_seq("let mut result : i32 = true");
         let result = match no_syntax_error_but_semantics_error {
             Ok(Expr {
-                expr: ExprKind::Let(_, ident, _, _),
+                expr: ExprKind::Let(Pattern::Ident(_, ident), _, _),
                 ..
             }) => ident
                 .span
@@ -1879,8 +1885,7 @@ mod tests {
                 Box::new(Expr::new(ExprKind::Block(
                     vec![],
                     Box::new(Expr::new(ExprKind::Let(
-                        Mutability::Const,
-                        Ident::new("x"),
+                        Pattern::Ident(Mutability::Const, Ident::new("x")),
                         Box::new(None),
                         Box::new(Expr::with_type(
                             ExprKind::Lit(Lit::I32(5)),

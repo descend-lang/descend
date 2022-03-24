@@ -49,6 +49,8 @@ pub enum TyError {
     MissingParallelCollectionIdent,
     // If a provenance place holder is not substituted for a real provenance
     CouldNotInferProvenance,
+    // The annotated or inferred type of the pattern does not fit the pattern.
+    PatternAndTypeDoNotMatch,
     UnexpectedType,
     // TODO remove as soon as possible
     String(String),

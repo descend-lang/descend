@@ -273,7 +273,7 @@ pub enum ExprKind {
     LetUninit(Ident, Box<Ty>),
     // Variable declaration, assignment and sequencing
     // let w x: ty = e1
-    Let(Mutability, Ident, Box<Option<Ty>>, Box<Expr>),
+    Let(Pattern, Box<Option<Ty>>, Box<Expr>),
     // Assignment to existing place [expression]
     Assign(PlaceExpr, Box<Expr>),
     // e1[i] = e2
@@ -349,6 +349,12 @@ impl fmt::Display for Ident {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.name)
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    Ident(Mutability, Ident),
+    Tuple(Vec<Pattern>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]

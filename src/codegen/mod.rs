@@ -3,7 +3,7 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{CompilUnit, DataTy, DataTyKind, Ident, PlaceExprKind, ThreadHierchyTy, TyKind};
+use crate::codegen::cu_ast::Stmt;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
-pub fn gen(compil_unit: &CompilUnit, idx_checks: bool) -> String {
+pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let preproc_fun_defs = compil_unit
         .fun_defs
         .to_vec()
@@ -26,8 +26,8 @@ pub fn gen(compil_unit: &CompilUnit, idx_checks: bool) -> String {
                 !is_shape_ty(p.ty.as_ref().unwrap())
                     && !matches!(
                         &p.ty.as_ref().unwrap().ty,
-                        desc::TyKind::Data(DataTy {
-                            dty: DataTyKind::ThreadHierchy(_),
+                        desc::TyKind::Data(desc::DataTy {
+                            dty: desc::DataTyKind::ThreadHierchy(_),
                             ..
                         })
                     )
@@ -170,7 +170,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bo
             !matches!(
                 ret_ty,
                 desc::DataTy {
-                    dty: DataTyKind::Scalar(desc::ScalarTy::Unit),
+                    dty: desc::DataTyKind::Scalar(desc::ScalarTy::Unit),
                     ..
                 }
             ),
@@ -195,87 +195,9 @@ fn gen_stmt(
     use desc::DataTyKind::*;
     use desc::ExprKind::*;
     match &expr.expr {
-        Let(mutbl, ident, _, e) => {
+        Let(pattern, _, e) => {
             // Let View
-            if is_shape_ty(e.ty.as_ref().unwrap()) {
-                codegen_ctx.shape_ctx.insert(
-                    &ident.name,
-                    ShapeExpr::create_from(e, &codegen_ctx.shape_ctx),
-                );
-                cu::Stmt::Skip
-            // Let Expression
-            } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
-                codegen_ctx.parall_ctx.insert(
-                    &ident.name,
-                    ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
-                );
-                cu::Stmt::Skip
-            } else if let desc::TyKind::Data(desc::DataTy {
-                dty: At(dty, desc::Memory::GpuShared),
-                ..
-            }) = &e.ty.as_ref().unwrap().ty
-            {
-                let cu_ty = if let desc::DataTy {
-                    dty: DataTyKind::Array(elem_dty, n),
-                    ..
-                } = dty.as_ref()
-                {
-                    cu::Ty::CArray(
-                        Box::new(gen_ty(
-                            &desc::TyKind::Data(elem_dty.as_ref().clone()),
-                            *mutbl,
-                        )),
-                        n.clone(),
-                    )
-                } else {
-                    gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl)
-                };
-                cu::Stmt::VarDecl {
-                    name: ident.name.clone(),
-                    ty: cu_ty,
-                    addr_space: Some(cu::GpuAddrSpace::Shared),
-                    expr: None,
-                }
-            } else {
-                let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, *mutbl);
-                let (init_expr, cu_ty, checks) = match gened_ty {
-                    cu::Ty::Array(_, _) => {
-                        let (ex, ch) =
-                            match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                                CheckedExpr::Expr(e) => (e, None),
-                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
-                            };
-                        (ex, gened_ty, ch)
-                    }
-                    _ => {
-                        let (ex, ch) =
-                            match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                                CheckedExpr::Expr(e) => (e, None),
-                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
-                            };
-                        (
-                            ex,
-                            if *mutbl == desc::Mutability::Mut {
-                                cu::Ty::Scalar(cu::ScalarTy::Auto)
-                            } else {
-                                cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
-                            },
-                            ch,
-                        )
-                    }
-                };
-                let var_decl = cu::Stmt::VarDecl {
-                    name: ident.name.clone(),
-                    ty: cu_ty,
-                    addr_space: None,
-                    expr: Some(init_expr),
-                };
-                if !idx_checks || checks.is_none() {
-                    var_decl
-                } else {
-                    cu::Stmt::Seq(vec![checks.unwrap(), var_decl])
-                }
-            }
+            gen_let(codegen_ctx, comp_unit, dev_fun, idx_checks, pattern, &e)
         }
         LetUninit(ident, ty) => cu::Stmt::VarDecl {
             name: ident.name.clone(),
@@ -408,7 +330,7 @@ fn gen_stmt(
             if matches!(
                 coll_expr.ty.as_ref().unwrap().ty,
                 desc::TyKind::Data(desc::DataTy {
-                    dty: DataTyKind::Range,
+                    dty: desc::DataTyKind::Range,
                     ..
                 })
             ) {
@@ -480,6 +402,115 @@ fn gen_stmt(
     }
 }
 
+fn gen_let(
+    codegen_ctx: &mut CodegenCtx,
+    comp_unit: &[desc::FunDef],
+    dev_fun: bool,
+    idx_checks: bool,
+    pattern: &desc::Pattern,
+    e: &desc::Expr,
+) -> Stmt {
+    match pattern {
+        desc::Pattern::Tuple(tuple_elems) => cu::Stmt::Seq(
+            tuple_elems
+                .iter()
+                .enumerate()
+                .map(|(i, tp)| {
+                    gen_let(
+                        codegen_ctx,
+                        comp_unit,
+                        dev_fun,
+                        idx_checks,
+                        tp,
+                        &desc::Expr::new(desc::ExprKind::Proj(Box::new(e.clone()), i)),
+                    )
+                })
+                .collect(),
+        ),
+        desc::Pattern::Ident(mutbl, ident) => {
+            if is_shape_ty(e.ty.as_ref().unwrap()) {
+                codegen_ctx.shape_ctx.insert(
+                    &ident.name,
+                    ShapeExpr::create_from(e, &codegen_ctx.shape_ctx),
+                );
+                cu::Stmt::Skip
+                // Let Expression
+            } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
+                codegen_ctx.parall_ctx.insert(
+                    &ident.name,
+                    ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
+                );
+                cu::Stmt::Skip
+            } else if let desc::TyKind::Data(desc::DataTy {
+                dty: desc::DataTyKind::At(dty, desc::Memory::GpuShared),
+                ..
+            }) = &e.ty.as_ref().unwrap().ty
+            {
+                let cu_ty = if let desc::DataTy {
+                    dty: desc::DataTyKind::Array(elem_dty, n),
+                    ..
+                } = dty.as_ref()
+                {
+                    cu::Ty::CArray(
+                        Box::new(gen_ty(
+                            &desc::TyKind::Data(elem_dty.as_ref().clone()),
+                            *mutbl,
+                        )),
+                        n.clone(),
+                    )
+                } else {
+                    gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl)
+                };
+                cu::Stmt::VarDecl {
+                    name: ident.name.clone(),
+                    ty: cu_ty,
+                    addr_space: Some(cu::GpuAddrSpace::Shared),
+                    expr: None,
+                }
+            } else {
+                let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, *mutbl);
+                let (init_expr, cu_ty, checks) = match gened_ty {
+                    cu::Ty::Array(_, _) => {
+                        let (ex, ch) =
+                            match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                                CheckedExpr::Expr(e) => (e, None),
+                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+                            };
+                        (ex, gened_ty, ch)
+                    }
+                    _ => {
+                        let (ex, ch) =
+                            match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                                CheckedExpr::Expr(e) => (e, None),
+                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+                            };
+                        (
+                            ex,
+                            if *mutbl == desc::Mutability::Mut {
+                                cu::Ty::Scalar(cu::ScalarTy::Auto)
+                            } else {
+                                cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                            },
+                            ch,
+                        )
+                    }
+                };
+                let var_decl = cu::Stmt::VarDecl {
+                    name: ident.name.clone(),
+                    ty: cu_ty,
+                    addr_space: None,
+                    expr: Some(init_expr),
+                };
+                if !idx_checks || checks.is_none() {
+                    var_decl
+                } else {
+                    cu::Stmt::Seq(vec![checks.unwrap(), var_decl])
+                }
+            }
+        }
+    }
+}
+
 fn has_generatable_ty(e: &desc::Expr) -> bool {
     matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Ident(_))
         || matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Data(_))
@@ -516,7 +547,7 @@ fn gen_if_else(
 }
 
 fn gen_for_each(
-    ident: &Ident,
+    ident: &desc::Ident,
     coll_expr: &desc::Expr,
     body: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
@@ -536,7 +567,7 @@ fn gen_for_each(
     codegen_ctx.shape_ctx.insert(
         &ident.name,
         ShapeExpr::Idx {
-            idx: desc::Nat::Ident(Ident::new(&i_name)),
+            idx: desc::Nat::Ident(desc::Ident::new(&i_name)),
             shape: Box::new(if is_shape_ty(coll_expr.ty.as_ref().unwrap()) {
                 ShapeExpr::create_from(coll_expr, &codegen_ctx.shape_ctx)
             } else {
@@ -579,7 +610,7 @@ fn gen_for_each(
 }
 
 fn gen_for_range(
-    ident: &Ident,
+    ident: &desc::Ident,
     range: &desc::Expr,
     body: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
@@ -771,7 +802,7 @@ fn gen_par_for(
     decls: &Option<Vec<desc::Expr>>,
     parall_ident: &Option<desc::Ident>,
     parall_collec: &desc::Expr,
-    input_idents: &[Ident],
+    input_idents: &[desc::Ident],
     inputs: &[desc::Expr],
     body: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
@@ -822,8 +853,8 @@ fn gen_par_for(
     let (pindex, sync_stmt) = match &parall_collec.ty.as_ref().unwrap().ty {
         // TODO Refactor
         //  The same things exists in ty_check where only threadHierchyTy for elem types is returned
-        desc::TyKind::Data(DataTy {
-            dty: DataTyKind::ThreadHierchy(th_hy),
+        desc::TyKind::Data(desc::DataTy {
+            dty: desc::DataTyKind::ThreadHierchy(th_hy),
             ..
         }) => match th_hy.as_ref() {
             desc::ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
@@ -1041,7 +1072,7 @@ fn gen_expr(
         }
         Ref(_, _, pl_expr) => match &expr.ty.as_ref().unwrap().ty {
             desc::TyKind::Data(desc::DataTy {
-                dty: DataTyKind::Ref(_, _, desc::Memory::GpuShared, _),
+                dty: desc::DataTyKind::Ref(_, _, desc::Memory::GpuShared, _),
                 ..
             }) => CheckedExpr::Expr(gen_pl_expr(
                 pl_expr,
@@ -1128,7 +1159,7 @@ fn gen_expr(
                 !matches!(
                     ty.as_ref(),
                     desc::DataTy {
-                        dty: DataTyKind::Scalar(desc::ScalarTy::Unit),
+                        dty: desc::DataTyKind::Scalar(desc::ScalarTy::Unit),
                         ..
                     }
                 ),
@@ -1145,7 +1176,7 @@ fn gen_expr(
         }),
         App(fun, kinded_args, args) => match &fun.expr {
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Ident(name),
+                pl_expr: desc::PlaceExprKind::Ident(name),
                 ..
             }) if name.name == "exec" => gen_exec(
                 &kinded_args[0],
@@ -1158,7 +1189,7 @@ fn gen_expr(
                 idx_checks,
             ),
             desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Ident(ident),
+                pl_expr: desc::PlaceExprKind::Ident(ident),
                 ..
             }) if crate::ty_check::pre_decl::fun_decls()
                 .iter()
@@ -1170,7 +1201,7 @@ fn gen_expr(
                         match gen_expr(
                             &desc::Expr::with_type(
                                 desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(
-                                    PlaceExprKind::Ident(pre_decl_ident),
+                                    desc::PlaceExprKind::Ident(pre_decl_ident),
                                 )),
                                 fun.ty.as_ref().unwrap().clone(),
                             ),
@@ -1286,7 +1317,7 @@ fn gen_expr(
             ),
             index: i.clone(),
         }),
-        Let(_, _, _, _)
+        Let(_, _, _)
         | LetUninit(_, _)
         | Block(_, _)
         | IfElse(_, _, _)
@@ -1367,9 +1398,9 @@ fn gen_bin_op_expr(
     }
 }
 
-fn extract_ident(ident: &desc::Expr) -> Ident {
+fn extract_ident(ident: &desc::Expr) -> desc::Ident {
     if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-        pl_expr: PlaceExprKind::Ident(ident),
+        pl_expr: desc::PlaceExprKind::Ident(ident),
         ..
     }) = &ident.expr
     {
@@ -1428,7 +1459,7 @@ fn create_lambda_no_shape_args(
             ))
         }
         desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-            pl_expr: PlaceExprKind::Ident(f),
+            pl_expr: desc::PlaceExprKind::Ident(f),
             ..
         }) => {
             let fun_def = comp_unit
@@ -1565,8 +1596,8 @@ fn contains_shape_or_th_hierchy_params(param_decls: &[desc::ParamDecl]) -> bool 
         is_shape_ty(p.ty.as_ref().unwrap())
             || matches!(
                 p.ty.as_ref().unwrap().ty,
-                desc::TyKind::Data(DataTy {
-                    dty: DataTyKind::ThreadHierchy(_),
+                desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::ThreadHierchy(_),
                     ..
                 })
             )
@@ -1583,8 +1614,8 @@ fn filter_and_map_shape_th_hierchy_params<'a>(
             is_shape_ty(p.ty.as_ref().unwrap())
                 || matches!(
                     &p.ty.as_ref().unwrap().ty,
-                    desc::TyKind::Data(DataTy {
-                        dty: DataTyKind::ThreadHierchy(_),
+                    desc::TyKind::Data(desc::DataTy {
+                        dty: desc::DataTyKind::ThreadHierchy(_),
                         ..
                     })
                 )
@@ -1628,7 +1659,7 @@ fn gen_pl_expr(
 ) -> cu::Expr {
     match &pl_expr {
         desc::PlaceExpr {
-            pl_expr: PlaceExprKind::Ident(ident),
+            pl_expr: desc::PlaceExprKind::Ident(ident),
             ..
         } => {
             if shape_ctx.contains_key(&ident.name) {
@@ -1652,7 +1683,7 @@ fn gen_pl_expr(
             }
         }
         desc::PlaceExpr {
-            pl_expr: PlaceExprKind::Proj(pl, n),
+            pl_expr: desc::PlaceExprKind::Proj(pl, n),
             ..
         } => match pl_expr.to_place() {
             // FIXME this does not work when there are tuples inside of shape tuples
@@ -1669,7 +1700,7 @@ fn gen_pl_expr(
             },
         },
         desc::PlaceExpr {
-            pl_expr: PlaceExprKind::Deref(ple),
+            pl_expr: desc::PlaceExprKind::Deref(ple),
             ..
         } => {
             // If an identifier that refers to an unwrapped shape expression is being dereferenced,
@@ -1982,8 +2013,8 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
         }) => None,
         desc::ArgKinded::Ty(desc::Ty {
             ty:
-                desc::TyKind::Data(DataTy {
-                    dty: DataTyKind::ThreadHierchy(_),
+                desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::ThreadHierchy(_),
                     ..
                 }),
             ..
@@ -2014,7 +2045,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
         Ident(ident) => cu::Ty::Ident(ident.name.clone()),
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::Atomic(a), ..
         }) => match a {
             desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
@@ -2025,7 +2056,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             desc::ScalarTy::Bool => cu::Ty::Atomic(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Atomic(cu::ScalarTy::Gpu),
         },
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::Scalar(s), ..
         }) => match s {
             desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
@@ -2036,20 +2067,20 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
             desc::ScalarTy::Gpu => cu::Ty::Scalar(cu::ScalarTy::Gpu),
         },
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::Tuple(tys), ..
         }) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect()),
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::Array(ty, n),
             ..
         }) => cu::Ty::Array(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), n.clone()),
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::At(ty, mem),
             ..
         }) => {
             if let desc::Memory::GpuShared = mem {
                 let dty = match ty.as_ref() {
-                    DataTy {
+                    desc::DataTy {
                         dty: d::Array(dty, _),
                         ..
                     } => dty.as_ref().clone(),
@@ -2072,7 +2103,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 cu::Ty::Buffer(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), buff_kind)
             }
         }
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::Ref(_, own, _, ty),
             ..
         }) => {
@@ -2093,7 +2124,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 cu::Ty::PtrConst(tty, None)
             }
         }
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::RawPtr(ty), ..
         }) => {
             let tty = Box::new(gen_ty(
@@ -2109,18 +2140,18 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             cu::Ty::Ptr(tty, None)
         }
         // TODO is this correct. I guess we want to generate type identifiers in generic functions.
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::Ident(ident),
             ..
         }) => cu::Ty::Ident(ident.name.clone()),
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::ArrayShape(_, _),
             ..
         }) => panic!(
             "Cannot generate array shape types.\
             Anything with this type should have been compiled away."
         ),
-        Data(DataTy {
+        Data(desc::DataTy {
             dty: d::Dead(_), ..
         }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
@@ -2154,19 +2185,19 @@ fn is_dev_fun(exec: desc::Exec) -> bool {
 fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
     match &ty.ty {
         desc::TyKind::Data(desc::DataTy {
-            dty: DataTyKind::Array(_, n),
+            dty: desc::DataTyKind::Array(_, n),
             ..
         }) => Some(n.clone()),
         desc::TyKind::Data(desc::DataTy {
-            dty: DataTyKind::Ref(_, _, _, arr),
+            dty: desc::DataTyKind::Ref(_, _, _, arr),
             ..
         }) => match arr.as_ref() {
             desc::DataTy {
-                dty: DataTyKind::Array(_, n),
+                dty: desc::DataTyKind::Array(_, n),
                 ..
             } => Some(n.clone()),
             desc::DataTy {
-                dty: DataTyKind::ArrayShape(_, n),
+                dty: desc::DataTyKind::ArrayShape(_, n),
                 ..
             } => Some(n.clone()),
             _ => None,
@@ -2177,7 +2208,7 @@ fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
 
 #[derive(Debug, Clone)]
 enum ParallelityCollec {
-    Ident(Ident),
+    Ident(desc::Ident),
     Proj {
         parall_expr: Box<ParallelityCollec>,
         i: usize,
@@ -2194,31 +2225,33 @@ impl ParallelityCollec {
         match &expr.expr {
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                    pl_expr: PlaceExprKind::Ident(ident),
+                    pl_expr: desc::PlaceExprKind::Ident(ident),
                     ..
                 }) = &f.expr
                 {
                     if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP {
-                        if let (TyKind::Fn(_, _, _, ret_ty), Some(p)) =
+                        if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(p)) =
                             (&f.ty.as_ref().unwrap().ty, args.first())
                         {
                             if let (
-                                TyKind::TupleView(elem_tys),
-                                TyKind::Data(DataTy {
-                                    dty: DataTyKind::ThreadHierchy(th_hierchy),
+                                desc::TyKind::TupleView(elem_tys),
+                                desc::TyKind::Data(desc::DataTy {
+                                    dty: desc::DataTyKind::ThreadHierchy(th_hierchy),
                                     ..
                                 }),
                             ) = (&ret_ty.as_ref().ty, &p.ty.as_ref().unwrap().ty)
                             {
                                 if let (
-                                    TyKind::Data(DataTy {
-                                        dty: DataTyKind::ThreadHierchy(th_hrchy),
+                                    desc::TyKind::Data(desc::DataTy {
+                                        dty: desc::DataTyKind::ThreadHierchy(th_hrchy),
                                         ..
                                     }),
-                                    ThreadHierchyTy::ThreadGrp(n1, n2, n3),
+                                    desc::ThreadHierchyTy::ThreadGrp(n1, n2, n3),
                                 ) = (&elem_tys.first().unwrap().ty, th_hierchy.as_ref())
                                 {
-                                    if let ThreadHierchyTy::ThreadGrp(k, _, _) = th_hrchy.as_ref() {
+                                    if let desc::ThreadHierchyTy::ThreadGrp(k, _, _) =
+                                        th_hrchy.as_ref()
+                                    {
                                         return ParallelityCollec::Split {
                                             pos: k.clone(),
                                             coll_size: n1.clone(),
@@ -2273,18 +2306,18 @@ impl ParallelityCollec {
     ) -> ParallelityCollec {
         match parall_expr {
             desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Ident(ident),
+                pl_expr: desc::PlaceExprKind::Ident(ident),
                 ..
             } => parall_ctx.get(&ident.name).clone(),
             desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Proj(pp, i),
+                pl_expr: desc::PlaceExprKind::Proj(pp, i),
                 ..
             } => ParallelityCollec::Proj {
                 parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
                 i: *i,
             },
             desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Deref(_),
+                pl_expr: desc::PlaceExprKind::Deref(_),
                 ..
             } => panic!(
                 "It is not possible to take references of Grids or Blocks.\
@@ -2297,8 +2330,8 @@ impl ParallelityCollec {
 fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
     matches!(
         ty.ty,
-        desc::TyKind::Data(DataTy {
-            dty: DataTyKind::ThreadHierchy(_),
+        desc::TyKind::Data(desc::DataTy {
+            dty: desc::DataTyKind::ThreadHierchy(_),
             ..
         })
     )
@@ -2371,7 +2404,7 @@ impl ShapeExpr {
             // TODO this is assuming that f is an identifier
             desc::ExprKind::App(f, gen_args, args) => {
                 if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                    pl_expr: PlaceExprKind::Ident(ident),
+                    pl_expr: desc::PlaceExprKind::Ident(ident),
                     ..
                 }) = &f.expr
                 {
@@ -2431,18 +2464,18 @@ impl ShapeExpr {
     fn create_pl_expr_shape(shape: &desc::PlaceExpr, shape_ctx: &ShapeCtx) -> ShapeExpr {
         match shape {
             desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Ident(ident),
+                pl_expr: desc::PlaceExprKind::Ident(ident),
                 ..
             } => shape_ctx.get(&ident.name).clone(),
             desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Proj(vv, i),
+                pl_expr: desc::PlaceExprKind::Proj(vv, i),
                 ..
             } => ShapeExpr::Proj {
                 shape: Box::new(ShapeExpr::create_pl_expr_shape(vv, shape_ctx)),
                 i: *i,
             },
             desc::PlaceExpr {
-                pl_expr: PlaceExprKind::Deref(_),
+                pl_expr: desc::PlaceExprKind::Deref(_),
                 ..
             } => {
                 panic!("It is not possible to take references of shapes. This should never happen.")
@@ -2479,32 +2512,36 @@ impl ShapeExpr {
         }
     }
 
-    fn create_group_shape(args: &[desc::Expr], f_ty: &TyKind, shape_ctx: &ShapeCtx) -> ShapeExpr {
+    fn create_group_shape(
+        args: &[desc::Expr],
+        f_ty: &desc::TyKind,
+        shape_ctx: &ShapeCtx,
+    ) -> ShapeExpr {
         if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, args.first()) {
             if let (
-                TyKind::Data(DataTy {
-                    dty: DataTyKind::Ref(_, _, _, arr_ty),
+                desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::Ref(_, _, _, arr_ty),
                     ..
                 }),
-                TyKind::Data(DataTy {
-                    dty: DataTyKind::Ref(_, _, _, arg_arr_ty),
+                desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::Ref(_, _, _, arg_arr_ty),
                     ..
                 }),
             ) = (&ret_ty.ty, &v.ty.as_ref().unwrap().ty)
             {
                 if let (
-                    DataTy {
-                        dty: DataTyKind::ArrayShape(inner_ty, _),
+                    desc::DataTy {
+                        dty: desc::DataTyKind::ArrayShape(inner_ty, _),
                         ..
                     },
-                    DataTy {
-                        dty: DataTyKind::ArrayShape(_, n),
+                    desc::DataTy {
+                        dty: desc::DataTyKind::ArrayShape(_, n),
                         ..
                     },
                 ) = (arr_ty.as_ref(), arg_arr_ty.as_ref())
                 {
-                    if let DataTy {
-                        dty: DataTyKind::ArrayShape(_, s),
+                    if let desc::DataTy {
+                        dty: desc::DataTyKind::ArrayShape(_, s),
                         ..
                     } = inner_ty.as_ref()
                     {
@@ -2585,7 +2622,7 @@ impl ShapeExpr {
                     let new_name = format!("p{}", *count);
                     vec.push((new_name.clone(), ref_expr.as_ref().clone()));
                     ref_expr.expr = desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(
-                        PlaceExprKind::Ident(desc::Ident::new(&new_name)),
+                        desc::PlaceExprKind::Ident(desc::Ident::new(&new_name)),
                     ));
                     *count += 1;
                     vec
@@ -2620,7 +2657,7 @@ impl ShapeExpr {
                                 let new_name = format!("p{}", *count);
                                 renamed.push((new_name.clone(), expr.clone()));
                                 expr.expr = desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(
-                                    PlaceExprKind::Ident(desc::Ident::new(&new_name)),
+                                    desc::PlaceExprKind::Ident(desc::Ident::new(&new_name)),
                                 ));
                                 *count += 1;
                             }
@@ -2774,13 +2811,13 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
 fn is_shape_ty(ty: &desc::Ty) -> bool {
     match &ty.ty {
         desc::TyKind::Data(desc::DataTy {
-            dty: DataTyKind::Ref(_, _, _, arr_vty),
+            dty: desc::DataTyKind::Ref(_, _, _, arr_vty),
             ..
         }) => {
             matches!(
                 arr_vty.as_ref(),
                 desc::DataTy {
-                    dty: DataTyKind::ArrayShape(_, _),
+                    dty: desc::DataTyKind::ArrayShape(_, _),
                     ..
                 }
             )

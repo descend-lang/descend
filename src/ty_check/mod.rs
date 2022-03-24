@@ -137,8 +137,8 @@ impl TyChecker {
             ExprKind::Block(prvs, body) => {
                 self.ty_check_block(kind_ctx, ty_ctx, exec, prvs, body)?
             }
-            ExprKind::Let(mutbl, ident, ty, e) => {
-                self.ty_check_let(kind_ctx, ty_ctx, exec, *mutbl, ident, ty, e)?
+            ExprKind::Let(pattern, ty, e) => {
+                self.ty_check_let(kind_ctx, ty_ctx, exec, pattern, ty, e)?
             }
             ExprKind::LetUninit(ident, ty) => Self::ty_check_let_uninit(ty_ctx, exec, ident, ty)?,
             ExprKind::Seq(es) => self.ty_check_seq(kind_ctx, ty_ctx, exec, es)?,
@@ -1597,31 +1597,102 @@ impl TyChecker {
         )
     }
 
+    fn create_pattern_dty(pattern: &Pattern) -> DataTy {
+        match pattern {
+            Pattern::Tuple(tuple_elems) => DataTy::new(DataTyKind::Tuple(
+                tuple_elems
+                    .iter()
+                    .map(|tp| TyChecker::create_pattern_dty(tp))
+                    .collect(),
+            )),
+            Pattern::Ident(_, _) => DataTy::new(utils::fresh_ident("pattern", DataTyKind::Ident)),
+        }
+    }
+
+    fn type_idents(pattern: &Pattern, dty: DataTy) -> Vec<IdentTyped> {
+        match (pattern, dty.dty) {
+            (Pattern::Tuple(tuple_elems), DataTyKind::Tuple(tuple_dtys)) => tuple_elems
+                .iter()
+                .zip(tuple_dtys)
+                .fold(vec![], |mut acc, (tp, dty)| {
+                    acc.append(&mut TyChecker::type_idents(tp, dty));
+                    acc
+                }),
+            (Pattern::Ident(mutbl, ident), d) => {
+                vec![IdentTyped::new(
+                    ident.clone(),
+                    Ty::new(TyKind::Data(DataTy::new(d))),
+                    *mutbl,
+                )]
+            }
+            _ => panic!("Pattern and data type do not match."),
+        }
+    }
+
+    fn infer_pattern_ident_tys(
+        ty_ctx: TyCtx,
+        pattern: &Pattern,
+        pattern_ty: &Ty,
+    ) -> TyResult<TyCtx> {
+        match (pattern, &pattern_ty.ty) {
+            (Pattern::Ident(mutbl, ident), ident_ty) => {
+                let ident_with_annotated_ty =
+                    IdentTyped::new(ident.clone(), Ty::new(ident_ty.clone()), *mutbl);
+                Ok(ty_ctx.append_ident_typed(ident_with_annotated_ty))
+            }
+            (
+                Pattern::Tuple(patterns),
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Tuple(elem_tys),
+                    ..
+                }),
+            ) => Ok(patterns
+                .iter()
+                .zip(elem_tys)
+                .try_fold(ty_ctx, |ctx, (p, tty)| {
+                    TyChecker::infer_pattern_ident_tys(ctx, p, &Ty::new(TyKind::Data(tty.clone())))
+                })?),
+            _ => Err(TyError::PatternAndTypeDoNotMatch),
+        }
+    }
+
+    fn infer_pattern_ty(
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        pattern: &Pattern,
+        pattern_ty: &mut Option<Ty>,
+        assign_ty: &mut Ty,
+    ) -> TyResult<TyCtx> {
+        let (ty_ctx_sub, pattern_ty) = if let Some(pty) = pattern_ty {
+            (
+                TyChecker::sub_unify(kind_ctx, ty_ctx, assign_ty, pty)?,
+                pty.clone(),
+            )
+        } else {
+            (ty_ctx, assign_ty.clone())
+        };
+        Ok(TyChecker::infer_pattern_ident_tys(
+            ty_ctx_sub,
+            pattern,
+            &pattern_ty,
+        )?)
+    }
+
     fn ty_check_let(
         &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
-        mutbl: Mutability,
-        ident: &mut Ident,
-        ty: &mut Option<Ty>,
+        pattern: &Pattern,
+        pattern_ty: &mut Option<Ty>,
         expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
         let e_ty = expr.ty.as_mut().unwrap();
-        let (ty_ctx_sub, ident_ty) = if let Some(tty) = ty {
-            (
-                TyChecker::sub_unify(kind_ctx, ty_ctx_e, e_ty, tty)?,
-                tty.clone(),
-            )
-        } else {
-            (ty_ctx_e, e_ty.clone())
-        };
-
-        let ident_with_annotated_ty = IdentTyped::new(ident.clone(), ident_ty, mutbl);
-        let ty_ctx_with_ident = ty_ctx_sub.append_ident_typed(ident_with_annotated_ty);
+        let ty_ctx_with_idents =
+            TyChecker::infer_pattern_ty(kind_ctx, ty_ctx_e, pattern, pattern_ty, e_ty)?;
         Ok((
-            ty_ctx_with_ident,
+            ty_ctx_with_idents,
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::Unit,
             )))),
@@ -1643,7 +1714,7 @@ impl TyChecker {
         Ok(outlives_ctx)
     }
 
-    // TODO repsect exec?
+    // TODO respect exec?
     fn ty_check_let_uninit(
         ty_ctx: TyCtx,
         exec: Exec,
