@@ -283,10 +283,13 @@ peg::parser! {
             "<" _ expressions:expression() **<2,> (_ "," _) _ ">" {
                 Expr::new(ExprKind::TupleView(expressions))
             }
-            "if" __ cond:expression() _ iftrue:block() _ "else" _ iffalse:block() {
-                Expr::new(
-                    ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(iffalse))
-                )
+            "if" __ cond:expression() _ iftrue:block() _ iffalse:("else" _ iffalse:block() {
+                iffalse })? {
+                Expr::new( match iffalse {
+                    Some(false_block) => ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(false_block)),
+                    None => ExprKind::If(Box::new(cond), Box::new(iftrue))
+                })
+
             }
            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))

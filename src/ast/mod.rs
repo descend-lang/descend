@@ -289,6 +289,7 @@ pub enum ExprKind {
     // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
+    If(Box<Expr>, Box<Expr>),
     // For-each loop.
     // for x in e_1 { e_2 }
     For(Ident, Box<Expr>, Box<Expr>),

@@ -199,6 +199,9 @@ impl TyChecker {
             ExprKind::IfElse(cond, case_true, case_false) => {
                 self.ty_check_if_else(kind_ctx, ty_ctx, exec, cond, case_true, case_false)?
             }
+            ExprKind::If(cond, case_true) => {
+                self.ty_check_if(kind_ctx, ty_ctx, exec, cond, case_true)?
+            }
             ExprKind::While(cond, body) => {
                 self.ty_check_while(kind_ctx, ty_ctx, exec, cond, body)?
             }
@@ -616,6 +619,57 @@ impl TyChecker {
 
         Ok((
             case_false_ty_ctx,
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            )))),
+        ))
+    }
+
+    fn ty_check_if(
+        &mut self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        cond: &mut Expr,
+        case_true: &mut Expr,
+    ) -> TyResult<(TyCtx, Ty)> {
+        // TODO deal with provenances in cases
+        let cond_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, cond)?;
+        let case_true_ty_ctx =
+            self.ty_check_expr(kind_ctx, cond_ty_ctx.clone(), exec, case_true)?;
+
+        let cond_ty = cond.ty.as_ref().unwrap();
+        let case_true_ty = case_true.ty.as_ref().unwrap();
+
+
+        if !matches!(
+            &cond_ty.ty,
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Bool),
+                ..
+            })
+        ) {
+            return Err(TyError::String(format!(
+                "Expected condition in if case, instead got {:?}",
+                cond_ty
+            )));
+        }
+        if !matches!(
+            &case_true_ty.ty,
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Unit),
+                ..
+            })
+        ) {
+            return Err(TyError::String(format!(
+                "Body of the true case is not of unit type, instead got {:?}",
+                case_true_ty
+            )));
+        }
+
+
+        Ok((
+            case_true_ty_ctx,
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::Unit,
             )))),

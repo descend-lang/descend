@@ -406,6 +406,17 @@ fn gen_stmt(
                 }
             }
         }
+        If(cond, e_tt) => {
+            match gen_expr(cond, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                CheckedExpr::ExprIdxCheck(check, con) => cu::Stmt::Seq(vec![
+                    check,
+                    gen_if(con, e_tt, codegen_ctx, comp_unit, dev_fun, idx_checks),
+                ]),
+                CheckedExpr::Expr(con) => {
+                    gen_if(con, e_tt, codegen_ctx, comp_unit, dev_fun, idx_checks)
+                }
+            }
+        }
         _ => {
             if return_value {
                 match gen_expr(&expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
@@ -563,6 +574,27 @@ fn gen_if_else(
         )),
         false_body: Box::new(gen_stmt(
             e_ff,
+            false,
+            codegen_ctx,
+            comp_unit,
+            dev_fun,
+            idx_checks,
+        )),
+    }
+}
+
+fn gen_if(
+    cond: cu_ast::Expr,
+    e_tt: &desc::Expr,
+    codegen_ctx: &mut CodegenCtx,
+    comp_unit: &[desc::FunDef],
+    dev_fun: bool,
+    idx_checks: bool,
+) -> cu::Stmt {
+    cu::Stmt::If {
+        cond: cond,
+        body: Box::new(gen_stmt(
+            e_tt,
             false,
             codegen_ctx,
             comp_unit,
@@ -1351,6 +1383,7 @@ fn gen_expr(
         | LetUninit(_, _)
         | Block(_, _)
         | IfElse(_, _, _)
+        | If(_, _)
         | Seq(_)
         | While(_, _)
         | For(_, _, _)

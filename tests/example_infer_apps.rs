@@ -20,6 +20,15 @@ fn scale_vec_test() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
+fn bitonic_sort() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/bitonic_sort.desc")?
+    ))
+}
+
+
+#[test]
 fn split_test() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",

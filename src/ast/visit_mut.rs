@@ -241,6 +241,10 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(tt);
             visitor.visit_expr(ff)
         }
+        ExprKind::If(cond, tt) =>    {
+            visitor.visit_expr(cond);
+            visitor.visit_expr(tt)
+        }
         ExprKind::Array(elems) => {
             walk_list!(visitor, visit_expr, elems);
         }
