@@ -197,8 +197,8 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, elems, ", ")?;
                 write!(f, "}}")
             }
-            Ref(expr) => write!(f, "&{}", expr),
-            Deref(expr) => write!(f, "*{}", expr),
+            Ref(expr) => write!(f, "(&{})", expr),
+            Deref(expr) => write!(f, "(*{})", expr),
             Tuple(elems) => {
                 write!(f, "descend::tuple{{")?;
                 fmt_vec(f, elems, ", ")?;

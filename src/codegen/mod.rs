@@ -199,12 +199,38 @@ fn gen_stmt(
             // Let View
             gen_let(codegen_ctx, comp_unit, dev_fun, idx_checks, pattern, &e)
         }
-        LetUninit(ident, ty) => cu::Stmt::VarDecl {
-            name: ident.name.clone(),
-            ty: gen_ty(&ty.as_ref().ty, desc::Mutability::Mut),
-            addr_space: None,
-            expr: None,
-        },
+        LetUninit(ident, ty) => {
+            let (ty, addr_space) = match &ty.ty {
+                desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::At(ddty, desc::Memory::GpuShared),
+                    ..
+                }) => (
+                    if let desc::DataTy {
+                        dty: desc::DataTyKind::Array(d, n),
+                        ..
+                    } = ddty.as_ref()
+                    {
+                        cu::Ty::CArray(
+                            Box::new(gen_ty(
+                                &desc::TyKind::Data(d.as_ref().clone()),
+                                desc::Mutability::Mut,
+                            )),
+                            n.clone(),
+                        )
+                    } else {
+                        gen_ty(&ty.as_ref().ty, desc::Mutability::Mut)
+                    },
+                    Some(cu::GpuAddrSpace::Shared),
+                ),
+                _ => (gen_ty(&ty.as_ref().ty, desc::Mutability::Mut), None),
+            };
+            cu::Stmt::VarDecl {
+                name: ident.name.clone(),
+                ty,
+                addr_space,
+                expr: None,
+            }
+        }
         Block(_, expr) => {
             codegen_ctx.push_scope();
             let block_stmt = gen_stmt(
@@ -392,9 +418,9 @@ fn gen_stmt(
             } else {
                 match gen_expr(&expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
                     CheckedExpr::ExprIdxCheck(ch, e) if idx_checks => {
-                        cu::Stmt::Seq(vec![ch, cu::Stmt::Return(Some(e))])
+                        cu::Stmt::Seq(vec![ch, cu::Stmt::Expr(e)])
                     }
-                    CheckedExpr::ExprIdxCheck(_, e) => cu::Stmt::Return(Some(e)),
+                    CheckedExpr::ExprIdxCheck(_, e) => cu::Stmt::Expr(e),
                     CheckedExpr::Expr(e) => cu::Stmt::Expr(e),
                 }
             }
@@ -1070,23 +1096,27 @@ fn gen_expr(
                 arg: Box::new(e),
             })
         }
-        Ref(_, _, pl_expr) => match &expr.ty.as_ref().unwrap().ty {
-            desc::TyKind::Data(desc::DataTy {
-                dty: desc::DataTyKind::Ref(_, _, desc::Memory::GpuShared, _),
-                ..
-            }) => CheckedExpr::Expr(gen_pl_expr(
-                pl_expr,
-                &codegen_ctx.shape_ctx,
-                comp_unit,
-                idx_checks,
-            )),
-            _ => CheckedExpr::Expr(cu::Expr::Ref(Box::new(gen_pl_expr(
-                pl_expr,
-                &codegen_ctx.shape_ctx,
-                comp_unit,
-                idx_checks,
-            )))),
-        },
+        Ref(_, _, pl_expr) => {
+            //match &expr.ty.as_ref().unwrap().ty {
+            // desc::TyKind::Data(desc::DataTy {
+            //     dty: desc::DataTyKind::Ref(_, _, desc::Memory::GpuShared, _),
+            //     ..
+            // }) => CheckedExpr::Expr(gen_pl_expr(
+            //     pl_expr,
+            //     &codegen_ctx.shape_ctx,
+            //     comp_unit,
+            //     idx_checks,
+            // )),
+            // _ =>
+            let ref_pl_expr = gen_pl_expr(pl_expr, &codegen_ctx.shape_ctx, comp_unit, idx_checks);
+            CheckedExpr::Expr(match &pl_expr.ty.as_ref().unwrap().ty {
+                desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::At(_, desc::Memory::GpuShared),
+                    ..
+                }) => ref_pl_expr,
+                _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
+            })
+        }
         BorrowIndex(_, _, pl_expr, n) => {
             if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
                 panic!("It should not be allowed to borrow from a shape expression.")
@@ -1829,7 +1859,7 @@ fn gen_shape(
 
         cu::Expr::ArraySubscript {
             array: Box::new(expr),
-            index: index,
+            index,
         }
     }
 
@@ -1853,7 +1883,7 @@ fn gen_shape(
                 &path,
             )
         }
-        (ShapeExpr::Tuple { shapes: shapes }, [path @ .., prj]) => match prj.eval() {
+        (ShapeExpr::Tuple { shapes }, [path @ .., prj]) => match prj.eval() {
             Ok(i) => match &shapes[i] {
                 ViewOrExpr::V(shape_expr) => {
                     gen_shape(shape_expr, path.to_vec(), shape_ctx, comp_unit, idx_checks)
@@ -1870,7 +1900,7 @@ fn gen_shape(
             },
             Err(e) => panic!("{:?}", e),
         },
-        (ShapeExpr::Idx { idx, shape: shape }, _) => {
+        (ShapeExpr::Idx { idx, shape }, _) => {
             path.push(idx.clone());
             gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
         }
@@ -1999,6 +2029,7 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
+        // FIXME remove this case?
         desc::ArgKinded::Ty(desc::Ty {
             ty: ty @ desc::TyKind::Data(_),
             ..
@@ -2023,10 +2054,13 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ty: desc::TyKind::Fn(_, _, _, _),
             ..
         }) => unimplemented!("needed?"),
-        desc::ArgKinded::DataTy(_)
-        | desc::ArgKinded::Memory(_)
-        | desc::ArgKinded::Provenance(_)
-        | desc::ArgKinded::Ident(_) => None,
+        desc::ArgKinded::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
+            &desc::TyKind::Data(dty.clone()),
+            desc::Mutability::Mut,
+        ))),
+        desc::ArgKinded::Memory(_) | desc::ArgKinded::Provenance(_) | desc::ArgKinded::Ident(_) => {
+            None
+        }
         desc::ArgKinded::Ty(desc::Ty {
             ty: desc::TyKind::Dead(_),
             ..
