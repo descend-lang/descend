@@ -1,6 +1,6 @@
-fn reduce_shared_mem<n: nat, a: prv, b: prv>(
-    ha_array: &a shrd cpu.mem [i32; n],
-    h_output: &b uniq cpu.mem [i32; 64]
+fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
+    ha_array: &a shrd cpu.mem [i32; gs*bs],
+    h_output: &b uniq cpu.mem [i32; gs]
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
@@ -9,24 +9,24 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
     let view_a = to_view(&shrd a_array);
     let block_group = group::<1024>(view_a);
     let view_out = group_mut::<1>(to_view_mut(&uniq out_array));
-    exec::<64, 1024>(
+    exec::<gs, bs>(
         &uniq gpu,
         <block_group, view_out>,
         // TODO remove type annotations
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
-          views: <&shrd gpu.global [[[[i32; 1024]]; 64]], &uniq gpu.global [[[[i32; 1]]; 64]]>| -[gpu.grid]-> () {
+        | grid: BlockGrp<gs, ThreadGrp<bs>>,
+          views: <&shrd gpu.global [[[[i32; bs]]; gs]], &uniq gpu.global [[[[i32; 1]]; gs]]>| -[gpu.grid]-> () {
             let block_group = views.0;
             let view_out = views.1;
 
             // TODO remove decl and move out tmp declaration
             decl {
-                let mut tmp: [i32; 1024] @ gpu.shared
+                let mut tmp: [i32; bs] @ gpu.shared
             } parfor block in grid with ib, out_elem from block_group, view_out {
                  let tmp_view = to_view_mut(&uniq tmp);
                  parfor block
                  with inp, tmp_in from ib, tmp_view { *tmp_in = *inp };
 
-                 for_nat k in halved_range(512) {
+                 for_nat k in halved_range(bs/2) {
                     let tmp_view = to_view_mut(&uniq tmp);
                     let split_tmp_view = (split uniq 2*k tmp_view).0;
                     let active_halves = split uniq k split_tmp_view;
@@ -52,5 +52,9 @@ fn reduce_shared_mem<n: nat, a: prv, b: prv>(
     // Todo
     //  There is no check for n == 64 (which is NOT the case). Therefore it is wrong to specify
     //  [i32; n] as the array type. However, this still type checks.
-    copy_to_host(&shrd out_array, h_output)
+    copy_to_host(&shrd out_array, &uniq *h_output);
+    let mut res = 0;
+    for x in h_output {
+        res = res + *x
+    }
 }
