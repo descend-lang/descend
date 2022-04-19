@@ -23,10 +23,17 @@ fn scale_vec_test() -> Result<(), descend::error::ErrorReported> {
 fn bitonic_sort() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/bitonic_sort.desc")?
+        descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc")?
     ))
 }
 
+#[test]
+fn bitonic_sort_shrd_mem() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/bitonic_sort/bitonic_sort_shrd_mem.desc")?
+    ))
+}
 
 #[test]
 fn split_test() -> Result<(), descend::error::ErrorReported> {
