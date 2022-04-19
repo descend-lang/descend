@@ -28,6 +28,14 @@ fn bitonic_sort() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
+fn bitonic_sort_split_blocks() -> Result<(), descend::error::ErrorReported> {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/bitonic_sort/bitonic_sort_split_blocks.desc")?
+    ))
+}
+
+#[test]
 fn bitonic_sort_shrd_mem() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
