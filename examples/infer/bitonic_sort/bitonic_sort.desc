@@ -62,7 +62,7 @@ fn bitonicsort<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu.thread]-
             let pairs = group_mut::< 2 > (joined);                              //[[T;2];n/2]
             let grouped_pairs = groups_mut::<512>(pairs);
             parfor block in grid with group_of_pairs from grouped_pairs{
-                parfor thread in block with pair from group of pairs{
+                parfor thread in block with pair from group_of_pairs{
                     if pair[0] > pair[1]{
                         let temp = pair[0];
                         pair[0] = pair[1];

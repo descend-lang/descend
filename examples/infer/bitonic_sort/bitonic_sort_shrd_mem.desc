@@ -170,11 +170,14 @@ fn bitonicsort_shrd_mem<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu
             let j_group_t = transpose_mut(j_group);                                  //[[T;n/j];j]
             let joined = join_mut(j_group_t);                                        //[T;n]
             let pairs = group_mut::< 2 > (joined);                              //[[T;2];n/2]
-            parfor block in grid with pair from pairs{
-                if pair[0] > pair[1]{
-                    let temp = pair[0];
-                    pair[0] = pair[1];
-                    pair[1] = temp
+            let grouped_pairs = groups_mut::<512>(pairs);
+            parfor block in grid with group_of_pairs from grouped_pairs{
+                parfor thread in block with pair from group_of_pairs{
+                    if pair[0] > pair[1]{
+                        let temp = pair[0];
+                        pair[0] = pair[1];
+                        pair[1] = temp
+                    }
                 }
             }
         })
