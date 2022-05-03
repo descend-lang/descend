@@ -1,4 +1,3 @@
-use crate::ast::utils;
 use crate::ast::utils::fresh_ident;
 use crate::ast::visit;
 use crate::ast::visit::Visit;
@@ -51,12 +50,11 @@ pub(super) fn inst_fn_ty_scheme(
         })
         .collect();
 
-    let mut mono_param_tys = param_tys
+    let mono_param_tys = param_tys
         .iter()
         .map(|ty| TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ty))
         .collect();
-    let mut mono_ret_ty =
-        TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
+    let mono_ret_ty = TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
 
     Ok(Ty::new(TyKind::Fn(
         vec![],
@@ -340,31 +338,31 @@ impl Nat {
         &self,
         ident: &Ident,
         constr_map: &mut ConstrainMap,
-        prv_rels: &mut Vec<PrvConstr>,
+        _: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        match &self {
-            _ if Self::occurs_check(&IdentKinded::new(ident, Kind::Nat), self) => {
-                Err(TyError::InfiniteType)
-            }
-            _ => {
-                constr_map
-                    .nat_unifier
-                    .values_mut()
-                    .for_each(|n| SubstIdent::new(ident, self).visit_nat(n));
-                if let Some(old) = constr_map
-                    .nat_unifier
-                    .insert(ident.name.clone(), self.clone())
-                {
-                    panic!(
-                        "Attempting to bind same variable name twice.\n\
-                Old value: `{:?}` replaced by new value: `{:?}`",
-                        old, self
-                    )
-                }
-                Ok(())
-            }
+        // Nats can be equal to an expression in which the nat appears again. E.g., a = a * 1
+        // match &self {
+        //     _ if Self::occurs_check(&IdentKinded::new(ident, Kind::Nat), self) => {
+        //         Err(TyError::InfiniteType)
+        //     }
+        //     _ => {
+        constr_map
+            .nat_unifier
+            .values_mut()
+            .for_each(|n| SubstIdent::new(ident, self).visit_nat(n));
+        if let Some(old) = constr_map
+            .nat_unifier
+            .insert(ident.name.clone(), self.clone())
+        {
+            println!(
+                "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                old, self
+            )
         }
+        Ok(())
     }
+    //}
+    // }
 }
 
 impl Constrainable for Nat {
@@ -374,7 +372,27 @@ impl Constrainable for Nat {
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        unify(self, other, constr_map)
+        match (&mut *self, &mut *other) {
+            (Nat::Ident(n1i), Nat::Ident(n2i)) => match (n1i.is_implicit, n2i.is_implicit) {
+                (true, true) => other.bind_to(n1i, constr_map, prv_rels),
+                (true, false) => other.bind_to(n1i, constr_map, prv_rels),
+                (false, true) => self.bind_to(n2i, constr_map, prv_rels),
+                (false, false) => {
+                    if n1i != n2i {
+                        panic!(
+                            "We can probably not bind to explicitly declared identifiers\
+                            `{}` and `{}`.",
+                            n1i, n2i
+                        )
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+            (Nat::Ident(n1i), _) => other.bind_to(n1i, constr_map, prv_rels),
+            (_, Nat::Ident(n2i)) => self.bind_to(n2i, constr_map, prv_rels),
+            _ => unify(self, other, constr_map),
+        }
     }
 
     fn substitute(&mut self, subst: &ConstrainMap) {

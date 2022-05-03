@@ -95,6 +95,7 @@ pub fn walk_th_hierchy<V: VisitMut>(visitor: &mut V, th_hierchy: &mut ThreadHier
         }
         ThreadHierchyTy::WarpGrp(n) => visitor.visit_nat(n),
         ThreadHierchyTy::Warp => {}
+        ThreadHierchyTy::Thread => {}
     }
 }
 
@@ -174,6 +175,9 @@ pub fn walk_pattern<V: VisitMut>(visitor: &mut V, pattern: &mut Pattern) {
         Pattern::Tuple(patterns) => {
             walk_list!(visitor, visit_pattern, patterns)
         }
+        Pattern::TupleView(patterns) => {
+            walk_list!(visitor, visit_pattern, patterns)
+        }
     }
 }
 
@@ -241,7 +245,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(tt);
             visitor.visit_expr(ff)
         }
-        ExprKind::If(cond, tt) =>    {
+        ExprKind::If(cond, tt) => {
             visitor.visit_expr(cond);
             visitor.visit_expr(tt)
         }

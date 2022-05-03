@@ -25,7 +25,8 @@ fn bitonicsort<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu.thread]-
                 let desc_blocks = group_mut::<512> (descending);
 
 
-                let (even_blocks, odd_blocks) =split_blocks::<(n/4*512)>(join_blocks(transpose_blocks(group_blocks::<2>(all_blocks))));
+                let (even_blocks, odd_blocks) = split_block_grp::<(n/4*512)>(join_block_grp(
+                    transpose_block_grp(group_block_grp::<2>(all_blocks))));
 
 
                 parfor block in even_blocks with elems from asc_blocks{

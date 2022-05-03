@@ -28,7 +28,6 @@ pub trait Visit: Sized {
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
 }
 
-// Taken from the Rust compiler
 macro_rules! walk_list {
     ($visitor: expr, $method: ident, $list: expr) => {
         for elem in $list {
@@ -95,6 +94,7 @@ pub fn walk_th_hierchy<V: Visit>(visitor: &mut V, th_hierchy: &ThreadHierchyTy) 
         }
         ThreadHierchyTy::WarpGrp(n) => visitor.visit_nat(n),
         ThreadHierchyTy::Warp => {}
+        ThreadHierchyTy::Thread => {}
     }
 }
 
@@ -174,6 +174,9 @@ pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
         Pattern::Tuple(patterns) => {
             walk_list!(visitor, visit_pattern, patterns)
         }
+        Pattern::TupleView(patterns) => {
+            walk_list!(visitor, visit_pattern, patterns)
+        }
     }
 }
 
@@ -241,7 +244,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_expr(tt);
             visitor.visit_expr(ff)
         }
-        ExprKind::If(cond, tt) =>    {
+        ExprKind::If(cond, tt) => {
             visitor.visit_expr(cond);
             visitor.visit_expr(tt)
         }

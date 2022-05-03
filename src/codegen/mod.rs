@@ -13,13 +13,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
-    let preproc_fun_defs = compil_unit
+    let fun_defs_to_be_generated = compil_unit
         .fun_defs
-        .to_vec()
-        .into_iter()
-        .map(replace_arg_kinded_idents)
-        .collect::<Vec<desc::FunDef>>();
-    let fun_defs_to_be_generated = preproc_fun_defs
         .iter()
         .filter(|f| {
             f.param_decls.iter().all(|p| {
@@ -39,7 +34,7 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         .chain(
             fun_defs_to_be_generated
                 .iter()
-                .map(|fun_def| gen_fun_def(fun_def, &preproc_fun_defs, idx_checks)),
+                .map(|fun_def| gen_fun_def(fun_def, &compil_unit.fun_defs, idx_checks)),
         )
         .collect::<cu::CuProgram>();
     printer::print(&cu_program)
@@ -406,17 +401,15 @@ fn gen_stmt(
                 }
             }
         }
-        If(cond, e_tt) => {
-            match gen_expr(cond, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                CheckedExpr::ExprIdxCheck(check, con) => cu::Stmt::Seq(vec![
-                    check,
-                    gen_if(con, e_tt, codegen_ctx, comp_unit, dev_fun, idx_checks),
-                ]),
-                CheckedExpr::Expr(con) => {
-                    gen_if(con, e_tt, codegen_ctx, comp_unit, dev_fun, idx_checks)
-                }
+        If(cond, e_tt) => match gen_expr(cond, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+            CheckedExpr::ExprIdxCheck(check, con) => cu::Stmt::Seq(vec![
+                check,
+                gen_if(con, e_tt, codegen_ctx, comp_unit, dev_fun, idx_checks),
+            ]),
+            CheckedExpr::Expr(con) => {
+                gen_if(con, e_tt, codegen_ctx, comp_unit, dev_fun, idx_checks)
             }
-        }
+        },
         _ => {
             if return_value {
                 match gen_expr(&expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
@@ -459,7 +452,39 @@ fn gen_let(
                         dev_fun,
                         idx_checks,
                         tp,
-                        &desc::Expr::new(desc::ExprKind::Proj(Box::new(e.clone()), i)),
+                        &desc::Expr::with_type(
+                            desc::ExprKind::Proj(Box::new(e.clone()), i),
+                            match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), i) {
+                                Ok(ty) => ty,
+                                Err(err) => {
+                                    panic!("Cannot project tuple element type at {}", i)
+                                }
+                            },
+                        ),
+                    )
+                })
+                .collect(),
+        ),
+        desc::Pattern::TupleView(tuple_elems) => cu::Stmt::Seq(
+            tuple_elems
+                .iter()
+                .enumerate()
+                .map(|(i, tp)| {
+                    gen_let(
+                        codegen_ctx,
+                        comp_unit,
+                        dev_fun,
+                        idx_checks,
+                        tp,
+                        &desc::Expr::with_type(
+                            desc::ExprKind::Proj(Box::new(e.clone()), i),
+                            match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), i) {
+                                Ok(ty) => ty,
+                                Err(err) => {
+                                    panic!("Cannot project tuple view element type at {}", i)
+                                }
+                            },
+                        ),
                     )
                 })
                 .collect(),
@@ -950,6 +975,7 @@ fn gen_par_for(
                     args: vec![],
                 })),
             ),
+            desc::ThreadHierchyTy::Thread => panic!("This should never happen."),
         },
         _ => panic!("Not a parallel collection type."),
     };
@@ -1897,7 +1923,7 @@ fn gen_shape(
     }
 
     match (shape_expr, path.as_slice()) {
-        (ShapeExpr::ToView { ref_expr, .. }, _) => {
+        (ShapeExpr::ToView { ref_expr }, _) => {
             path.reverse();
             gen_indexing(
                 match gen_expr(
@@ -1966,7 +1992,7 @@ fn gen_shape(
                 _ => panic!("Cannot create SplitAt shape. Index or projection missing."),
             }
         }
-        (ShapeExpr::Group { size, n, shape }, _) => {
+        (ShapeExpr::Group { size, shape }, _) => {
             let i = path.pop();
             let j = path.pop();
             match (i, j) {
@@ -1993,23 +2019,37 @@ fn gen_shape(
                 _ => panic!("Cannot generate Group shape. One or more indices missing."),
             }
         }
-        (ShapeExpr::Zip { n, shapes }, _) => {
-            let idx = path.pop();
-            let proj = path.pop();
-            match (idx, proj) {
-                (Some(i), Some(pr)) => match pr.eval() {
-                    Ok(v) => {
-                        let inner_shape = &shapes[v];
-                        path.push(i);
-                        gen_shape(inner_shape, path, shape_ctx, comp_unit, idx_checks)
-                    }
-                    Err(m) => panic!("{:?}", m),
-                },
-                _ => panic!("Cannot generate Zip View. Index or projection missing."),
+        (ShapeExpr::Join { n, shape }, _) => {
+            let i = path.pop();
+            match i {
+                Some(i) => {
+                    path.push(desc::Nat::BinOp(
+                        desc::BinOpNat::Mod,
+                        Box::new(i.clone()),
+                        Box::new(n.clone()),
+                    ));
+                    path.push(desc::Nat::BinOp(
+                        desc::BinOpNat::Div,
+                        Box::new(i),
+                        Box::new(n.clone()),
+                    ));
+                    gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
+                }
+                None => panic!("Cannot generate Join shape. Indexing missing."),
             }
         }
-        (ShapeExpr::Join { m, n, shape }, _) => unimplemented!(),
-        (ShapeExpr::Transpose { m, n, shape }, _) => unimplemented!(),
+        (ShapeExpr::Transpose { shape }, _) => {
+            let i = path.pop();
+            let j = path.pop();
+            match (i, j) {
+                (Some(i), Some(j)) => {
+                    path.push(i);
+                    path.push(j);
+                    gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
+                }
+                _ => panic!("Cannot generate Transpose shape. One or more indices missing."),
+            }
+        }
         ve => panic!("unexpected, found: {:?}", ve),
     }
 }
@@ -2330,7 +2370,42 @@ impl ParallelityCollec {
                                 }
                             }
                         }
-                        panic!("Cannot create `split` from the provided arguments.");
+                        panic!("Cannot create `split_thread_grp` from the provided arguments.");
+                    } else if ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK_GRP {
+                        if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(p)) =
+                            (&f.ty.as_ref().unwrap().ty, args.first())
+                        {
+                            if let (
+                                desc::TyKind::TupleView(elem_tys),
+                                desc::TyKind::Data(desc::DataTy {
+                                    dty: desc::DataTyKind::ThreadHierchy(th_hierchy),
+                                    ..
+                                }),
+                            ) = (&ret_ty.as_ref().ty, &p.ty.as_ref().unwrap().ty)
+                            {
+                                if let (
+                                    desc::TyKind::Data(desc::DataTy {
+                                        dty: desc::DataTyKind::ThreadHierchy(th_hrchy),
+                                        ..
+                                    }),
+                                    desc::ThreadHierchyTy::BlockGrp(m1, _, _, _, _, _),
+                                ) = (&elem_tys.first().unwrap().ty, th_hierchy.as_ref())
+                                {
+                                    if let desc::ThreadHierchyTy::BlockGrp(k, _, _, _, _, _) =
+                                        th_hrchy.as_ref()
+                                    {
+                                        return ParallelityCollec::Split {
+                                            pos: k.clone(),
+                                            coll_size: m1.clone(),
+                                            parall_expr: Box::new(ParallelityCollec::create_from(
+                                                p, parall_ctx,
+                                            )),
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                        panic!("Cannot create `split_block_grp` from the provided arguments.");
                     } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
                         unimplemented!("Needs to take generic arguments from function type.");
                         if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
@@ -2444,22 +2519,13 @@ enum ShapeExpr {
     },
     Group {
         size: desc::Nat,
-        n: desc::Nat,
         shape: Box<ShapeExpr>,
     },
     Join {
-        m: desc::Nat,
         n: desc::Nat,
         shape: Box<ShapeExpr>,
     },
-
-    Zip {
-        n: desc::Nat,
-        shapes: Vec<ShapeExpr>,
-    },
     Transpose {
-        m: desc::Nat,
-        n: desc::Nat,
         shape: Box<ShapeExpr>,
     },
 }
@@ -2484,12 +2550,14 @@ impl ShapeExpr {
                         || ident.name == crate::ty_check::pre_decl::GROUP_MUT
                     {
                         ShapeExpr::create_group_shape(args, f_ty, shape_ctx)
-                    // } else if ident.name == crate::ty_check::pre_decl::JOIN {
-                    //     ShapeExpr::create_join_shape(args, f_ty, shape_ctx)
-                    // } else if ident.name == crate::ty_check::pre_decl::ZIP {
-                    //     ShapeExpr::create_zip_shape(args, f_ty, shape_ctx)
-                    // } else if ident.name == crate::ty_check::pre_decl::TRANSPOSE {
-                    //     ShapeExpr::create_transpose_shape(args, f_ty, shape_ctx)
+                    } else if ident.name == crate::ty_check::pre_decl::JOIN
+                        || ident.name == crate::ty_check::pre_decl::JOIN_MUT
+                    {
+                        ShapeExpr::create_join_shape(args, shape_ctx)
+                    } else if ident.name == crate::ty_check::pre_decl::TRANSPOSE
+                        || ident.name == crate::ty_check::pre_decl::TRANSPOSE_MUT
+                    {
+                        ShapeExpr::create_transpose_shape(args, shape_ctx)
                     } else {
                         unimplemented!()
                     }
@@ -2614,7 +2682,6 @@ impl ShapeExpr {
                     {
                         return ShapeExpr::Group {
                             size: s.clone(),
-                            n: n.clone(),
                             shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
                         };
                     }
@@ -2623,60 +2690,35 @@ impl ShapeExpr {
         }
         panic!("Cannot create `group` from the provided arguments.");
     }
-    //
-    // fn create_join_shape(args: &[desc::Expr], f_ty: &TyKind, shape_ctx: &ShapeCtx) -> ShapeExpr {
-    //     if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, args.first()) {
-    //     if let (desc::ArgKinded::Nat(m), desc::ArgKinded::Nat(n), Some(v)) =
-    //         (&gen_args[0], &gen_args[1], args.first())
-    //     {
-    //         return ShapeExpr::Join {
-    //             m: m.clone(),
-    //             n: n.clone(),
-    //             shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
-    //         };
-    //     }
-    //     panic!("Cannot create `to_shape` from the provided arguments.");
-    // }
 
-    // fn create_zip_shape(args: &[desc::Expr], f_ty: &TyKind, shape_ctx: &ShapeCtx) -> ShapeExpr {
-    //     if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, &args[0], args[1]) {
-    //     if let (desc::ArgKinded::Nat(n), desc::ArgKinded::Ty(t1), desc::ArgKinded::Ty(t2), v1, v2) =
-    //         (&gen_args[0], &gen_args[1], &gen_args[2], &args[0], &args[1])
-    //     {
-    //         return ShapeExpr::Zip {
-    //             n: n.clone(),
-    //             shapes: vec![
-    //                 ShapeExpr::create_from(v1, shape_ctx),
-    //                 ShapeExpr::create_from(v2, shape_ctx),
-    //             ],
-    //         };
-    //     }
-    //     panic!(
-    //         "Cannot create `zip` from the provided arguments:\n{:?},\n{:?},\n{:?}",
-    //         &gen_args[0], &gen_args[1], &gen_args[2]
-    //     );
-    // }
+    fn create_join_shape(args: &[desc::Expr], shape_ctx: &ShapeCtx) -> ShapeExpr {
+        if let Some(v) = args.first() {
+            if let desc::TyKind::Data(desc::DataTy {
+                dty: desc::DataTyKind::Ref(_, _, _, arr_shape),
+                ..
+            }) = &v.ty.as_ref().unwrap().ty
+            {
+                if let desc::DataTyKind::ArrayShape(inner_dim, _) = &arr_shape.as_ref().dty {
+                    if let desc::DataTyKind::ArrayShape(_, n) = &inner_dim.as_ref().dty {
+                        return ShapeExpr::Join {
+                            n: n.clone(),
+                            shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
+                        };
+                    }
+                }
+            }
+        }
+        panic!("Cannot create `join_shape` from the provided arguments.");
+    }
 
-    // fn create_transpose_shape(
-    //     args: &[desc::Expr],
-    //     f_ty: &TyKind,
-    //     shape_ctx: &ShapeCtx,
-    // ) -> ShapeExpr {
-    //     if let (
-    //         desc::ArgKinded::Nat(m),
-    //         desc::ArgKinded::Nat(n),
-    //         desc::ArgKinded::Ty(ty),
-    //         Some(v),
-    //     ) = (&gen_args[0], &gen_args[1], &gen_args[2], args.first())
-    //     {
-    //         return ShapeExpr::Transpose {
-    //             m: m.clone(),
-    //             n: n.clone(),
-    //             shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
-    //         };
-    //     }
-    //     panic!("Cannot create `to_shape` from the provided arguments.");
-    // }
+    fn create_transpose_shape(args: &[desc::Expr], shape_ctx: &ShapeCtx) -> ShapeExpr {
+        if let Some(v) = args.first() {
+            return ShapeExpr::Transpose {
+                shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
+            };
+        }
+        panic!("Cannot create `to_shape` from the provided arguments.");
+    }
 
     fn collect_and_rename_input_exprs(&mut self) -> Vec<(String, desc::Expr)> {
         fn collect_and_rename_input_exprs_rec(
@@ -2694,24 +2736,17 @@ impl ShapeExpr {
                     *count += 1;
                     vec
                 }
-                ShapeExpr::SplitAt { shape: shape, .. } => {
+                ShapeExpr::SplitAt { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
-                ShapeExpr::Group { shape: shape, .. } => {
+                ShapeExpr::Group { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
-                ShapeExpr::Join { shape: shape, .. } => {
+                ShapeExpr::Join { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
-                ShapeExpr::Transpose { shape: shape, .. } => {
+                ShapeExpr::Transpose { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Zip { shapes: shapes, .. } => {
-                    let mut renamed = vec;
-                    for v in shapes {
-                        renamed = collect_and_rename_input_exprs_rec(v, count, renamed);
-                    }
-                    renamed
                 }
                 ShapeExpr::Tuple { shapes: elems } => {
                     let mut renamed = vec;
@@ -2732,10 +2767,10 @@ impl ShapeExpr {
                     }
                     renamed
                 }
-                ShapeExpr::Idx { shape: shape, .. } => {
+                ShapeExpr::Idx { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
-                ShapeExpr::Proj { shape: shape, .. } => {
+                ShapeExpr::Proj { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
             }
@@ -2744,71 +2779,6 @@ impl ShapeExpr {
         let mut count = 0;
         collect_and_rename_input_exprs_rec(self, &mut count, vec)
     }
-}
-
-fn replace_arg_kinded_idents(mut fun_def: desc::FunDef) -> desc::FunDef {
-    use desc::*;
-    struct ReplaceArgKindedIdents {
-        ident_names_to_kinds: HashMap<String, Kind>,
-    }
-    impl VisitMut for ReplaceArgKindedIdents {
-        fn visit_expr(&mut self, expr: &mut Expr) {
-            match &mut expr.expr {
-                ExprKind::Block(prvs, body) => {
-                    self.ident_names_to_kinds
-                        .extend(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
-                    self.visit_expr(body)
-                }
-                ExprKind::App(f, gen_args, args) => {
-                    self.visit_expr(f);
-                    for gen_arg in gen_args {
-                        if let ArgKinded::Ident(ident) = gen_arg {
-                            let to_be_kinded = ident.clone();
-                            match self.ident_names_to_kinds.get(&ident.name).unwrap() {
-                                Kind::Provenance => {
-                                    *gen_arg =
-                                        ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
-                                }
-                                Kind::Memory => {
-                                    *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded))
-                                }
-                                Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
-                                Kind::Ty => {
-                                    // TODO how to deal with View??!! This is a problem!
-                                    //  Ident only for Ty but not for DataTy or ViewTy?
-                                    *gen_arg = ArgKinded::Ty(Ty::new(desc::TyKind::Data(
-                                        DataTy::new(DataTyKind::Ident(to_be_kinded)),
-                                    )))
-                                }
-                                _ => panic!("This kind can not be referred to with an identifier."),
-                            }
-                        }
-                    }
-                    walk_list!(self, visit_expr, args)
-                }
-                ExprKind::ForNat(ident, _, body) => {
-                    self.ident_names_to_kinds
-                        .extend(iter::once((ident.name.clone(), Kind::Nat)));
-                    self.visit_expr(body)
-                }
-                _ => visit_mut::walk_expr(self, expr),
-            }
-        }
-
-        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
-            self.ident_names_to_kinds = fun_def
-                .generic_params
-                .iter()
-                .map(|desc::IdentKinded { ident, kind }| (ident.name.clone(), *kind))
-                .collect();
-            visit_mut::walk_fun_def(self, fun_def)
-        }
-    }
-    let mut replace = ReplaceArgKindedIdents {
-        ident_names_to_kinds: HashMap::new(),
-    };
-    replace.visit_fun_def(&mut fun_def);
-    fun_def
 }
 
 // Precondition: Views are inlined in every function definition.

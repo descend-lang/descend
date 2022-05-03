@@ -7,7 +7,7 @@ type Res = Result<(), descend::error::ErrorReported>;
 fn scalar_mult() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/scalar_mult.desc")?
+        descend::compile("examples/infer/scalar_mult.desc")?
     ))
 }
 
@@ -53,6 +53,11 @@ fn split_test() -> Result<(), descend::error::ErrorReported> {
 
 #[test]
 fn scan() -> Result<(), descend::error::ErrorReported> {
+    eprintln!(
+        "Breaks because there are name clashes between nats and type variables.\n \
+    This is not the case for the fully typed version.\n\
+    Solution: Keep track of the kinded arguments for dependent function separately depending on their kinds."
+    );
     Ok(println!(
         "{}",
         descend::compile("examples/infer/scan.desc")?

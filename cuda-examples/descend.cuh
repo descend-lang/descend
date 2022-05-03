@@ -378,7 +378,7 @@ template<typename DescendType>
 using GpuBuffer = Buffer<Memory::GpuGlobal, DescendType>;
 
 template<typename DescendType, typename PtrType>
-auto gpu_alloc(const Gpu * const __restrict__ gpu, const PtrType * const __restrict__ init_ptr) -> GpuBuffer<DescendType>  {
+auto gpu_alloc_copy(const Gpu * const __restrict__ gpu, const PtrType * const __restrict__ init_ptr) -> GpuBuffer<DescendType>  {
     return descend::GpuBuffer<DescendType>(gpu, init_ptr);
 }
 

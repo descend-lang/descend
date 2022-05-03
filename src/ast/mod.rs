@@ -15,6 +15,7 @@ mod span;
 #[macro_use]
 pub mod visit;
 pub mod utils;
+#[macro_use]
 pub mod visit_mut;
 
 #[derive(Clone, Debug)]
@@ -328,6 +329,7 @@ pub struct Ident {
     pub name: String,
     #[span_derive_ignore]
     pub span: Option<Span>,
+    pub is_implicit: bool,
 }
 
 impl Ident {
@@ -335,6 +337,15 @@ impl Ident {
         Self {
             name: String::from(name),
             span: None,
+            is_implicit: false,
+        }
+    }
+
+    pub fn new_impli(name: &str) -> Self {
+        Self {
+            name: String::from(name),
+            span: None,
+            is_implicit: true,
         }
     }
 
@@ -342,6 +353,7 @@ impl Ident {
         Self {
             name,
             span: Some(span),
+            is_implicit: false,
         }
     }
 }
@@ -356,6 +368,7 @@ impl fmt::Display for Ident {
 pub enum Pattern {
     Ident(Mutability, Ident),
     Tuple(Vec<Pattern>),
+    TupleView(Vec<Pattern>),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -510,6 +523,21 @@ pub enum ArgKinded {
     Ty(Ty),
     DataTy(DataTy),
     Provenance(Provenance),
+}
+
+impl ArgKinded {
+    pub fn kind(&self) -> Kind {
+        match self {
+            ArgKinded::Ident(_) => {
+                panic!("Unexpected: unkinded identifier should have been removed after parsing")
+            }
+            ArgKinded::Ty(_) => Kind::Ty,
+            ArgKinded::DataTy(_) => Kind::DataTy,
+            ArgKinded::Provenance(_) => Kind::Provenance,
+            ArgKinded::Memory(_) => Kind::Memory,
+            ArgKinded::Nat(_) => Kind::Nat,
+        }
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -781,6 +809,7 @@ pub enum ThreadHierchyTy {
     ThreadGrp(Nat, Nat, Nat),
     WarpGrp(Nat),
     Warp,
+    Thread,
 }
 
 impl fmt::Display for ThreadHierchyTy {
@@ -795,6 +824,7 @@ impl fmt::Display for ThreadHierchyTy {
             ThreadGrp(n1, n2, n3) => write!(f, "ThreadGrp<{}, {}, {}>", n1, n2, n3),
             WarpGrp(n) => write!(f, "WarpGrp<{}>", n),
             Warp => write!(f, "Warp"),
+            Thread => write!(f, "Thread"),
         }
     }
 }
@@ -818,6 +848,7 @@ impl ThreadHierchyTy {
             ),
             WarpGrp(n) => WarpGrp(n.subst_ident_kinded(ident_kinded, with)),
             Warp => Warp,
+            Thread => Thread,
         }
     }
 }
@@ -1256,7 +1287,7 @@ impl fmt::Display for Nat {
         match self {
             Self::Ident(ident) => write!(f, "{}", ident),
             Self::Lit(n) => write!(f, "{}", n),
-            Self::BinOp(op, lhs, rhs) => write!(f, "{} {} {}", lhs, op, rhs),
+            Self::BinOp(op, lhs, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Self::App(func, args) => {
                 write!(f, "{}(", func)?;
                 if let Some((last, leading)) = args.split_last() {

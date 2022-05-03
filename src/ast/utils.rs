@@ -7,7 +7,7 @@ pub(crate) fn fresh_ident<F, R>(name: &str, ident_constr: F) -> R
 where
     F: Fn(Ident) -> R,
 {
-    ident_constr(Ident::new(&fresh_name(name)))
+    ident_constr(Ident::new_impli(&fresh_name(name)))
 }
 
 pub(crate) fn fresh_name(name: &str) -> String {

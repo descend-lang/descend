@@ -3,17 +3,25 @@ pub mod source;
 mod utils;
 
 use crate::ast::*;
+use core::iter;
 use error::ParseError;
+use std::collections::HashMap;
 
 use crate::error::ErrorReported;
 pub use source::*;
 
 use crate::ast::utils::fresh_ident;
+use crate::ast::visit_mut::VisitMut;
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
     Ok(CompilUnit::new(
-        parser.parse().map_err(|err| err.emit())?,
+        parser
+            .parse()
+            .map_err(|err| err.emit())?
+            .into_iter()
+            .map(replace_arg_kinded_idents)
+            .collect::<Vec<FunDef>>(),
         source,
     ))
 }
@@ -31,6 +39,70 @@ impl<'a> Parser<'a> {
     fn parse(&self) -> Result<Vec<FunDef>, ParseError<'_>> {
         descend::compil_unit(self.source.str()).map_err(|peg_err| ParseError::new(self, peg_err))
     }
+}
+
+fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
+    struct ReplaceArgKindedIdents {
+        ident_names_to_kinds: HashMap<String, Kind>,
+    }
+    impl VisitMut for ReplaceArgKindedIdents {
+        fn visit_expr(&mut self, expr: &mut Expr) {
+            match &mut expr.expr {
+                ExprKind::Block(prvs, body) => {
+                    self.ident_names_to_kinds
+                        .extend(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
+                    self.visit_expr(body)
+                }
+                ExprKind::App(f, gen_args, args) => {
+                    self.visit_expr(f);
+                    for gen_arg in gen_args {
+                        if let ArgKinded::Ident(ident) = gen_arg {
+                            let to_be_kinded = ident.clone();
+                            match self.ident_names_to_kinds.get(&ident.name).unwrap() {
+                                Kind::Provenance => {
+                                    *gen_arg =
+                                        ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
+                                }
+                                Kind::Memory => {
+                                    *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded))
+                                }
+                                Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
+                                Kind::Ty => {
+                                    // TODO how to deal with View??!! This is a problem!
+                                    //  Ident only for Ty but not for DataTy or ViewTy?
+                                    *gen_arg = ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
+                                        DataTyKind::Ident(to_be_kinded),
+                                    ))))
+                                }
+                                _ => panic!("This kind can not be referred to with an identifier."),
+                            }
+                        }
+                    }
+                    walk_list!(self, visit_expr, args)
+                }
+                ExprKind::ForNat(ident, _, body) => {
+                    self.ident_names_to_kinds
+                        .extend(iter::once((ident.name.clone(), Kind::Nat)));
+                    self.visit_expr(body)
+                }
+                _ => visit_mut::walk_expr(self, expr),
+            }
+        }
+
+        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
+            self.ident_names_to_kinds = fun_def
+                .generic_params
+                .iter()
+                .map(|IdentKinded { ident, kind }| (ident.name.clone(), *kind))
+                .collect();
+            visit_mut::walk_fun_def(self, fun_def)
+        }
+    }
+    let mut replace = ReplaceArgKindedIdents {
+        ident_names_to_kinds: HashMap::new(),
+    };
+    replace.visit_fun_def(&mut fun_def);
+    fun_def
 }
 
 pub mod error {
@@ -145,6 +217,9 @@ peg::parser! {
                 Pattern::Ident(mutbl, ident) }
             / tuple_pattern: "(" _ elems_pattern:pattern() ** (_ "," _) _ ")" {
                 Pattern::Tuple(elems_pattern)
+            }
+            / tuple_view_pattern: "<" _ elems_pattern:pattern() ** (_ "," _) _ ">" {
+                Pattern::TupleView(elems_pattern)
             }
 
         // These rules lead to stackoverflows when integrated in rule expression
