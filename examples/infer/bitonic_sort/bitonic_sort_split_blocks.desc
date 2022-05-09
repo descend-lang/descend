@@ -15,7 +15,7 @@ fn bitonicsort<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu.thread]-
 
                 let grouped_pairs = group_mut::< (k/j) > (pair);                     //[[[T;2];k/j];n*j/2k]
                 let grouped_pairs_t = transpose_mut(grouped_pairs);                      //[[[T;2];n*j/2k];k/j]
-                let splitted = split uniq k / (2 * j) grouped_pairs_t;       //([[[T;2];n*j/2k];k/2j],[[[T;2];n*j/2k];k/2j])
+                let splitted = split uniq (k / (2 * j)) grouped_pairs_t;       //([[[T;2];n*j/2k];k/2j],[[[T;2];n*j/2k];k/2j])
                 let ascending = join_mut(splitted.0);                                    //([[T;2];n/4],[[T;2];n/4])
                 let descending = join_mut(splitted.1);
 

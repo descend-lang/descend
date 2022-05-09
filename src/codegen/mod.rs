@@ -2,12 +2,13 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
+use crate::ast::utils;
+use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::codegen::cu_ast::Stmt;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::iter;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 // Precondition. all function definitions are successfully typechecked and
@@ -122,6 +123,7 @@ impl<T: Debug + Clone> ScopeCtx<T> {
 
 enum CheckedExpr {
     Expr(cu::Expr),
+    // TODO Wrap in Box
     ExprIdxCheck(cu::Stmt, cu::Expr),
 }
 
@@ -292,12 +294,12 @@ fn gen_stmt(
                                 name: ident.name.clone(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::I32),
                                 addr_space: None,
-                                expr: Some(cu::Expr::Lit(cu::Lit::I32(1))),
+                                expr: Some(cu::Expr::Nat(input[0].clone())),
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Le,
                                 lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::Nat(input[0].clone())),
+                                rhs: Box::new(cu::Expr::Nat(input[1].clone())),
                             };
                             let iter = cu::Expr::Assign {
                                 lhs: Box::new(i.clone()),
@@ -786,65 +788,96 @@ fn gen_exec(
     };
 
     // FIXME only allows Lambdas
-    let dev_fun = if let desc::ExprKind::Lambda(params, _, _, body) = &fun.expr {
-        let parall_collec = params[0].ident.clone();
-        let mut fresh_parall_codegen_ctx = CodegenCtx {
-            parall_ctx: ParallCtx::new(),
-            shape_ctx: codegen_ctx.shape_ctx.clone(),
-        };
-        codegen_ctx.shape_ctx.push_scope();
-        fresh_parall_codegen_ctx.parall_ctx.insert(
-            &parall_collec.name.clone(),
-            ParallelityCollec::Ident(parall_collec),
-        );
+    let (dev_fun, free_kinded_idents) =
+        if let desc::ExprKind::Lambda(params, _, _, body) = &fun.expr {
+            let parall_collec = params[0].ident.clone();
+            let mut fresh_parall_codegen_ctx = CodegenCtx {
+                parall_ctx: ParallCtx::new(),
+                shape_ctx: codegen_ctx.shape_ctx.clone(),
+            };
+            codegen_ctx.shape_ctx.push_scope();
+            fresh_parall_codegen_ctx.parall_ctx.insert(
+                &parall_collec.name.clone(),
+                ParallelityCollec::Ident(parall_collec),
+            );
 
-        // Remember to inline input shape expression
-        let in_name = &params[1].ident.name.clone();
-        fresh_parall_codegen_ctx
-            .shape_ctx
-            .insert(in_name, input_shape_expr);
+            // Remember to inline input shape expression
+            let in_name = &params[1].ident.name.clone();
+            fresh_parall_codegen_ctx
+                .shape_ctx
+                .insert(in_name, input_shape_expr);
 
-        let gpu_fun_body = gen_stmt(
-            body,
-            false,
-            &mut fresh_parall_codegen_ctx,
-            comp_unit,
-            true,
-            idx_checks,
-        );
-        let mut global_failure_init = vec![
-            cu::Stmt::If {
-                cond: cu::Expr::BinOp {
-                    lhs: Box::new(cu::Expr::Deref(Box::new(cu::Expr::Ident(
-                        "global_failure".to_string(),
-                    )))),
-                    op: cu::BinOp::Neq,
-                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(-1))),
+            let gpu_fun_body = gen_stmt(
+                body,
+                false,
+                &mut fresh_parall_codegen_ctx,
+                comp_unit,
+                true,
+                idx_checks,
+            );
+            let mut global_failure_init = vec![
+                cu::Stmt::If {
+                    cond: cu::Expr::BinOp {
+                        lhs: Box::new(cu::Expr::Deref(Box::new(cu::Expr::Ident(
+                            "global_failure".to_string(),
+                        )))),
+                        op: cu::BinOp::Neq,
+                        rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(-1))),
+                    },
+                    body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Return(None)))),
                 },
-                body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Return(None)))),
-            },
-            cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                template_args: vec![],
-                args: vec![],
-            }),
-        ];
-        let lambda = cu::Expr::Lambda {
-            params: param_decls,
-            body: Box::new(if idx_checks {
-                global_failure_init.push(gpu_fun_body);
-                cu::Stmt::Seq(global_failure_init)
-            } else {
-                gpu_fun_body
-            }),
-            ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
-            is_dev_fun: true,
-        };
+                cu::Stmt::Expr(cu::Expr::FunCall {
+                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                    template_args: vec![],
+                    args: vec![],
+                }),
+            ];
 
-        lambda
-    } else {
-        panic!("Currently only lambdas can be passed.")
-    };
+            let free_kinded_idents = {
+                let mut free_kinded_idents = utils::FreeKindedIdents::new();
+                free_kinded_idents.visit_expr(&body.clone());
+                free_kinded_idents
+                    .set
+                    .iter()
+                    .filter(|ki| ki.kind != desc::Kind::Provenance)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            let nat_param_decls = free_kinded_idents
+                .iter()
+                .map(|ki| match &ki.kind {
+                    desc::Kind::Nat => cu::ParamDecl {
+                        name: ki.ident.name.clone(),
+                        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+                    },
+                    desc::Kind::Ty
+                    | desc::Kind::Provenance
+                    | desc::Kind::Memory
+                    | desc::Kind::DataTy => {
+                        panic!("Unexpected found {:?}.", ki.ident.name)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut all_param_decls = param_decls;
+            all_param_decls.extend(nat_param_decls);
+            (
+                cu::Expr::Lambda {
+                    captures: vec![],
+                    params: all_param_decls,
+                    body: Box::new(if idx_checks {
+                        global_failure_init.push(gpu_fun_body);
+                        cu::Stmt::Seq(global_failure_init)
+                    } else {
+                        gpu_fun_body
+                    }),
+                    ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
+                    is_dev_fun: true,
+                },
+                free_kinded_idents,
+            )
+        } else {
+            panic!("Currently only lambdas can be passed.")
+        };
     let mut checks: Vec<cu::Stmt> = vec![];
     let mut input: Vec<_> = name_to_exprs
         .iter()
@@ -862,6 +895,17 @@ fn gen_exec(
     let template_args = gen_args_kinded(vec![blocks.clone(), threads.clone()].as_slice());
     let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
     args.append(&mut input);
+    let mut nat_input_idents = free_kinded_idents
+        .iter()
+        .filter_map(|ki| {
+            if let desc::Kind::Nat = ki.kind {
+                Some(cu::Expr::Nat(desc::Nat::Ident(ki.ident.clone())))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    args.append(&mut nat_input_idents);
 
     if checks.is_empty() {
         CheckedExpr::Expr(cu::Expr::FunCall {
@@ -1193,12 +1237,12 @@ fn gen_expr(
         Index(pl_expr, idx) => {
             if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
                 CheckedExpr::ExprIdxCheck(
-                    gen_check_idx_stmt(&expr, comp_unit, dev_fun, idx_checks),
+                    gen_check_idx_stmt(expr, comp_unit, dev_fun, idx_checks),
                     gen_idx_into_shape(pl_expr, idx, &codegen_ctx.shape_ctx, comp_unit, idx_checks),
                 )
             } else {
                 CheckedExpr::ExprIdxCheck(
-                    gen_check_idx_stmt(&expr, comp_unit, dev_fun, idx_checks),
+                    gen_check_idx_stmt(expr, comp_unit, dev_fun, idx_checks),
                     cu::Expr::ArraySubscript {
                         array: Box::new(gen_pl_expr(
                             pl_expr,
@@ -1240,7 +1284,12 @@ fn gen_expr(
                 rhs: Box::new(e),
             })
         }
-        Lambda(params, exec, ty, expr) => CheckedExpr::Expr(cu::Expr::Lambda {
+        Lambda(params, exec, ty, body) => CheckedExpr::Expr(cu::Expr::Lambda {
+            captures: {
+                let mut free_idents = utils::FreeKindedIdents::new();
+                free_idents.visit_expr(body);
+                free_idents.set.iter().map(|ki| ki.ident.clone()).collect()
+            },
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
                 expr,

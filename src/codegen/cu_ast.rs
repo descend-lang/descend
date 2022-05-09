@@ -67,6 +67,7 @@ pub(super) enum Expr {
         rhs: Box<Expr>,
     },
     Lambda {
+        captures: Vec<crate::ast::Ident>,
         params: Vec<ParamDecl>,
         body: Box<Stmt>,
         ret_ty: Ty,

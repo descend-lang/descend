@@ -161,13 +161,16 @@ impl std::fmt::Display for Expr {
                 rhs: r_val,
             } => write!(f, "{} = {}", l_val, r_val),
             Lambda {
+                captures,
                 params,
                 body,
                 ret_ty,
                 is_dev_fun,
             } => {
                 let dev_qual = if *is_dev_fun { "__device__" } else { "" };
-                writeln!(f, "[] {} (", dev_qual)?;
+                writeln!(f, "[");
+                fmt_vec(f, &captures, ",")?;
+                writeln!(f, "] {} (", dev_qual)?;
                 fmt_vec(f, &params, ",\n")?;
                 writeln!(f, ") -> {} {{", ret_ty)?;
                 writeln!(f, "{}", &body)?;

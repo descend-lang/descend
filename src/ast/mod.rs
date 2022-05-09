@@ -1,8 +1,10 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Formatter;
 
+use crate::ast::utils::FreeKindedIdents;
+use crate::ast::visit::Visit;
 use descend_derive::span_derive;
 pub use span::*;
 
@@ -1268,6 +1270,7 @@ impl PartialOrd for Nat {
             (Nat::Lit(l), Nat::Lit(o)) if l == o => Some(Ordering::Equal),
             (Nat::Lit(l), Nat::Lit(o)) if l > o => Some(Ordering::Greater),
             (Nat::BinOp(op, lhs, rhs), Nat::BinOp(oop, olhs, orhs))
+                // FIXME always true even if greater or less
                 if op == oop && lhs == olhs && rhs == orhs =>
             {
                 Some(Ordering::Equal)

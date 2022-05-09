@@ -1,5 +1,4 @@
-use crate::ast::utils::fresh_ident;
-use crate::ast::visit;
+use crate::ast::utils::{fresh_ident, FreeKindedIdents};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
@@ -222,15 +221,15 @@ impl Constrainable for Ty {
         }
     }
 
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_ty(self);
+        free_idents.set
+    }
+
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_ty(self);
-    }
-
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeIdents::new();
-        free_idents.visit_ty(self);
-        free_idents.set
     }
 }
 
@@ -321,15 +320,15 @@ impl Constrainable for DataTy {
         }
     }
 
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_dty(self);
+        free_idents.set
+    }
+
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_dty(self);
-    }
-
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeIdents::new();
-        free_idents.visit_dty(self);
-        free_idents.set
     }
 }
 
@@ -401,7 +400,7 @@ impl Constrainable for Nat {
     }
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeIdents::new();
+        let mut free_idents = FreeKindedIdents::new();
         free_idents.visit_nat(self);
         free_idents.set
     }
@@ -469,7 +468,7 @@ impl Constrainable for Memory {
     }
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeIdents::new();
+        let mut free_idents = FreeKindedIdents::new();
         free_idents.visit_mem(self);
         free_idents.set
     }
@@ -514,16 +513,15 @@ impl Constrainable for Provenance {
         prv_rels.push(PrvConstr(self.clone(), other.clone()));
         Ok(())
     }
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_prv(self);
+        free_idents.set
+    }
 
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_prv(self);
-    }
-
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeIdents::new();
-        free_idents.visit_prv(self);
-        free_idents.set
     }
 }
 
@@ -640,64 +638,6 @@ impl<'a> VisitMut for SubstIdent<'a, DataTy> {
         match &mut dty.dty {
             DataTyKind::Ident(ident) if ident.name == self.ident.name => *dty = self.term.clone(),
             _ => visit_mut::walk_dty(self, dty),
-        }
-    }
-}
-
-struct FreeIdents {
-    set: HashSet<IdentKinded>,
-}
-
-impl FreeIdents {
-    fn new() -> Self {
-        FreeIdents {
-            set: HashSet::new(),
-        }
-    }
-}
-
-impl Visit for FreeIdents {
-    fn visit_nat(&mut self, nat: &Nat) {
-        match nat {
-            Nat::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Nat))),
-            //Nat::App(ident, args) =>
-            _ => visit::walk_nat(self, nat),
-        }
-    }
-
-    fn visit_mem(&mut self, mem: &Memory) {
-        match mem {
-            Memory::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Memory))),
-            _ => visit::walk_mem(self, mem),
-        }
-    }
-
-    fn visit_prv(&mut self, prv: &Provenance) {
-        match prv {
-            Provenance::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Provenance))),
-            _ => visit::walk_prv(self, prv),
-        }
-    }
-
-    fn visit_ty(&mut self, ty: &Ty) {
-        match &ty.ty {
-            TyKind::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty))),
-            TyKind::Fn(idents_kinded, param_tys, _, ret_ty) => {
-                if !idents_kinded.is_empty() {
-                    panic!("Generic function types can not appear, only their instatiated counter parts.")
-                }
-
-                walk_list!(self, visit_ty, param_tys);
-            }
-            _ => visit::walk_ty(self, ty),
         }
     }
 }
