@@ -5,14 +5,14 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
         auto gpu = descend::gpu_device(0);
         auto a_array = descend::gpu_alloc_copy<descend::array<descend::i32, n>>(
                 (&gpu), (&(*ha_array)));
-        for (descend::i32 k = 1; k <= 2; k = k * 2) {
+        for (descend::i32 k = 2; k <= (n / 2); k = k * 2) {
             for (descend::i32 j = (k / 2); j > 0; j = j / 2) {
 
                 descend::exec<(n / (2 * 512)), 512>(
                         (&gpu),
-                        [] __device__(descend::i32 *const p0) -> void {
+                        [] __device__(descend::i32 *const p0, size_t n, descend::i32 k, descend::i32 j) -> void {
                             {
-
+                                size_t s = 512;
                                 if (blockIdx.x < k) {
 
                                     {
@@ -250,20 +250,20 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
                                 }
                             }
                         },
-                        (&a_array));
+                        (&a_array), n, k, j);
             }
         }
         for (descend::i32 j = (n / 2); j > 0; j = j / 2) {
 
             descend::exec<(n / (2 * 512)), 512>(
                     (&gpu),
-                    [] __device__(descend::i32 *const p0) -> void {
+                    [] __device__(descend::i32 *const p0, size_t n, descend::i32 j) -> void {
                         {
 
                             {
 
                                 {
-
+                                    size_t s = 512;
                                     if (p0[(((((((blockIdx.x * s) + threadIdx.x) * s) + 0) %
                                               (n / j)) *
                                              s) +
@@ -301,7 +301,7 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
                             }
                         }
                     },
-                    (&a_array));
+                    (&a_array), n, j);
         }
         descend::copy_to_host<descend::array<descend::i32, n>>((&a_array),
                                                                ha_array);
@@ -323,7 +323,7 @@ auto main() -> int {
         for (int i = 0; i < NUM_VALS; i ++){
             ha_array[i] = i ^ run;
         }
-        bitonicsort<>(&ha_array);
+        bitonicsort<NUM_VALS>(&ha_array);
         for (int i = 0; i < NUM_VALS; i++){
             if (ha_array[i] != gold[i]){
                 std::cout << "Error at " << i << ": Expected `" << gold[i]

@@ -1,14 +1,14 @@
-fn scalar_mult<n:nat, a:prv>(ha_array:&a uniq cpu.mem [i32;n]) -[cpu.thread]->()<'c, 'd, 'r, 'h, 'g>{
+fn scalar_mult<n:nat>(ha_array:&uniq cpu.mem [i32;n]) -[cpu.thread]->(){
     let mut gpu =gpu_device(0);
-    let mut a_array = gpu_alloc_copy(&'c uniq gpu, &'d shrd *ha_array);
-    let view_a = to_view_mut(&'r uniq a_array);
+    let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
+    let view_a = to_view_mut(&uniq a_array);
     let grouped_a = group_mut::<1024>(view_a);
 
     exec::<64, 1024>(
-        &'h uniq gpu,
+        &uniq gpu,
         <grouped_a>,
         | grid: BlockGrp<64, ThreadGrp<1024>>,
-            input: <&'r uniq gpu.global [[[[i32;1024]];64]]>
+            input: <&uniq gpu.global [[[[i32;1024]];64]]>
         | -[gpu.grid]->(){
 
             parfor block in grid with a_group from input.0 {
@@ -18,5 +18,5 @@ fn scalar_mult<n:nat, a:prv>(ha_array:&a uniq cpu.mem [i32;n]) -[cpu.thread]->()
             }
         }
     );
-    copy_to_host(&'g shrd a_array, ha_array)
+    copy_to_host(&shrd a_array, ha_array)
 }
