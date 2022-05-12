@@ -2385,76 +2385,21 @@ impl ParallelityCollec {
                     ..
                 }) = &f.expr
                 {
-                    if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP {
-                        if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(p)) =
-                            (&f.ty.as_ref().unwrap().ty, args.first())
+                    if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP
+                        || ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK_GRP
+                    {
+                        if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
+                            (&gen_args[0], &gen_args[1], args.first())
                         {
-                            if let (
-                                desc::TyKind::TupleView(elem_tys),
-                                desc::TyKind::Data(desc::DataTy {
-                                    dty: desc::DataTyKind::ThreadHierchy(th_hierchy),
-                                    ..
-                                }),
-                            ) = (&ret_ty.as_ref().ty, &p.ty.as_ref().unwrap().ty)
-                            {
-                                if let (
-                                    desc::TyKind::Data(desc::DataTy {
-                                        dty: desc::DataTyKind::ThreadHierchy(th_hrchy),
-                                        ..
-                                    }),
-                                    desc::ThreadHierchyTy::ThreadGrp(n1, n2, n3),
-                                ) = (&elem_tys.first().unwrap().ty, th_hierchy.as_ref())
-                                {
-                                    if let desc::ThreadHierchyTy::ThreadGrp(k, _, _) =
-                                        th_hrchy.as_ref()
-                                    {
-                                        return ParallelityCollec::Split {
-                                            pos: k.clone(),
-                                            coll_size: n1.clone(),
-                                            parall_expr: Box::new(ParallelityCollec::create_from(
-                                                p, parall_ctx,
-                                            )),
-                                        };
-                                    }
-                                }
-                            }
+                            return ParallelityCollec::Split {
+                                pos: k.clone(),
+                                coll_size: n.clone(),
+                                parall_expr: Box::new(ParallelityCollec::create_from(
+                                    p, parall_ctx,
+                                )),
+                            };
                         }
-                        panic!("Cannot create `split_thread_grp` from the provided arguments.");
-                    } else if ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK_GRP {
-                        if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(p)) =
-                            (&f.ty.as_ref().unwrap().ty, args.first())
-                        {
-                            if let (
-                                desc::TyKind::TupleView(elem_tys),
-                                desc::TyKind::Data(desc::DataTy {
-                                    dty: desc::DataTyKind::ThreadHierchy(th_hierchy),
-                                    ..
-                                }),
-                            ) = (&ret_ty.as_ref().ty, &p.ty.as_ref().unwrap().ty)
-                            {
-                                if let (
-                                    desc::TyKind::Data(desc::DataTy {
-                                        dty: desc::DataTyKind::ThreadHierchy(th_hrchy),
-                                        ..
-                                    }),
-                                    desc::ThreadHierchyTy::BlockGrp(m1, _, _, _, _, _),
-                                ) = (&elem_tys.first().unwrap().ty, th_hierchy.as_ref())
-                                {
-                                    if let desc::ThreadHierchyTy::BlockGrp(k, _, _, _, _, _) =
-                                        th_hrchy.as_ref()
-                                    {
-                                        return ParallelityCollec::Split {
-                                            pos: k.clone(),
-                                            coll_size: m1.clone(),
-                                            parall_expr: Box::new(ParallelityCollec::create_from(
-                                                p, parall_ctx,
-                                            )),
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                        panic!("Cannot create `split_block_grp` from the provided arguments.");
+                        panic!("Cannot create `split` for parallel collection from the provided arguments.");
                     } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
                         unimplemented!("Needs to take generic arguments from function type.");
                         if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
