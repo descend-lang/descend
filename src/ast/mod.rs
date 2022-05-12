@@ -1203,6 +1203,33 @@ pub enum Nat {
 }
 
 impl Nat {
+    // Very naive implementation covering only one case.
+    pub fn simplify(&self) -> Nat {
+        match self {
+            Nat::BinOp(BinOpNat::Mul, l, r) => match l.as_ref() {
+                Nat::BinOp(BinOpNat::Div, ll, lr) if lr.as_ref() == r.as_ref() => ll.simplify(),
+                _ => Nat::BinOp(
+                    BinOpNat::Mul,
+                    Box::new(l.simplify()),
+                    Box::new(r.simplify()),
+                ),
+            },
+            Nat::BinOp(BinOpNat::Add, l, r) => match (l.as_ref(), r.as_ref()) {
+                (Nat::Lit(0), r) => r.simplify(),
+                (l, Nat::Lit(0)) => l.simplify(),
+                _ => Nat::BinOp(
+                    BinOpNat::Add,
+                    Box::new(l.simplify()),
+                    Box::new(r.simplify()),
+                ),
+            },
+            Nat::BinOp(op, l, r) => {
+                Nat::BinOp(op.clone(), Box::new(l.simplify()), Box::new(r.simplify()))
+            }
+            _ => self.clone(),
+        }
+    }
+
     pub fn eval(&self) -> Result<usize, String> {
         match self {
             Nat::Ident(i) => Err(format!("Cannot evaluate identifier `{}`.", i)),
@@ -1239,6 +1266,25 @@ impl Nat {
     }
 }
 
+#[test]
+fn test_simplify() {
+    let d = Nat::Ident(Ident::new("d"));
+    let i = Nat::Ident(Ident::new("i"));
+    let n = Nat::BinOp(
+        BinOpNat::Mul,
+        Box::new(Nat::BinOp(
+            BinOpNat::Div,
+            Box::new(i.clone()),
+            Box::new(d.clone()),
+        )),
+        Box::new(d),
+    );
+    let r = n.simplify();
+    if i != r {
+        panic!("{}", r)
+    }
+}
+
 impl PartialEq for Nat {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -1256,7 +1302,7 @@ impl PartialEq for Nat {
                         "WARNING: Not able to check equality of Nats `{}` and `{}`",
                         self, other
                     );
-                    true
+                    false
                 }
             },
         }
