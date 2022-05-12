@@ -870,7 +870,7 @@ fn bin_op(op: BinOp) -> Ty {
 }
 
 // join/join_mut:
-//  <r: prv, m: mem, n: nat, o: nat, d: dty>(&r W m [[ [[d; n]]; o]]) -> [[d; n*o]]
+//  <r: prv, m: mem, o: nat, n: nat, d: dty>(&r W m [[ [[d; n]]; o]]) -> [[d; n*o]]
 fn join_ty(own: Ownership) -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -898,7 +898,7 @@ fn join_ty(own: Ownership) -> Ty {
         kind: Kind::DataTy,
     };
     Ty::new(TyKind::Fn(
-        vec![r_prv, m_mem, n_nat, o_nat, d_dty],
+        vec![r_prv, m_mem, o_nat, n_nat, d_dty],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
             own,

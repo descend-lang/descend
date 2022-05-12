@@ -2068,19 +2068,19 @@ fn gen_shape(
                 _ => panic!("Cannot generate Group shape. One or more indices missing."),
             }
         }
-        (ShapeExpr::Join { n, shape }, _) => {
+        (ShapeExpr::Join { group_size, shape }, _) => {
             let i = path.pop();
             match i {
                 Some(i) => {
                     path.push(desc::Nat::BinOp(
                         desc::BinOpNat::Mod,
                         Box::new(i.clone()),
-                        Box::new(n.clone()),
+                        Box::new(group_size.clone()),
                     ));
                     path.push(desc::Nat::BinOp(
                         desc::BinOpNat::Div,
                         Box::new(i),
-                        Box::new(n.clone()),
+                        Box::new(group_size.clone()),
                     ));
                     gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
                 }
@@ -2571,7 +2571,7 @@ enum ShapeExpr {
         shape: Box<ShapeExpr>,
     },
     Join {
-        n: desc::Nat,
+        group_size: desc::Nat,
         shape: Box<ShapeExpr>,
     },
     Transpose {
@@ -2590,7 +2590,6 @@ impl ShapeExpr {
                     ..
                 }) = &f.expr
                 {
-                    let f_ty = &f.ty.as_ref().unwrap().ty;
                     if ident.name == crate::ty_check::pre_decl::TO_VIEW
                         || ident.name == crate::ty_check::pre_decl::TO_VIEW_MUT
                     {
@@ -2598,11 +2597,11 @@ impl ShapeExpr {
                     } else if ident.name == crate::ty_check::pre_decl::GROUP
                         || ident.name == crate::ty_check::pre_decl::GROUP_MUT
                     {
-                        ShapeExpr::create_group_shape(args, f_ty, shape_ctx)
+                        ShapeExpr::create_group_shape(gen_args, args, shape_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::JOIN
                         || ident.name == crate::ty_check::pre_decl::JOIN_MUT
                     {
-                        ShapeExpr::create_join_shape(args, shape_ctx)
+                        ShapeExpr::create_join_shape(gen_args, args, shape_ctx)
                     } else if ident.name == crate::ty_check::pre_decl::TRANSPOSE
                         || ident.name == crate::ty_check::pre_decl::TRANSPOSE_MUT
                     {
@@ -2672,7 +2671,7 @@ impl ShapeExpr {
             shapes: elems
                 .iter()
                 .map(|e| {
-                    if is_shape_ty(&e.ty.as_ref().unwrap()) {
+                    if is_shape_ty(e.ty.as_ref().unwrap()) {
                         ViewOrExpr::V(ShapeExpr::create_from(e, shape_ctx))
                     } else {
                         ViewOrExpr::E(e.clone())
@@ -2697,67 +2696,31 @@ impl ShapeExpr {
     }
 
     fn create_group_shape(
+        gen_args: &[desc::ArgKinded],
         args: &[desc::Expr],
-        f_ty: &desc::TyKind,
         shape_ctx: &ShapeCtx,
     ) -> ShapeExpr {
-        if let (desc::TyKind::Fn(_, _, _, ret_ty), Some(v)) = (f_ty, args.first()) {
-            if let (
-                desc::TyKind::Data(desc::DataTy {
-                    dty: desc::DataTyKind::Ref(_, _, _, arr_ty),
-                    ..
-                }),
-                desc::TyKind::Data(desc::DataTy {
-                    dty: desc::DataTyKind::Ref(_, _, _, arg_arr_ty),
-                    ..
-                }),
-            ) = (&ret_ty.ty, &v.ty.as_ref().unwrap().ty)
-            {
-                if let (
-                    desc::DataTy {
-                        dty: desc::DataTyKind::ArrayShape(inner_ty, _),
-                        ..
-                    },
-                    desc::DataTy {
-                        dty: desc::DataTyKind::ArrayShape(_, n),
-                        ..
-                    },
-                ) = (arr_ty.as_ref(), arg_arr_ty.as_ref())
-                {
-                    if let desc::DataTy {
-                        dty: desc::DataTyKind::ArrayShape(_, s),
-                        ..
-                    } = inner_ty.as_ref()
-                    {
-                        return ShapeExpr::Group {
-                            size: s.clone(),
-                            shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
-                        };
-                    }
-                }
-            }
+        if let (desc::ArgKinded::Nat(s), Some(v)) = (&gen_args[0], args.first()) {
+            return ShapeExpr::Group {
+                size: s.clone(),
+                shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
+            };
         }
         panic!("Cannot create `group` from the provided arguments.");
     }
 
-    fn create_join_shape(args: &[desc::Expr], shape_ctx: &ShapeCtx) -> ShapeExpr {
-        if let Some(v) = args.first() {
-            if let desc::TyKind::Data(desc::DataTy {
-                dty: desc::DataTyKind::Ref(_, _, _, arr_shape),
-                ..
-            }) = &v.ty.as_ref().unwrap().ty
-            {
-                if let desc::DataTyKind::ArrayShape(inner_dim, _) = &arr_shape.as_ref().dty {
-                    if let desc::DataTyKind::ArrayShape(_, n) = &inner_dim.as_ref().dty {
-                        return ShapeExpr::Join {
-                            n: n.clone(),
-                            shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
-                        };
-                    }
-                }
-            }
+    fn create_join_shape(
+        gen_args: &[desc::ArgKinded],
+        args: &[desc::Expr],
+        shape_ctx: &ShapeCtx,
+    ) -> ShapeExpr {
+        if let (desc::ArgKinded::Nat(n), Some(v)) = (&gen_args[3], args.first()) {
+            return ShapeExpr::Join {
+                group_size: n.clone(),
+                shape: Box::new(ShapeExpr::create_from(v, shape_ctx)),
+            };
         }
-        panic!("Cannot create `join_shape` from the provided arguments.");
+        panic!("Cannot create `to_view` from the provided arguments.");
     }
 
     fn create_transpose_shape(args: &[desc::Expr], shape_ctx: &ShapeCtx) -> ShapeExpr {
