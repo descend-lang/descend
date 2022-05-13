@@ -1297,13 +1297,7 @@ impl PartialEq for Nat {
             }
             _ => match (self.eval(), other.eval()) {
                 (Ok(n), Ok(o)) => n == o,
-                _ => {
-                    println!(
-                        "WARNING: Not able to check equality of Nats `{}` and `{}`",
-                        self, other
-                    );
-                    false
-                }
+                _ => false,
             },
         }
     }

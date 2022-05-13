@@ -170,7 +170,11 @@ fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_na
                 map.insert(id.clone(), ArgKinded::Nat(mono_nat.clone()))
             {
                 if &old != mono_nat {
-                    panic!("Attempting to bind two unqueal nats to same identifier.")
+                    println!(
+                        "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                        old, mono_nat
+                    );
+                    println!("Possibly attempting to bind two unqueal nats to same identifier.")
                 }
             }
         }

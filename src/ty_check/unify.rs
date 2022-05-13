@@ -411,7 +411,11 @@ fn unify(n1: &Nat, n2: &Nat, constr_map: &mut ConstrainMap) -> TyResult<()> {
     if n1 == n2 {
         Ok(())
     } else {
-        Err(TyError::CannotUnify)
+        println!(
+            "WARNING: Not able to check equality of Nats `{}` and `{}`",
+            n1, n2
+        );
+        Ok(())
     }
 }
 
