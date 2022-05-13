@@ -26,21 +26,25 @@ fn bitonicsort<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu.thread]-
                 let <first_blocks, second_blocks> = split_block_grp::<(n/4*512)>(grid);
                 parfor block in first_blocks with elems from asc_blocks{
                     parfor thread in block with pair from elems{
-                        if pair[0]>pair[1]{
-                            let temp = pair[0];
-                            pair[0] = pair[1];
-                            pair[1] = temp
+                        let mut  pa0 = pair[0];
+                        let mut pa1 = pair[1];
+                        if pa0>pa1{
+                            let temp = pa0;
+                            pa0 = pa1;
+                            pa1 = temp
                         }
                     }
                 };
 
                 parfor block in second_blocks with elems from desc_blocks{
                     parfor thread in block with pair from elems{
-                        if pair[0]<pair[1]{
-                            let temp = pair[0];
-                            pair[0] = pair[1];
-                            pair[1] = temp
-                     }
+                        let mut pa0 = pair[0];
+                        let mut pa1 = pair[1];
+                        if pa0<pa1{
+                            let temp = pa0;
+                            pa0 = pa1;
+                            pa1 = temp
+                        }
                     }
                 }
 
