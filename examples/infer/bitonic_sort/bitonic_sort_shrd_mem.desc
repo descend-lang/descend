@@ -5,7 +5,10 @@ fn bitonicsort_shrd_mem<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu
 
     let view_pre = to_view_mut(&uniq a_array);
 
-    exec::<(n/(2*512)),512>(view_pre,|grid,array|-[gpu.grid]->(){
+    exec::<(n/(2*512)),512>(view_pre,
+      | grid: BlockGrp<(n/(2*512)), ThreadGrp<512>>,
+        array: &uniq gpu.global [[i32; n]]
+      |-[gpu.grid]->(){
         let block_group = group_mut::<2*512>(array);
         let halves = group_mut::<512>(block_group);
         let pairs = transpose_mut(halves);
@@ -16,9 +19,9 @@ fn bitonicsort_shrd_mem<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu
             let array_view = to_view_mut(&uniq block_array);
             let array_halves = group_mut::<512>(array_view);
             let array_pairs = transpose_mut(array_halves);
-            parfor thread in block with input_pair, smem_pair from pairs, array_pairs{
-                *smem_pair[0] = *input_pair[0];
-                *smem_pair[1] = *input_pair[1]
+            parfor thread in block with input_pair, smem_pair from input, array_pairs{
+                smem_pair[0] = input_pair[0];
+                smem_pair[1] = input_pair[1]
             };
 
             for_nat k in doubled_range(2, max(2*BLOCKSIZE,n/2)){
@@ -109,7 +112,11 @@ fn bitonicsort_shrd_mem<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu
             })
         };
 
-        exec::<(n/(2*512)),512>(view_a,|grid,array|-[gpu.grid]->(){
+        let view_a = to_view_mut(&uniq a_array);
+        exec::<(n/(2*512)),512>(view_a,
+          | grid: BlockGrp<(n/(2*512)), ThreadGrp<512>>,
+            array: &uniq gpu.global [[i32; n]]
+          |-[gpu.grid]->(){
             let block_group = group_mut::<2*512>(array);
             let halves = group_mut::<512>(block_group);
             let pairs = transpose_mut(halves);
@@ -121,8 +128,8 @@ fn bitonicsort_shrd_mem<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu
                 let array_halves = group_mut::<512>(array_view);
                 let array_pairs = transpose_mut(array_halves);
                 parfor thread in block with input_pair, smem_pair from pairs, array_pairs{
-                    *smem_pair[0] = *input_pair[0];
-                    *smem_pair[1] = *input_pair[1]
+                    smem_pair[0] = input_pair[0];
+                    smem_pair[1] = input_pair[1]
                 };
 
 
@@ -165,7 +172,10 @@ fn bitonicsort_shrd_mem<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu
     let view_post = to_view_mut(&uniq a_array);
 
     for_nat j in halved_range(n/2){
-        exec::<(n/(2*512)),512>(view_post,|grid,array|-[gpu.grid]->(){
+        exec::<(n/(2*512)),512>(view_post,
+          | grid: BlockGrp<(n/(2*512)), ThreadGrp<512>>,
+            array: &uniq gpu.global [[i32; n]]
+          |-[gpu.grid]->(){
             let j_group = group_mut::< j > (array);                             //[[T;j];n/j]
             let j_group_t = transpose_mut(j_group);                                  //[[T;n/j];j]
             let joined = join_mut(j_group_t);                                        //[T;n]

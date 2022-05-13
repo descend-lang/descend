@@ -2387,6 +2387,7 @@ impl ParallelityCollec {
                 {
                     if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP
                         || ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK_GRP
+                        || ident.name == crate::ty_check::pre_decl::SPLIT_WARP_GRP
                     {
                         if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
                             (&gen_args[0], &gen_args[1], args.first())
@@ -2401,7 +2402,6 @@ impl ParallelityCollec {
                         }
                         panic!("Cannot create `split` for parallel collection from the provided arguments.");
                     } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
-                        unimplemented!("Needs to take generic arguments from function type.");
                         if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
                             return ParallelityCollec::Split {
                                 pos: k.clone(),
