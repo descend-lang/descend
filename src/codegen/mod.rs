@@ -1978,7 +1978,7 @@ fn gen_shape(
 
         cu::Expr::ArraySubscript {
             array: Box::new(expr),
-            index: index, //.simplify(),
+            index: index.simplify(),
         }
     }
 

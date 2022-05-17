@@ -107,7 +107,13 @@ private:
 
 public:
     BenchConfig(std::initializer_list<std::string> kernel_idents): kernel_idents_(kernel_idents) {}
-
+    BenchConfig(std::size_t num_kernels){
+        for (int i = 0; i < num_kernels; i++){
+            std::stringstream ss;
+            ss << "kernel_" << i;
+            kernel_idents_.push_back(ss.str());
+        }
+    }
     auto num_kernels() const -> size_t {
         return kernel_idents_.size();
     }

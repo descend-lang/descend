@@ -1,7 +1,10 @@
+#define BENCH
 #include "descend.cuh"
 #include <time.h>
 #include <stdlib.h>
 #include <algorithm>
+const int NUM_VALS = 4096; // Number elements to sort
+const int NUM_KERNEL = 78; // Number Kernels to start
 template <std::size_t n>
 auto bitonicsort(descend::i32 *const ha_array) -> void {
     {
@@ -13,114 +16,108 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
 
                 descend::exec<(n / (2 * 512)), 512>(
                         (&gpu),
-                        [] __device__(descend::i32 *const p0, std::size_t j, std::size_t k,
-                                      std::size_t n) -> void {
+                        [] __device__(descend::i32 *const p0, std::size_t j, std::size_t n,
+                                      std::size_t k) -> void {
                             {
 
                                 if (blockIdx.x < (n / (4 * 512))) {
 
                                     {
 
-                                        if (p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
-                                                      (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
-                                                    2) +
-                                                   0) %
+                                        if (p0[((((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
+                                                     (k / j)) +
+                                                    ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                     ((n / 2) / (k / j)))) *
+                                                   2) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
-                                                     (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
-                                                   2) +
-                                                  0) /
+                                                ((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                     ((n / 2) / (k / j))) *
+                                                    (k / j)) +
+                                                   ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                    ((n / 2) / (k / j)))) *
+                                                  2) /
                                                  (n / j)))] >
-                                            p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
+                                            p0[(((((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                       ((n / 2) / (k / j))) *
                                                       (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
+                                                     ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                      ((n / 2) / (k / j)))) *
                                                     2) +
                                                    1) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
+                                                (((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
                                                      (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
+                                                    ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                     ((n / 2) / (k / j)))) *
                                                    2) +
                                                   1) /
                                                  (n / j)))]) {
                                             const auto temp =
-                                                    p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                               ((((n / j) * j) / 2) / (k / j))) *
-                                                              (k / j)) +
-                                                             (((blockIdx.x * 512) + threadIdx.x) /
-                                                              ((((n / j) * j) / 2) / (k / j)))) *
-                                                            2) +
-                                                           0) %
+                                                    p0[((((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                              ((n / 2) / (k / j))) *
+                                                             (k / j)) +
+                                                            ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                             ((n / 2) / (k / j)))) *
+                                                           2) %
                                                           (n / j)) *
                                                          j) +
-                                                        ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                              ((((n / j) * j) / 2) / (k / j))) *
-                                                             (k / j)) +
-                                                            (((blockIdx.x * 512) + threadIdx.x) /
-                                                             ((((n / j) * j) / 2) / (k / j)))) *
-                                                           2) +
-                                                          0) /
+                                                        ((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                             ((n / 2) / (k / j))) *
+                                                            (k / j)) +
+                                                           ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                            ((n / 2) / (k / j)))) *
+                                                          2) /
                                                          (n / j)))];
-                                            p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
-                                                      (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
-                                                    2) +
-                                                   0) %
+                                            p0[((((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
+                                                     (k / j)) +
+                                                    ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                     ((n / 2) / (k / j)))) *
+                                                   2) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
-                                                     (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
-                                                   2) +
-                                                  0) /
+                                                ((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                     ((n / 2) / (k / j))) *
+                                                    (k / j)) +
+                                                   ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                    ((n / 2) / (k / j)))) *
+                                                  2) /
                                                  (n / j)))] =
-                                                    p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                               ((((n / j) * j) / 2) / (k / j))) *
+                                                    p0[(((((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                               ((n / 2) / (k / j))) *
                                                               (k / j)) +
-                                                             (((blockIdx.x * 512) + threadIdx.x) /
-                                                              ((((n / j) * j) / 2) / (k / j)))) *
+                                                             ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                              ((n / 2) / (k / j)))) *
                                                             2) +
                                                            1) %
                                                           (n / j)) *
                                                          j) +
-                                                        ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                              ((((n / j) * j) / 2) / (k / j))) *
+                                                        (((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                              ((n / 2) / (k / j))) *
                                                              (k / j)) +
-                                                            (((blockIdx.x * 512) + threadIdx.x) /
-                                                             ((((n / j) * j) / 2) / (k / j)))) *
+                                                            ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                             ((n / 2) / (k / j)))) *
                                                            2) +
                                                           1) /
                                                          (n / j)))];
-                                            p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
+                                            p0[(((((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                       ((n / 2) / (k / j))) *
                                                       (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
+                                                     ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                      ((n / 2) / (k / j)))) *
                                                     2) +
                                                    1) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
+                                                (((((((((blockIdx.x - 0) * 512) + threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
                                                      (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
+                                                    ((((blockIdx.x - 0) * 512) + threadIdx.x) /
+                                                     ((n / 2) / (k / j)))) *
                                                    2) +
                                                   1) /
                                                  (n / j)))] = temp;
@@ -129,110 +126,140 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
                                     __syncthreads();
                                 }
 
-                                if ((n / (4 * 512)) <= blockIdx.x) {
+                                if (blockIdx.x >= (n / (4 * 512))) {
 
                                     {
 
-                                        if (p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
-                                                      (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
-                                                    2) +
-                                                   0) %
+                                        if (p0[((((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
+                                                     (k / j)) +
+                                                    (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) /
+                                                      ((n / 2) / (k / j))) +
+                                                     (k / (2 * j)))) *
+                                                   2) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
-                                                     (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
-                                                   2) +
-                                                  0) /
+                                                ((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                      threadIdx.x) %
+                                                     ((n / 2) / (k / j))) *
+                                                    (k / j)) +
+                                                   (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                      threadIdx.x) /
+                                                     ((n / 2) / (k / j))) +
+                                                    (k / (2 * j)))) *
+                                                  2) /
                                                  (n / j)))] <
-                                            p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
+                                            p0[(((((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                        threadIdx.x) %
+                                                       ((n / 2) / (k / j))) *
                                                       (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
+                                                     (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                        threadIdx.x) /
+                                                       ((n / 2) / (k / j))) +
+                                                      (k / (2 * j)))) *
                                                     2) +
                                                    1) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
+                                                (((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
                                                      (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
+                                                    (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) /
+                                                      ((n / 2) / (k / j))) +
+                                                     (k / (2 * j)))) *
                                                    2) +
                                                   1) /
                                                  (n / j)))]) {
                                             const auto temp =
-                                                    p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                               ((((n / j) * j) / 2) / (k / j))) *
-                                                              (k / j)) +
-                                                             (((blockIdx.x * 512) + threadIdx.x) /
-                                                              ((((n / j) * j) / 2) / (k / j)))) *
-                                                            2) +
-                                                           0) %
+                                                    p0[((((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                               threadIdx.x) %
+                                                              ((n / 2) / (k / j))) *
+                                                             (k / j)) +
+                                                            (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                               threadIdx.x) /
+                                                              ((n / 2) / (k / j))) +
+                                                             (k / (2 * j)))) *
+                                                           2) %
                                                           (n / j)) *
                                                          j) +
-                                                        ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                              ((((n / j) * j) / 2) / (k / j))) *
-                                                             (k / j)) +
-                                                            (((blockIdx.x * 512) + threadIdx.x) /
-                                                             ((((n / j) * j) / 2) / (k / j)))) *
-                                                           2) +
-                                                          0) /
+                                                        ((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                              threadIdx.x) %
+                                                             ((n / 2) / (k / j))) *
+                                                            (k / j)) +
+                                                           (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                              threadIdx.x) /
+                                                             ((n / 2) / (k / j))) +
+                                                            (k / (2 * j)))) *
+                                                          2) /
                                                          (n / j)))];
-                                            p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
-                                                      (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
-                                                    2) +
-                                                   0) %
+                                            p0[((((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
+                                                     (k / j)) +
+                                                    (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) /
+                                                      ((n / 2) / (k / j))) +
+                                                     (k / (2 * j)))) *
+                                                   2) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
-                                                     (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
-                                                   2) +
-                                                  0) /
+                                                ((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                      threadIdx.x) %
+                                                     ((n / 2) / (k / j))) *
+                                                    (k / j)) +
+                                                   (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                      threadIdx.x) /
+                                                     ((n / 2) / (k / j))) +
+                                                    (k / (2 * j)))) *
+                                                  2) /
                                                  (n / j)))] =
-                                                    p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                               ((((n / j) * j) / 2) / (k / j))) *
+                                                    p0[(((((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                                threadIdx.x) %
+                                                               ((n / 2) / (k / j))) *
                                                               (k / j)) +
-                                                             (((blockIdx.x * 512) + threadIdx.x) /
-                                                              ((((n / j) * j) / 2) / (k / j)))) *
+                                                             (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                                threadIdx.x) /
+                                                               ((n / 2) / (k / j))) +
+                                                              (k / (2 * j)))) *
                                                             2) +
                                                            1) %
                                                           (n / j)) *
                                                          j) +
-                                                        ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                              ((((n / j) * j) / 2) / (k / j))) *
+                                                        (((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                               threadIdx.x) %
+                                                              ((n / 2) / (k / j))) *
                                                              (k / j)) +
-                                                            (((blockIdx.x * 512) + threadIdx.x) /
-                                                             ((((n / j) * j) / 2) / (k / j)))) *
+                                                            (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                               threadIdx.x) /
+                                                              ((n / 2) / (k / j))) +
+                                                             (k / (2 * j)))) *
                                                            2) +
                                                           1) /
                                                          (n / j)))];
-                                            p0[((((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                       ((((n / j) * j) / 2) / (k / j))) *
+                                            p0[(((((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                        threadIdx.x) %
+                                                       ((n / 2) / (k / j))) *
                                                       (k / j)) +
-                                                     (((blockIdx.x * 512) + threadIdx.x) /
-                                                      ((((n / j) * j) / 2) / (k / j)))) *
+                                                     (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                        threadIdx.x) /
+                                                       ((n / 2) / (k / j))) +
+                                                      (k / (2 * j)))) *
                                                     2) +
                                                    1) %
                                                   (n / j)) *
                                                  j) +
-                                                ((((((((blockIdx.x * 512) + threadIdx.x) %
-                                                      ((((n / j) * j) / 2) / (k / j))) *
+                                                (((((((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) %
+                                                      ((n / 2) / (k / j))) *
                                                      (k / j)) +
-                                                    (((blockIdx.x * 512) + threadIdx.x) /
-                                                     ((((n / j) * j) / 2) / (k / j)))) *
+                                                    (((((blockIdx.x - (n / (4 * 512))) * 512) +
+                                                       threadIdx.x) /
+                                                      ((n / 2) / (k / j))) +
+                                                     (k / (2 * j)))) *
                                                    2) +
                                                   1) /
                                                  (n / j)))] = temp;
@@ -242,7 +269,7 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
                                 }
                             }
                         },
-                        (&a_array), j, k, n);
+                        (&a_array), j, n, k);
             }
         }
         for (std::size_t j = (n / 2); j > 0; j = j / 2) {
@@ -257,27 +284,23 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
 
                                 {
 
-                                    if (p0[(((((((blockIdx.x * 512) + threadIdx.x) * 2) + 0) %
+                                    if (p0[((((((blockIdx.x * 512) + threadIdx.x) * 2) %
                                               (n / j)) *
                                              j) +
-                                            (((((blockIdx.x * 512) + threadIdx.x) * 2) + 0) /
+                                            ((((blockIdx.x * 512) + threadIdx.x) * 2) /
                                              (n / j)))] >
                                         p0[(((((((blockIdx.x * 512) + threadIdx.x) * 2) + 1) %
                                               (n / j)) *
                                              j) +
                                             (((((blockIdx.x * 512) + threadIdx.x) * 2) + 1) /
                                              (n / j)))]) {
-                                        const auto temp =
-                                                p0[(((((((blockIdx.x * 512) + threadIdx.x) * 2) + 0) %
-                                                      (n / j)) *
-                                                     j) +
-                                                    (((((blockIdx.x * 512) + threadIdx.x) * 2) + 0) /
-                                                     (n / j)))];
-                                        p0[(((((((blockIdx.x * 512) + threadIdx.x) * 2) + 0) %
-                                              (n / j)) *
+                                        const auto temp = p0[(
+                                                (((((blockIdx.x * 512) + threadIdx.x) * 2) % (n / j)) *
+                                                 j) +
+                                                ((((blockIdx.x * 512) + threadIdx.x) * 2) / (n / j)))];
+                                        p0[((((((blockIdx.x * 512) + threadIdx.x) * 2) % (n / j)) *
                                              j) +
-                                            (((((blockIdx.x * 512) + threadIdx.x) * 2) + 0) /
-                                             (n / j)))] =
+                                            ((((blockIdx.x * 512) + threadIdx.x) * 2) / (n / j)))] =
                                                 p0[(((((((blockIdx.x * 512) + threadIdx.x) * 2) + 1) %
                                                       (n / j)) *
                                                      j) +
@@ -305,9 +328,11 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
 
 
 
+
+descend::Benchmark benchmark{descend::BenchConfig(NUM_KERNEL)};
 auto main() -> int {
     const int NUM_RUNS = 10;
-    const int NUM_VALS = 4096;
+
     srand(time(NULL));
 
     std::cout << "begin computation" << std::endl;
@@ -337,6 +362,7 @@ auto main() -> int {
     }
     free(gold);
     std::cout << "success" << std::endl;
+    std::cout << benchmark.avg_to_csv();
 }
 
 
