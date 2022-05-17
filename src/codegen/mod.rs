@@ -1024,19 +1024,30 @@ fn gen_par_for(
         _ => panic!("Not a parallel collection type."),
     };
 
+    let p = ParallelityCollec::create_from(parall_collec, &codegen_ctx.parall_ctx);
+    let parall_cond_res = gen_parall_cond(&pindex, &p);
+    let offset_pindex = if let Some((_, range)) = &parall_cond_res {
+        match range {
+            ParallRange::Range(l, _) => {
+                desc::Nat::BinOp(desc::BinOpNat::Sub, Box::new(pindex), Box::new(l.clone()))
+            }
+            ParallRange::SplitRange(_, _, _) => panic!("unexpected"),
+        }
+    } else {
+        pindex
+    };
     let par_section = gen_parall_section(
         parall_ident,
         input_idents,
         inputs,
         body,
-        &pindex,
+        &offset_pindex,
         codegen_ctx,
         comp_unit,
         idx_checks,
     );
 
-    let p = ParallelityCollec::create_from(parall_collec, &codegen_ctx.parall_ctx);
-    let body = if let Some((Some(parall_cond), _)) = gen_parall_cond(&pindex, &p) {
+    let body = if let Some((Some(parall_cond), _)) = parall_cond_res {
         cu::Stmt::If {
             cond: parall_cond,
             body: Box::new(par_section),
@@ -1802,7 +1813,7 @@ fn gen_pl_expr(
         } => {
             if shape_ctx.contains_key(&ident.name) {
                 gen_shape(
-                    &shape_ctx.get(&ident.name),
+                    shape_ctx.get(&ident.name),
                     vec![],
                     shape_ctx,
                     comp_unit,
@@ -1826,7 +1837,7 @@ fn gen_pl_expr(
         } => match pl_expr.to_place() {
             // FIXME this does not work when there are tuples inside of shape tuples
             Some(p) if shape_ctx.contains_key(&p.ident.name) => gen_shape(
-                &shape_ctx.get(&p.ident.name),
+                shape_ctx.get(&p.ident.name),
                 p.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
                 shape_ctx,
                 comp_unit,
@@ -1846,7 +1857,7 @@ fn gen_pl_expr(
             // The dereferencing will happen through indexing.
             match ple.to_place() {
                 Some(pl) if shape_ctx.contains_key(&pl.ident.name) => gen_shape(
-                    &shape_ctx.get(&pl.ident.name),
+                    shape_ctx.get(&pl.ident.name),
                     pl.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
                     shape_ctx,
                     comp_unit,
@@ -1893,8 +1904,8 @@ fn gen_parall_cond(
                     (
                         cu::Expr::BinOp {
                             op: cu::BinOp::Ge,
-                            lhs: Box::new(cu::Expr::Nat(m.clone())),
-                            rhs: Box::new(cu::Expr::Nat(pid.clone())),
+                            lhs: Box::new(cu::Expr::Nat(pid.clone())),
+                            rhs: Box::new(cu::Expr::Nat(m.clone())),
                         },
                         ParallRange::Range(m, u),
                     )
