@@ -536,7 +536,7 @@ peg::parser! {
             / "&" _ prov:(prv:provenance() __ { prv })? own:ownership() __ mem:memory_kind() __ dty:dty() {
                 DataTyKind::Ref(match prov {
                     Some(prv) => prv,
-                    None => Provenance::Value(crate::ast::utils::fresh_name("'r"))
+                    None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$r")))
                 }, own, mem, Box::new(dty))
             }
 
