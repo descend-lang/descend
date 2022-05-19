@@ -5,6 +5,7 @@
 #include <algorithm>
 const int NUM_VALS = 4096; // Number elements to sort
 const int NUM_KERNEL = 78; // Number Kernels to start
+
 template <std::size_t n>
 auto bitonicsort(descend::i32 *const ha_array) -> void {
     {
@@ -16,8 +17,8 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
 
                 descend::exec<(n / (2 * 512)), 512>(
                         (&gpu),
-                        [] __device__(descend::i32 *const p0, std::size_t j, std::size_t n,
-                                      std::size_t k) -> void {
+                        [] __device__(descend::i32 *const p0, std::size_t k, std::size_t j,
+                                      std::size_t n) -> void {
                             {
 
                                 if (blockIdx.x < (n / (4 * 512))) {
@@ -269,15 +270,15 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
                                 }
                             }
                         },
-                        (&a_array), j, n, k);
+                        (&a_array), k, j, n);
             }
         }
         for (std::size_t j = (n / 2); j > 0; j = j / 2) {
 
             descend::exec<(n / (2 * 512)), 512>(
                     (&gpu),
-                    [] __device__(descend::i32 *const p0, std::size_t n,
-                                  std::size_t j) -> void {
+                    [] __device__(descend::i32 *const p0, std::size_t j,
+                                  std::size_t n) -> void {
                         {
 
                             {
@@ -317,7 +318,7 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
                             }
                         }
                     },
-                    (&a_array), n, j);
+                    (&a_array), j, n);
         }
         descend::copy_to_host<descend::array<descend::i32, n>>((&a_array),
                                                                ha_array);
