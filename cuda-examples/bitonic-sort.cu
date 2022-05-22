@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <algorithm>
 const int NUM_VALS = 4096; // Number elements to sort
-const int NUM_KERNEL = 78; // Number Kernels to start
+const int NUM_KERNEL = 78; // Number Kernels to start per run
 
 template <std::size_t n>
 auto bitonicsort(descend::i32 *const ha_array) -> void {
@@ -332,7 +332,7 @@ auto bitonicsort(descend::i32 *const ha_array) -> void {
 
 descend::Benchmark benchmark{descend::BenchConfig(NUM_KERNEL)};
 auto main() -> int {
-    const int NUM_RUNS = 10;
+    const int NUM_RUNS = 100;
 
     srand(time(NULL));
 
