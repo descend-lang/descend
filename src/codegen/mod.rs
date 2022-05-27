@@ -2580,10 +2580,20 @@ impl ShapeExpr {
                 shape: Box::new(ShapeExpr::create_from(expr, shape_ctx)),
                 i: *i,
             },
-            _ => panic!(
-                "Expected a function application, identifer or projection, but found {:?}",
-                expr.expr
-            ),
+            desc::ExprKind::Ref(
+                _,
+                _,
+                desc::PlaceExpr {
+                    pl_expr: desc::PlaceExprKind::Deref(ple),
+                    ..
+                },
+            ) => ShapeExpr::create_pl_expr_shape(ple, shape_ctx),
+            _ => {
+                panic!(
+                    "Expected a function application, identifer or projection, but found {:?}",
+                    expr.expr
+                )
+            }
         }
     }
 

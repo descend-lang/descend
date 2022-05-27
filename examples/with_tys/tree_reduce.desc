@@ -8,12 +8,13 @@ fn reduce<n: nat, a: prv, b: prv>(
     let block_group = group_mut::<1024, 'r, gpu.global, n, i32>(
         to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array));
 
-    exec::<64, 1024, 'h, &'r uniq gpu.global [[[[i32; 1024]]; 64]]>(
+    exec::<64, 1024, 'h, <&'r uniq gpu.global [[[[i32; 1024]]; 64]]>>(
         &'h uniq gpu,
-        block_group,
+        <block_group>,
         | grid: BlockGrp<64, ThreadGrp<1024>>,
-          input: &'r uniq gpu.global [[[[i32; 1024]]; 64]]| -[gpu.grid]-> () <>{
-            parfor block in grid with ib from input <'z>{
+          input: <&'r uniq gpu.global [[[[i32; 1024]]; 64]]>| -[gpu.grid]-> () <>{
+            let inp = input.0;
+            parfor block in grid with ib from inp <'z>{
                 let ib_borrow: &'z uniq gpu.global [[i32; 1024]] = &'z uniq *ib;
                 for_nat k in halved_range(512) <'r1, 'r2, 's1, 's2>{
                     let split_ib = (split 'r1 'r2 uniq 2*k ib_borrow).0;
