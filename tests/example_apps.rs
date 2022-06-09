@@ -3,10 +3,6 @@
 extern crate descend;
 
 type Res = Result<(), descend::error::ErrorReported>;
-#[test]
-fn scalar_mult() -> Res{
-   Ok(println!("{}", descend::compile("examples/with_tys/scalar_mult.desc")?))
-}
 
 #[test]
 fn split_test() -> Result<(), descend::error::ErrorReported> {
@@ -34,14 +30,6 @@ fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
 
 #[test]
 fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/with_tys/tree_reduce_working.desc")?
-    ))
-}
-
-#[test]
-fn tree_reduce_sequencing_fail() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
         descend::compile("examples/with_tys/tree_reduce.desc")?

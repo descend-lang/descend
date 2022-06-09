@@ -6,17 +6,15 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
 
     let a_array = gpu_alloc_copy::<'c, a, [i32; gs*bs]>(&'c uniq gpu, ha_array);
     let mut out_array = gpu_alloc_copy::<'c, 'm, [i32; gs]>(&'c uniq gpu, &'m shrd *h_output);
-    let view_a = to_view::<'r, gpu.global, (gs*bs), i32>(&'r shrd a_array);
-    let block_group = group::<bs, 'r, gpu.global, (gs*bs), i32>(view_a);
-    let view_out = group_mut::<1, 'm, gpu.global, gs, i32>(to_view_mut::<'m, gpu.global, gs, i32>(&'m uniq out_array));
-    exec::<gs, bs, 'h, <&'r shrd gpu.global [[[[i32; bs]]; gs]], &'m uniq gpu.global [[[[i32; 1]]; gs]]>>(
+    exec::<gs, bs, 'h, (&'r shrd gpu.global [i32; gs*bs], &'m uniq gpu.global [i32; gs])>(
         &'h uniq gpu,
-        <block_group, view_out>,
+        (&'r shrd a_array, &'m uniq out_array),
         | grid: BlockGrp<64, ThreadGrp<1024>>,
-          views: <&'r shrd gpu.global [[[[i32; bs]]; gs]], &'m uniq gpu.global [[[[i32; 1]]; gs]]>| -[gpu.grid]-> () <>{
-            let block_group = views.0;
-            let view_out = views.1;
-
+          inputs: (&'r shrd gpu.global [i32; gs*bs], &'m uniq gpu.global [i32; gs])| -[gpu.grid]-> () <>{
+            let view_a = to_view::<'r, gpu.global, (gs*bs), i32>(inputs.0);
+            let block_group = group::<bs, 'r, gpu.global, (gs*bs), i32>(view_a);
+            let view_out = group_mut::<1, 'm, gpu.global, gs, i32>(
+                to_view_mut::<'m, gpu.global, gs, i32>(inputs.1));
             // TODO remove decl and move out tmp declaration
             decl {
                 let mut tmp: [i32; bs] @ gpu.shared

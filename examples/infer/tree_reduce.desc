@@ -4,24 +4,19 @@ fn reduce<n: nat, a: prv, b: prv>(
     let mut gpu: Gpu = gpu_device(0);
 
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
-    let block_group = group_mut(to_view_mut(&uniq a_array));
-
     exec::<64, 1024>(
         &uniq gpu,
-        <block_group>,
+        (&uniq a_array,),
         | grid: BlockGrp<64, ThreadGrp<1024>>,
-          input: <&uniq gpu.global [[[[i32; 1024]]; 64]]>| -[gpu.grid]-> () <>{
-            let ibp = input.0;
-            parfor block in grid with ib from ibp {
-                let ib_borrow: &uniq gpu.global [[i32; 1024]] = &uniq *ib;
+          input: (&uniq gpu.global [i32; n])| -[gpu.grid]-> () {
+            let block_group = group_mut::<1024>(to_view_mut(input.0));
+            parfor block in grid with ib from block_group {
                 for_nat k in halved_range(512) {
-                    let split_ib = (split uniq 2*k ib_borrow).0;
-                    let active_halves = split uniq k split_ib;
-                    let active_half0 = active_halves.0;
-                    let active_half1 = active_halves.1;
+                    let split_ib = (split uniq 2*k ib).0;
+                    let (active_half0, active_half1) = split uniq k split_ib;
 
                     parfor split_thread_grp::<k, 1024, 1, 1>(block).0
-                    with fst_half, snd_half from active_half0, active_half1 <>{
+                    with fst_half, snd_half from active_half0, active_half1 {
                         *fst_half = *fst_half + *snd_half
                     }
                 }

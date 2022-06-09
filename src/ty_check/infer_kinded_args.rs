@@ -50,6 +50,8 @@ macro_rules! insert_checked {
         let arg_kinded = $constr($mono_ref.clone());
         if let Some(old) = $map.insert($id_ref.clone(), arg_kinded.clone()) {
             if old != arg_kinded {
+                println!("old: {:?}", old);
+                println!("new: {:?}", arg_kinded);
                 panic!("Found different terms for same identifier in mono type.")
             }
         }
@@ -73,9 +75,6 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
     match (&poly_ty.ty, &mono_ty.ty) {
         (TyKind::Ident(id), _) => insert_checked!(map, ArgKinded::Ty, id, mono_ty),
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
-        (TyKind::TupleView(elem_tys1), TyKind::TupleView(elem_tys2)) => {
-            infer_from_lists!(infer_kargs_tys, map, elem_tys1, elem_tys2)
-        }
         (
             TyKind::Fn(gen_params1, params1, exec1, ret_ty1),
             TyKind::Fn(gen_params2, params2, exec2, ret_ty2),

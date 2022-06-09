@@ -2,31 +2,42 @@ use crate::ast::utils::{fresh_ident, FreeKindedIdents};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
+use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::TyError;
+use crate::ty_check::subty::multiple_outlives;
 use crate::ty_check::{TyChecker, TyResult};
 use std::collections::{HashMap, HashSet};
 
-pub(super) fn constrain<S: Constrainable>(
-    t1: &mut S,
-    t2: &mut S,
-) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
+pub(super) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
+    let (subst, _) = constrain(t1, t2)?;
+    substitute(&subst, t1);
+    substitute(&subst, t2);
+    Ok(())
+}
+
+pub(super) fn sub_unify<C: Constrainable>(
+    kind_ctx: &KindCtx,
+    ty_ctx: TyCtx,
+    sub: &mut C,
+    sup: &mut C,
+) -> TyResult<TyCtx> {
+    let (subst, prv_rels) = constrain(sub, sup)?;
+    substitute(&subst, sub);
+    substitute(&subst, sup);
+    let outlives_ctx = multiple_outlives(
+        kind_ctx,
+        ty_ctx,
+        prv_rels.iter().map(|PrvConstr(p1, p2)| (p1, p2)),
+    )?;
+    Ok(outlives_ctx)
+}
+
+fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
     let mut constr_map = ConstrainMap::new();
     let mut prv_rels = Vec::new();
     t1.constrain(t2, &mut constr_map, &mut prv_rels)?;
     Ok((constr_map, prv_rels))
 }
-
-// pub(super) struct TermConstrainer {
-//     pub(super) constr_map: ConstrainMap,
-// }
-//
-// impl TermConstrainer {
-//     pub(super) fn new() -> Self {
-//         TermConstrainer {
-//             constr_map: ConstrainMap::new(),
-//         }
-//     }
-// }
 
 pub(super) fn inst_fn_ty_scheme(
     idents_kinded: &[IdentKinded],
@@ -172,10 +183,6 @@ impl Constrainable for Ty {
         match (&mut self.ty, &mut other.ty) {
             (TyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
             (_, TyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
-            (TyKind::TupleView(elem_tys1), TyKind::TupleView(elem_tys2)) => elem_tys1
-                .iter_mut()
-                .zip(elem_tys2)
-                .try_for_each(|(t1, t2)| t1.constrain(t2, constr_map, prv_rels)),
             (
                 TyKind::Fn(idents_kinded1, param_tys1, exec1, ret_ty1),
                 TyKind::Fn(idents_kinded2, param_tys2, exec2, ret_ty2),
@@ -360,8 +367,19 @@ impl Nat {
         }
         Ok(())
     }
-    //}
-    // }
+
+    // FIXME: Add constrains?!
+    fn unify(n1: &Nat, n2: &Nat, constr_map: &mut ConstrainMap) -> TyResult<()> {
+        if n1 == n2 {
+            Ok(())
+        } else {
+            println!(
+                "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                n1, n2
+            );
+            Ok(())
+        }
+    }
 }
 
 impl Constrainable for Nat {
@@ -390,7 +408,7 @@ impl Constrainable for Nat {
             },
             (Nat::Ident(n1i), _) => other.bind_to(n1i, constr_map, prv_rels),
             (_, Nat::Ident(n2i)) => self.bind_to(n2i, constr_map, prv_rels),
-            _ => unify(self, other, constr_map),
+            _ => Self::unify(self, other, constr_map),
         }
     }
 
@@ -403,19 +421,6 @@ impl Constrainable for Nat {
         let mut free_idents = FreeKindedIdents::new();
         free_idents.visit_nat(self);
         free_idents.set
-    }
-}
-
-// FIXME: Add constrains?!
-fn unify(n1: &Nat, n2: &Nat, constr_map: &mut ConstrainMap) -> TyResult<()> {
-    if n1 == n2 {
-        Ok(())
-    } else {
-        println!(
-            "WARNING: Not able to check equality of Nats `{}` and `{}`",
-            n1, n2
-        );
-        Ok(())
     }
 }
 

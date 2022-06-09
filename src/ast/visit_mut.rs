@@ -125,7 +125,7 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_dty(dty)
         }
         DataTyKind::RawPtr(dty) => visitor.visit_dty(dty),
-        DataTyKind::Range => (),
+        DataTyKind::Range => {}
         DataTyKind::Dead(dty) => visitor.visit_dty(dty),
     }
 }
@@ -133,7 +133,6 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
 pub fn walk_ty<V: VisitMut>(visitor: &mut V, ty: &mut Ty) {
     match &mut ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::TupleView(elem_tys) => walk_list!(visitor, visit_ty, elem_tys),
         TyKind::Fn(gen_params, params, exec, ret_ty) => {
             walk_list!(visitor, visit_ident_kinded, gen_params);
             walk_list!(visitor, visit_ty, params);
@@ -178,6 +177,7 @@ pub fn walk_pattern<V: VisitMut>(visitor: &mut V, pattern: &mut Pattern) {
         Pattern::TupleView(patterns) => {
             walk_list!(visitor, visit_pattern, patterns)
         }
+        Pattern::Wildcard => {}
     }
 }
 
@@ -290,9 +290,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::UnOp(op, expr) => {
             visitor.visit_unary_op(op);
             visitor.visit_expr(expr)
-        }
-        ExprKind::TupleView(elems) => {
-            walk_list!(visitor, visit_expr, elems);
         }
         ExprKind::Split(_prv_val1, _prv_val2, own, s, view) => {
             visitor.visit_own(own);

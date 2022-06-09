@@ -7,17 +7,16 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
 
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
     let b_array = gpu_alloc_copy(&uniq gpu, &shrd *hb_array);
-    let view_a = group_mut::<1024>(to_view_mut(&uniq a_array));
-    let view_b = group::<1024>(to_view(&shrd b_array));
     exec::<64, 1024>(
         &uniq gpu,
-        <view_a, view_b>,
+        // FIXME nothing stops me from passing the complete @-value via a move here
+        (&uniq a_array, &shrd b_array),
         | grid: BlockGrp<64, ThreadGrp<1024>>,
-          input: <&uniq gpu.global [[[[i32; 1024]]; 64]], &shrd gpu.global [[[[i32; 1024]]; 64]]>
+          input: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n])
         | -[gpu.grid]-> () {
-            let in0 = input.0;
-            let in1 = input.1;
-            parfor block in grid with a_group, b_group from in0, in1 {
+            let view_a = group_mut::<1024>(to_view_mut(input.0));
+            let view_b = group::<1024>(to_view(input.1));
+            parfor block in grid with a_group, b_group from view_a, view_b {
                 parfor block with a, b from a_group, b_group {
                     *a = *a + *b
                 }

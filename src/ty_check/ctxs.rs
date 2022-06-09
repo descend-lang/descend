@@ -229,14 +229,6 @@ impl TyCtx {
                     }
                     place_frame
                 }
-                TyKind::TupleView(tys) => {
-                    let mut place_frame = vec![(pl.clone(), ty.clone())];
-                    for (index, proj_ty) in tys.iter().enumerate() {
-                        let mut exploded_index = explode(proj(pl.clone(), index), proj_ty.clone());
-                        place_frame.append(&mut exploded_index);
-                    }
-                    place_frame
-                }
             }
         }
 
@@ -271,12 +263,6 @@ impl TyCtx {
                             return Err(CtxError::IllegalProjection);
                         }
                         res_ty = Ty::new(TyKind::Data(elem_tys[*n].clone()));
-                    }
-                    TyKind::TupleView(elem_tys) => {
-                        if elem_tys.len() <= *n {
-                            return Err(CtxError::IllegalProjection);
-                        }
-                        res_ty = elem_tys[*n].clone();
                     }
                     t => {
                         panic!(
@@ -317,11 +303,6 @@ impl TyCtx {
                     };
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys))))
                 }
-                TyKind::TupleView(mut elem_tys) => {
-                    elem_tys[*idx] =
-                        set_ty_for_path_in_ty(elem_tys[*idx].clone(), &path[1..], part_ty);
-                    Ty::new(TyKind::TupleView(elem_tys))
-                }
                 _ => panic!("Path not compatible with type."),
             }
         }
@@ -343,7 +324,6 @@ impl TyCtx {
                 match &pl_ty.ty {
                     TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
-                    TyKind::TupleView(elem_tys) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(
                         Box::new(dty.clone()),
                     )))),

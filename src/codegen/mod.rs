@@ -2,10 +2,9 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::utils;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::codegen::cu_ast::Stmt;
+use crate::ast::{utils, Mutability};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -441,7 +440,7 @@ fn gen_let(
     idx_checks: bool,
     pattern: &desc::Pattern,
     e: &desc::Expr,
-) -> Stmt {
+) -> cu::Stmt {
     match pattern {
         desc::Pattern::Tuple(tuple_elems) => cu::Stmt::Seq(
             tuple_elems
@@ -491,86 +490,111 @@ fn gen_let(
                 })
                 .collect(),
         ),
-        desc::Pattern::Ident(mutbl, ident) => {
-            if is_shape_ty(e.ty.as_ref().unwrap()) {
-                codegen_ctx.shape_ctx.insert(
-                    &ident.name,
-                    ShapeExpr::create_from(e, &codegen_ctx.shape_ctx),
-                );
-                cu::Stmt::Skip
-                // Let Expression
-            } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
-                codegen_ctx.parall_ctx.insert(
-                    &ident.name,
-                    ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
-                );
-                cu::Stmt::Skip
-            } else if let desc::TyKind::Data(desc::DataTy {
-                dty: desc::DataTyKind::At(dty, desc::Memory::GpuShared),
-                ..
-            }) = &e.ty.as_ref().unwrap().ty
-            {
-                let cu_ty = if let desc::DataTy {
-                    dty: desc::DataTyKind::Array(elem_dty, n),
-                    ..
-                } = dty.as_ref()
-                {
-                    cu::Ty::CArray(
-                        Box::new(gen_ty(
-                            &desc::TyKind::Data(elem_dty.as_ref().clone()),
-                            *mutbl,
-                        )),
-                        n.clone(),
-                    )
-                } else {
-                    gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), *mutbl)
+        desc::Pattern::Ident(mutbl, ident) => gen_decl_init(
+            codegen_ctx,
+            comp_unit,
+            dev_fun,
+            idx_checks,
+            ident,
+            *mutbl,
+            e,
+        ),
+        desc::Pattern::Wildcard => gen_decl_init(
+            codegen_ctx,
+            comp_unit,
+            dev_fun,
+            idx_checks,
+            &desc::Ident::new(&desc::utils::fresh_name("$wild")),
+            desc::Mutability::Const,
+            e,
+        ),
+    }
+}
+
+fn gen_decl_init(
+    codegen_ctx: &mut CodegenCtx,
+    comp_unit: &[desc::FunDef],
+    dev_fun: bool,
+    idx_checks: bool,
+    ident: &desc::Ident,
+    mutbl: Mutability,
+    e: &desc::Expr,
+) -> cu::Stmt {
+    if is_shape_ty(e.ty.as_ref().unwrap()) {
+        codegen_ctx.shape_ctx.insert(
+            &ident.name,
+            ShapeExpr::create_from(e, &codegen_ctx.shape_ctx),
+        );
+        cu::Stmt::Skip
+        // Let Expression
+    } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
+        codegen_ctx.parall_ctx.insert(
+            &ident.name,
+            ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
+        );
+        cu::Stmt::Skip
+    } else if let desc::TyKind::Data(desc::DataTy {
+        dty: desc::DataTyKind::At(dty, desc::Memory::GpuShared),
+        ..
+    }) = &e.ty.as_ref().unwrap().ty
+    {
+        let cu_ty = if let desc::DataTy {
+            dty: desc::DataTyKind::Array(elem_dty, n),
+            ..
+        } = dty.as_ref()
+        {
+            cu::Ty::CArray(
+                Box::new(gen_ty(
+                    &desc::TyKind::Data(elem_dty.as_ref().clone()),
+                    mutbl,
+                )),
+                n.clone(),
+            )
+        } else {
+            gen_ty(&desc::TyKind::Data(dty.as_ref().clone()), mutbl)
+        };
+        cu::Stmt::VarDecl {
+            name: ident.name.clone(),
+            ty: cu_ty,
+            addr_space: Some(cu::GpuAddrSpace::Shared),
+            expr: None,
+        }
+    } else {
+        let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
+        let (init_expr, cu_ty, checks) = match gened_ty {
+            cu::Ty::Array(_, _) => {
+                let (ex, ch) = match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                    CheckedExpr::Expr(e) => (e, None),
+                    CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
                 };
-                cu::Stmt::VarDecl {
-                    name: ident.name.clone(),
-                    ty: cu_ty,
-                    addr_space: Some(cu::GpuAddrSpace::Shared),
-                    expr: None,
-                }
-            } else {
-                let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, *mutbl);
-                let (init_expr, cu_ty, checks) = match gened_ty {
-                    cu::Ty::Array(_, _) => {
-                        let (ex, ch) =
-                            match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                                CheckedExpr::Expr(e) => (e, None),
-                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
-                            };
-                        (ex, gened_ty, ch)
-                    }
-                    _ => {
-                        let (ex, ch) =
-                            match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                                CheckedExpr::Expr(e) => (e, None),
-                                CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
-                            };
-                        (
-                            ex,
-                            if *mutbl == desc::Mutability::Mut {
-                                cu::Ty::Scalar(cu::ScalarTy::Auto)
-                            } else {
-                                cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
-                            },
-                            ch,
-                        )
-                    }
-                };
-                let var_decl = cu::Stmt::VarDecl {
-                    name: ident.name.clone(),
-                    ty: cu_ty,
-                    addr_space: None,
-                    expr: Some(init_expr),
-                };
-                if !idx_checks || checks.is_none() {
-                    var_decl
-                } else {
-                    cu::Stmt::Seq(vec![checks.unwrap(), var_decl])
-                }
+                (ex, gened_ty, ch)
             }
+            _ => {
+                let (ex, ch) = match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                    CheckedExpr::Expr(e) => (e, None),
+                    CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+                };
+                (
+                    ex,
+                    if mutbl == desc::Mutability::Mut {
+                        cu::Ty::Scalar(cu::ScalarTy::Auto)
+                    } else {
+                        cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                    },
+                    ch,
+                )
+            }
+        };
+        let var_decl = cu::Stmt::VarDecl {
+            name: ident.name.clone(),
+            ty: cu_ty,
+            addr_space: None,
+            expr: Some(init_expr),
+        };
+        if !idx_checks || checks.is_none() {
+            var_decl
+        } else {
+            cu::Stmt::Seq(vec![checks.unwrap(), var_decl])
         }
     }
 }
@@ -749,15 +773,15 @@ fn gen_exec(
     blocks: &desc::ArgKinded,
     threads: &desc::ArgKinded,
     gpu_expr: &desc::Expr,
-    shape_expr: &desc::Expr,
+    input_expr: &desc::Expr,
     fun: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
     comp_unit: &[desc::FunDef],
     idx_checks: bool,
 ) -> CheckedExpr {
     // Prepare parameter declarations for inputs
-    let mut input_shape_expr = ShapeExpr::create_from(shape_expr, &codegen_ctx.shape_ctx);
-    let name_to_exprs = input_shape_expr.collect_and_rename_input_exprs();
+    let mut cu_input_expr = ShapeExpr::create_from(input_expr, &codegen_ctx.shape_ctx);
+    let name_to_exprs = cu_input_expr.collect_and_rename_input_exprs();
     let mut param_decls: Vec<_> = name_to_exprs
         .iter()
         .map(|(name, expr)| cu::ParamDecl {
@@ -805,7 +829,7 @@ fn gen_exec(
             let in_name = &params[1].ident.name.clone();
             fresh_parall_codegen_ctx
                 .shape_ctx
-                .insert(in_name, input_shape_expr);
+                .insert(in_name, cu_input_expr);
 
             let gpu_fun_body = gen_stmt(
                 body,
@@ -1323,7 +1347,7 @@ fn gen_expr(
             is_dev_fun: is_dev_fun(*exec),
         }),
         App(fun, kinded_args, args) => match &fun.expr {
-            desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+            PlaceExpr(desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Ident(name),
                 ..
             }) if name.name == "exec" => gen_exec(
@@ -1336,7 +1360,7 @@ fn gen_expr(
                 comp_unit,
                 idx_checks,
             ),
-            desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+            PlaceExpr(desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Ident(ident),
                 ..
             }) if crate::ty_check::pre_decl::fun_decls()
@@ -1348,9 +1372,9 @@ fn gen_expr(
                     fun: Box::new(
                         match gen_expr(
                             &desc::Expr::with_type(
-                                desc::ExprKind::PlaceExpr(desc::PlaceExpr::new(
-                                    desc::PlaceExprKind::Ident(pre_decl_ident),
-                                )),
+                                PlaceExpr(desc::PlaceExpr::new(desc::PlaceExprKind::Ident(
+                                    pre_decl_ident,
+                                ))),
                                 fun.ty.as_ref().unwrap().clone(),
                             ),
                             codegen_ctx,
@@ -1480,9 +1504,6 @@ fn gen_expr(
         ),
         Split(_, _, _, _, _) => {
             panic!("The split operator should have been descontructed by now.")
-        }
-        TupleView(_) => {
-            panic!("All tuple shape should have been deconstructed using projections by now.")
         }
         Range(_, _) => {
             panic!("Range should be deconstructed at a different place.")
@@ -2172,10 +2193,6 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ..
         }) => unimplemented!(),
         desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::TupleView(_),
-            ..
-        }) => None,
-        desc::ArgKinded::Ty(desc::Ty {
             ty:
                 desc::TyKind::Data(desc::DataTy {
                     dty: desc::DataTyKind::ThreadHierchy(_),
@@ -2324,10 +2341,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
         Fn(_, _, _, _) => unimplemented!("needed?"),
-        TupleView(_) => panic!(
-            "Cannot generate tuple shape types.\
-            Anything with this type should have been compiled away."
-        ),
         Range => panic!("Range types cannot be generated."),
         Dead(_) => panic!("Dead types cannot be generated."),
     };
@@ -2575,11 +2588,11 @@ impl ShapeExpr {
             desc::ExprKind::PlaceExpr(pl_expr) => {
                 ShapeExpr::create_pl_expr_shape(pl_expr, shape_ctx)
             }
-            desc::ExprKind::TupleView(elems) => ShapeExpr::create_tuple_shape(elems, shape_ctx),
             desc::ExprKind::Proj(expr, i) => ShapeExpr::Proj {
                 shape: Box::new(ShapeExpr::create_from(expr, shape_ctx)),
                 i: *i,
             },
+            desc::ExprKind::Tuple(elems) => ShapeExpr::create_tuple_shape(elems, shape_ctx),
             desc::ExprKind::Ref(
                 _,
                 _,
@@ -2796,17 +2809,6 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
                 ExprKind::ParForWith(_, _, _, _, _, body) => match &mut body.expr {
-                    ExprKind::TupleView(t) => {
-                        for f in t {
-                            match &mut f.expr {
-                                ExprKind::PlaceExpr(PlaceExpr {
-                                    pl_expr: PlaceExprKind::Ident(x),
-                                    ..
-                                }) => f.expr = self.create_lambda_from_fun_def(&x.name),
-                                _ => visit_mut::walk_expr(self, f),
-                            }
-                        }
-                    }
                     ExprKind::PlaceExpr(PlaceExpr {
                         pl_expr: PlaceExprKind::Ident(x),
                         ..
@@ -2837,7 +2839,12 @@ fn is_shape_ty(ty: &desc::Ty) -> bool {
                 }
             )
         }
-        desc::TyKind::TupleView(_) => true,
+        desc::TyKind::Data(desc::DataTy {
+            dty: desc::DataTyKind::Tuple(elem_dtys),
+            ..
+        }) => elem_dtys
+            .iter()
+            .all(|d| is_shape_ty(&desc::Ty::new(desc::TyKind::Data(d.clone())))),
         _ => false,
     }
 }

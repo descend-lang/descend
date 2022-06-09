@@ -1,6 +1,4 @@
 mod borrow_check;
-mod coalesce;
-mod constrain;
 mod ctxs;
 mod error;
 mod infer_kinded_args;
@@ -9,12 +7,10 @@ mod subty;
 mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
+use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
-use crate::ast::{PrvRel, ThreadHierchyTy};
 use crate::error::ErrorReported;
 use crate::ty_check::infer_kinded_args::infer_kinded_args_from_mono_ty;
-use crate::ty_check::subty::multiple_outlives;
-use crate::ty_check::unify::{Constrainable, PrvConstr};
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
@@ -36,7 +32,6 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
 
 struct TyChecker {
     gl_ctx: GlobalCtx,
-    // term_constr: TermConstrainer,
 }
 
 impl TyChecker {
@@ -44,11 +39,7 @@ impl TyChecker {
         let gl_ctx = GlobalCtx::new()
             .append_from_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
-        // let term_constr = TermConstrainer::new();
-        TyChecker {
-            gl_ctx,
-            // term_constr,
-        }
+        TyChecker { gl_ctx }
     }
 
     fn ty_check(&mut self, compil_unit: &mut CompilUnit) -> TyResult<()> {
@@ -147,9 +138,6 @@ impl TyChecker {
             ExprKind::Lit(l) => Self::ty_check_literal(ty_ctx, l),
             ExprKind::Array(elems) => self.ty_check_array(kind_ctx, ty_ctx, exec, elems)?,
             ExprKind::Tuple(elems) => self.ty_check_tuple(kind_ctx, ty_ctx, exec, elems)?,
-            ExprKind::TupleView(elems) => {
-                self.ty_check_tuple_view(kind_ctx, ty_ctx, exec, elems)?
-            }
             ExprKind::Proj(e, i) => self.ty_check_proj(kind_ctx, ty_ctx, exec, e, *i)?,
             ExprKind::App(ef, k_args, args) => {
                 self.ty_check_app(kind_ctx, ty_ctx, exec, ef, k_args, args)?
@@ -322,8 +310,8 @@ impl TyChecker {
                         "Trying to access array out-of-bounds.".to_string(),
                     ));
                 }
-                Ty::new(TyKind::TupleView(vec![
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
+                    DataTy::new(DataTyKind::Ref(
                         Provenance::Value(prv1.clone()),
                         own,
                         m.clone(),
@@ -331,8 +319,8 @@ impl TyChecker {
                             elem_dty.clone(),
                             s.clone(),
                         ))),
-                    )))),
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                    )),
+                    DataTy::new(DataTyKind::Ref(
                         Provenance::Value(prv2.clone()),
                         own,
                         m.clone(),
@@ -340,8 +328,8 @@ impl TyChecker {
                             elem_dty.clone(),
                             Nat::BinOp(BinOpNat::Sub, Box::new(n.clone()), Box::new(s.clone())),
                         ))),
-                    )))),
-                ]))
+                    )),
+                ]))))
             } else {
                 return Err(TyError::UnexpectedType);
             }
@@ -983,12 +971,15 @@ impl TyChecker {
         let pl = pl_expr.to_place().unwrap();
         let mut place_ty = assigned_val_ty_ctx.place_ty(&pl)?;
         // FIXME this should be checked for ArrayViews as well
-        if matches!(&place_ty.ty, TyKind::TupleView(_)) {
-            return Err(TyError::String(format!(
-                "Assigning views is forbidden. Trying to assign view {:?}",
-                e
-            )));
-        }
+        // fn contains_view_dty(ty: &TyKind) -> bool {
+        //     unimplemented!()
+        // }
+        // if contains_view_dty(&place_ty.ty) {
+        //     return Err(TyError::String(format!(
+        //         "Reassigning views is forbidden. Trying to assign view {:?}",
+        //         e
+        //     )));
+        // }
         Self::check_mutable(&assigned_val_ty_ctx, &pl)?;
 
         // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
@@ -1022,7 +1013,7 @@ impl TyChecker {
             // }
         }
 
-        let after_subty_ctx = TyChecker::sub_unify(
+        let after_subty_ctx = unify::sub_unify(
             kind_ctx,
             assigned_val_ty_ctx,
             e.ty.as_mut().unwrap(),
@@ -1068,7 +1059,7 @@ impl TyChecker {
         })?;
 
         let deref_ty = &mut deref_expr.ty.as_mut().unwrap();
-        let after_subty_ctx = TyChecker::sub_unify(
+        let after_subty_ctx = unify::sub_unify(
             kind_ctx,
             assigned_val_ty_ctx,
             e.ty.as_mut().unwrap(),
@@ -1411,7 +1402,7 @@ impl TyChecker {
             res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, exec, arg)?;
         }
         let ret_ty = Ty::new(utils::fresh_ident("ret_ty", TyKind::Ident));
-        let (subst, _) = unify::constrain(
+        unify::unify(
             &mut f_mono_ty,
             &mut Ty::new(TyKind::Fn(
                 vec![],
@@ -1422,7 +1413,6 @@ impl TyChecker {
                 Box::new(ret_ty),
             )),
         )?;
-        unify::substitute(&subst, &mut f_mono_ty);
         let mut inferred_k_args = infer_kinded_args_from_mono_ty(
             f_remain_gen_args,
             f_subst_param_tys,
@@ -1527,9 +1517,6 @@ impl TyChecker {
             .iter()
             .map(|elem| match &elem.ty.as_ref().unwrap().ty {
                 TyKind::Data(dty) => Ok(dty.clone()),
-                TyKind::TupleView(_) => Err(TyError::String(
-                    "Tuple elements cannot be tuple views.".to_string(),
-                )),
                 TyKind::Ident(_) => Err(TyError::String(
                     "Tuple elements must be data types, but found general type identifier."
                         .to_string(),
@@ -1567,24 +1554,6 @@ impl TyChecker {
         let elem_ty = proj_elem_ty(e.ty.as_ref().unwrap(), i);
 
         Ok((tuple_ty_ctx, elem_ty?))
-    }
-
-    fn ty_check_tuple_view(
-        &mut self,
-        kind_ctx: &KindCtx,
-        ty_ctx: TyCtx,
-        exec: Exec,
-        elems: &mut [Expr],
-    ) -> TyResult<(TyCtx, Ty)> {
-        let mut tmp_ty_ctx = ty_ctx;
-        for elem in elems.iter_mut() {
-            tmp_ty_ctx = self.ty_check_expr(kind_ctx, tmp_ty_ctx, exec, elem)?;
-        }
-        let elem_tys: Vec<_> = elems
-            .iter()
-            .map(|elem| elem.ty.as_ref().unwrap().clone())
-            .collect();
-        Ok((tmp_ty_ctx, Ty::new(TyKind::TupleView(elem_tys))))
     }
 
     fn ty_check_array(
@@ -1633,27 +1602,6 @@ impl TyChecker {
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(scalar_data)))),
         )
     }
-    //
-    // fn create_pattern_ty(pattern: &Pattern) -> Ty {
-    //     match pattern {
-    //         Pattern::Tuple(tuple_elems) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(
-    //             tuple_elems
-    //                 .iter()
-    //                 .map(|tp| TyChecker::create_pattern_ty(tp))
-    //                 .collect(),
-    //         )))),
-    //         Pattern::TupleView(tuple_elems) => Ty::new(TyKind::TupleView(
-    //             tuple_elems
-    //                 .iter()
-    //                 .map(|tp| TyChecker::create_pattern_ty(tp))
-    //                 .collect(),
-    //         )),
-    //         Pattern::Ident(_, _) => Ty::new(TyKind::Data(DataTy::new(utils::fresh_ident(
-    //             "pattern",
-    //             DataTyKind::Ident,
-    //         )))),
-    //     }
-    // }
 
     fn type_idents(pattern: &Pattern, dty: DataTy) -> Vec<IdentTyped> {
         match (pattern, dty.dty) {
@@ -1698,12 +1646,6 @@ impl TyChecker {
                 .try_fold(ty_ctx, |ctx, (p, tty)| {
                     TyChecker::infer_pattern_ident_tys(ctx, p, &Ty::new(TyKind::Data(tty.clone())))
                 })?),
-            (Pattern::TupleView(patterns), TyKind::TupleView(elem_tys)) => Ok(patterns
-                .iter()
-                .zip(elem_tys)
-                .try_fold(ty_ctx, |ctx, (p, tty)| {
-                    TyChecker::infer_pattern_ident_tys(ctx, p, tty)
-                })?),
             _ => Err(TyError::PatternAndTypeDoNotMatch),
         }
     }
@@ -1717,17 +1659,13 @@ impl TyChecker {
     ) -> TyResult<TyCtx> {
         let (ty_ctx_sub, pattern_ty) = if let Some(pty) = pattern_ty {
             (
-                TyChecker::sub_unify(kind_ctx, ty_ctx, assign_ty, pty)?,
+                unify::sub_unify(kind_ctx, ty_ctx, assign_ty, pty)?,
                 pty.clone(),
             )
         } else {
             (ty_ctx, assign_ty.clone())
         };
-        Ok(TyChecker::infer_pattern_ident_tys(
-            ty_ctx_sub,
-            pattern,
-            &pattern_ty,
-        )?)
+        TyChecker::infer_pattern_ident_tys(ty_ctx_sub, pattern, &pattern_ty)
     }
 
     fn ty_check_let(
@@ -1749,21 +1687,6 @@ impl TyChecker {
                 ScalarTy::Unit,
             )))),
         ))
-    }
-
-    fn sub_unify<C: Constrainable>(
-        kind_ctx: &KindCtx,
-        ty_ctx: TyCtx,
-        sub: &mut C,
-        sup: &mut C,
-    ) -> TyResult<TyCtx> {
-        let (subst, prv_rels) = unify::constrain(sub, sup)?;
-        let outlives_ctx = multiple_outlives(
-            kind_ctx,
-            ty_ctx,
-            prv_rels.iter().map(|PrvConstr(p1, p2)| (p1, p2)),
-        )?;
-        Ok(outlives_ctx)
     }
 
     // TODO respect exec?
@@ -1828,7 +1751,7 @@ impl TyChecker {
                 pl_expr
             )));
         }
-        unify::constrain(
+        unify::unify(
             pl_expr.ty.as_mut().unwrap(),
             &mut Ty::new(TyKind::Data(DataTy::with_constr(
                 utils::fresh_ident("pl_deref", DataTyKind::Ident),
@@ -1966,11 +1889,6 @@ impl TyChecker {
                     ));
                 },
             ),
-            TyKind::TupleView(_) => {
-                return Err(TyError::String(
-                    "Trying to borrow a tuple view.".to_string(),
-                ))
-            }
             TyKind::Fn(_, _, _, _) => {
                 return Err(TyError::String("Trying to borrow a function.".to_string()))
             }
@@ -2086,14 +2004,6 @@ impl TyChecker {
                     vec![],
                 ))
             }
-            TyKind::TupleView(_) => {
-                if !ty.is_fully_alive() {
-                    return Err(TyError::String(
-                        "The value in this identifier has been moved out.".to_string(),
-                    ));
-                }
-                Ok((ty.clone(), vec![], vec![]))
-            }
             TyKind::Fn(_, _, _, _) => {
                 if !ty.is_fully_alive() {
                     panic!("This should never happen.")
@@ -2140,28 +2050,6 @@ impl TyChecker {
             }) => {
                 if let Some(ty) = elem_dtys.get(n) {
                     Ok((Ty::new(TyKind::Data(ty.clone())), mem, passed_prvs))
-                } else {
-                    Err(TyError::String(
-                        "Trying to access non existing tuple element.".to_string(),
-                    ))
-                }
-            }
-            TyKind::TupleView(elem_tys) => {
-                if let Some(ty) = elem_tys.get(n) {
-                    let mem = if let TyKind::Data(_) = &ty.ty {
-                        Self::default_mem_by_exec(exec)
-                    } else {
-                        None
-                    };
-                    Ok((
-                        ty.clone(),
-                        if mem.is_some() {
-                            vec![mem.unwrap()]
-                        } else {
-                            vec![]
-                        },
-                        passed_prvs,
-                    ))
                 } else {
                     Err(TyError::String(
                         "Trying to access non existing tuple element.".to_string(),
@@ -2382,13 +2270,7 @@ impl TyChecker {
                     Err(CtxError::KindedIdentNotFound(ident.clone()))?
                 }
             }
-            TyKind::TupleView(elem_tys) =>
             // TODO check well-formedness of Nats
-            {
-                for elem_ty in elem_tys {
-                    self.ty_well_formed(kind_ctx, ty_ctx, exec, elem_ty)?;
-                }
-            }
             TyKind::Fn(idents_kinded, param_tys, exec, ret_ty) => {
                 let extended_kind_ctx = kind_ctx.clone().append_idents(idents_kinded.clone());
                 self.ty_well_formed(&extended_kind_ctx, ty_ctx, *exec, ret_ty)?;
@@ -2409,28 +2291,14 @@ pub fn proj_elem_ty(ty: &Ty, i: usize) -> TyResult<Ty> {
             ..
         }) => match dtys.get(i) {
             Some(dty) => Ok(Ty::new(TyKind::Data(dty.clone()))),
-            None => {
-                return Err(TyError::String(format!(
-                    "Cannot project element `{}` from tuple with {} elements.",
-                    i,
-                    dtys.len()
-                )))
-            }
+            None => Err(TyError::String(format!(
+                "Cannot project element `{}` from tuple with {} elements.",
+                i,
+                dtys.len()
+            ))),
         },
-        TyKind::TupleView(tys) => match tys.get(i) {
-            Some(ty) => Ok(ty.clone()),
-            None => {
-                return Err(TyError::String(format!(
-                    "Cannot project element `{}` from tuple with {} elements.",
-                    i,
-                    tys.len()
-                )))
-            }
-        },
-        _ => {
-            return Err(TyError::String(
-                "Cannot project from non tuple type.".to_string(),
-            ))
-        }
+        _ => Err(TyError::String(
+            "Cannot project from non tuple type.".to_string(),
+        )),
     }
 }

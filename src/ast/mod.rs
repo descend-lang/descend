@@ -1,10 +1,8 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Formatter;
 
-use crate::ast::utils::FreeKindedIdents;
-use crate::ast::visit::Visit;
 use descend_derive::span_derive;
 pub use span::*;
 
@@ -310,7 +308,6 @@ pub enum ExprKind {
         Vec<Expr>,
         Box<Expr>,
     ),
-    TupleView(Vec<Expr>),
     Split(
         Option<String>,
         Option<String>,
@@ -371,6 +368,7 @@ pub enum Pattern {
     Ident(Mutability, Ident),
     Tuple(Vec<Pattern>),
     TupleView(Vec<Pattern>),
+    Wildcard,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -670,7 +668,6 @@ pub struct Ty {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind {
     Data(DataTy),
-    TupleView(Vec<Ty>),
     Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
     Ident(Ident),
     Dead(Box<Ty>),
@@ -733,7 +730,6 @@ impl Ty {
     pub fn copyable(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
-            TyKind::TupleView(elem_tys) => elem_tys.iter().all(|ty| ty.copyable()),
             TyKind::Fn(_, _, _, _) => true,
             TyKind::Ident(_) => false,
             TyKind::Dead(_) => panic!(
@@ -746,18 +742,34 @@ impl Ty {
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::TupleView(elem_tys) => elem_tys.iter().all(|ty| ty.is_fully_alive()),
             TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
             TyKind::Dead(_) => false,
+        }
+    }
+
+    pub fn eq_structure(&self, other: &Self) -> bool {
+        match (&self.ty, &other.ty) {
+            (TyKind::Fn(gps1, ptys1, exec1, ret_ty1), TyKind::Fn(gps2, ptys2, exec2, ret_ty2)) => {
+                let mut res = true;
+                for (gp1, gp2) in gps1.iter().zip(gps2) {
+                    res &= gp1 == gp2;
+                }
+                for (pty1, pty2) in ptys1.iter().zip(ptys2) {
+                    res &= pty1.eq_structure(pty2);
+                }
+                res &= exec1 == exec2;
+                res & ret_ty1.eq_structure(ret_ty2)
+            }
+            (TyKind::Data(dty1), TyKind::Data(dty2)) => unimplemented!(), //dty1.eq_structure(dty2),
+            (TyKind::Ident(id1), TyKind::Ident(id2)) => id1 == id2,
+            (TyKind::Dead(ty1), TyKind::Dead(ty2)) => ty1.eq_structure(ty2),
+            _ => false,
         }
     }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
-            TyKind::TupleView(elem_tys) => elem_tys
-                .iter()
-                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
             TyKind::Fn(_, param_tys, _, ret_ty) => {
                 param_tys
                     .iter()
@@ -772,12 +784,6 @@ impl Ty {
         match &self.ty {
             // TODO mutate and do not create a new type (also this drops the span).
             TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
-            TyKind::TupleView(elem_tys) => Ty::new(TyKind::TupleView(
-                elem_tys
-                    .iter()
-                    .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
-                    .collect(),
-            )),
             TyKind::Fn(gen_params, params, exec, ret) => Ty::new(TyKind::Fn(
                 gen_params.clone(),
                 params
@@ -1310,7 +1316,6 @@ impl PartialOrd for Nat {
             (Nat::Lit(l), Nat::Lit(o)) if l == o => Some(Ordering::Equal),
             (Nat::Lit(l), Nat::Lit(o)) if l > o => Some(Ordering::Greater),
             (Nat::BinOp(op, lhs, rhs), Nat::BinOp(oop, olhs, orhs))
-                // FIXME always true even if greater or less
                 if op == oop && lhs == olhs && rhs == orhs =>
             {
                 Some(Ordering::Equal)

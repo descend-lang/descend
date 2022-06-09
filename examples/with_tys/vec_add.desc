@@ -3,29 +3,27 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
     ha_array: &a uniq cpu.mem [i32; n],
     hb_array: &b shrd cpu.mem [i32; n]
 ) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h>{
-    let mut gpu: Gpu = gpu_device(0);
+    let mut gpu = gpu_device(0);
 
-    let mut a_array: [i32; n] @ gpu.global =
+    let mut a_array: _ @ gpu.global =
         gpu_alloc_copy::<'c, 'd, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
     let b_array: [i32; n] @ gpu.global =
         gpu_alloc_copy::<'f, 'i, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);
-    let view_a: &'r uniq gpu.global [[i32; n]] =
-        to_view_mut::<'r, gpu.global, n, i32>(&'r uniq a_array);
-    let view_b: &'s shrd gpu.global [[i32; n]] =
-        to_view::<'s, gpu.global, n, i32>(&'s shrd b_array);
-    let grouped_a = group_mut::<1024, 'r, gpu.global, n, i32>(view_a);
-    let grouped_b = group::<1024, 's, gpu.global, n, i32>(view_b);
     // exec: <b: nat, t: nat, r: prv, m: mem, elem_ty: ty, n: nat>(
     //        &r uniq m Gpu, [[elem_ty; n]], ([[[[Thread; t]]; b]], [[elem_ty; n]]) -[gpu]-> ()) -> ()
-    exec::<64, 1024, 'h, <&'r uniq gpu.global [[[[i32; 1024]]; 64]], &'s shrd gpu.global [[[[i32; 1024]]; 64]]>>(
+    exec::<64, 1024, 'h, (&'r uniq gpu.global [i32; n], &'s shrd gpu.global [i32; n])>(
         &'h uniq gpu,
-        <grouped_a, grouped_b>,
+        (&'r uniq a_array, &'s shrd b_array),
         | grid: BlockGrp<64, ThreadGrp<1024>>,
-          input: <&'r uniq gpu.global [[[[i32; 1024]]; 64]], &'s shrd gpu.global [[[[i32; 1024]]; 64]]>
+          input: (&'r uniq gpu.global [i32; n], &'s shrd gpu.global [i32; n])
         | -[gpu.grid]-> () {
-            let in0 = input.0;
-            let in1 = input.1;
-            parfor block in grid with a_group, b_group from in0, in1 {
+            let view_a: &'r uniq gpu.global [[i32; n]] =
+                to_view_mut::<'r, gpu.global, n, i32>(input.0);
+            let view_b: &'s shrd gpu.global [[i32; n]] =
+                to_view::<'s, gpu.global, n, i32>(input.1);
+            let grouped_a = group_mut::<1024, 'r, gpu.global, n, i32>(view_a);
+            let grouped_b = group::<1024, 's, gpu.global, n, i32>(view_b);
+            parfor block in grid with a_group, b_group from grouped_a, grouped_b {
                 parfor block with a, b from a_group, b_group {
                     *a = *a + *b
                 }

@@ -3,27 +3,12 @@
 extern crate descend;
 
 type Res = Result<(), descend::error::ErrorReported>;
-#[test]
-fn scalar_mult() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/scalar_mult.desc")?
-    ))
-}
 
 #[test]
-fn scale_vec_test() -> Result<(), descend::error::ErrorReported> {
+fn scale_vec() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/vec_scale.desc")?
-    ))
-}
-
-#[test]
-fn bitonic_sort() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc")?
+        descend::compile("examples/infer/scale_vec.desc")?
     ))
 }
 
@@ -31,11 +16,11 @@ fn bitonic_sort() -> Result<(), descend::error::ErrorReported> {
 fn bitonic_sort_split_blocks() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/bitonic_sort/bitonic_sort_split_blocks.desc")?
+        descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc")?
     ))
 }
 
-#[test]
+#[ignore]
 fn bitonic_sort_shrd_mem() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
@@ -74,14 +59,6 @@ fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
 
 #[test]
 fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/tree_reduce_working.desc")?
-    ))
-}
-
-#[test]
-fn tree_reduce_sequencing_fail() -> Result<(), descend::error::ErrorReported> {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/tree_reduce.desc")?

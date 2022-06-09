@@ -221,6 +221,7 @@ peg::parser! {
             / tuple_view_pattern: "<" _ elems_pattern:pattern() ** (_ "," _) _ ">" {
                 Pattern::TupleView(elems_pattern)
             }
+            / "_" { Pattern::Wildcard }
 
         // These rules lead to stackoverflows when integrated in rule expression
         // FIXME: How to integrate this properly into the precedence parser?
@@ -351,12 +352,6 @@ peg::parser! {
             }
             "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
                 Expr::new(ExprKind::Tuple(expressions))
-            }
-            "<" _ expression:expression() _ ">" {
-                Expr::new(ExprKind::TupleView(vec![expression]))
-            }
-            "<" _ expressions:expression() **<2,> (_ "," _) _ ">" {
-                Expr::new(ExprKind::TupleView(expressions))
             }
             "if" __ cond:expression() _ iftrue:block() _ iffalse:("else" _ iffalse:block() {
                 iffalse })? {
@@ -505,9 +500,6 @@ peg::parser! {
             = begin:position!() dty:dty() end:position!() {
                 Ty::with_span(TyKind::Data(dty), Span::new(begin, end))
             }
-            / begin:position!() "<" _ tys:ty() **<1,> (_ "," _) _ ">" end:position!() {
-                Ty::with_span(TyKind::TupleView(tys), Span::new(begin, end))
-            }
 
         /// Parse a type token
         pub(crate) rule dty() -> DataTy
@@ -539,6 +531,7 @@ peg::parser! {
                     None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$r")))
                 }, own, mem, Box::new(dty))
             }
+            / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$d"))) }
 
         pub(crate) rule th_hy() -> ThreadHierchyTy =
         "BlockGrp" _ "<" _ n1:nat() _ ns:("," _ n2:nat() _ "," _ n3:nat() _ { (n2, n3) })? "," _
@@ -1246,34 +1239,6 @@ mod tests {
             ))),
             "does not recognize projection on tuple view expression"
         );
-        assert_eq!(
-            descend::expression("<x>.0"),
-            Ok(Expr::new(ExprKind::Proj(
-                Box::new(Expr::new(ExprKind::TupleView(vec![Expr::new(
-                    ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))))
-                )]))),
-                zero_literal
-            ))),
-            "does not recognize projection on tuple view expression with a single element"
-        );
-        assert_eq!(
-            descend::expression("<x, y, z>.1"),
-            Ok(Expr::new(ExprKind::Proj(
-                Box::new(Expr::new(ExprKind::TupleView(vec![
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
-                        Ident::new("x")
-                    )))),
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
-                        Ident::new("y")
-                    )))),
-                    Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
-                        Ident::new("z")
-                    ))))
-                ]))),
-                one_literal
-            ))),
-            "does not recognize projection on tuple view expression"
-        );
     }
 
     #[test]
@@ -1488,29 +1453,6 @@ mod tests {
         assert_eq!(
             descend::expression_seq("(12, x[3], true)"),
             Ok(Expr::new(ExprKind::Tuple(vec![
-                Expr::with_type(
-                    ExprKind::Lit(Lit::I32(12)),
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))
-                ),
-                Expr::new(ExprKind::Index(
-                    PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x"))),
-                    Nat::Lit(3)
-                )),
-                Expr::with_type(
-                    ExprKind::Lit(Lit::Bool(true)),
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::Bool
-                    ))))
-                )
-            ])))
-        );
-    }
-
-    #[test]
-    fn expression_tupel_view() {
-        assert_eq!(
-            descend::expression_seq("<12, x[3], true>"),
-            Ok(Expr::new(ExprKind::TupleView(vec![
                 Expr::with_type(
                     ExprKind::Lit(Lit::I32(12)),
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))))

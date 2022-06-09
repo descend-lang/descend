@@ -6,18 +6,14 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
 
     let a_array = gpu_alloc_copy(&uniq gpu, ha_array);
     let mut out_array = gpu_alloc_copy(&uniq gpu, &shrd *h_output);
-    let view_a = to_view(&shrd a_array);
-    let block_group = group::<1024>(view_a);
-    let view_out = group_mut::<1>(to_view_mut(&uniq out_array));
     exec::<gs, bs>(
         &uniq gpu,
-        <block_group, view_out>,
+        (&shrd a_array, &uniq out_array),
         // TODO remove type annotations
         | grid: BlockGrp<gs, ThreadGrp<bs>>,
-          views: <&shrd gpu.global [[[[i32; bs]]; gs]], &uniq gpu.global [[[[i32; 1]]; gs]]>| -[gpu.grid]-> () {
-            let block_group = views.0;
-            let view_out = views.1;
-
+          inputs: (&shrd gpu.global [i32; gs*bs], &uniq gpu.global [i32; gs])| -[gpu.grid]-> () {
+            let block_group = group::<1024>(to_view(inputs.0));
+            let view_out = group_mut::<1>(to_view_mut(inputs.1));
             // TODO remove decl and move out tmp declaration
             decl {
                 let mut tmp: [i32; bs] @ gpu.shared
