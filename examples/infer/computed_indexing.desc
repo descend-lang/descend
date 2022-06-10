@@ -40,7 +40,7 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
             let data = inputs.2;
 
             parfor block in grid with indices_inp, results_inp from indices_input, results_input {
-                parfor block with ind, res from indices_inp, results_inp {
+                parfor _ in block with ind, res from indices_inp, results_inp {
                     let i = *ind;
                     *res = data[i]
                 }

@@ -1,9 +1,6 @@
 //! Helper functions for parsing
 
-use crate::ast::{
-    BinOp, BinOpNat, DataTy, DataTyKind, Expr, ExprKind, Ident, Lit, Nat, PlaceExpr, PlaceExprKind,
-    ScalarTy, UnOp,
-};
+use crate::ast::{BinOp, BinOpNat, DataTy, DataTyKind, Expr, ExprKind, Lit, Nat, ScalarTy, UnOp};
 
 pub fn type_from_lit(lit: &Lit) -> DataTy {
     DataTy::new(DataTyKind::Scalar(match lit {

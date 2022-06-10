@@ -16,7 +16,7 @@ fn upsweep<a: prv>(
     for_nat d in halved_range(32) <'a>{
         let tmp_up_view = group_mut::<64/d, 'a, gpu.shared, 64, i32>(
             to_view_mut::<'a, gpu.shared, 64, i32>(&'a uniq *arr_ref));
-        parfor split_thread_grp::<d, 32, 1, 1>(thread_grp).0
+        parfor _ in split_thread_grp::<d, 32, 1, 1>(thread_grp).0
         with arr from tmp_up_view
         { arr[64/d-1] = arr[64/d-1] + arr[32/d-1] }
     }
@@ -37,7 +37,7 @@ fn downsweep<a: prv>(
     for_nat d in doubled_range(1, 32) <'b>{
         let tmp_down_view = group_mut::<64 / d, 'b, gpu.shared, 64, i32>(
             to_view_mut::<'b, gpu.shared, 64, i32 > (&'b uniq *arr_ref));
-        parfor split_thread_grp::<d, 32, 1, 1> (block).0
+        parfor _ in split_thread_grp::<d, 32, 1, 1> (block).0
         with arr from tmp_down_view
         {
             let t = arr[32/d-1];
@@ -95,7 +95,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                     let input_halves = split 'r1 'r2 shrd 32 ib;
 
                     // Copy to temporary shared memory storage
-                    parfor block
+                    parfor _ in block
                     with s0, s1, d0, d1 from input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1
                     {
                         *d0 = *s0;
@@ -112,7 +112,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                     let tmp_view2 = to_view_mut::<'l, gpu.shared, 64, i32>(&'l uniq tmp);
                     let tmp_last: &'l2 uniq gpu.shared [[i32; 1]] =
                         (split 'l1 'l2 uniq 63 tmp_view2).1;
-                    parfor split_thread_grp::<1, 32, 1, 1>(block).0
+                    parfor _ in split_thread_grp::<1, 32, 1, 1>(block).0
                     with sum, last from bsum, tmp_last
                     {
                         *sum = *last;
@@ -128,7 +128,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                     let tmp_halves3 = split 'e1 'e2 uniq 32 tmp_view3;
                     // Copy results to global memory
                     let output_halves = split 'm1 'm2 uniq 32 block_out;
-                    parfor block
+                    parfor _ in block
                     with d0, d1, s0, s1 from output_halves.0, output_halves.1, tmp_halves3.0, tmp_halves3.1
                     {
                         *d0 = *s0;
@@ -161,7 +161,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
             parfor block in grid
             with scanned_vals_blocked, block_sum from out_grp2, block_sums_view
             {
-                parfor block
+                parfor _ in block
                 with scanned_val from scanned_vals_blocked
                 {
                     *scanned_val = *scanned_val + *block_sum

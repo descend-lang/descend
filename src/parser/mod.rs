@@ -218,9 +218,6 @@ peg::parser! {
             / tuple_pattern: "(" _ elems_pattern:pattern() ** (_ "," _) _ ")" {
                 Pattern::Tuple(elems_pattern)
             }
-            / tuple_view_pattern: "<" _ elems_pattern:pattern() ** (_ "," _) _ ">" {
-                Pattern::TupleView(elems_pattern)
-            }
             / "_" { Pattern::Wildcard }
 
         // These rules lead to stackoverflows when integrated in rule expression
@@ -365,7 +362,7 @@ peg::parser! {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
             decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
-            "parfor" __ par_ident:(i:ident() __ "in" __ { i })? parall_collec:expression() __
+            "parfor" __ par_ident:maybe_ident() __ "in" __ parall_collec:expression() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
             "from" __ input:expression() **<1,> (_ "," _) _ body:block() {
                 Expr::new(ExprKind::ParForWith(decls, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
@@ -378,6 +375,10 @@ peg::parser! {
             block:block() { block }
             expression: expr_helper() { expression }
         }
+
+        rule maybe_ident() -> Option<Ident> =
+            i:ident() { Some(i) }
+            / "_" { None }
 
         rule block() -> Expr =
             prov_values:("<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _ { prov_values })?

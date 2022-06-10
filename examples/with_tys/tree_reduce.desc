@@ -18,7 +18,7 @@ fn reduce<n: nat, a: prv, b: prv>(
                     let split_ib = (split 'r1 'r2 uniq 2*k ib).0;
                     let (active_half0, active_half1) = split 's1 's2 uniq k split_ib;
 
-                    parfor split_thread_grp::<k, 1024, 1, 1>(block).0
+                    parfor _ in split_thread_grp::<k, 1024, 1, 1>(block).0
                     with fst_half, snd_half from active_half0, active_half1 <>{
                         *fst_half = *fst_half + *snd_half
                     }

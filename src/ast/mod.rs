@@ -300,6 +300,7 @@ pub enum ExprKind {
     While(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
+    ParBranch(Box<Expr>, Vec<Ident>, Vec<Expr>),
     ParForWith(
         Option<Vec<Expr>>,
         Option<Ident>,
@@ -367,7 +368,6 @@ impl fmt::Display for Ident {
 pub enum Pattern {
     Ident(Mutability, Ident),
     Tuple(Vec<Pattern>),
-    TupleView(Vec<Pattern>),
     Wildcard,
 }
 

@@ -9,7 +9,7 @@ fn scale_vec<n: nat>(
         | grid: BlockGrp<64, ThreadGrp<1024>>, vec: (&uniq gpu.global [f64; n]) | -[gpu.grid]-> () {
             let groups = group_mut::<1024>(to_view_mut(vec.0));
             parfor block in grid with g from groups {
-                parfor block with v from g {
+                parfor _ in block with v from g {
                     *v = *v * 3.0
                 }
             }

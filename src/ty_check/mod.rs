@@ -162,6 +162,15 @@ impl TyChecker {
             ExprKind::IdxAssign(pl_expr, idx, e) => {
                 self.ty_check_idx_assign(kind_ctx, ty_ctx, exec, pl_expr, idx, e)?
             }
+            ExprKind::ParBranch(parall_collec, branch_idents, branch_bodies) => self
+                .ty_check_par_branch(
+                    kind_ctx,
+                    ty_ctx,
+                    exec,
+                    parall_collec,
+                    branch_idents,
+                    branch_bodies,
+                )?,
             ExprKind::ParForWith(
                 decls,
                 parall_ident,
@@ -662,6 +671,31 @@ impl TyChecker {
                 ScalarTy::Unit,
             )))),
         ))
+    }
+
+    fn ty_check_par_branch(
+        &mut self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        parall_collec: &mut Expr,
+        branch_idents: &[Ident],
+        branch_bodies: &mut [Expr],
+    ) -> TyResult<(TyCtx, Ty)> {
+        let parall_collec_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, parall_collec)?;
+        match &parall_collec.ty.as_ref().unwrap().ty {
+            TyKind::Data(DataTy {
+                // TODO implement
+                //dty: DataTyKind::SplitBlockGrp,
+                ..
+            }) => {
+                unimplemented!()
+            }
+            _ => Err(TyError::String(format!(
+                "Unexpected type. Expected Split Parallel Collection but found: {:?}",
+                &parall_collec.ty.as_ref().unwrap().ty
+            ))),
+        }
     }
 
     // TODO split up groupings, i.e., deal with TupleViews and require enough functions.

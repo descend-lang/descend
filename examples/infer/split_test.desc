@@ -8,7 +8,7 @@ fn red_block<r: prv>(
         let active_half0 = active_halves.0;
         let active_half1 = active_halves.1;
 
-        parfor split_thread_grp::<k, 1024, 1, 1 >(block).0
+        parfor _ in split_thread_grp::<k, 1024, 1, 1 >(block).0
         with fst, snd from active_half0, active_half1 { * fst = * fst + * snd }
     }
 }

@@ -188,7 +188,6 @@ fn gen_stmt(
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
-    use desc::DataTyKind::*;
     use desc::ExprKind::*;
     match &expr.expr {
         Let(pattern, _, e) => {
@@ -377,6 +376,7 @@ fn gen_stmt(
                 )
             }
         }
+        ParBranch(parall_collec, branch_idents, branch_bodies) => unimplemented!(),
         ParForWith(decls, parall_ident, parall_collec, input_idents, input_exprs, body) => {
             gen_par_for(
                 decls,
@@ -459,30 +459,6 @@ fn gen_let(
                                 Ok(ty) => ty,
                                 Err(err) => {
                                     panic!("Cannot project tuple element type at {}", i)
-                                }
-                            },
-                        ),
-                    )
-                })
-                .collect(),
-        ),
-        desc::Pattern::TupleView(tuple_elems) => cu::Stmt::Seq(
-            tuple_elems
-                .iter()
-                .enumerate()
-                .map(|(i, tp)| {
-                    gen_let(
-                        codegen_ctx,
-                        comp_unit,
-                        dev_fun,
-                        idx_checks,
-                        tp,
-                        &desc::Expr::with_type(
-                            desc::ExprKind::Proj(Box::new(e.clone()), i),
-                            match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), i) {
-                                Ok(ty) => ty,
-                                Err(err) => {
-                                    panic!("Cannot project tuple view element type at {}", i)
                                 }
                             },
                         ),
@@ -1498,6 +1474,7 @@ fn gen_expr(
         | While(_, _)
         | For(_, _, _)
         | ForNat(_, _, _)
+        | ParBranch(_, _, _)
         | ParForWith(_, _, _, _, _, _) => panic!(
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
@@ -2185,14 +2162,6 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
         // FIXME remove this case?
         desc::ArgKinded::Ty(desc::Ty {
-            ty: ty @ desc::TyKind::Data(_),
-            ..
-        }) => Some(cu::TemplateArg::Ty(gen_ty(&ty, desc::Mutability::Mut))),
-        desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::Ident(_),
-            ..
-        }) => unimplemented!(),
-        desc::ArgKinded::Ty(desc::Ty {
             ty:
                 desc::TyKind::Data(desc::DataTy {
                     dty: desc::DataTyKind::ThreadHierchy(_),
@@ -2200,6 +2169,14 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
                 }),
             ..
         }) => None,
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: ty @ desc::TyKind::Data(_),
+            ..
+        }) => Some(cu::TemplateArg::Ty(gen_ty(&ty, desc::Mutability::Mut))),
+        desc::ArgKinded::Ty(desc::Ty {
+            ty: desc::TyKind::Ident(_),
+            ..
+        }) => unimplemented!(),
         desc::ArgKinded::Ty(desc::Ty {
             ty: desc::TyKind::Fn(_, _, _, _),
             ..
@@ -2341,8 +2318,15 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
         Fn(_, _, _, _) => unimplemented!("needed?"),
-        Range => panic!("Range types cannot be generated."),
         Dead(_) => panic!("Dead types cannot be generated."),
+        Data(desc::DataTy {
+            dty: desc::DataTyKind::ThreadHierchy(_),
+            ..
+        })
+        | Data(desc::DataTy {
+            dty: desc::DataTyKind::Range,
+            ..
+        }) => panic!("Cannot generate type for ThreadHierchy or Range"),
     };
 
     if matches!(mutbl, desc::Mutability::Mut) {

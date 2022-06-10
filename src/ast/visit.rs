@@ -173,9 +173,6 @@ pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
         Pattern::Tuple(patterns) => {
             walk_list!(visitor, visit_pattern, patterns)
         }
-        Pattern::TupleView(patterns) => {
-            walk_list!(visitor, visit_pattern, patterns)
-        }
         Pattern::Wildcard => {}
     }
 }
@@ -259,6 +256,11 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_ident(ident);
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
+        }
+        ExprKind::ParBranch(parall_collec, branch_idents, branch_bodies) => {
+            visitor.visit_expr(parall_collec);
+            walk_list!(visitor, visit_ident, branch_idents);
+            walk_list!(visitor, visit_expr, branch_bodies);
         }
         ExprKind::ParForWith(decls, par_elem, parall_collec, input_elems, input, body) => {
             for d in decls {

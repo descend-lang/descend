@@ -1,4 +1,3 @@
-use crate::ast::TyKind::Data;
 use crate::ast::{
     BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
     Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
@@ -941,7 +940,7 @@ fn group_ty(own: Ownership) -> Ty {
 }
 
 // +: <t: ty>(t, t) -> t
-fn bin_op(op: BinOp) -> Ty {
+fn bin_op() -> Ty {
     let t = Ident::new("t");
     let t_ty = IdentKinded {
         ident: t.clone(),
