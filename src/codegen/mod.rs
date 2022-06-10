@@ -1327,7 +1327,7 @@ fn gen_expr(
             },
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
-                expr,
+                body,
                 !matches!(
                     ty.as_ref(),
                     desc::DataTy {

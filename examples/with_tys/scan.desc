@@ -34,7 +34,7 @@ fn downsweep<a: prv>(
     block: ThreadGrp<32>,
     arr_ref: &a uniq gpu.shared [i32; 64]
 ) -[gpu.block]-> () <>{
-    for_nat d in doubled_range(32) <'b>{
+    for_nat d in doubled_range(1, 32) <'b>{
         let tmp_down_view = group_mut::<64 / d, 'b, gpu.shared, 64, i32>(
             to_view_mut::<'b, gpu.shared, 64, i32 > (&'b uniq *arr_ref));
         parfor split_thread_grp::<d, 32, 1, 1> (block).0
