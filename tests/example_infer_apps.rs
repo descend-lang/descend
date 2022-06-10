@@ -5,15 +5,15 @@ extern crate descend;
 type Res = Result<(), descend::error::ErrorReported>;
 
 #[test]
-fn scale_vec() -> Result<(), descend::error::ErrorReported> {
+fn scale_vec() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/scale_vec.desc")?
     ))
 }
 
-#[test]
-fn bitonic_sort_split_blocks() -> Result<(), descend::error::ErrorReported> {
+#[ignore]
+fn bitonic_sort_split_blocks() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc")?
@@ -21,7 +21,7 @@ fn bitonic_sort_split_blocks() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[ignore]
-fn bitonic_sort_shrd_mem() -> Result<(), descend::error::ErrorReported> {
+fn bitonic_sort_shrd_mem() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/bitonic_sort/bitonic_sort_shrd_mem.desc")?
@@ -29,7 +29,7 @@ fn bitonic_sort_shrd_mem() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
-fn split_test() -> Result<(), descend::error::ErrorReported> {
+fn split_test() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/split_test.desc")?
@@ -37,7 +37,7 @@ fn split_test() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
-fn scan() -> Result<(), descend::error::ErrorReported> {
+fn scan() -> Res {
     eprintln!(
         "Breaks because there are name clashes between nats and type variables.\n \
     This is not the case for the fully typed version.\n\
@@ -50,7 +50,7 @@ fn scan() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
-fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
+fn reduce_shared_mem() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/shared_mem_red.desc")?
@@ -58,7 +58,7 @@ fn reduce_shared_mem() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
-fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
+fn tree_reduce() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/tree_reduce.desc")?
@@ -66,7 +66,7 @@ fn tree_reduce() -> Result<(), descend::error::ErrorReported> {
 }
 
 #[test]
-fn vector_add() -> Result<(), descend::error::ErrorReported> {
+fn vector_add() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/vec_add.desc")?
@@ -75,7 +75,7 @@ fn vector_add() -> Result<(), descend::error::ErrorReported> {
 
 #[ignore]
 #[test]
-fn warp_reduce() -> Result<(), descend::error::ErrorReported> {
+fn warp_reduce() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/warp_reduce.desc")?
@@ -84,12 +84,12 @@ fn warp_reduce() -> Result<(), descend::error::ErrorReported> {
 
 #[ignore]
 #[test]
-fn bfs() -> Result<(), descend::error::ErrorReported> {
+fn bfs() -> Res {
     Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
 }
 
 #[test]
-fn computed_indexing() -> Result<(), descend::error::ErrorReported> {
+fn computed_indexing() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/computed_indexing.desc")?
