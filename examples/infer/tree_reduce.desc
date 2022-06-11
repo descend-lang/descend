@@ -13,11 +13,16 @@ fn reduce<n: nat, a: prv, b: prv>(
             parfor block in grid with ib from block_group {
                 for_nat k in halved_range(512) {
                     let split_ib = (split uniq 2*k ib).0;
-                    let (active_half0, active_half1) = split uniq k split_ib;
+                    let (active_half0, active_half1) = &uniq split_ib;
 
-                    parfor _ in split_thread_grp::<k, 1024, 1, 1>(block).0
-                    with fst_half, snd_half from active_half0, active_half1 {
-                        *fst_half = *fst_half + *snd_half
+                    par_branch split_thread_grp::<k>(block) {
+                        active_threads => {
+                            parfor _ in active_threads
+                            with fst_half, snd_half from active_half0, active_half1 {
+                                *fst_half = *fst_half + *snd_half
+                            }
+                        },
+                        inactive_threads => { () }
                     }
                 }
             }

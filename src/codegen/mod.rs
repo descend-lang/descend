@@ -1019,7 +1019,9 @@ fn gen_par_for(
                     args: vec![],
                 })),
             ),
-            desc::ThreadHierchyTy::Thread => panic!("This should never happen."),
+            desc::ThreadHierchyTy::SplitGrp(_, _) | desc::ThreadHierchyTy::Thread => {
+                panic!("This should never happen.")
+            }
         },
         _ => panic!("Not a parallel collection type."),
     };
