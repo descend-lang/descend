@@ -32,26 +32,22 @@ fn inplace_vector_add(
             let flags = input.1;
             let aggs = input.2;
             let prefixs = input.3;
-            let view_a = group_mut::<1024>(to_view_mut(a_array));
+            let view_a = group_mut::<2048>(to_view_mut(a_array));
             decl {
                 let mut tmp: [i32; 1024 * 2] @ gpu.shared
             } parfor block in grid with a_group from view_a {
+                // Copy into shared
                 {
-                    <'e>{
-                        let tmp_view = to_view_mut::<'e, gpu.shared, 1024, i32 >(& uniq tmp);
-                        parfor thread in block with a, b from a_group, tmp_view {
-                            *b = *a
-                        }
+                    let mut tmp_view = group_mut::<2>(to_view_mut(& uniq tmp));
+                    let foo = group_mut::<2>(a_group);
+                    parfor thread in block with t_tmp, f from tmp_view, foo {
+                        t_tmp[0] = f[0];
+                        t_tmp[1] = f[1]
                     }
                 }
+
+
             }
-            // let view_a = group_mut::<1024>(to_view_mut(a_array));
-            // let view_b = group_mut::<64>(to_view_mut(aggs))
-            //parfor block in grid with a_group, b_group from view_a, view_b {
-            //    parfor thread in block with a, b from a_group, b_group {
-            //        *a = *a + *b
-            //    }
-            //}
         }
     )
     // copy_to_host(&shrd a_array, ha_array)
