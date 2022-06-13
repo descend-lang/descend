@@ -1,0 +1,45 @@
+fn inplace_vector_add(
+    // TODO global fun params into same frame as top level declaration in body
+    ha_array: &uniq cpu.mem [i32; 64 * 1024 * 2],
+    hflag_array: &uniq cpu.mem [i32; 64],
+    hagg_array: &uniq cpu.mem [i32; 64],
+    hprefix_array: &uniq cpu.mem [i32; 64]
+) -[cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
+    let mut flags_array = gpu_alloc_copy(&uniq gpu, &shrd *hflag_array);
+    let mut aggs_array = gpu_alloc_copy(&uniq gpu, &shrd *hagg_array);
+    let mut prefixs_array = gpu_alloc_copy(&uniq gpu, &shrd *hprefix_array);
+    exec::<64, 1024>(
+        &uniq gpu,
+        // FIXME nothing stops me from passing the complete @-value via a move here
+        (
+            &uniq a_array, 
+            &uniq flags_array,
+            &uniq aggs_array,
+            &uniq prefixs_array
+        ),
+        | grid: BlockGrp<64, ThreadGrp<1024>>,
+          input: (
+              &uniq gpu.global [i32; 64 * 1024 * 2],
+              &uniq gpu.global [i32; 64],
+              &uniq gpu.global [i32; 64],
+              &uniq gpu.global [i32; 64]
+          )
+        | -[gpu.grid]-> () {
+            let a_array = input.0;
+            let flags = input.1;
+            let aggs = input.2;
+            let prefixs = input.3
+            // let view_a = group_mut::<1024>(to_view_mut(a_array));
+            // let view_b = group_mut::<64>(to_view_mut(aggs))
+            //parfor block in grid with a_group, b_group from view_a, view_b {
+            //    parfor thread in block with a, b from a_group, b_group {
+            //        *a = *a + *b
+            //    }
+            //}
+        }
+    )
+    // copy_to_host(&shrd a_array, ha_array)
+}
