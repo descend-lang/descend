@@ -1019,7 +1019,9 @@ fn gen_par_for(
                     args: vec![],
                 })),
             ),
-            desc::ThreadHierchyTy::Thread => panic!("This should never happen."),
+            desc::ThreadHierchyTy::SplitGrp(_, _) | desc::ThreadHierchyTy::Thread => {
+                panic!("This should never happen.")
+            }
         },
         _ => panic!("Not a parallel collection type."),
     };
@@ -2567,7 +2569,18 @@ impl ShapeExpr {
                 }
             }
             desc::ExprKind::Split(_, _, _, s, shape) => {
-                ShapeExpr::create_split_at_shape(s, shape.as_ref(), shape_ctx)
+                if let desc::PlaceExpr {
+                    pl_expr: desc::PlaceExprKind::Deref(shape),
+                    ..
+                } = shape.as_ref()
+                {
+                    ShapeExpr::create_split_at_shape(s, shape.as_ref(), shape_ctx)
+                } else {
+                    panic!(
+                        "An error pointing out that only a value must be split by reborrowing \
+                        should have been thrown before."
+                    )
+                }
             }
             desc::ExprKind::PlaceExpr(pl_expr) => {
                 ShapeExpr::create_pl_expr_shape(pl_expr, shape_ctx)

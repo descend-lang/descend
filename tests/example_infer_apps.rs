@@ -29,14 +29,6 @@ fn bitonic_sort_shrd_mem() -> Res {
 }
 
 #[test]
-fn split_test() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/split_test.desc")?
-    ))
-}
-
-#[test]
 fn scan() -> Res {
     eprintln!(
         "Breaks because there are name clashes between nats and type variables.\n \
@@ -53,7 +45,7 @@ fn scan() -> Res {
 fn reduce_shared_mem() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/shared_mem_red.desc")?
+        descend::compile("examples/infer/reduce_shared_mem.desc")?
     ))
 }
 

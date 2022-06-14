@@ -361,6 +361,14 @@ peg::parser! {
            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
+            "par_branch" __ par_collec:expression() _ "{" _
+                branch:(branch_ident:ident() _ "=>" _
+                    branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
+            "}" {
+                Expr::new(ExprKind::ParBranch(Box::new(par_collec),
+                    branch.iter().map(|(i, _)| i.clone()).collect(),
+                    branch.iter().map(|(_, b)| b.clone()).collect()))
+            }
             decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
             "parfor" __ par_ident:maybe_ident() __ "in" __ parall_collec:expression() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
@@ -613,7 +621,7 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
+                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
                 / "Block" / "Warp" / "Thread" / "with")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )

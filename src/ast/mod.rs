@@ -811,6 +811,7 @@ impl Ty {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ThreadHierchyTy {
+    SplitGrp(Box<ThreadHierchyTy>, Nat),
     // BlockGrp(gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z)
     BlockGrp(Nat, Nat, Nat, Nat, Nat, Nat),
     // ThreadGrp(blockDim.x, blockDim.y, blockDim.z)
@@ -824,6 +825,7 @@ impl fmt::Display for ThreadHierchyTy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ThreadHierchyTy::*;
         match self {
+            SplitGrp(th, n) => write!(f, "Split<{},{}>", th, n),
             BlockGrp(n1, n2, n3, m1, m2, m3) => write!(
                 f,
                 "BlockGrp<{}, {}, {}, ThreadGrp<{}, {}, {}>>",
@@ -841,6 +843,10 @@ impl ThreadHierchyTy {
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use ThreadHierchyTy::*;
         match self {
+            SplitGrp(th, n) => SplitGrp(
+                Box::new(th.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            ),
             BlockGrp(n1, n2, n3, m1, m2, m3) => BlockGrp(
                 n1.subst_ident_kinded(ident_kinded, with),
                 n2.subst_ident_kinded(ident_kinded, with),

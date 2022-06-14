@@ -7,6 +7,7 @@ mod subty;
 mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
+use crate::ast::DataTyKind::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
@@ -302,56 +303,56 @@ impl TyChecker {
 
         let (ty_ctx_prv1, prv1) = TyChecker::infer_prv(ty_ctx, r1);
         let (ty_ctx_prv1_prv2, prv2) = TyChecker::infer_prv(ty_ctx_prv1, r2);
-
-        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx_prv1_prv2, exec, own, view)?;
-        let split_ty = if let TyKind::Data(DataTy {
-            dty: DataTyKind::Ref(_, _, m, arr_view_ty),
-            ..
-        }) = &view.ty.as_ref().unwrap().ty
-        {
-            if let DataTy {
-                dty: DataTyKind::ArrayShape(elem_dty, n),
-                ..
-            } = arr_view_ty.as_ref()
-            {
-                if s > n {
-                    return Err(TyError::String(
-                        "Trying to access array out-of-bounds.".to_string(),
-                    ));
-                }
-                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
-                    DataTy::new(DataTyKind::Ref(
-                        Provenance::Value(prv1.clone()),
-                        own,
-                        m.clone(),
-                        Box::new(DataTy::new(DataTyKind::ArrayShape(
-                            elem_dty.clone(),
-                            s.clone(),
-                        ))),
-                    )),
-                    DataTy::new(DataTyKind::Ref(
-                        Provenance::Value(prv2.clone()),
-                        own,
-                        m.clone(),
-                        Box::new(DataTy::new(DataTyKind::ArrayShape(
-                            elem_dty.clone(),
-                            Nat::BinOp(BinOpNat::Sub, Box::new(n.clone()), Box::new(s.clone())),
-                        ))),
-                    )),
-                ]))))
-            } else {
-                return Err(TyError::UnexpectedType);
-            }
-        } else {
-            return Err(TyError::UnexpectedType);
-        };
-
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv1)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv1));
         }
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv2)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv2));
         }
+        let mems =
+            self.place_expr_ty_mems_under_exec_own(kind_ctx, &ty_ctx_prv1_prv2, exec, own, view)?;
+
+        let split_ty = if let TyKind::Data(DataTy {
+            dty: DataTyKind::ArrayShape(elem_dty, n),
+            ..
+        }) = &view.ty.as_ref().unwrap().ty
+        {
+            if s > n {
+                return Err(TyError::String(
+                    "Trying to access array out-of-bounds.".to_string(),
+                ));
+            }
+
+            let mem = if let Some(mem) = mems.last() {
+                mem
+            } else {
+                panic!("An array view must always reside in memory.")
+            };
+
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
+                DataTy::new(DataTyKind::Ref(
+                    Provenance::Value(prv1.clone()),
+                    own,
+                    mem.clone(),
+                    Box::new(DataTy::new(DataTyKind::ArrayShape(
+                        elem_dty.clone(),
+                        s.clone(),
+                    ))),
+                )),
+                DataTy::new(DataTyKind::Ref(
+                    Provenance::Value(prv2.clone()),
+                    own,
+                    mem.clone(),
+                    Box::new(DataTy::new(DataTyKind::ArrayShape(
+                        elem_dty.clone(),
+                        Nat::BinOp(BinOpNat::Sub, Box::new(n.clone()), Box::new(s.clone())),
+                    ))),
+                )),
+            ]))))
+        } else {
+            return Err(TyError::UnexpectedType);
+        };
+
         let loans = borrow_check::ownership_safe(
             self,
             kind_ctx,
@@ -359,7 +360,7 @@ impl TyChecker {
             exec,
             &[],
             own,
-            &PlaceExpr::new(PlaceExprKind::Deref(Box::new(view.clone()))),
+            &view.clone(),
         )
         .map_err(|err| TyError::ConflictingBorrow(Box::new(view.clone()), Ownership::Uniq, err))?;
         let (fst_loans, snd_loans) = split_loans(loans);
@@ -473,7 +474,7 @@ impl TyChecker {
         let collec_ty_ctx_with_ident =
             collec_ty_ctx
                 .clone()
-                .append_frame(vec![internal::FrameEntry::Var(IdentTyped::new(
+                .append_frame(vec![FrameEntry::Var(IdentTyped::new(
                     ident.clone(),
                     Ty::new(TyKind::Data(DataTy::new(ident_dty))),
                     Mutability::Const,
@@ -683,19 +684,115 @@ impl TyChecker {
         branch_bodies: &mut [Expr],
     ) -> TyResult<(TyCtx, Ty)> {
         let parall_collec_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, parall_collec)?;
-        match &parall_collec.ty.as_ref().unwrap().ty {
-            TyKind::Data(DataTy {
-                // TODO implement
-                //dty: DataTyKind::SplitBlockGrp,
-                ..
-            }) => {
-                unimplemented!()
+        if let TyKind::Data(DataTy {
+            dty: DataTyKind::ThreadHierchy(th),
+            ..
+        }) = &parall_collec.ty.as_ref().unwrap().ty
+        {
+            if let ThreadHierchyTy::SplitGrp(th, n) = th.as_ref() {
+                if branch_idents.len() != branch_bodies.len() {
+                    panic!(
+                        "Amount of branch identifiers and amount of branches do not match:\
+                            {} and {}",
+                        branch_idents.len(),
+                        branch_bodies.len()
+                    );
+                }
+                if branch_idents.len() != 2 {
+                    return Err(TyError::String(format!(
+                        "Expected 2 parallel branches but found {}",
+                        branch_idents.len()
+                    )));
+                }
+                let idents_typed = Self::parbranch_parall_ident_dty_from_split(
+                    branch_idents,
+                    th.as_ref().clone(),
+                    n.clone(),
+                )?;
+                let mut parbranch_ctx = parall_collec_ty_ctx.clone();
+                for (it, bb) in idents_typed.into_iter().zip(branch_bodies) {
+                    let branch_ctx = parbranch_ctx.append_frame(vec![]).append_ident_typed(it);
+                    let branch_res_ctx = self.ty_check_expr(kind_ctx, branch_ctx, exec, bb)?;
+                    if bb.ty.as_ref().unwrap().ty
+                        != TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))
+                    {
+                        return Err(TyError::String(
+                            "A par_branch branch must not return a value.".to_string(),
+                        ));
+                    }
+                    parbranch_ctx = branch_res_ctx.drop_last_frame();
+                }
+                Ok((
+                    parbranch_ctx,
+                    Ty::new(TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))),
+                ))
+            } else {
+                Err(TyError::String(format!(
+                    "Expected a split parallel resource but found a non split."
+                )))
             }
-            _ => Err(TyError::String(format!(
+        } else {
+            Err(TyError::String(format!(
                 "Unexpected type. Expected Split Parallel Collection but found: {:?}",
                 &parall_collec.ty.as_ref().unwrap().ty
-            ))),
+            )))
         }
+    }
+
+    fn parbranch_parall_ident_dty_from_split(
+        idents: &[Ident],
+        orig_th: ThreadHierchyTy,
+        pos: Nat,
+    ) -> TyResult<Vec<IdentTyped>> {
+        let (lth, rth) = match orig_th {
+            ThreadHierchyTy::BlockGrp(m1, m2, m3, n1, n2, n3) => (
+                ThreadHierchyTy::BlockGrp(
+                    pos.clone(),
+                    m2.clone(),
+                    m3.clone(),
+                    n1.clone(),
+                    n2.clone(),
+                    n3.clone(),
+                ),
+                ThreadHierchyTy::BlockGrp(
+                    Nat::BinOp(BinOpNat::Sub, Box::new(m1), Box::new(pos)),
+                    m2,
+                    m3,
+                    n1,
+                    n2,
+                    n3,
+                ),
+            ),
+            ThreadHierchyTy::ThreadGrp(n1, n2, n3) => (
+                ThreadHierchyTy::ThreadGrp(pos.clone(), n2.clone(), n3.clone()),
+                ThreadHierchyTy::ThreadGrp(
+                    Nat::BinOp(BinOpNat::Sub, Box::new(n1), Box::new(pos)),
+                    n2,
+                    n3,
+                ),
+            ),
+            ThreadHierchyTy::SplitGrp(_, _) => {
+                return Err(TyError::String(
+                    "Nested split parallel resources are not yet supported.".to_string(),
+                ))
+            }
+            _ => panic!("A non-splittable parallel resource should not exist here"),
+        };
+        let li = IdentTyped::new(
+            idents[0].clone(),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(lth),
+            )))),
+            Mutability::Const,
+        );
+        let ri = IdentTyped::new(
+            idents[1].clone(),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+                Box::new(rth),
+            )))),
+            Mutability::Const,
+        );
+        Ok(vec![li, ri])
     }
 
     // TODO split up groupings, i.e., deal with TupleViews and require enough functions.
@@ -711,18 +808,23 @@ impl TyChecker {
         input_exprs: &mut [Expr],
         body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        fn to_exec_and_size(parall_collec: &Expr) -> Exec {
+        fn to_exec(parall_collec: &Expr) -> TyResult<Exec> {
             match &parall_collec.ty.as_ref().unwrap().ty {
                 TyKind::Data(DataTy {
                     dty: DataTyKind::ThreadHierchy(th_hy),
                     ..
                 }) => match th_hy.as_ref() {
-                    ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => Exec::GpuGrid,
-                    ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
-                    ThreadHierchyTy::WarpGrp(_) => Exec::GpuBlock,
-                    ThreadHierchyTy::Warp => Exec::GpuWarp,
+                    ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => Ok(Exec::GpuGrid),
+                    ThreadHierchyTy::ThreadGrp(_, _, _) => Ok(Exec::GpuBlock),
+                    ThreadHierchyTy::WarpGrp(_) => Ok(Exec::GpuBlock),
+                    ThreadHierchyTy::Warp => Ok(Exec::GpuWarp),
                     // TODO error instead?
-                    ThreadHierchyTy::Thread => Exec::GpuThread,
+                    ThreadHierchyTy::Thread => Ok(Exec::GpuThread),
+                    ThreadHierchyTy::SplitGrp(_, _) => Err(TyError::String(
+                        "A split parallel execution resource is not allowed as an argument for\
+                            parfor."
+                            .to_string(),
+                    )),
                 },
                 _ => panic!("Expected a parallel collection: Grid or Block."),
             }
@@ -749,7 +851,7 @@ impl TyChecker {
                         })
                     ) {
                         decl_ty_ctx = decl_ty_ctx.set_place_ty(
-                            &internal::Place {
+                            &Place {
                                 ident: ident.clone(),
                                 path: vec![],
                             },
@@ -764,7 +866,7 @@ impl TyChecker {
 
         let parall_collec_ty_ctx =
             self.ty_check_expr(kind_ctx, decl_ty_ctx, exec, parall_collec)?;
-        let allowed_exec = to_exec_and_size(parall_collec);
+        let allowed_exec = to_exec(parall_collec)?;
         if allowed_exec != exec {
             return Err(TyError::String(format!(
                 "Trying to run a parallel for-loop over {:?} inside of {:?}",
@@ -778,7 +880,7 @@ impl TyChecker {
 
         let input_idents_typed = TyChecker::type_input_idents(input_idents, input_exprs)?;
         let parall_ident_typed =
-            TyChecker::parall_ident_ty_from_parall_collec(parall_ident, parall_collec)?;
+            TyChecker::parfor_parall_ident_ty_from_parall_collec(parall_ident, parall_collec)?;
         let body_exec = TyChecker::exec_for_parall_collec(&parall_ident_typed)?;
         let mut frm_ty = input_idents_typed
             .into_iter()
@@ -842,7 +944,7 @@ impl TyChecker {
             .collect::<TyResult<Vec<_>>>()
     }
 
-    fn parall_ident_ty_from_parall_collec(
+    fn parfor_parall_ident_ty_from_parall_collec(
         parall_ident: &Option<Ident>,
         parall_collec: &Expr,
     ) -> TyResult<Option<IdentTyped>> {
@@ -861,9 +963,15 @@ impl TyChecker {
                 ThreadHierchyTy::Warp | ThreadHierchyTy::ThreadGrp(_, _, _) => {
                     ThreadHierchyTy::Thread
                 }
+                ThreadHierchyTy::SplitGrp(_, _) => {
+                    return Err(TyError::String(
+                        "Expected a parallel collection but instead found a split of one."
+                            .to_string(),
+                    ))
+                }
                 ThreadHierchyTy::Thread => {
                     return Err(TyError::String(
-                        "Thread is not a collection parallel execution resources.".to_string(),
+                        "Thread is not a parallel execution resources.".to_string(),
                     ))
                 }
             },
@@ -894,12 +1002,19 @@ impl TyChecker {
             match th_hierchy.as_ref() {
                 ThreadHierchyTy::WarpGrp(_) | ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
                 ThreadHierchyTy::Warp => Exec::GpuWarp,
+                ThreadHierchyTy::Thread => Exec::GpuThread,
                 ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => {
                     return Err(TyError::String(
                         "Cannot parallelize over multiple Grids.".to_string(),
                     ))
                 }
-                ThreadHierchyTy::Thread => Exec::GpuThread,
+                ThreadHierchyTy::SplitGrp(_, _) => {
+                    return Err(TyError::String(
+                        "Cannot parallelise over multiple parallel execution\
+                        resources at the same time."
+                            .to_string(),
+                    ));
+                }
             }
         } else {
             panic!(

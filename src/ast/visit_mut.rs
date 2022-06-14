@@ -80,6 +80,10 @@ pub fn walk_prv<V: VisitMut>(visitor: &mut V, prv: &mut Provenance) {
 
 pub fn walk_th_hierchy<V: VisitMut>(visitor: &mut V, th_hierchy: &mut ThreadHierchyTy) {
     match th_hierchy {
+        ThreadHierchyTy::SplitGrp(th, n) => {
+            visitor.visit_th_hierchy(th);
+            visitor.visit_nat(n);
+        }
         ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3) => {
             visitor.visit_nat(n1);
             visitor.visit_nat(n2);
