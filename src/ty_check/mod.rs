@@ -303,56 +303,56 @@ impl TyChecker {
 
         let (ty_ctx_prv1, prv1) = TyChecker::infer_prv(ty_ctx, r1);
         let (ty_ctx_prv1_prv2, prv2) = TyChecker::infer_prv(ty_ctx_prv1, r2);
-
-        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx_prv1_prv2, exec, own, view)?;
-        let split_ty = if let TyKind::Data(DataTy {
-            dty: DataTyKind::Ref(_, _, m, arr_view_ty),
-            ..
-        }) = &view.ty.as_ref().unwrap().ty
-        {
-            if let DataTy {
-                dty: DataTyKind::ArrayShape(elem_dty, n),
-                ..
-            } = arr_view_ty.as_ref()
-            {
-                if s > n {
-                    return Err(TyError::String(
-                        "Trying to access array out-of-bounds.".to_string(),
-                    ));
-                }
-                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
-                    DataTy::new(DataTyKind::Ref(
-                        Provenance::Value(prv1.clone()),
-                        own,
-                        m.clone(),
-                        Box::new(DataTy::new(DataTyKind::ArrayShape(
-                            elem_dty.clone(),
-                            s.clone(),
-                        ))),
-                    )),
-                    DataTy::new(DataTyKind::Ref(
-                        Provenance::Value(prv2.clone()),
-                        own,
-                        m.clone(),
-                        Box::new(DataTy::new(DataTyKind::ArrayShape(
-                            elem_dty.clone(),
-                            Nat::BinOp(BinOpNat::Sub, Box::new(n.clone()), Box::new(s.clone())),
-                        ))),
-                    )),
-                ]))))
-            } else {
-                return Err(TyError::UnexpectedType);
-            }
-        } else {
-            return Err(TyError::UnexpectedType);
-        };
-
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv1)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv1));
         }
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv2)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv2));
         }
+        let mems =
+            self.place_expr_ty_mems_under_exec_own(kind_ctx, &ty_ctx_prv1_prv2, exec, own, view)?;
+
+        let split_ty = if let TyKind::Data(DataTy {
+            dty: DataTyKind::ArrayShape(elem_dty, n),
+            ..
+        }) = &view.ty.as_ref().unwrap().ty
+        {
+            if s > n {
+                return Err(TyError::String(
+                    "Trying to access array out-of-bounds.".to_string(),
+                ));
+            }
+
+            let mem = if let Some(mem) = mems.last() {
+                mem
+            } else {
+                panic!("An array view must always reside in memory.")
+            };
+
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
+                DataTy::new(DataTyKind::Ref(
+                    Provenance::Value(prv1.clone()),
+                    own,
+                    mem.clone(),
+                    Box::new(DataTy::new(DataTyKind::ArrayShape(
+                        elem_dty.clone(),
+                        s.clone(),
+                    ))),
+                )),
+                DataTy::new(DataTyKind::Ref(
+                    Provenance::Value(prv2.clone()),
+                    own,
+                    mem.clone(),
+                    Box::new(DataTy::new(DataTyKind::ArrayShape(
+                        elem_dty.clone(),
+                        Nat::BinOp(BinOpNat::Sub, Box::new(n.clone()), Box::new(s.clone())),
+                    ))),
+                )),
+            ]))))
+        } else {
+            return Err(TyError::UnexpectedType);
+        };
+
         let loans = borrow_check::ownership_safe(
             self,
             kind_ctx,
@@ -360,7 +360,7 @@ impl TyChecker {
             exec,
             &[],
             own,
-            &PlaceExpr::new(PlaceExprKind::Deref(Box::new(view.clone()))),
+            &view.clone(),
         )
         .map_err(|err| TyError::ConflictingBorrow(Box::new(view.clone()), Ownership::Uniq, err))?;
         let (fst_loans, snd_loans) = split_loans(loans);

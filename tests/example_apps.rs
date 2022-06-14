@@ -5,14 +5,6 @@ extern crate descend;
 type Res = Result<(), descend::error::ErrorReported>;
 
 #[test]
-fn split_test() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/with_tys/split_test.desc")?
-    ))
-}
-
-#[test]
 fn scan() -> Res {
     Ok(println!(
         "{}",
@@ -24,7 +16,7 @@ fn scan() -> Res {
 fn reduce_shared_mem() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/with_tys/shared_mem_red.desc")?
+        descend::compile("examples/with_tys/reduce_shared_mem.desc")?
     ))
 }
 

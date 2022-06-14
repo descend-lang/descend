@@ -12,8 +12,8 @@ fn reduce<n: nat, a: prv, b: prv>(
             let block_group = group_mut::<1024>(to_view_mut(input.0));
             parfor block in grid with ib from block_group {
                 for_nat k in halved_range(512) {
-                    let split_ib = (split uniq 2*k ib).0;
-                    let (active_half0, active_half1) = &uniq split_ib;
+                    let split_ib = (split uniq 2*k (*ib)).0;
+                    let (active_half0, active_half1) = split uniq k (*split_ib);
 
                     par_branch split_thread_grp::<k>(block) {
                         active_threads => {
