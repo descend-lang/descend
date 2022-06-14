@@ -28,25 +28,53 @@ fn inplace_vector_add(
               &uniq gpu.global [i32; 64]
           )
         | -[gpu.grid]-> () {
+            // TODO deconstruction works
             let a_array = input.0;
             let flags = input.1;
             let aggs = input.2;
             let prefixs = input.3;
             let view_a = group_mut::<2048>(to_view_mut(a_array));
+            let view_aggs = to_view_mut(aggs);
             decl {
-                let mut tmp: [i32; 1024 * 2] @ gpu.shared
+                let mut tmp: [i32; 1024 * 2] @ gpu.shared;
+                let mut result_reduction: [i32; 1024] @ gpu.shared
             } parfor block in grid with a_group from view_a {
                 // Copy into shared
-                {
-                    let mut tmp_view = group_mut::<2>(to_view_mut(& uniq tmp));
-                    let foo = group_mut::<2>(a_group);
-                    parfor thread in block with t_tmp, f from tmp_view, foo {
-                        t_tmp[0] = f[0];
-                        t_tmp[1] = f[1]
-                    }
+                let mut tmp_view = group_mut::<2>(to_view_mut(& uniq tmp));
+                let mut result_view = to_view_mut(& uniq result_reduction);
+                let global = group_mut::<2>(a_group);
+                parfor thread in block
+                // missing coleasing
+                with t_tmp, f from &uniq *tmp_view, global {
+                    t_tmp[0] = f[0];
+                    t_tmp[1] = f[1]
+                };
+                // TODO not every reduction has a neutral element
+                parfor thread in block
+                with t_tmp, r from &uniq *tmp_view, &uniq *result_view {
+                    *r = t_tmp[0] + t_tmp[1]
+                };
+
+                // borrowed from tree_reduce
+                for_nat k in halved_range(512) {
+                   let split_ib = (split uniq 2*k result_view).0;
+                   let (active_half0, active_half1) = split uniq k split_ib;
+
+                   parfor thread in split_thread_grp::<k, 1024, 1, 1>(block).0
+                   with fst_half, snd_half from active_half0, active_half1 {
+                       // kompiliert nicht
+                       // *fst_half = *snd_half;
+                       fst_half[0] = fst_half[0] + snd_half[0]
+                   }
                 }
 
-
+                // // Is this possible without with block? I do not need it?
+                // parfor thread in split_thread_grp::<1, 1024, 1, 1>(block).0
+                // with r from result_view {
+                //     thread;
+                //     // Just because it is possible, it should not be done...
+                //     view_aggs[1]
+                // }
             }
         }
     )
