@@ -1,24 +1,24 @@
-fn inplace_vector_add(
+fn prefix_scan(
     // TODO global fun params into same frame as top level declaration in body
-    ha_array: &uniq cpu.mem [i32; 64 * 1024 * 2],
-    hflag_array: &uniq cpu.mem [i32; 64],
-    hagg_array: &uniq cpu.mem [i32; 64],
-    hprefix_array: &uniq cpu.mem [i32; 64]
+    cpu_i_array: &uniq cpu.mem [i32; 64 * 1024 * 2],
+    cpu_flag_array: &uniq cpu.mem [i32; 64],
+    cpu_agg_array: &uniq cpu.mem [i32; 64],
+    cpu_prefix_array: &uniq cpu.mem [i32; 64]
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
-    let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
-    let mut flags_array = gpu_alloc_copy(&uniq gpu, &shrd *hflag_array);
-    let mut aggs_array = gpu_alloc_copy(&uniq gpu, &shrd *hagg_array);
-    let mut prefixs_array = gpu_alloc_copy(&uniq gpu, &shrd *hprefix_array);
+    let mut g_i = gpu_alloc_copy(&uniq gpu, &shrd *cpu_i_array);
+    let mut g_flags = gpu_alloc_copy(&uniq gpu, &shrd *cpu_flag_array);
+    let mut g_aggs = gpu_alloc_copy(&uniq gpu, &shrd *cpu_agg_array);
+    let mut g_prefixs = gpu_alloc_copy(&uniq gpu, &shrd *cpu_prefix_array);
     exec::<64, 1024>(
         &uniq gpu,
         // FIXME nothing stops me from passing the complete @-value via a move here
         (
-            &uniq a_array, 
-            &uniq flags_array,
-            &uniq aggs_array,
-            &uniq prefixs_array
+            &uniq g_i, 
+            &uniq g_flags,
+            &uniq g_aggs,
+            &uniq g_prefixs
         ),
         | grid: BlockGrp<64, ThreadGrp<1024>>,
           input: (
@@ -29,27 +29,30 @@ fn inplace_vector_add(
           )
         | -[gpu.grid]-> () {
             // TODO deconstruction works
-            let a_array = input.0;
-            let flags = input.1;
-            let aggs = input.2;
-            let prefixs = input.3;
-            let view_a = group_mut::<2048>(to_view_mut(a_array));
-            let view_aggs = to_view_mut(aggs);
+            let gi_i = input.0;
+            let gi_flags = input.1;
+            let gi_aggs = input.2;
+            let gi_prefixs = input.3;
+            let view_a = group_mut::<2048>(to_view_mut(gi_i));
+            let view_aggs = to_view_mut(gi_aggs);
             decl {
                 let mut tmp: [i32; 1024 * 2] @ gpu.shared;
+                let mut tmp2: [i32; 1024 * 2] @ gpu.shared;
                 let mut result_reduction: [i32; 1024] @ gpu.shared
-            } parfor block in grid with a_group from view_a {
+            } parfor block in grid with a_group, agg from view_a, view_aggs {
                 // Copy into shared
                 let mut tmp_view = group_mut::<2>(to_view_mut(& uniq tmp));
+                let mut tmp_view_2 = group_mut::<2>(to_view_mut(& uniq tmp));
                 let mut result_view = to_view_mut(& uniq result_reduction);
                 let global = group_mut::<2>(a_group);
                 parfor thread in block
+                with t_tmp, t2_tmp, f from &uniq *tmp_view, &uniq *tmp_view_2, &uniq *global {
                 // missing coleasing
-                with t_tmp, f from &uniq *tmp_view, global {
                     t_tmp[0] = f[0];
-                    t_tmp[1] = f[1]
+                    t_tmp[1] = f[1];
+                    t2_tmp[0] = f[0];
+                    t2_tmp[1] = f[1]
                 };
-                // TODO not every reduction has a neutral element
                 parfor thread in block
                 with t_tmp, r from &uniq *tmp_view, &uniq *result_view {
                     *r = t_tmp[0] + t_tmp[1]
@@ -57,26 +60,74 @@ fn inplace_vector_add(
 
                 // borrowed from tree_reduce
                 for_nat k in halved_range(512) {
-                   let split_ib = (split uniq 2*k result_view).0;
-                   let (active_half0, active_half1) = split uniq k split_ib;
+                   let split_ib = (split uniq 2*k (*result_view)).0;
+                   let (active_half0, active_half1) = split uniq k (*split_ib);
 
                    parfor thread in split_thread_grp::<k, 1024, 1, 1>(block).0
                    with fst_half, snd_half from active_half0, active_half1 {
-                       // kompiliert nicht
-                       // *fst_half = *snd_half;
-                       fst_half[0] = fst_half[0] + snd_half[0]
+                       *fst_half = *fst_half + *snd_half
                    }
-                }
+                };
 
-                // // Is this possible without with block? I do not need it?
-                // parfor thread in split_thread_grp::<1, 1024, 1, 1>(block).0
-                // with r from result_view {
-                //     thread;
-                //     // Just because it is possible, it should not be done...
-                //     view_aggs[1]
-                // }
+                // Is this possible without with block? I do not need it?
+                parfor thread in split_thread_grp::<1>(block).0
+                with r from &uniq *result_view {
+                    // This feels wrong...
+                    *agg = *r
+                };
+
+                // TODO unsafe block
+                // Work for future me
+
+                upsweep(block, &uniq tmp);
+                let tmp_view2 = to_view_mut(&uniq tmp);
+                let tmp_last = (split uniq 2047 (*tmp_view2)).1;
+                parfor _ in split_thread_grp::<1>(block).0
+                with last from tmp_last
+                {
+                    *last = 0
+                };
+                downsweep(block, &uniq tmp);
+                parfor thread in block
+                with t_tmp, t2_tmp, f from &uniq *tmp_view, &uniq *tmp_view_2, global {
+                    f[0] = t2_tmp[0];
+                    f[1] = t2_tmp[1]
+                }
             }
         }
-    )
-    // copy_to_host(&shrd a_array, ha_array)
+    );
+    copy_to_host(&shrd g_i, cpu_i_array);
+    copy_to_host(&shrd g_flags, cpu_flag_array);
+    copy_to_host(&shrd g_aggs, cpu_agg_array);
+    copy_to_host(&shrd g_prefixs, cpu_prefix_array)
+}
+
+fn upsweep(
+    thread_grp: ThreadGrp<1024>,
+    arr_ref: &uniq gpu.shared [i32; 2048]
+) -[gpu.block]-> () <>{
+    for_nat d in halved_range(1024) <'a>{
+        let tmp_up_view = group_mut::<2048/d, 'a, gpu.shared, 2048, i32>(
+            to_view_mut(&uniq *arr_ref));
+        parfor _ in split_thread_grp::<d>(thread_grp).0
+        with arr from tmp_up_view
+        { arr[2048/d-1] = arr[2048/d-1] + arr[1024/d-1] }
+    }
+}
+
+fn downsweep(
+    block: ThreadGrp<1024>,
+    arr_ref: &uniq gpu.shared [i32; 2048]
+) -[gpu.block]-> () <>{
+    for_nat d in doubled_range(1, 1024) <'b>{
+        let tmp_down_view = group_mut::<2048 / d, 'b, gpu.shared, 2048, i32>(
+            to_view_mut::<'b, gpu.shared, 2048, i32 > (&'b uniq *arr_ref));
+        parfor _ in split_thread_grp::<d, 1024, 1, 1> (block).0
+        with arr from tmp_down_view
+        {
+            let t = arr[1024/d-1];
+            arr[1024/d-1] = arr[2048/d-1];
+            arr[2048/d-1] = arr[2048/d-1] + t
+        }
+    }
 }

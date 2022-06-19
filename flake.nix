@@ -20,6 +20,10 @@
           cudaPackages.cudatoolkit
           linuxPackages.nvidia_x11
         ];
+        rust-toolchain = pkgs.symlinkJoin {
+          name = "rust-toolchain";
+          paths = [pkgs.rustc pkgs.cargo pkgs.rustPlatform.rustcSrc];
+        };
         fhs = pkgs.buildFHSUserEnv {
           name = "cuda-env";
           targetPkgs = pkgs: with pkgs; [ 
@@ -41,7 +45,9 @@
             xorg.libXext xorg.libX11 xorg.libXv xorg.libXrandr zlib 
             ncurses5
             stdenv.cc
+            gdbgui
             binutils
+            rust-toolchain
           ] ;
           multiPkgs = pkgs: with pkgs; [ zlib ];
           runScript = "bash";
@@ -55,7 +61,7 @@
         in
         {
           nixpkgs.config.allowUnfree = true;
-          devShell = pkgs.mkShell
+          devShells.onlyRust = pkgs.mkShell
             {
               buildInputs = buildInputs;
               RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
@@ -63,7 +69,7 @@
                 export CUDA_PATH=${pkgs.cudatoolkit}
               '';
             };
-          devShells.fhsExec = pkgs.stdenv.mkDerivation {
+          devShell = pkgs.stdenv.mkDerivation {
             name = "cuda-env-shell";
             nativeBuildInputs = [fhs buildInputs];
             shellHook = "exec cuda-env";
