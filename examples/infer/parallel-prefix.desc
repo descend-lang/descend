@@ -1,3 +1,14 @@
+/*
+ * Naming stuff is hard:
+ * - cpu_    prefix is memory in the cpu
+ * - g_      prefix is global memory
+ * - gi_     prefix is global memory inside the exec
+ * - b_      prefix is for block memory
+ * - shared_ prefix is shared memory inside a block
+ * - view_   preifx(or suffix) is a view of the following
+ * - t_      prefix is inside a parfor per thread
+ */
+
 fn prefix_scan(
     // TODO global fun params into same frame as top level declaration in body
     cpu_i_array: &uniq cpu.mem [i32; 64 * 1024 * 2],
@@ -13,7 +24,6 @@ fn prefix_scan(
     let mut g_prefixs = gpu_alloc_copy(&uniq gpu, &shrd *cpu_prefix_array);
     exec::<64, 1024>(
         &uniq gpu,
-        // FIXME nothing stops me from passing the complete @-value via a move here
         (
             &uniq g_i, 
             &uniq g_flags,
@@ -33,7 +43,7 @@ fn prefix_scan(
             let gi_flags = input.1;
             let gi_aggs = input.2;
             let gi_prefixs = input.3;
-            let view_a = group_mut::<2048>(to_view_mut(gi_i));
+            let view_input = group_mut::<2048>(to_view_mut(gi_i));
             let view_aggs = to_view_mut(gi_aggs);
             let view_flags = to_view_mut(gi_flags);
             let view_prefix = to_view_mut(gi_prefixs);
@@ -43,16 +53,16 @@ fn prefix_scan(
                 let mut result_reduction: [i32; 1024] @ gpu.shared;
                 let mut exclusive_prefix: [i32; 1] @ gpu.shared
             } parfor block in grid 
-                with a_group, agg, flag, prefix from view_a, view_aggs, view_flags, view_prefix {
+                with b_input, b_agg, b_flag, b_prefix from view_input, view_aggs, view_flags, view_prefix {
                 // Copy into shared
                 let mut shared_input_view = group_mut::<2>(to_view_mut(& uniq shared_input));
                 let mut result_view = to_view_mut(& uniq result_reduction);
-                let global = group_mut::<2>(a_group);
+                let group_input = group_mut::<2>(b_input);
                 parfor thread in block
-                with t_shared_input, f from
-                    &uniq *shared_input_view, &uniq *global {
-                    t_shared_input[0] = f[0];
-                    t_shared_input[1] = f[1]
+                with t_shared_input, t_input from
+                    &uniq *shared_input_view, &uniq *group_input {
+                    t_shared_input[0] = t_input[0];
+                    t_shared_input[1] = t_input[1]
                 };
                 parfor thread in block
                 with t_shared_input, r from &uniq *shared_input_view, &uniq *result_view {
@@ -71,19 +81,19 @@ fn prefix_scan(
                 };
 
                 parfor thread in split_thread_grp::<1>(block).0
-                with r from &uniq *result_view {
-                    // This feels wrong...
-                    *agg = *r
+                // This feels wrong...
+                with t_r from &uniq *result_view {
+                    *b_agg = *t_r
                 };
                 // Cheesy Threadfence
+                // This feels wrong...
                 parfor thread in split_thread_grp::<1>(block).0
-                with r from &uniq *result_view {
-                    // This feels wrong...
-                    *flag = 1
+                with t_r from &uniq *result_view {
+                    *b_flag = 1
                 };
 
                 parfor thread in split_thread_grp::<1>(block).0
-                with r from &uniq *result_view {
+                with t_r from &uniq *result_view {
                     let unsafe_code_block_marker = 0
                 // unsafe code block
                 /* 
@@ -111,19 +121,18 @@ fn prefix_scan(
                             }
                         }
                       }
-                      __syncthreads();
                   }
                 */
                 };
                 // Is this possible without with block? I do not need it?
                 parfor thread in split_thread_grp::<1>(block).0
-                with r from &uniq *result_view {
-                    *prefix = *r
+                with t_r from &uniq *result_view {
+                    *b_prefix = *t_r
                 };
                 // Cheesy Threadfence
                 parfor thread in split_thread_grp::<1>(block).0
-                with r from &uniq *result_view {
-                    *flag = 2
+                with t_r from &uniq *result_view {
+                    *b_flag = 2
                 };
 
                 upsweep(block, &uniq shared_input);
@@ -136,9 +145,9 @@ fn prefix_scan(
                 };
                 downsweep(block, &uniq shared_input);
                 parfor thread in block
-                with t_tmp, f from &uniq *shared_input_view, global {
-                    f[0] = t_tmp[0] + exclusive_prefix[0];
-                    f[1] = t_tmp[1] + exclusive_prefix[0]
+                with t_tmp, t_input from &uniq *shared_input_view, group_input {
+                    t_input[0] = t_tmp[0] + exclusive_prefix[0];
+                    t_input[1] = t_tmp[1] + exclusive_prefix[0]
                 }
             }
         }
