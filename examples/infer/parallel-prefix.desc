@@ -35,27 +35,28 @@ fn prefix_scan(
             let gi_prefixs = input.3;
             let view_a = group_mut::<2048>(to_view_mut(gi_i));
             let view_aggs = to_view_mut(gi_aggs);
+            let view_flags = to_view_mut(gi_flags);
+            let view_prefix = to_view_mut(gi_prefixs);
             decl {
-                let mut tmp: [i32; 1024 * 2] @ gpu.shared;
+                let mut shared_input: [i32; 1024 * 2] @ gpu.shared;
                 let mut tmp2: [i32; 1024 * 2] @ gpu.shared;
-                let mut result_reduction: [i32; 1024] @ gpu.shared
-            } parfor block in grid with a_group, agg from view_a, view_aggs {
+                let mut result_reduction: [i32; 1024] @ gpu.shared;
+                let mut exclusive_prefix: [i32; 1] @ gpu.shared
+            } parfor block in grid 
+                with a_group, agg, flag, prefix from view_a, view_aggs, view_flags, view_prefix {
                 // Copy into shared
-                let mut tmp_view = group_mut::<2>(to_view_mut(& uniq tmp));
-                let mut tmp_view_2 = group_mut::<2>(to_view_mut(& uniq tmp));
+                let mut shared_input_view = group_mut::<2>(to_view_mut(& uniq shared_input));
                 let mut result_view = to_view_mut(& uniq result_reduction);
                 let global = group_mut::<2>(a_group);
                 parfor thread in block
-                with t_tmp, t2_tmp, f from &uniq *tmp_view, &uniq *tmp_view_2, &uniq *global {
-                // missing coleasing
-                    t_tmp[0] = f[0];
-                    t_tmp[1] = f[1];
-                    t2_tmp[0] = f[0];
-                    t2_tmp[1] = f[1]
+                with t_shared_input, f from
+                    &uniq *shared_input_view, &uniq *global {
+                    t_shared_input[0] = f[0];
+                    t_shared_input[1] = f[1]
                 };
                 parfor thread in block
-                with t_tmp, r from &uniq *tmp_view, &uniq *result_view {
-                    *r = t_tmp[0] + t_tmp[1]
+                with t_shared_input, r from &uniq *shared_input_view, &uniq *result_view {
+                    *r = t_shared_input[0] + t_shared_input[1]
                 };
 
                 // borrowed from tree_reduce
@@ -69,29 +70,75 @@ fn prefix_scan(
                    }
                 };
 
-                // Is this possible without with block? I do not need it?
                 parfor thread in split_thread_grp::<1>(block).0
                 with r from &uniq *result_view {
                     // This feels wrong...
                     *agg = *r
                 };
+                // Cheesy Threadfence
+                parfor thread in split_thread_grp::<1>(block).0
+                with r from &uniq *result_view {
+                    // This feels wrong...
+                    *flag = 1
+                };
 
-                // TODO unsafe block
-                // Work for future me
+                parfor thread in split_thread_grp::<1>(block).0
+                with r from &uniq *result_view {
+                    let unsafe_code_block_marker = 0
+                // unsafe code block
+                /* 
+                  inline_cuda {
+                      if (blockIdx.x > 0) {
+                        bool done = false;
+                        // WINDOW
+                        int end_index = blockIdx.x - 5;
+                        if (end_index < 0) end_index = 0;
+                        while (!done) {
+                            int i = blockIdx.x - 1;
+                            while (i >= 0) {
+                                int flag = gi_flags[i];
+                                // printf("flag: %d\n", flag);
+                                if (flag == 0) {
+                                    break;
+                                } else if (flag == 1) {
+                                    exclusive_prefix[0] = exclusive_prefix[0] + gi_aggs[i];
+                                } else if (flag == 2) {
+                                    exclusive_prefix[0] = gi_prefixs[i] + exclusive_prefix[0];
+                                    done = true;
+                                    break;
+                                }
+                                i--;
+                            }
+                        }
+                      }
+                      __syncthreads();
+                  }
+                */
+                };
+                // Is this possible without with block? I do not need it?
+                parfor thread in split_thread_grp::<1>(block).0
+                with r from &uniq *result_view {
+                    *prefix = *r
+                };
+                // Cheesy Threadfence
+                parfor thread in split_thread_grp::<1>(block).0
+                with r from &uniq *result_view {
+                    *flag = 2
+                };
 
-                upsweep(block, &uniq tmp);
-                let tmp_view2 = to_view_mut(&uniq tmp);
+                upsweep(block, &uniq shared_input);
+                let tmp_view2 = to_view_mut(&uniq shared_input);
                 let tmp_last = (split uniq 2047 (*tmp_view2)).1;
                 parfor _ in split_thread_grp::<1>(block).0
                 with last from tmp_last
                 {
                     *last = 0
                 };
-                downsweep(block, &uniq tmp);
+                downsweep(block, &uniq shared_input);
                 parfor thread in block
-                with t_tmp, t2_tmp, f from &uniq *tmp_view, &uniq *tmp_view_2, global {
-                    f[0] = t2_tmp[0];
-                    f[1] = t2_tmp[1]
+                with t_tmp, f from &uniq *shared_input_view, global {
+                    f[0] = t_tmp[0] + exclusive_prefix[0];
+                    f[1] = t_tmp[1] + exclusive_prefix[0]
                 }
             }
         }
