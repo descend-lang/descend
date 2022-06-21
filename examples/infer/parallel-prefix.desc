@@ -44,19 +44,21 @@ fn prefix_scan(
             let gi_aggs = input.2;
             let gi_prefixs = input.3;
             let view_input = group_mut::<2048>(to_view_mut(gi_i));
-            let view_aggs = to_view_mut(gi_aggs);
-            let view_flags = to_view_mut(gi_flags);
-            let view_prefix = to_view_mut(gi_prefixs);
+            let view_aggs = group_mut::<1>(to_view_mut(gi_aggs));
+            let view_flags = group_mut::<1>(to_view_mut(gi_flags));
+            // let view_flags = to_view_mut(gi_flags);
+            let view_prefix = group_mut::<1>(to_view_mut(gi_prefixs));
             decl {
                 let mut shared_input: [i32; 1024 * 2] @ gpu.shared;
-                let mut tmp2: [i32; 1024 * 2] @ gpu.shared;
+                // let mut tmp2: [i32; 1024 * 2] @ gpu.shared;
                 let mut result_reduction: [i32; 1024] @ gpu.shared;
+                // TODO check if this can be i32, not array
                 let mut exclusive_prefix: [i32; 1] @ gpu.shared
             } parfor block in grid 
                 with b_input, b_agg, b_flag, b_prefix from view_input, view_aggs, view_flags, view_prefix {
                 // Copy into shared
                 let mut shared_input_view = group_mut::<2>(to_view_mut(& uniq shared_input));
-                let mut result_view = to_view_mut(& uniq result_reduction);
+                let mut result_view = to_view_mut(&uniq result_reduction);
                 let group_input = group_mut::<2>(b_input);
                 parfor thread in block
                 with t_shared_input, t_input from
@@ -64,6 +66,7 @@ fn prefix_scan(
                     t_shared_input[0] = t_input[0];
                     t_shared_input[1] = t_input[1]
                 };
+
                 parfor thread in block
                 with t_shared_input, r from &uniq *shared_input_view, &uniq *result_view {
                     *r = t_shared_input[0] + t_shared_input[1]
@@ -82,14 +85,14 @@ fn prefix_scan(
 
                 parfor thread in split_thread_grp::<1>(block).0
                 // This feels wrong...
-                with t_r from &uniq *result_view {
-                    *b_agg = *t_r
+                with t_r, t_agg from &uniq *result_view, &uniq *b_agg {
+                    *t_agg = *t_r
                 };
                 // Cheesy Threadfence
                 // This feels wrong...
                 parfor thread in split_thread_grp::<1>(block).0
-                with t_r from &uniq *result_view {
-                    *b_flag = 1
+                with t_flag from &uniq *b_flag {
+                    *t_flag = 1
                 };
 
                 parfor thread in split_thread_grp::<1>(block).0
@@ -103,6 +106,7 @@ fn prefix_scan(
                         // WINDOW
                         int end_index = blockIdx.x - 5;
                         if (end_index < 0) end_index = 0;
+                        exclusive_prefix[0] = 0;
                         while (!done) {
                             int i = blockIdx.x - 1;
                             while (i >= 0) {
@@ -126,13 +130,13 @@ fn prefix_scan(
                 };
                 // Is this possible without with block? I do not need it?
                 parfor thread in split_thread_grp::<1>(block).0
-                with t_r from &uniq *result_view {
-                    *b_prefix = *t_r
+                with t_r, t_prefix from &uniq *result_view, &uniq *b_prefix  {
+                    *t_prefix = *t_r
                 };
                 // Cheesy Threadfence
                 parfor thread in split_thread_grp::<1>(block).0
-                with t_r from &uniq *result_view {
-                    *b_flag = 2
+                with t_flag from &uniq *b_flag {
+                    *t_flag = 2
                 };
 
                 upsweep(block, &uniq shared_input);
