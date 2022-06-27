@@ -89,6 +89,10 @@ fn ownership_safe_deref_raw(
     most_spec_pl: &internal::Place,
 ) -> OwnResult<HashSet<Loan>> {
     // TODO is anything here correct?
+    if !(&ty_checker.unsafeMode) {
+        panic!("Cannot deref raw pointer in safe descend!");
+    }
+
     let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));

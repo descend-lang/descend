@@ -1910,6 +1910,7 @@ impl TyChecker {
         exec: Exec,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
+
         // TODO refactor
         borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], Ownership::Shrd, pl_expr)
             .map_err(|err| {
@@ -2156,8 +2157,7 @@ impl TyChecker {
 
         match &ty.ty {
             TyKind::Data(dty) => {
-                let unsafeMode = self.unsafeMode;
-                if !unsafeMode && !dty.is_fully_alive() {
+                if !dty.is_fully_alive() {
                     return Err(TyError::String(format!(
                         "The value in this identifier `{}` has been moved out.",
                         ident
