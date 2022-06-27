@@ -239,6 +239,17 @@ fn gen_stmt(
             codegen_ctx.drop_scope();
             cu::Stmt::Block(Box::new(block_stmt))
         }
+        Unsafe(expr) => {
+            let block_stmt = gen_stmt(
+                expr,
+                return_value,
+                codegen_ctx,
+                comp_unit,
+                dev_fun,
+                idx_checks,
+            );
+            cu::Stmt::Unsafe(Box::new(block_stmt))
+        }
         // e1 ; e2
         Seq(s) => {
             let (last, leading) = s.split_last().unwrap();
@@ -1477,7 +1488,8 @@ fn gen_expr(
         | For(_, _, _)
         | ForNat(_, _, _)
         | ParBranch(_, _, _)
-        | ParForWith(_, _, _, _, _, _) => panic!(
+        | ParForWith(_, _, _, _, _, _) 
+        | Unsafe(_) => panic!(
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),

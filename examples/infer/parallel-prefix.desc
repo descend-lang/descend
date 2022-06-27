@@ -97,9 +97,51 @@ fn prefix_scan(
                     *t_flag = 1
                 };
 
+                let block_id_x = block_dim_x();
                 parfor thread in split_thread_grp::<1>(block).0
-                with t_exclusive_prefix from &uniq *view_exclusive_prefix {
-                let unsafe_code_block_marker = 0
+                with t_exclusive_prefix, t_flag, t_agg, t_prefix from &uniq *view_exclusive_prefix, &uniq *b_flag, &uniq *b_agg, &uniq *b_prefix {
+                    if block_id_x > 0 {
+                        let mut not_done = true;
+                        let mut endIndex = block_id_x - 5;
+                        if endIndex < 0 {
+                            endIndex = 0
+                        };
+                        // TODO implement !done
+                        while not_done {
+                            *t_exclusive_prefix = 0;
+                            let mut i = 1;
+                            let mut flag = 0;
+                            let mut agg = 0;
+                            let mut prefix = 0;
+                            let mut not_break_loop = true;
+                            while i <= 5 && block_id_x - i >= 0 && not_break_loop <'a> {
+                                let raw_ptr_flag = to_raw_ptr(&uniq *t_flag);
+                                let raw_ptr_flag_offset = offset_raw_ptr::<i32>(raw_ptr_flag, 0 - i);
+                                flag = *raw_ptr_flag_offset;
+
+                                let raw_ptr_agg = to_raw_ptr(&uniq *t_agg);
+                                let raw_ptr_agg_offset = offset_raw_ptr::<i32>(raw_ptr_agg, 0 - i);
+                                agg = *raw_ptr_agg_offset;
+
+                                let raw_ptr_prefix = to_raw_ptr(&uniq *t_prefix);
+                                let raw_ptr_prefix_offset = offset_raw_ptr::<i32>(raw_ptr_prefix, 0 - i);
+                                prefix = *raw_ptr_prefix_offset;
+
+                                if flag == 0 {
+                                    not_break_loop = false
+                                };
+                                if flag == 1 {
+                                    *t_exclusive_prefix = *t_exclusive_prefix + agg
+                                };
+                                if flag == 2 {
+                                    *t_exclusive_prefix = *t_exclusive_prefix + prefix;
+                                    not_break_loop = false;
+                                    not_done = false
+                                };
+                                i = i - 1
+                            }
+                        }
+                    }
                 // *t_exclusive_prefix = 0
                 // unsafe code block
                 /* 
@@ -157,11 +199,16 @@ fn prefix_scan(
                     *last = *t_last_bkp
                 };
                 downsweep(block, &uniq shared_input);
+                let mut exclusive_prefix_bkp = 0;
+                parfor thread in split_thread_grp::<1>(block).0
+                with t_r, t_prefix, t_exclusive_prefix from &uniq *result_view, &uniq *b_prefix, &shrd *view_exclusive_prefix  {
+                    exclusive_prefix_bkp = *t_exclusive_prefix
+                };
                 parfor thread in block
-                with t_tmp, t_input, t_exclusive_prefix from &uniq *shared_input_view, group_input, &uniq *view_exclusive_prefix   {
+                with t_tmp, t_input from &uniq *shared_input_view, group_input   {
                     // Workaround for *exclusive_prefix in 2 following lines
-                    t_input[0] = t_tmp[0] + *t_exclusive_prefix;
-                    t_input[1] = t_tmp[1] + *t_exclusive_prefix
+                    t_input[0] = t_tmp[0] + view_exclusive_prefix[0];
+                    t_input[1] = t_tmp[1] + view_exclusive_prefix[0]
                 }
             }
         }

@@ -453,10 +453,9 @@ constexpr descend::array<T, N> create_array(const T& value)
 {
     return detail::create_array(value, std::make_index_sequence<N>());
 }
-
 template <typename T>
 inline __device__ T* to_raw_ptr(T* ptr) {
-    return ptr - (blockIdx.x * blockDim.x + threadIdx.x);
+    return ptr;
 }
 
 template <typename T>
@@ -466,5 +465,13 @@ inline __host__ __device__ T* offset_raw_ptr(T* ptr, i32 off) {
 
 };
 
+namespace descend {
+    inline __device__ descend::tuple<descend::i32, descend::i32, descend::i32> block_dim() {
+       return thrust::make_tuple(blockDim.x, blockDim.y, blockDim.z);
+    }
+    inline __device__ descend::i32 block_dim_x() {
+       return blockIdx.x;
+    }
+}
 
 #endif //DESCEND_DESCEND_CUH

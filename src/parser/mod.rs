@@ -380,6 +380,9 @@ peg::parser! {
               body_expr:block() {
                 Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
             }
+            "unsafe" __ body:block() {
+                Expr::new(ExprKind::Unsafe(Box::new(body)))
+            }
             block:block() { block }
             expression: expr_helper() { expression }
         }
@@ -622,7 +625,7 @@ peg::parser! {
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
-                / "Block" / "Warp" / "Thread" / "with")
+                / "Block" / "Warp" / "Thread" / "with" / "unsafe")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.mem" / "gpu.global" / "gpu.shared"

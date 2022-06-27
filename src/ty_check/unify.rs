@@ -318,7 +318,7 @@ impl Constrainable for DataTy {
             }
             (DataTyKind::Range, DataTyKind::Range) => Ok(()), // FIXME/ REMOVE
             (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
-                unimplemented!()
+                Ok(())
             }
             (DataTyKind::Dead(_), _) => {
                 panic!()

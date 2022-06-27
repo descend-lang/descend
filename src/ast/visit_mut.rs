@@ -308,6 +308,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::Deref(expr) => visitor.visit_expr(expr),
         ExprKind::Range(_, _) => (),
+        ExprKind::Unsafe(expr) => visitor.visit_expr(expr),
     }
 }
 

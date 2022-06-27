@@ -145,6 +145,7 @@ impl std::fmt::Display for Stmt {
                 }
                 write!(f, ";")
             }
+            Unsafe(expr) => write!(f, "// unsafe\n {}", expr)
         }
     }
 }

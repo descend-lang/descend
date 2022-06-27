@@ -54,6 +54,7 @@ pub(super) enum Stmt {
     },
     Return(Option<Expr>),
     Label(String),
+    Unsafe(Box<Stmt>),
 }
 
 #[derive(Clone, Debug)]

@@ -17,6 +17,8 @@ pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
 pub static ATOMIC_SET: &str = "atomic_set";
 pub static SHUFFLE_XOR: &str = "shuffle_xor";
+pub static BLOCK_DIM: &str = "block_dim";
+pub static BLOCK_DIM_X: &str = "block_dim_x";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -53,6 +55,8 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
         (ATOMIC_SET, atomic_set_ty()),
         (SHUFFLE_XOR, shuffle_xor_ty()),
+        (BLOCK_DIM, block_dim_ty()),
+        (BLOCK_DIM_X, block_dim_x_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -79,9 +83,11 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
 //      &r uniq m t
 // ) -[gpu.thread]-> RawPtr<t>
 fn to_raw_ptr_ty() -> Ty {
+
     let r = Ident::new("r");
     let m = Ident::new("m");
     let t = Ident::new("t");
+
 
     let r_prv = IdentKinded {
         ident: r.clone(),
@@ -93,7 +99,7 @@ fn to_raw_ptr_ty() -> Ty {
     };
     let t_ty = IdentKinded {
         ident: t.clone(),
-        kind: Kind::Ty,
+        kind: Kind::DataTy,
     };
 
     Ty::new(TyKind::Fn(
@@ -119,7 +125,7 @@ fn offset_raw_ptr_ty() -> Ty {
     let t = Ident::new("t");
     let t_ty = IdentKinded {
         ident: t.clone(),
-        kind: Kind::Ty,
+        kind: Kind::DataTy,
     };
 
     Ty::new(TyKind::Fn(
@@ -188,6 +194,32 @@ fn shuffle_xor_ty() -> Ty {
         ],
         Exec::GpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(d))))),
+    ))
+}
+
+fn block_dim_ty() -> Ty {
+    Ty::new(TyKind::Fn(
+        vec![],
+        vec![],
+        Exec::GpuBlock,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(
+            vec![
+            DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+            DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+            DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+            ],
+        ))))),
+    ))
+}
+
+fn block_dim_x_ty() -> Ty {
+    Ty::new(TyKind::Fn(
+        vec![],
+        vec![],
+        Exec::GpuBlock,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32
+        ))))),
     ))
 }
 

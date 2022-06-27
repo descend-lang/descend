@@ -321,6 +321,7 @@ pub enum ExprKind {
     Deref(Box<Expr>),
     // Index into an array; ONLY for codegen
     Idx(Box<Expr>, Nat),
+    Unsafe(Box<Expr>),
 }
 
 #[span_derive(PartialEq, Eq, Hash)]

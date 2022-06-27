@@ -16,6 +16,7 @@ use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
 use std::ops::Deref;
+use crate::ty_check::unify::substitute;
 
 type TyResult<T> = Result<T, TyError>;
 
@@ -33,6 +34,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
 
 struct TyChecker {
     gl_ctx: GlobalCtx,
+    unsafeMode: bool,
 }
 
 impl TyChecker {
@@ -40,7 +42,7 @@ impl TyChecker {
         let gl_ctx = GlobalCtx::new()
             .append_from_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
-        TyChecker { gl_ctx }
+        TyChecker { gl_ctx, unsafeMode: false }
     }
 
     fn ty_check(&mut self, compil_unit: &mut CompilUnit) -> TyResult<()> {
@@ -224,6 +226,7 @@ impl TyChecker {
                 "Dereferencing a non place expression is not a valid Descend \
         program and only exists for codegen."
             ),
+            ExprKind::Unsafe(body) => self.ty_check_unsafe(kind_ctx, ty_ctx, exec, body)?,
         };
 
         // TODO reintroduce!!!!
@@ -671,6 +674,25 @@ impl TyChecker {
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::Unit,
             )))),
+        ))
+    }
+
+    fn ty_check_unsafe(
+        &mut self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        expr: &mut Expr,
+    ) -> TyResult<(TyCtx, Ty)> {
+        self.unsafeMode = true;
+        let case_true_ty_ctx =
+            self.ty_check_expr(kind_ctx, ty_ctx.clone(), exec, expr)?;
+        self.unsafeMode = false;
+        Ok((
+           case_true_ty_ctx,
+           Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+               ScalarTy::Unit,
+           )))),
         ))
     }
 
@@ -2134,7 +2156,8 @@ impl TyChecker {
 
         match &ty.ty {
             TyKind::Data(dty) => {
-                if !dty.is_fully_alive() {
+                let unsafeMode = self.unsafeMode;
+                if !unsafeMode && !dty.is_fully_alive() {
                     return Err(TyError::String(format!(
                         "The value in this identifier `{}` has been moved out.",
                         ident
