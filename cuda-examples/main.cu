@@ -1,12 +1,13 @@
 #include "output.cu"
+#include "params.cuh"
 
     
 int main() {
-  size_t items_per_thread =  2;
-  size_t size_block = 1024;
-  size_t items_per_block = items_per_thread * size_block;
-  size_t size_grid = 64;
-  size_t items_per_grid = items_per_block * size_grid;
+  const size_t items_per_thread = ITEMS_PER_THREAD;
+  const size_t size_block = THREAD_PER_BLOCKS;
+  const size_t items_per_block = items_per_thread * size_block;
+  const size_t size_grid = BLOCKS_PER_GRID;
+  const size_t items_per_grid = items_per_block * size_grid;
   int* ha_array = (int *) malloc(sizeof(int) * items_per_grid);
   int* flags = (int *) malloc(sizeof(int) * size_grid);
   int* aggs = (int *) malloc(sizeof(int) * size_grid);
@@ -23,15 +24,17 @@ int main() {
     gold[i] += gold[i-1];
   }
 
-  for (int i = 0; i < 64; i++) {
+  for (int i = 0; i < size_grid; i++) {
     flags[i] = 0;
   }
 
-  prefix_scan(ha_array, flags, aggs, prefixs);
+  prefix_scan<size_grid, size_block, items_per_thread>(ha_array, flags, aggs, prefixs);
+  //prefix_scan(ha_array, flags, aggs, prefixs);
 
-  for (int i=0; i < 2100; i++) {
+  for (int i=0; i < items_per_grid; i++) {
     if (gold[i] != ha_array[i]) {
       printf("bad value at %d, gold: %d, actual value %d\n", i, gold[i], ha_array[i]);
+      return -1;
     }
   }
 
@@ -40,5 +43,3 @@ int main() {
   free(aggs);
   free(prefixs);
 }
-
-

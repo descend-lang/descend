@@ -9,12 +9,12 @@
  * - t_      prefix is inside a parfor per thread
  */
 
-fn prefix_scan(
+fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
     // TODO global fun params into same frame as top level declaration in body
-    cpu_i_array: &uniq cpu.mem [i32; 64 * 1024 * 2],
-    cpu_flag_array: &uniq cpu.mem [i32; 64],
-    cpu_agg_array: &uniq cpu.mem [i32; 64],
-    cpu_prefix_array: &uniq cpu.mem [i32; 64]
+    cpu_i_array: &uniq cpu.mem [i32; g_size * b_size * t_size],
+    cpu_flag_array: &uniq cpu.mem [i32; g_size],
+    cpu_agg_array: &uniq cpu.mem [i32; g_size],
+    cpu_prefix_array: &uniq cpu.mem [i32; g_size]
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
@@ -22,7 +22,7 @@ fn prefix_scan(
     let mut g_flags = gpu_alloc_copy(&uniq gpu, &shrd *cpu_flag_array);
     let mut g_aggs = gpu_alloc_copy(&uniq gpu, &shrd *cpu_agg_array);
     let mut g_prefixs = gpu_alloc_copy(&uniq gpu, &shrd *cpu_prefix_array);
-    exec::<64, 1024>(
+    exec::<g_size, b_size>(
         &uniq gpu,
         (
             &uniq g_i, 
@@ -30,12 +30,12 @@ fn prefix_scan(
             &uniq g_aggs,
             &uniq g_prefixs
         ),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
+        | grid: BlockGrp<g_size, ThreadGrp<b_size>>,
           input: (
-              &uniq gpu.global [i32; 64 * 1024 * 2],
-              &uniq gpu.global [i32; 64],
-              &uniq gpu.global [i32; 64],
-              &uniq gpu.global [i32; 64]
+              &uniq gpu.global [i32; g_size * b_size * t_size],
+              &uniq gpu.global [i32; g_size],
+              &uniq gpu.global [i32; g_size],
+              &uniq gpu.global [i32; g_size]
           )
         | -[gpu.grid]-> () {
             // TODO deconstruction works
@@ -43,43 +43,47 @@ fn prefix_scan(
             let gi_flags = input.1;
             let gi_aggs = input.2;
             let gi_prefixs = input.3;
-            let view_input = group_mut::<2048>(to_view_mut(gi_i));
+            let view_input = group_mut::<(b_size * t_size)>(to_view_mut(gi_i));
             let view_aggs = group_mut::<1>(to_view_mut(gi_aggs));
             let view_flags = group_mut::<1>(to_view_mut(gi_flags));
             // let view_flags = to_view_mut(gi_flags);
             let view_prefix = group_mut::<1>(to_view_mut(gi_prefixs));
             decl {
-                let mut shared_input: [i32; 1024 * 2] @ gpu.shared;
+                let mut shared_input: [i32; (b_size * t_size)] @ gpu.shared;
                 // let mut tmp2: [i32; 1024 * 2] @ gpu.shared;
-                let mut result_reduction: [i32; 1024] @ gpu.shared;
+                let mut result_reduction: [i32; b_size] @ gpu.shared;
                 let mut exclusive_prefix: [i32; 1] @ gpu.shared;
                 let mut last_value: [i32; 1] @ gpu.shared
             } parfor block in grid 
                 with b_input, b_agg, b_flag, b_prefix from view_input, view_aggs, view_flags, view_prefix {
                 // Copy into shared
-                let mut shared_input_view = group_mut::<2>(to_view_mut(& uniq shared_input));
+                let mut shared_input_view = group_mut::<t_size>(to_view_mut(& uniq shared_input));
                 let mut result_view = to_view_mut(&uniq result_reduction);
                 let mut view_exclusive_prefix = to_view_mut(&uniq exclusive_prefix);
                 let mut view_last_value = to_view_mut(&uniq last_value);
-                let group_input = group_mut::<2>(b_input);
+                let group_input = group_mut::<t_size>(b_input);
                 parfor thread in block
                 with t_shared_input, t_input from
                     &uniq *shared_input_view, &uniq *group_input {
-                    t_shared_input[0] = t_input[0];
-                    t_shared_input[1] = t_input[1]
+                    for_nat k in range(0, t_size) {
+                        t_shared_input[k] = t_input[k]
+                    } 
                 };
 
                 parfor thread in block
                 with t_shared_input, r from &uniq *shared_input_view, &uniq *result_view {
-                    *r = t_shared_input[0] + t_shared_input[1]
+                    *r = 0;
+                    for_nat k in range(0, t_size) {
+                        *r = *r + t_shared_input[k]
+                    } 
                 };
 
                 // borrowed from tree_reduce
-                for_nat k in halved_range(512) {
+                for_nat k in halved_range(b_size / 2) {
                    let split_ib = (split uniq 2*k (*result_view)).0;
                    let (active_half0, active_half1) = split uniq k (*split_ib);
 
-                   parfor thread in split_thread_grp::<k, 1024, 1, 1>(block).0
+                   parfor thread in split_thread_grp::<k, b_size, 1, 1>(block).0
                    with fst_half, snd_half from active_half0, active_half1 {
                        *fst_half = *fst_half + *snd_half
                    }
@@ -188,20 +192,46 @@ fn prefix_scan(
                 };
 
                 let tmp_view2 = to_view_mut(&uniq shared_input);
-                let tmp_last = (split uniq 2047 (*tmp_view2)).1;
+                let tmp_last = (split uniq ((b_size * t_size) - 1) (*tmp_view2)).1;
                 parfor _ in split_thread_grp::<1>(block).0
                 with last, t_last_bkp from &uniq *tmp_last, &uniq *view_last_value
                 {
                     *t_last_bkp = *last
                 };
 
-                upsweep(block, &uniq shared_input);
+                // upsweep::<b_size, t_size>(block, &uniq shared_input)
+                // upsweep(block, &uniq shared_input);
+                {
+                    let foo = &uniq shared_input;
+                    for_nat d in halved_range(b_size) <'a>{
+                        let tmp_up_view = group_mut::<(b_size * t_size)/d, 'a, gpu.shared, (b_size * t_size), i32>(
+                            to_view_mut(&uniq *foo));
+                        parfor _ in split_thread_grp::<d>(block).0
+                        with arr from tmp_up_view
+                        { arr[(b_size * t_size)/d-1] = arr[(b_size * t_size)/d-1] + arr[b_size/d-1] }
+                    }
+                };
                 parfor _ in split_thread_grp::<1>(block).0
                 with last, t_last_bkp from &uniq *tmp_last, &uniq *view_last_value
                 {
                     *last = *t_last_bkp
                 };
-                downsweep(block, &uniq shared_input);
+                // downsweep(block, &uniq shared_input);
+                {
+                    let foo = &uniq shared_input;
+                    for_nat d in doubled_range(1, b_size) <'b>{
+                        let tmp_down_view = group_mut::<(b_size * t_size) / d, 'b, gpu.shared, (b_size * t_size), i32>(
+                            to_view_mut::<'b, gpu.shared, (b_size * t_size), i32 > (&'b uniq *foo));
+                        parfor _ in split_thread_grp::<d, b_size, 1, 1> (block).0
+                            with arr from tmp_down_view
+                        {
+                            let t = arr[b_size/d-1];
+                            arr[b_size/d-1] = arr[(b_size * t_size)/d-1];
+                            arr[(b_size * t_size)/d-1] = arr[(b_size * t_size)/d-1] + t
+                        }
+                    }
+                };
+                // end downsweep
                 let mut exclusive_prefix_bkp = 0;
                 parfor thread in split_thread_grp::<1>(block).0
                 with t_r, t_prefix, t_exclusive_prefix from &uniq *result_view, &uniq *b_prefix, &shrd *view_exclusive_prefix  {
@@ -209,9 +239,10 @@ fn prefix_scan(
                 };
                 parfor thread in block
                 with t_tmp, t_input from &uniq *shared_input_view, group_input   {
-                    // Workaround for *exclusive_prefix in 2 following lines
-                    t_input[0] = t_tmp[0] + view_exclusive_prefix[0];
-                    t_input[1] = t_tmp[1] + view_exclusive_prefix[0]
+                    // Workaround for *exclusive_prefix in 2 b_size lines
+                    for_nat k in range(0, t_size) {
+                        t_input[k] = t_tmp[k] + view_exclusive_prefix[0]
+                    } 
                 }
             }
         }
@@ -223,8 +254,8 @@ fn prefix_scan(
 }
 
 fn upsweep(
-    thread_grp: ThreadGrp<1024>,
-    arr_ref: &uniq gpu.shared [i32; 2048]
+    thread_grp: ThreadGrp<b_size>,
+    arr_ref: &uniq gpu.shared [i32; (b_size * t_size)]
 ) -[gpu.block]-> () <>{
     for_nat d in halved_range(1024) <'a>{
         let tmp_up_view = group_mut::<2048/d, 'a, gpu.shared, 2048, i32>(
