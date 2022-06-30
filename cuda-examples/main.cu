@@ -16,7 +16,7 @@ int main() {
   int* gold = (int *) malloc(sizeof(int) * items_per_grid);
 
   for (int i=0; i < items_per_grid; i++) {
-    ha_array[i] = 2;
+    ha_array[i] = i % 2;
     gold[i] = ha_array[i];
   }
 
@@ -31,10 +31,10 @@ int main() {
   prefix_scan<size_grid, size_block, items_per_thread>(ha_array, flags, aggs, prefixs);
   //prefix_scan(ha_array, flags, aggs, prefixs);
 
-  for (int i=0; i < items_per_grid; i++) {
+  // for (int i=0; i < items_per_grid; i++) {
+  for (int i=0; i < 4000; i++) {
     if (gold[i] != ha_array[i]) {
       printf("bad value at %d, gold: %d, actual value %d\n", i, gold[i], ha_array[i]);
-      return -1;
     }
   }
 
