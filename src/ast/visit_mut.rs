@@ -80,10 +80,6 @@ pub fn walk_prv<V: VisitMut>(visitor: &mut V, prv: &mut Provenance) {
 
 pub fn walk_th_hierchy<V: VisitMut>(visitor: &mut V, th_hierchy: &mut ThreadHierchyTy) {
     match th_hierchy {
-        ThreadHierchyTy::SplitGrp(th, n) => {
-            visitor.visit_th_hierchy(th);
-            visitor.visit_nat(n);
-        }
         ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3) => {
             visitor.visit_nat(n1);
             visitor.visit_nat(n2);
@@ -109,6 +105,10 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
         DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
         DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
+        DataTyKind::SplitThreadHierchy(th_hy, n) => {
+            visitor.visit_th_hierchy(th_hy);
+            visitor.visit_nat(n);
+        }
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);

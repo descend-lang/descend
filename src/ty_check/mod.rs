@@ -685,52 +685,44 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let parall_collec_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, parall_collec)?;
         if let TyKind::Data(DataTy {
-            dty: DataTyKind::ThreadHierchy(th),
+            dty: DataTyKind::SplitThreadHierchy(th, n),
             ..
         }) = &parall_collec.ty.as_ref().unwrap().ty
         {
-            if let ThreadHierchyTy::SplitGrp(th, n) = th.as_ref() {
-                if branch_idents.len() != branch_bodies.len() {
-                    panic!(
-                        "Amount of branch identifiers and amount of branches do not match:\
+            if branch_idents.len() != branch_bodies.len() {
+                panic!(
+                    "Amount of branch identifiers and amount of branches do not match:\
                             {} and {}",
-                        branch_idents.len(),
-                        branch_bodies.len()
-                    );
-                }
-                if branch_idents.len() != 2 {
-                    return Err(TyError::String(format!(
-                        "Expected 2 parallel branches but found {}",
-                        branch_idents.len()
-                    )));
-                }
-                let idents_typed = Self::parbranch_parall_ident_dty_from_split(
-                    branch_idents,
-                    th.as_ref().clone(),
-                    n.clone(),
-                )?;
-                let mut parbranch_ctx = parall_collec_ty_ctx.clone();
-                for (it, bb) in idents_typed.into_iter().zip(branch_bodies) {
-                    let branch_ctx = parbranch_ctx.append_frame(vec![]).append_ident_typed(it);
-                    let branch_res_ctx = self.ty_check_expr(kind_ctx, branch_ctx, exec, bb)?;
-                    if bb.ty.as_ref().unwrap().ty
-                        != TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))
-                    {
-                        return Err(TyError::String(
-                            "A par_branch branch must not return a value.".to_string(),
-                        ));
-                    }
-                    parbranch_ctx = branch_res_ctx.drop_last_frame();
-                }
-                Ok((
-                    parbranch_ctx,
-                    Ty::new(TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))),
-                ))
-            } else {
-                Err(TyError::String(format!(
-                    "Expected a split parallel resource but found a non split."
-                )))
+                    branch_idents.len(),
+                    branch_bodies.len()
+                );
             }
+            if branch_idents.len() != 2 {
+                return Err(TyError::String(format!(
+                    "Expected 2 parallel branches but found {}",
+                    branch_idents.len()
+                )));
+            }
+            let idents_typed = Self::parbranch_parall_ident_dty_from_split(
+                branch_idents,
+                th.as_ref().clone(),
+                n.clone(),
+            )?;
+            let mut parbranch_ctx = parall_collec_ty_ctx.clone();
+            for (it, bb) in idents_typed.into_iter().zip(branch_bodies) {
+                let branch_ctx = parbranch_ctx.append_frame(vec![]).append_ident_typed(it);
+                let branch_res_ctx = self.ty_check_expr(kind_ctx, branch_ctx, exec, bb)?;
+                if bb.ty.as_ref().unwrap().ty != TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit))) {
+                    return Err(TyError::String(
+                        "A par_branch branch must not return a value.".to_string(),
+                    ));
+                }
+                parbranch_ctx = branch_res_ctx.drop_last_frame();
+            }
+            Ok((
+                parbranch_ctx,
+                Ty::new(TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))),
+            ))
         } else {
             Err(TyError::String(format!(
                 "Unexpected type. Expected Split Parallel Collection but found: {:?}",
@@ -771,11 +763,6 @@ impl TyChecker {
                     n3,
                 ),
             ),
-            ThreadHierchyTy::SplitGrp(_, _) => {
-                return Err(TyError::String(
-                    "Nested split parallel resources are not yet supported.".to_string(),
-                ))
-            }
             _ => panic!("A non-splittable parallel resource should not exist here"),
         };
         let li = IdentTyped::new(
@@ -820,11 +807,6 @@ impl TyChecker {
                     ThreadHierchyTy::Warp => Ok(Exec::GpuWarp),
                     // TODO error instead?
                     ThreadHierchyTy::Thread => Ok(Exec::GpuThread),
-                    ThreadHierchyTy::SplitGrp(_, _) => Err(TyError::String(
-                        "A split parallel execution resource is not allowed as an argument for\
-                            parfor."
-                            .to_string(),
-                    )),
                 },
                 _ => panic!("Expected a parallel collection: Grid or Block."),
             }
@@ -963,12 +945,6 @@ impl TyChecker {
                 ThreadHierchyTy::Warp | ThreadHierchyTy::ThreadGrp(_, _, _) => {
                     ThreadHierchyTy::Thread
                 }
-                ThreadHierchyTy::SplitGrp(_, _) => {
-                    return Err(TyError::String(
-                        "Expected a parallel collection but instead found a split of one."
-                            .to_string(),
-                    ))
-                }
                 ThreadHierchyTy::Thread => {
                     return Err(TyError::String(
                         "Thread is not a parallel execution resources.".to_string(),
@@ -1007,13 +983,6 @@ impl TyChecker {
                     return Err(TyError::String(
                         "Cannot parallelize over multiple Grids.".to_string(),
                     ))
-                }
-                ThreadHierchyTy::SplitGrp(_, _) => {
-                    return Err(TyError::String(
-                        "Cannot parallelise over multiple parallel execution\
-                        resources at the same time."
-                            .to_string(),
-                    ));
                 }
             }
         } else {
@@ -2364,6 +2333,7 @@ impl TyChecker {
                 }
                 //FIXME check well-formedness of nats
                 DataTyKind::ThreadHierchy(th_hy) => {}
+                DataTyKind::SplitThreadHierchy(th_hy, n) => {}
                 DataTyKind::Tuple(elem_dtys) => {
                     for elem_dty in elem_dtys {
                         self.ty_well_formed(

@@ -189,6 +189,10 @@ impl TyCtx {
                     ..
                 })
                 | TyKind::Data(DataTy {
+                    dty: d::SplitThreadHierchy(_, _),
+                    ..
+                })
+                | TyKind::Data(DataTy {
                     dty: d::Scalar(_), ..
                 })
                 | TyKind::Data(DataTy {

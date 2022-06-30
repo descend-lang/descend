@@ -103,6 +103,13 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         (DataTyKind::ThreadHierchy(th_hy1), DataTyKind::ThreadHierchy(th_hy2)) => {
             infer_kargs_th_hierchies(map, th_hy1, th_hy2)
         }
+        (
+            DataTyKind::SplitThreadHierchy(th_hy1, n1),
+            DataTyKind::SplitThreadHierchy(th_hy2, n2),
+        ) => {
+            infer_kargs_th_hierchies(map, th_hy1, th_hy2);
+            infer_kargs_nats(map, n1, n2);
+        }
         (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
             infer_from_lists!(infer_kargs_dtys, map, elem_dtys1, elem_dtys2)
         }
