@@ -31,18 +31,26 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                     let active_half1 = active_halves.1;
 
                     // Fixme: At this point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
-                    parfor _ in split_thread_grp::<k>(block).0
-                    with a, b from active_half0, active_half1 {
-                        *a = *a + *b
+                    par_branch split_thread_grp::<k>(block) {
+                        active =>
+                            parfor _ in active
+                            with a, b from active_half0, active_half1 {
+                                * a = * a + * b
+                            },
+                        inactive => { () }
                     }
                  };
                  let tmp_view2 = to_view_mut(&uniq tmp);
                  let tmp_res = (split uniq 1 (*tmp_view2)).0;
-                 parfor _ in split_thread_grp::<1>(block).0
-                 with out, tmp_val from out_elem, tmp_res {
-                    *out = *tmp_val
+                 par_branch split_thread_grp::<1>(block) {
+                    single_thread =>
+                        parfor _ in single_thread
+                        with out, tmp_val from out_elem, tmp_res {
+                            *out = *tmp_val
+                        },
+                    rest => { () }
                  }
-             }
+            }
         }
     );
     // Todo
