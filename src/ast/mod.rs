@@ -21,13 +21,38 @@ pub mod visit_mut;
 #[derive(Clone, Debug)]
 pub struct CompilUnit<'a> {
     pub fun_defs: Vec<FunDef>,
+    pub struct_defs: Vec<StructDef>,
+    pub trait_defs: Vec<TraitDef>,
+    pub impl_defs: Vec<ImplDef>,
     pub source: &'a SourceCode<'a>,
 }
 
 impl<'a> CompilUnit<'a> {
-    pub fn new(fun_defs: Vec<FunDef>, source: &'a SourceCode<'a>) -> Self {
-        CompilUnit { fun_defs, source }
+    pub fn new(defs: Vec<Item>, source: &'a SourceCode<'a>) -> Self {
+        let mut fun_defs: Vec<FunDef> = Vec::with_capacity(defs.len());
+        let mut struct_defs: Vec<StructDef> = Vec::with_capacity(defs.len());
+        let mut trait_defs: Vec<TraitDef> = Vec::with_capacity(defs.len());
+        let mut impl_defs: Vec<ImplDef> = Vec::with_capacity(defs.len());
+        defs.iter()
+            .for_each(|f| {
+                match f {
+                    Item::FunDef(fun_def) => fun_defs.push(fun_def.clone()),
+                    Item::StructDef(struct_def) => struct_defs.push(struct_def.clone()),
+                    Item::TraitDef(trait_def) => trait_defs.push(trait_def.clone()),
+                    Item::ImplDef(impl_def) => impl_defs.push(impl_def.clone()),
+                }
+            });
+        CompilUnit { fun_defs, struct_defs, trait_defs, impl_defs, source }
     }
+}
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    FunDef(FunDef),
+    StructDef(StructDef),
+    TraitDef(TraitDef),
+    ImplDef(ImplDef)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +64,68 @@ pub struct FunDef {
     pub exec: Exec,
     pub prv_rels: Vec<PrvRel>,
     pub body_expr: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+    pub name: String,
+    pub generic_params: Vec<IdentKinded>,
+    pub conditions: Vec<Predicate>,
+    pub decls: Vec<StructField>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDef {
+    pub name: String,
+    pub generic_params: Vec<IdentKinded>,
+    pub conditions: Vec<Predicate>,
+    pub decls: Vec<AssociatedItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplDef {
+    pub name: String,
+    pub generic_params: Vec<IdentKinded>,
+    pub conditions: Vec<Predicate>,
+    pub decls: Vec<AssociatedItem>,
+    pub trait_impl: Option<String>
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: DataTy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunDecl {
+    pub name: String,
+    pub generic_params: Vec<IdentKinded>,
+    pub param_decls: Vec<ParamDecl2>,
+    pub ret_dty: DataTy,
+    pub exec: Option<Exec>,
+    pub prv_rels: Vec<PrvRel>,
+    pub body_expr: Option<Expr>,
+    pub conditions: Vec<Predicate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamDecl2 {
+    pub ident: Option<Ident>,
+    pub ty: Ty,
+    pub mutbl: Mutability,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssociatedItem {
+    Function(FunDecl),
+    ConstItem(String, Ty, Option<Expr>)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Predicate {
+    pub param: String,
+    pub trait_bound: String,
 }
 
 impl FunDef {
@@ -106,6 +193,7 @@ impl Expr {
             match &pl_expr.pl_expr {
                 PlaceExprKind::Ident(ident) => idents.any(|name| ident.name == *name),
                 PlaceExprKind::Proj(tuple, _) => pl_expr_contains_name_in(tuple, idents),
+                PlaceExprKind::StructAcess(dstruct, _) => pl_expr_contains_name_in(dstruct, idents),
                 PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
             }
         }
@@ -143,19 +231,25 @@ impl Expr {
                                     {
                                         *expr = subst_expr.clone();
                                     }
-                                }
+                                },
                                 PlaceExprKind::Proj(tuple, i) => {
                                     let mut tuple_expr =
                                         Expr::new(ExprKind::PlaceExpr(tuple.as_ref().clone()));
                                     self.visit_expr(&mut tuple_expr);
                                     *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), *i));
-                                }
+                                },
                                 PlaceExprKind::Deref(deref_expr) => {
                                     let mut ref_expr =
                                         Expr::new(ExprKind::PlaceExpr(deref_expr.as_ref().clone()));
                                     self.visit_expr(&mut ref_expr);
                                     *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
-                                }
+                                },
+                                PlaceExprKind::StructAcess(dstruct, name) => {
+                                    let mut struct_expr =
+                                        Expr::new(ExprKind::PlaceExpr(dstruct.as_ref().clone()));
+                                    self.visit_expr(&mut struct_expr);
+                                    *expr = Expr::new(ExprKind::StructAcess(Box::new(struct_expr), name.clone()));
+                                },
                             }
                         }
                     }
@@ -263,8 +357,11 @@ pub enum ExprKind {
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),
     Tuple(Vec<Expr>),
+    // e.g., structName <generic1> { name: String::from("Test") }
+    StructInst(String, Vec<ArgKinded>, Vec<(Ident, Expr)>),
     // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
     Proj(Box<Expr>, usize),
+    StructAcess(Box<Expr>, String),
     // Borrow Expressions
     Ref(Option<String>, Ownership, PlaceExpr),
     BorrowIndex(Option<String>, Ownership, PlaceExpr, Nat),
@@ -560,6 +657,7 @@ pub enum SplitTag {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExprKind {
     Proj(Box<PlaceExpr>, usize),
+    StructAcess(Box<PlaceExpr>, String),
     Deref(Box<PlaceExpr>),
     Ident(Ident),
 }
@@ -588,6 +686,7 @@ impl PlaceExpr {
             PlaceExprKind::Proj(ple, _) => ple.is_place(),
             PlaceExprKind::Ident(_) => true,
             PlaceExprKind::Deref(_) => false,
+            PlaceExprKind::StructAcess(ple, _) => ple.is_place(),
         }
     }
 
@@ -598,6 +697,7 @@ impl PlaceExpr {
                 PlaceExprKind::Proj(pl_expr, _) => self.prefix_of(pl_expr),
                 PlaceExprKind::Deref(pl_expr) => self.prefix_of(pl_expr),
                 PlaceExprKind::Ident(_) => false,
+                PlaceExprKind::StructAcess(pl_expr, _) => self.prefix_of(&pl_expr),
             }
         } else {
             true
@@ -634,6 +734,18 @@ impl PlaceExpr {
                 internal::PlaceCtx::Hole,
                 internal::Place::new(ident.clone(), vec![]),
             ),
+            // PlaceExprKind::StructAcess(inner_ple, name) => {
+            //     let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+            //     match pl_ctx {
+            //         internal::PlaceCtx::Hole => {
+            //             pl.path.push(*n);
+            //             (pl_ctx, internal::Place::new(pl.ident, pl.path))
+            //         }
+            //         _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
+            //     }
+            // },
+            PlaceExprKind::StructAcess(_, _) =>
+                unimplemented!("TODO PlaceCtx erweitern"),
         }
     }
 
@@ -652,6 +764,8 @@ impl fmt::Display for PlaceExpr {
             PlaceExprKind::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
             PlaceExprKind::Deref(pl_expr) => write!(f, "*{}", pl_expr),
             PlaceExprKind::Ident(ident) => write!(f, "{}", ident),
+            PlaceExprKind::StructAcess(pl_expr, name) =>
+                write!(f, "{}.{}", pl_expr, name),
         }
     }
 }
@@ -760,7 +874,7 @@ impl Ty {
                 res &= exec1 == exec2;
                 res & ret_ty1.eq_structure(ret_ty2)
             }
-            (TyKind::Data(dty1), TyKind::Data(dty2)) => unimplemented!(), //dty1.eq_structure(dty2),
+            (TyKind::Data(_), TyKind::Data(_)) => unimplemented!(), //dty1.eq_structure(dty2),
             (TyKind::Ident(id1), TyKind::Ident(id2)) => id1 == id2,
             (TyKind::Dead(ty1), TyKind::Dead(ty2)) => ty1.eq_structure(ty2),
             _ => false,

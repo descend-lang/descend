@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use crate::error::ErrorReported;
 pub use source::*;
 
-use crate::ast::utils::fresh_ident;
 use crate::ast::visit_mut::VisitMut;
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
@@ -21,7 +20,7 @@ pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported
             .map_err(|err| err.emit())?
             .into_iter()
             .map(replace_arg_kinded_idents)
-            .collect::<Vec<FunDef>>(),
+            .collect::<Vec<Item>>(),
         source,
     ))
 }
@@ -36,12 +35,12 @@ impl<'a> Parser<'a> {
         Parser { source }
     }
 
-    fn parse(&self) -> Result<Vec<FunDef>, ParseError<'_>> {
+    fn parse(&self) -> Result<Vec<Item>, ParseError<'_>> {
         descend::compil_unit(self.source.str()).map_err(|peg_err| ParseError::new(self, peg_err))
     }
 }
 
-fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
+fn replace_arg_kinded_idents(mut item_def: Item) -> Item {
     struct ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap<String, Kind>,
     }
@@ -89,20 +88,26 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
             }
         }
 
-        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
-            self.ident_names_to_kinds = fun_def
-                .generic_params
+        fn visit_item_def(&mut self, item_def: &mut Item) {
+            let generic_params = 
+                match item_def {
+                    Item::FunDef(fun_def) =>  &fun_def.generic_params,
+                    Item::StructDef(struct_def) => unimplemented!("TODO"),
+                    Item::TraitDef(trait_def) => unimplemented!("TODO"),
+                    Item::ImplDef(impl_def) => unimplemented!("TODO"),
+                };
+            self.ident_names_to_kinds = generic_params
                 .iter()
                 .map(|IdentKinded { ident, kind }| (ident.name.clone(), *kind))
                 .collect();
-            visit_mut::walk_fun_def(self, fun_def)
+            visit_mut::walk_item_def(self, item_def)
         }
     }
     let mut replace = ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap::new(),
     };
-    replace.visit_fun_def(&mut fun_def);
-    fun_def
+    replace.visit_item_def(&mut item_def);
+    item_def
 }
 
 pub mod error {
@@ -162,10 +167,19 @@ pub mod error {
 peg::parser! {
     pub(crate) grammar descend() for str {
 
-        pub(crate) rule compil_unit() -> Vec<FunDef>
-            = _ funcs:(fun:global_fun_def() { fun }) ** _ _ {
-                funcs
+        pub(crate) rule compil_unit() -> Vec<Item>
+            = _ items:(item:item() { item }) ** _ _ {
+                items
             }
+
+        pub(crate) rule item() -> Item
+            = result:(f:global_fun_def() { Item::FunDef(f) }
+            / s: struct_def() { Item::StructDef(s) }
+            / t: trait_def() { Item::TraitDef(t) }
+            / i: inherent_impl_def() { Item::ImplDef(i) }
+            / i: trait_impl_def() { Item::ImplDef(i)}) {
+                result
+            }    
 
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
@@ -177,14 +191,188 @@ peg::parser! {
                     None => vec![]
                 };
                 FunDef {
-                  name,
-                  generic_params,
-                  param_decls,
-                  ret_dty,
-                  exec,
-                  prv_rels: vec![],
-                  body_expr
+                    name,
+                    generic_params,
+                    param_decls,
+                    ret_dty,
+                    exec,
+                    prv_rels: vec![],
+                    body_expr
                 }
+        }
+
+        pub(crate) rule struct_def() -> StructDef
+            = "struct" __ name:identifier() _ g:generic_params()?  _  w:where_clause()? _ 
+            struct_fields:(u:("{" t:(_ s:(struct_field() ** (_ "," _)) _ {s})? "}" {t}) {Some(u)}
+                            / ";" {None}) _ {
+                let (generic_params, mut conditions) =
+                    match g {
+                        Some(x) => x,
+                        None => (Vec::new(), Vec::new())
+                    };
+                match w {
+                    Some(mut cons) => conditions.append(&mut cons),
+                    None => ()
+                };
+                let decls: Vec<StructField> = match struct_fields {
+                    Some(struct_fields) => match struct_fields {Some(s) => s, None => vec![]},
+                    None => vec![]
+                };
+                StructDef {
+                    name,
+                    generic_params,
+                    conditions,
+                    decls,
+                }
+            }
+            
+        pub(crate) rule trait_def() -> TraitDef 
+            = "trait" __ name:identifier() _ g:generic_params()?  _  w:where_clause()?
+            supertrait:(_ ":" _ i:identifier(){i})? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
+                let (generic_params, mut conditions) =
+                    match g {
+                        Some(x) => x,
+                        None => (Vec::new(), Vec::new())
+                    };
+                match w {
+                    Some(mut cons) => {
+                        let mut preds: Vec<Predicate> = cons.clone();
+                        conditions.append(&mut preds);},
+                    None => ()
+                };
+                match supertrait {
+                    Some(supertrait) => {
+                        let pred = Predicate{param: String::from("Self"), trait_bound: supertrait};
+                        conditions.push(pred)},
+                    None => ()
+                };
+                TraitDef {
+                    name,
+                    generic_params,
+                    conditions,
+                    decls,
+                }
+            }
+
+        pub(crate) rule inherent_impl_def() -> ImplDef    
+            = "impl" __ g:generic_params()? _ name:identifier() _ w:where_clause()? _
+            "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}" {
+                let (generic_params, mut conditions) =
+                    match g {
+                        Some(x) => x,
+                        None => (Vec::new(), Vec::new())
+                    };
+                match w {
+                    Some(mut cons) => {
+                        let mut preds: Vec<Predicate> = cons.clone();
+                        conditions.append(&mut preds);},
+                    None => ()
+                };
+                ImplDef { name, generic_params, conditions, decls, trait_impl: None}
+            }
+
+        pub(crate) rule trait_impl_def() -> ImplDef 
+            = "impl" __ g:generic_params()? _ name:identifier() _ "for" _
+            trait_name:identifier() _ w:where_clause()? _ "{" _
+            decls:(_ i:associated_item() ** _ {i}) _ "}" {
+                let (generic_params, mut conditions) =
+                match g {
+                    Some(x) => x,
+                    None => (Vec::new(), Vec::new())
+                };
+            match w {
+                Some(mut cons) => {
+                    let mut preds: Vec<Predicate> = cons.clone();
+                    conditions.append(&mut preds);},
+                None => ()
+            };
+            ImplDef { name, generic_params, conditions, decls, trait_impl: Some(trait_name)}
+        }
+
+        rule struct_field() -> StructField
+            = name:identifier() _ ":" _ ty:dty() {
+                StructField {name, ty}
+        }
+
+        rule associated_item() -> AssociatedItem
+            = ass_item:(f:fun_def() {AssociatedItem::Function(f)}
+            / const_item:("const" __ name:identifier() _ ":"
+                _ ty:ty() expr:(_ "=" _ e:expression() {e})? _
+                ";" {AssociatedItem::ConstItem(name, ty, expr)})) {
+                    ass_item
+            }
+
+        rule generic_params() -> (Vec<IdentKinded>, Vec<Predicate>)
+            = generic_params:("<" _ t:(genericParam() ** (_ "," _)) _ ">" {t}) {
+                let (idents, preds_options): (Vec<_>, Vec<_>) = generic_params.into_iter().unzip();
+                let  preds = preds_options.into_iter().filter_map(|option| option).collect();
+                (idents, preds)
+            }
+        
+         rule genericParam() -> (IdentKinded, Option<Predicate>)
+            = name:ident() bound:(_ ":" _ r:(k:kind(){Ok(k)} / t:identifier(){Err(t)}) {r})? {
+                match bound {
+                    Some(kind_or_trait) =>
+                        match kind_or_trait {
+                            Ok(kind) => (IdentKinded::new(&name, kind), None),
+                            Err(trait_bound) => {
+                                let name_string = name.name.clone();
+                                (IdentKinded::new(&name, Kind::Ty),
+                                    Some(Predicate{param: name_string, trait_bound}))
+                            }
+                        },
+                    None => (IdentKinded::new(&name, Kind::Ty), None)
+                }
+            }
+           
+        rule where_clause() -> Vec<Predicate>
+            = "where" __ i:(where_clause_item() ** (_ "," _)) {
+                i
+            }
+        
+        rule where_clause_item() -> Predicate 
+            = param:identifier() _ ":" _ trait_bound:identifier() {
+                Predicate{param, trait_bound}
+            }
+
+        rule fun_def() -> FunDecl
+            = "fn" __ name:identifier() _ g:generic_params()? _
+            "(" _ param_decls:(p:fun_parameter2() ** (_ "," _) {p}) _ ")" _ 
+            exec:("-" _ "[" _ e:execution_resource() _ "]" {e})? _ w:where_clause()? _
+            "-" _ ">" _ ret_dty:dty() _ body_expr:(";" {None} / b:block()? {b}) {
+                let (generic_params, mut conditions) =
+                    match g {
+                        Some(x) => x,
+                        None => (Vec::new(), Vec::new())
+                    };
+                match w {
+                    Some(mut cons) => {
+                        let mut preds: Vec<Predicate> = cons.clone();
+                        conditions.append(&mut preds);},
+                    None => ()
+                };
+                FunDecl {
+                    name,
+                    generic_params,
+                    param_decls,
+                    ret_dty,
+                    exec,
+                    prv_rels: vec![],
+                    body_expr,
+                    conditions
+                }
+        }
+
+        rule fun_parameter2() -> ParamDecl2
+            = result:(mutbl:(m:mutability() __ {m})? ident:(i:ident() _ ":" _ {i})? ty:ty() {
+                let mutbl = mutbl.unwrap_or(Mutability::Const);
+                ParamDecl2 { ident, ty, mutbl }
+            } / "&" _ mutbl:(m:mutability() __ {m})? _ "self" {
+                let ty = Ty{ ty: TyKind::Data(DataTy::new(DataTyKind::Ident(Ident::new("Self")))),
+                    constraints: vec![], span: None};
+                ParamDecl2 { ident: Some(Ident::new("self")), ty, mutbl: mutbl.unwrap_or(Mutability::Const) }
+            }) {
+                result
             }
 
         rule kind_parameter() -> IdentKinded
@@ -284,15 +472,33 @@ peg::parser! {
                     |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
                 )
             }
+            e:(@) ns:("." _ n:identifier() {n})+ {
+                ns.into_iter().fold(e,
+                    |prev, n| Expr::new(ExprKind::StructAcess(Box::new(prev), n))
+                )
+            }
             begin:position!() "split" __ r1:(prv:prov_value() __ { prv })?
                     r2:(prv:prov_value()  __ { prv })? o:ownership() __
                     s:nat() __ view:place_expression() end:position!() {
                 Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
             }
-            begin:position!() func:ident() place_end:position!() _
+            p:(p:place_expression() "." {p})? begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
-            {
+            {{
+                let args =
+                    match p {
+                        Some(place_expr) => {
+                            let firstArg = //TODO Ownership should not be Shrd
+                                Expr::new(ExprKind::Ref(None, Ownership::Shrd, place_expr));
+                            let mut result = Vec::with_capacity(args.len());
+                            result.push(firstArg);
+                            let mut args = args.clone();
+                            result.append(&mut args);
+                            result
+                        },
+                        None => args,
+                    };
                 Expr::new(
                     ExprKind::App(
                         Box::new(Expr::with_span(
@@ -302,8 +508,8 @@ peg::parser! {
                         kind_args.unwrap_or(vec![]),
                         args
                     )
-                )
-            }
+                )    
+            }}
             begin:position!() func:ident() end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" { k })
             {
@@ -316,6 +522,25 @@ peg::parser! {
                         kind_args
                 ))
             }
+            begin:position!() struct_name:identifier() _
+                kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "{" _ args:(i:ident() e:(_ ":" _ e:expression(){e})? {(i, e)}) ** (_ "," _)
+                 _ "}"  end:position!() {{ //Wieso 2 Klammern????????????????
+                let args = args.iter().map(|(ident, expr_option)| {
+                    match expr_option {
+                        Some(e) => (ident.clone(), e.clone()),
+                        None => (ident.clone(), Expr::new(ExprKind::PlaceExpr(
+                            PlaceExpr::new(PlaceExprKind::Ident(ident.clone())))))
+                    }}).collect();
+                Expr::with_span(
+                    ExprKind::StructInst(
+                        struct_name,
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    ),
+                    Span::new(begin, end)
+                )
+            }}
             l:literal() {
                 Expr::with_type(
                     ExprKind::Lit(l),
@@ -430,6 +655,9 @@ peg::parser! {
                 "*" _ deref:@ { PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref))) }
                 --
                 proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n))}
+                // The !(_ "(") makes sure this is not a method call on a struct
+                struct_access:@ _ "." _ i:identifier() !(_ "(") {
+                    PlaceExpr::new(PlaceExprKind::StructAcess(Box::new(struct_access), i)) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -438,6 +666,7 @@ peg::parser! {
                     }
                 }
                 ident:ident() { PlaceExpr::new(PlaceExprKind::Ident(ident)) }
+                "self" { PlaceExpr::new(PlaceExprKind::Ident(Ident::new("self"))) }
                 "(" _ pl_expr:place_expression() _ ")" { pl_expr }
             }
             // = begin:position!() begin_derefs:(begin_deref:position!() "*" _ { begin_deref })*
@@ -529,6 +758,8 @@ peg::parser! {
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
             / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
             / name:ident() { DataTyKind::Ident(name) }
+            / "Self" { DataTyKind::Ident(Ident::new("Self")) } //TODO this should be a new type
+            //TODO struct type / name:ident() _ "<" _ params:(dt:dty_term() ** (_ "," _)) _ ">"
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTyKind::Array(Box::new(t), n) }
             / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
@@ -621,8 +852,8 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
-                / "Block" / "Warp" / "Thread" / "with")
+                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "struct"
+                / "trait" / "where" / "impl" / "Grid" / "Block" / "Warp" / "Thread" / "with")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.mem" / "gpu.global" / "gpu.shared"
@@ -1961,5 +2192,187 @@ mod tests {
         let result = descend::compil_unit(src)
             .expect("Cannot parse compilation unit with multiple functions");
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn compil_struct_decl() {
+        let src = "struct Test ;";
+        let result = descend::struct_def(src).expect("Cannot parse empty struct");
+
+        let name = String::from("Test");
+        let generic_params: Vec<IdentKinded> = vec![];
+        let conditions: Vec<Predicate> = vec![];
+        let decls: Vec<StructField> = vec![];
+
+        assert_eq!(result,
+            StructDef {name, generic_params, conditions, decls});
+    }
+
+    #[test]
+    fn compil_struct_decl2() {
+        let src = "struct Test { }";
+        let result = descend::struct_def(src).expect("Cannot parse empty struct");
+
+        let name = String::from("Test");
+        let generic_params: Vec<IdentKinded> = vec![];
+        let conditions: Vec<Predicate> = vec![];
+        let decls: Vec<StructField> = vec![];
+
+        assert_eq!(result,
+            StructDef {name, generic_params, conditions, decls})
+    }
+
+    #[test]
+    fn compil_struct_decl3() {
+        let src = "struct Test { a: i32, b: f32 }";
+        let result = descend::struct_def(src).expect("Cannot parse struct");
+
+        let name = String::from("Test");
+        let generic_params: Vec<IdentKinded> = vec![];
+        let conditions: Vec<Predicate> = vec![];
+        let name_a = String::from("a");
+        let name_b = String::from("b");
+        let ty_a = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
+        let ty_b = DataTy::new(DataTyKind::Scalar(ScalarTy::F32));
+        let field1 = StructField{name: name_a, ty: ty_a};
+        let field2 = StructField{name: name_b, ty: ty_b};
+        let decls: Vec<StructField> = vec![field1, field2];
+
+        assert_eq!(result,
+            StructDef {name, generic_params, conditions, decls});
+    }
+
+    #[test]
+    fn compil_struct_decl4() {
+        let src = "struct Test<T:Number, Q> where Q:Number { }";
+        let result = descend::struct_def(src).expect("Cannot parse empty struct with generics");
+
+        let name = String::from("Test");
+        let gen_param1 = Ident::new("T");
+        let gen_param2 = Ident::new("Q");
+        let generic_params: Vec<IdentKinded> = vec![
+            IdentKinded::new(&gen_param1, Kind::Ty),
+            IdentKinded::new(&gen_param2, Kind::Ty)];
+        let conditions: Vec<Predicate> = vec![
+            Predicate{param: String::from("T"), trait_bound: String::from("Number")},
+            Predicate{param: String::from("Q"), trait_bound: String::from("Number")}];
+        let decls: Vec<StructField> = vec![];
+
+        assert_eq!(result,
+            StructDef {name, generic_params, conditions, decls});
+    }
+
+    #[test]
+    fn compil_trait_decl() {
+        let src = r#"trait Eq {
+            fn eq(&self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+            fn eq2(&self, &shrd cpu.mem Self) -> bool;
+        }"#;//TODO allow default shrd ownership?
+
+        let result = descend::trait_def(src).expect("Cannot parse empty struct");
+
+        assert_eq!(result.decls.len(), 2);
+        let params1 = 
+            match &result.decls[0] {
+                AssociatedItem::Function(fun_decl) => fun_decl.param_decls.clone(),
+                _ => vec![]
+            };
+        let params2 = 
+            match &result.decls[1] {
+                AssociatedItem::Function(fun_decl) => fun_decl.param_decls.clone(),
+                _ => vec![]
+            };
+
+        let name = String::from("Eq");
+        let generic_params: Vec<IdentKinded> = vec![];
+        let conditions: Vec<Predicate> = vec![];
+        let decls: Vec<AssociatedItem> = vec![
+            AssociatedItem::Function(
+                FunDecl{name: String::from("eq"),
+                    generic_params: vec![],
+                    param_decls: params1,
+                    ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                    exec: Some(Exec::CpuThread),
+                    prv_rels: vec![],
+                    body_expr: None,
+                    conditions: vec![]}),
+            AssociatedItem::Function(
+                FunDecl{name: String::from("eq2"),
+                    generic_params: vec![],
+                    param_decls: params2,
+                    ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                    exec: None,
+                    prv_rels: vec![],
+                    body_expr: None,
+                    conditions: vec![]}),
+        ];
+
+        assert_eq!(result,
+            TraitDef {name, generic_params, conditions, decls});        
+    }
+
+    #[test]
+    fn compil_trait_decl2() {
+        let src = r#"trait Ord: Eq {
+            fn lt(&self, &shrd cpu.mem Self) -> bool;
+            fn le(&self, &shrd cpu.mem Self) -> bool;
+        }"#;
+
+        let result = descend::trait_def(src).expect("Cannot parse empty struct");
+        let conditions = vec![
+            Predicate{param: String::from("Self"), trait_bound: String::from("Eq")},
+        ];
+        assert_eq!(result.conditions, conditions);
+        assert_eq!(result.decls.len(), 2);
+    }
+
+    #[test]
+    fn compil_struct_and_trait() {
+        let src = r#"
+        struct Point {
+            x: i32,
+            y: i32
+        }
+        trait Eq {
+            const important_const: f32;
+            const magic_number: i32 = 42;
+            fn eq(&self, &shrd cpu.mem Self) -> bool;
+        }
+        impl Eq for Point {
+            fn eq(&self, other: &shrd cpu.mem Point) -> bool {
+                self.x == other.x && self.y == other.y
+            }
+        }
+        struct GenericStruct<T, Q: Number, S> where S: SomeTrait {
+            x: T
+        }
+        impl <T, Q:Number, S> GenericStruct where S: SomeTrait {
+            fn eq(&self, other: &shrd cpu.mem Point) -> bool {
+                self.x == other.x && self.x == other.y
+            }
+        }
+        fn bar() -[cpu.thread] -> Point {
+            let x = 3;
+            Point { x, y: 42 }
+        }
+        fn main() -[cpu.thread] -> () {
+            let (p1, p2) = (Point {x: 3, y: 4}, Point {x: 4, y: 5});
+            let test = eq(p1, &shrd p2);
+            let are_equal = p1.eq(&shrd p2);
+            let x = bar().x
+        }
+        "#;
+        let result = descend::compil_unit(src).expect("Cannot parse struct and trait");
+        assert_eq!(result.len(), 7);
+    }
+
+    #[test]
+    fn non_place_expr_assigment() {
+        let src = r#"
+        fn main() -[cpu.thread] -> () {
+            bar().x = 42
+        }
+        "#;
+        descend::compil_unit(src).expect_err("Assigment to non place_expr not possible");
     }
 }

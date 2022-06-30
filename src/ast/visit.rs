@@ -26,6 +26,10 @@ pub trait Visit: Sized {
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
     fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
+    fn visit_struct_def(&mut self, struct_def: &StructDef) { walk_struct_def(self, struct_def) }
+    fn visit_trait_def(&mut self, trait_def: &TraitDef) { walk_trait_def(self, trait_def) }
+    fn visit_impl_def(&mut self, impl_def: &ImplDef) { walk_impl_def(self, impl_def) }
+    fn visit_item_def(&mut self, item_def: &Item) { walk_item_def(self, item_def) }
 }
 
 macro_rules! walk_list {
@@ -153,7 +157,8 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
-        }
+        },
+        PlaceExprKind::StructAcess(pl_expr, _) => visitor.visit_pl_expr(pl_expr),
     }
 }
 
@@ -240,6 +245,9 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_expr(f);
             walk_list!(visitor, visit_arg_kinded, gen_args);
         }
+        ExprKind::StructInst(_, _, _) => {
+            unimplemented!("TODO");
+        }
         ExprKind::IfElse(cond, tt, ff) => {
             visitor.visit_expr(cond);
             visitor.visit_expr(tt);
@@ -256,6 +264,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             walk_list!(visitor, visit_expr, elems);
         }
         ExprKind::Proj(e, _) => visitor.visit_expr(e),
+        ExprKind::StructAcess(e, _) => visitor.visit_expr(e),
         ExprKind::For(ident, coll, body) => {
             visitor.visit_ident(ident);
             visitor.visit_expr(coll);
@@ -335,4 +344,48 @@ pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
     visitor.visit_exec(exec);
     walk_list!(visitor, visit_prv_rel, prv_rels);
     visitor.visit_expr(body_expr)
+}
+
+pub fn walk_struct_def<V: Visit>(visitor: &mut V, struct_def: &StructDef) {
+    let StructDef {
+        name,
+        generic_params,
+        conditions,
+        decls
+    } = struct_def;
+    unimplemented!("TODO");
+}
+
+pub fn walk_trait_def<V: Visit>(visitor: &mut V, trait_def: &TraitDef) {
+    let TraitDef {
+        name,
+        generic_params,
+        conditions,
+        decls
+    } = trait_def;
+    unimplemented!("TODO");
+}
+
+pub fn walk_impl_def<V: Visit>(visitor: &mut V, impl_def: &ImplDef) {
+    let ImplDef {
+        name,
+        generic_params,
+        conditions,
+        decls,
+        trait_impl
+    } = impl_def;
+    unimplemented!("TODO");
+}
+
+pub fn walk_item_def<V: Visit>(visitor: &mut V, item_def: &Item) {
+    match item_def {
+        Item::FunDef(fun_def) =>
+            walk_fun_def(visitor, fun_def),
+        Item::StructDef(struct_def) =>
+            walk_struct_def(visitor, struct_def),
+        Item::TraitDef(trait_def) =>
+            walk_trait_def(visitor, trait_def),
+        Item::ImplDef(impl_def) =>
+            walk_impl_def(visitor, impl_def)
+    }
 }

@@ -1199,6 +1199,7 @@ fn gen_expr(
                 })
             }
         }
+        StructAcess(_, _) => unimplemented!("TODO"),
         BinOp(op, lhs, rhs) => {
             gen_bin_op_expr(op, lhs, rhs, codegen_ctx, comp_unit, dev_fun, idx_checks)
         }
@@ -1415,6 +1416,9 @@ fn gen_expr(
                 .expect("Cannot find function definition.");
             let inst_fun = partial_app_gen_args(fun_def, &kinded_args);
             gen_expr(&inst_fun, codegen_ctx, comp_unit, dev_fun, idx_checks)
+        }
+        StructInst(_, _, _) => {
+            unimplemented!("TODO");
         }
         Array(elems) => CheckedExpr::Expr(cu::Expr::InitializerList {
             elems: elems
@@ -1848,6 +1852,10 @@ fn gen_pl_expr(
                 n: *n,
             },
         },
+        desc::PlaceExpr {
+            pl_expr: desc::PlaceExprKind::StructAcess(_, _),
+            ..
+        } => unimplemented!("TODO"),
         desc::PlaceExpr {
             pl_expr: desc::PlaceExprKind::Deref(ple),
             ..
@@ -2463,6 +2471,10 @@ impl ParallelityCollec {
                 i: *i,
             },
             desc::PlaceExpr {
+                pl_expr: desc::PlaceExprKind::StructAcess(_, _),
+                ..
+            } => unimplemented!("TODO"),
+            desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Deref(_),
                 ..
             } => panic!(
@@ -2633,6 +2645,10 @@ impl ShapeExpr {
                 shape: Box::new(ShapeExpr::create_pl_expr_shape(vv, shape_ctx)),
                 i: *i,
             },
+            desc::PlaceExpr {
+                pl_expr: desc::PlaceExprKind::StructAcess(_, _),
+                ..
+            } => unimplemented!("TODO"),
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Deref(_),
                 ..

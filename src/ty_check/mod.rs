@@ -140,12 +140,16 @@ impl TyChecker {
             ExprKind::Array(elems) => self.ty_check_array(kind_ctx, ty_ctx, exec, elems)?,
             ExprKind::Tuple(elems) => self.ty_check_tuple(kind_ctx, ty_ctx, exec, elems)?,
             ExprKind::Proj(e, i) => self.ty_check_proj(kind_ctx, ty_ctx, exec, e, *i)?,
+            ExprKind::StructAcess(e, _) => unimplemented!("TODO"),
             ExprKind::App(ef, k_args, args) => {
                 self.ty_check_app(kind_ctx, ty_ctx, exec, ef, k_args, args)?
             }
             // TODO remove
             ExprKind::DepApp(ef, k_args) => {
                 unimplemented!()
+            }
+            ExprKind::StructInst(_, _, _) => {
+                unimplemented!("TODO")
             }
             ExprKind::Ref(prv, own, pl_expr) => {
                 self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv, *own, pl_expr)?
@@ -2111,6 +2115,8 @@ impl TyChecker {
                 .proj_expr_ty_mem_passed_prvs_under_exec_own(
                     kind_ctx, ty_ctx, exec, own, tuple_expr, *n,
                 )?,
+            PlaceExprKind::StructAcess(struct_expr, name) =>
+                unimplemented!("TODO"),
             // TC-Deref
             PlaceExprKind::Deref(borr_expr) => self.deref_expr_ty_mem_passed_prvs_under_exec_own(
                 kind_ctx, ty_ctx, exec, own, borr_expr,
