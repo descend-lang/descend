@@ -50,6 +50,7 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
             let view_prefix = group_mut::<1>(to_view_mut(gi_prefixs));
             decl {
                 let mut shared_input: [i32; (b_size * t_size)] @ gpu.shared;
+                let mut shared_input_bkp: [i32; (b_size * t_size)] @ gpu.shared;
                 // let mut tmp2: [i32; 1024 * 2] @ gpu.shared;
                 let mut result_reduction: [i32; b_size] @ gpu.shared;
                 let mut exclusive_prefix: [i32; 1] @ gpu.shared;
@@ -58,15 +59,19 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                 with b_input, b_agg, b_flag, b_prefix from view_input, view_aggs, view_flags, view_prefix {
                 // Copy into shared
                 let mut shared_input_view = group_mut::<t_size>(to_view_mut(& uniq shared_input));
+                let mut shared_input_bkp_view = group_mut::<t_size>(to_view_mut(& uniq shared_input_bkp));
                 let mut result_view = to_view_mut(&uniq result_reduction);
                 let mut view_exclusive_prefix = to_view_mut(&uniq exclusive_prefix);
                 let mut view_last_value = to_view_mut(&uniq last_value);
                 let group_input = group_mut::<t_size>(b_input);
                 parfor thread in block
-                with t_shared_input, t_input from
-                    &uniq *shared_input_view, &uniq *group_input {
+                with t_shared_input, t_input, t_shared_input_bkp from
+                    &uniq *shared_input_view, &uniq *group_input, &uniq * shared_input_bkp_view {
                     for_nat k in range(0, t_size) {
                         t_shared_input[k] = t_input[k]
+                    };
+                    for_nat k in range(0, t_size) {
+                        t_shared_input_bkp[k] = t_input[k]
                     } 
                 };
 
@@ -214,7 +219,8 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                 parfor _ in split_thread_grp::<1>(block).0
                 with last, t_last_bkp from &uniq *tmp_last, &uniq *view_last_value
                 {
-                    *last = *t_last_bkp
+                    // *last = *t_last_bkp
+                    *last = 0
                 };
                 // downsweep(block, &uniq shared_input);
                 {
@@ -238,10 +244,10 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                     exclusive_prefix_bkp = *t_exclusive_prefix
                 };
                 parfor thread in block
-                with t_tmp, t_input from &uniq *shared_input_view, group_input   {
+                with t_tmp, t_input, t_input_bkp from &uniq *shared_input_view, group_input, shared_input_bkp_view   {
                     // Workaround for *exclusive_prefix in 2 b_size lines
                     for_nat k in range(0, t_size) {
-                        t_input[k] = t_tmp[k] + view_exclusive_prefix[0]
+                        t_input[k] = t_tmp[k] + view_exclusive_prefix[0] + t_input_bkp[k]
                     } 
                 }
             }
