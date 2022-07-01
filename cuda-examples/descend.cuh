@@ -469,7 +469,7 @@ namespace descend {
     inline __device__ descend::tuple<descend::i32, descend::i32, descend::i32> block_dim() {
        return thrust::make_tuple(blockDim.x, blockDim.y, blockDim.z);
     }
-    inline __device__ descend::i32 block_dim_x() {
+    inline __device__ descend::i32 block_id_x() {
        return blockIdx.x;
     }
 }

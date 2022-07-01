@@ -152,6 +152,10 @@ impl TyError {
                         BorrowingError::TyError(ty_err) => {
                             ty_err.emit(source);
                         }
+                        BorrowingError::String(error_str) => {
+                            eprintln!("{:?}", error_str)
+
+                        },
                     }
                 } else {
                     eprintln!("Span was None: {:?}", self)

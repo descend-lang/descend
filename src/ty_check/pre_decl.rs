@@ -18,7 +18,7 @@ pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
 pub static ATOMIC_SET: &str = "atomic_set";
 pub static SHUFFLE_XOR: &str = "shuffle_xor";
 pub static BLOCK_DIM: &str = "block_dim";
-pub static BLOCK_DIM_X: &str = "block_dim_x";
+pub static BLOCK_ID_X: &str = "block_id_x";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -56,7 +56,7 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (ATOMIC_SET, atomic_set_ty()),
         (SHUFFLE_XOR, shuffle_xor_ty()),
         (BLOCK_DIM, block_dim_ty()),
-        (BLOCK_DIM_X, block_dim_x_ty()),
+        (BLOCK_ID_X, block_id_x_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -197,6 +197,7 @@ fn shuffle_xor_ty() -> Ty {
     ))
 }
 
+// TODO
 fn block_dim_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![],
@@ -212,7 +213,7 @@ fn block_dim_ty() -> Ty {
     ))
 }
 
-fn block_dim_x_ty() -> Ty {
+fn block_id_x_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![],
         vec![],

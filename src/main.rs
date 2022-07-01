@@ -2,6 +2,30 @@ use descend::compile;
 use std::{env, fs, process::Command};
 use std::io::{self, Write};
 
+// fn fmain() {
+//    let mut args: Vec<String> = env::args().rev().collect();
+// 
+//    // Popfile path
+//    args.pop();
+// 
+//    // Get mode 
+//    let mode = args.pop().expect("[Err] Missing mode!");
+// 
+//    let transpile = false;
+// 
+//    match mode {
+//       "transpile" => {
+//          while !args.is_empty() {
+//             let curr_word = args.pop().expect("Unexpected End of arguments");
+//             match curr_word.as_str() {
+//                "-o" => 
+//             }
+//          }
+//          let output_file = args.pop();
+//       }
+//    }
+// }
+
 fn main() {
    // let output = compile("examples/infer/parral-prefix.desc");
    // Because pop takes the last element, we need to reverse
