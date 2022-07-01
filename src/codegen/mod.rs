@@ -276,6 +276,28 @@ fn gen_stmt(
             let (init, cond, iter) = match range {
                 desc::Nat::App(r_name, input) => {
                     let (init_decl, cond, iter) = match r_name.name.as_str() {
+                        "range" => {
+                            let init_decl = cu::Stmt::VarDecl {
+                                name: ident.name.clone(),
+                                ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+                                addr_space: None,
+                                expr: Some(cu::Expr::Nat(input[0].clone())),
+                            };
+                            let cond = cu::Expr::BinOp {
+                                op: cu::BinOp::Lt,
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::Nat(input[1].clone())),
+                            };
+                            let iter = cu::Expr::Assign {
+                                lhs: Box::new(i.clone()),
+                                rhs: Box::new(cu::Expr::BinOp {
+                                    op: cu::BinOp::Add,
+                                    lhs: Box::new(i),
+                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(1))),
+                                }),
+                            };
+                            (init_decl, cond, iter)
+                        }
                         "halved_range" => {
                             let init_decl = cu::Stmt::VarDecl {
                                 name: ident.name.clone(),
