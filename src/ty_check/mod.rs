@@ -684,10 +684,16 @@ impl TyChecker {
         exec: Exec,
         expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        self.unsafeMode = true;
-        let case_true_ty_ctx =
-            self.ty_check_expr(kind_ctx, ty_ctx.clone(), exec, expr)?;
-        self.unsafeMode = false;
+        // Ingore nested unsafe blocks
+        let case_true_ty_ctx = if self.unsafeMode {
+            self.ty_check_expr(kind_ctx, ty_ctx.clone(), exec, expr)?
+        } else {
+            self.unsafeMode = true;
+            let case_true_ty_ctx =
+                self.ty_check_expr(kind_ctx, ty_ctx.clone(), exec, expr)?;
+            self.unsafeMode = false;
+            case_true_ty_ctx
+        };
         Ok((
            case_true_ty_ctx,
            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
