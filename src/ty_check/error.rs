@@ -154,7 +154,6 @@ impl TyError {
                         }
                         BorrowingError::String(error_str) => {
                             eprintln!("{:?}", error_str)
-
                         },
                     }
                 } else {
