@@ -95,12 +95,10 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                 };
 
                 parfor thread in split_thread_grp::<1>(block).0
-                // This feels wrong...
                 with t_r, t_agg from &uniq *result_view, &uniq *b_agg {
                     *t_agg = *t_r
                 };
                 // Cheesy Threadfence
-                // This feels wrong...
                 parfor thread in split_thread_grp::<1>(block).0
                 with t_flag from &uniq *b_flag {
                     *t_flag = 1
@@ -108,7 +106,8 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
 
                 let block_id_x = block_dim_x();
                 parfor thread in split_thread_grp::<1>(block).0
-                with t_exclusive_prefix, t_flag, t_agg, t_prefix from &uniq *view_exclusive_prefix, &uniq *b_flag, &uniq *b_agg, &uniq *b_prefix {
+                with t_exclusive_prefix, t_flag, t_agg, t_prefix from
+                &uniq *view_exclusive_prefix, &uniq *b_flag, &uniq *b_agg, &uniq *b_prefix {
                     if block_id_x > 0 {
                         let mut not_done = true;
                         let mut endIndex = block_id_x - 5;
@@ -123,7 +122,7 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                             let mut agg = 0;
                             let mut prefix = 0;
                             let mut not_break_loop = true;
-                            while i <= 5 && block_id_x - i >= 0 && not_break_loop <'a> {
+                            while i <= 5 && block_id_x - i >= 0 && not_break_loop {
                                 let raw_ptr_flag = to_raw_ptr(&uniq *t_flag);
                                 let raw_ptr_flag_offset = offset_raw_ptr::<i32>(raw_ptr_flag, 0 - i);
 
@@ -154,38 +153,7 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                             }
                         }
                     }
-                // *t_exclusive_prefix = 0
-                // unsafe code block
-                /* 
-                  inline_cuda {
-                      if (blockIdx.x > 0) {
-                        bool done = false;
-                        // WINDOW
-                        int end_index = blockIdx.x - 5;
-                        if (end_index < 0) end_index = 0;
-                        exclusive_prefix[0] = 0;
-                        while (!done) {
-                            int i = blockIdx.x - 1;
-                            while (i >= 0) {
-                                int flag = gi_flags[i];
-                                // printf("flag: %d\n", flag);
-                                if (flag == 0) {
-                                    break;
-                                } else if (flag == 1) {
-                                    exclusive_prefix[0] = exclusive_prefix[0] + gi_aggs[i];
-                                } else if (flag == 2) {
-                                    exclusive_prefix[0] = gi_prefixs[i] + exclusive_prefix[0];
-                                    done = true;
-                                    break;
-                                }
-                                i--;
-                            }
-                        }
-                      }
-                  }
-                */
                 };
-                // Is this possible without with block? I do not need it?
                 parfor thread in split_thread_grp::<1>(block).0
                 with t_r, t_prefix, t_exclusive_prefix from &uniq *result_view, &uniq *b_prefix, &shrd *view_exclusive_prefix  {
                     *t_prefix = *t_exclusive_prefix + *t_r
@@ -194,14 +162,6 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                 parfor thread in split_thread_grp::<1>(block).0
                 with t_flag from &uniq *b_flag {
                     *t_flag = 2
-                };
-
-                let tmp_view2 = to_view_mut(&uniq shared_input);
-                let tmp_last = (split uniq ((b_size * t_size) - 1) (*tmp_view2)).1;
-                parfor _ in split_thread_grp::<1>(block).0
-                with last, t_last_bkp from &uniq *tmp_last, &uniq *view_last_value
-                {
-                    *t_last_bkp = *last
                 };
 
                 // upsweep::<b_size, t_size>(block, &uniq shared_input)
@@ -216,8 +176,10 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                         { arr[(b_size * t_size)/d-1] = arr[(b_size * t_size)/d-1] + arr[b_size/d-1] }
                     }
                 };
+                let tmp_view2 = to_view_mut(&uniq shared_input);
+                let tmp_last = (split uniq ((b_size * t_size) - 1) (*tmp_view2)).1;
                 parfor _ in split_thread_grp::<1>(block).0
-                with last, t_last_bkp from &uniq *tmp_last, &uniq *view_last_value
+                with last from &uniq *tmp_last
                 {
                     // *last = *t_last_bkp
                     *last = 0
@@ -238,11 +200,6 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
                     }
                 };
                 // end downsweep
-                let mut exclusive_prefix_bkp = 0;
-                parfor thread in split_thread_grp::<1>(block).0
-                with t_r, t_prefix, t_exclusive_prefix from &uniq *result_view, &uniq *b_prefix, &shrd *view_exclusive_prefix  {
-                    exclusive_prefix_bkp = *t_exclusive_prefix
-                };
                 parfor thread in block
                 with t_tmp, t_input, t_input_bkp from &uniq *shared_input_view, group_input, shared_input_bkp_view   {
                     // Workaround for *exclusive_prefix in 2 b_size lines
