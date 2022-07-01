@@ -892,7 +892,8 @@ fn gen_exec(
                 })
                 .collect::<Vec<_>>();
             let mut all_param_decls = param_decls;
-            all_param_decls.extend(nat_param_decls);
+            // Why did we need that?
+            // all_param_decls.extend(nat_param_decls);
             (
                 cu::Expr::Lambda {
                     captures: vec![],
@@ -938,7 +939,8 @@ fn gen_exec(
             }
         })
         .collect::<Vec<_>>();
-    args.append(&mut nat_input_idents);
+    // Why did we needed them?
+    // args.append(&mut nat_input_idents);
 
     if checks.is_empty() {
         CheckedExpr::Expr(cu::Expr::FunCall {
