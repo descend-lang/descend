@@ -90,7 +90,7 @@ fn ownership_safe_deref_raw(
 ) -> OwnResult<HashSet<Loan>> {
     // TODO is anything here correct?
     if !(&ty_checker.unsafeMode) {
-        panic!("Cannot deref raw pointer in safe descend!");
+        return Err(BorrowingError::String("Canot deref raw pointer in safe descend!".to_string()))
     }
 
     let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(

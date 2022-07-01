@@ -245,6 +245,7 @@ pub enum BorrowingError {
     BorrowNotInReborrowList(Place),
     TemporaryConflictingBorrow(String),
     TyError(Box<TyError>),
+    String(String),
 }
 
 impl From<TyError> for BorrowingError {

@@ -317,8 +317,8 @@ impl Constrainable for DataTy {
                 }
             }
             (DataTyKind::Range, DataTyKind::Range) => Ok(()), // FIXME/ REMOVE
-            (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
-                Ok(())
+            (DataTyKind::RawPtr(dty1), DataTyKind::RawPtr(dty2)) => {
+                dty1.constrain(dty2, constr_map, prv_rels)
             }
             (DataTyKind::Dead(_), _) => {
                 panic!()
