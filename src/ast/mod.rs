@@ -21,6 +21,7 @@ pub mod visit_mut;
 #[derive(Clone, Debug)]
 pub struct CompilUnit<'a> {
     pub fun_defs: Vec<FunDef>,
+    pub fun_decls: Vec<FunDecl>,
     pub struct_defs: Vec<StructDef>,
     pub trait_defs: Vec<TraitDef>,
     pub impl_defs: Vec<ImplDef>,
@@ -30,6 +31,7 @@ pub struct CompilUnit<'a> {
 impl<'a> CompilUnit<'a> {
     pub fn new(defs: Vec<Item>, source: &'a SourceCode<'a>) -> Self {
         let mut fun_defs: Vec<FunDef> = Vec::with_capacity(defs.len());
+        let mut fun_decls: Vec<FunDecl> = Vec::with_capacity(defs.len());
         let mut struct_defs: Vec<StructDef> = Vec::with_capacity(defs.len());
         let mut trait_defs: Vec<TraitDef> = Vec::with_capacity(defs.len());
         let mut impl_defs: Vec<ImplDef> = Vec::with_capacity(defs.len());
@@ -37,12 +39,13 @@ impl<'a> CompilUnit<'a> {
             .for_each(|f| {
                 match f {
                     Item::FunDef(fun_def) => fun_defs.push(fun_def.clone()),
+                    Item::FunDecl(fun_decl) => fun_decls.push(fun_decl.clone()),
                     Item::StructDef(struct_def) => struct_defs.push(struct_def.clone()),
                     Item::TraitDef(trait_def) => trait_defs.push(trait_def.clone()),
                     Item::ImplDef(impl_def) => impl_defs.push(impl_def.clone()),
                 }
             });
-        CompilUnit { fun_defs, struct_defs, trait_defs, impl_defs, source }
+        CompilUnit { fun_defs, fun_decls, struct_defs, trait_defs, impl_defs, source }
     }
 }
 
@@ -50,6 +53,7 @@ impl<'a> CompilUnit<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     FunDef(FunDef),
+    FunDecl(FunDecl),
     StructDef(StructDef),
     TraitDef(TraitDef),
     ImplDef(ImplDef)
@@ -59,6 +63,7 @@ pub enum Item {
 pub struct FunDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
+    pub conditions: Vec<WhereClauseItem>,
     pub param_decls: Vec<ParamDecl>,
     pub ret_dty: DataTy,
     pub exec: Exec,
@@ -67,10 +72,21 @@ pub struct FunDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FunDecl {
+    pub name: String,
+    pub generic_params: Vec<IdentKinded>,
+    pub conditions: Vec<WhereClauseItem>,
+    pub param_decls: Vec<ParamTypeDecl>,
+    pub ret_dty: DataTy,
+    pub exec: Exec,
+    pub prv_rels: Vec<PrvRel>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
-    pub conditions: Vec<Predicate>,
+    pub conditions: Vec<WhereClauseItem>,
     pub decls: Vec<StructField>,
 }
 
@@ -78,7 +94,7 @@ pub struct StructDef {
 pub struct TraitDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
-    pub conditions: Vec<Predicate>,
+    pub conditions: Vec<WhereClauseItem>,
     pub decls: Vec<AssociatedItem>,
 }
 
@@ -86,7 +102,7 @@ pub struct TraitDef {
 pub struct ImplDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
-    pub conditions: Vec<Predicate>,
+    pub conditions: Vec<WhereClauseItem>,
     pub decls: Vec<AssociatedItem>,
     pub trait_impl: Option<String>
 }
@@ -98,32 +114,14 @@ pub struct StructField {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FunDecl {
-    pub name: String,
-    pub generic_params: Vec<IdentKinded>,
-    pub param_decls: Vec<ParamDecl2>,
-    pub ret_dty: DataTy,
-    pub exec: Option<Exec>,
-    pub prv_rels: Vec<PrvRel>,
-    pub body_expr: Option<Expr>,
-    pub conditions: Vec<Predicate>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParamDecl2 {
-    pub ident: Option<Ident>,
-    pub ty: Ty,
-    pub mutbl: Mutability,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum AssociatedItem {
-    Function(FunDecl),
+    FunDef(FunDef),
+    FunDecl(FunDecl),
     ConstItem(String, Ty, Option<Expr>)
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Predicate {
+pub struct WhereClauseItem {
     pub param: String,
     pub trait_bound: String,
 }
@@ -148,6 +146,12 @@ impl FunDef {
 pub struct ParamDecl {
     pub ident: Ident,
     pub ty: Option<Ty>,
+    pub mutbl: Mutability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamTypeDecl {
+    pub ty: Ty,
     pub mutbl: Mutability,
 }
 
@@ -612,7 +616,7 @@ impl fmt::Display for Kind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArgKinded {
     Ident(Ident),
     Nat(Nat),
@@ -999,6 +1003,8 @@ pub enum DataTyKind {
     // [[ dty; n ]]
     ArrayShape(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
+    StructType(String, Vec<ArgKinded>),
+    SelfType,
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
     ThreadHierchy(Box<ThreadHierchyTy>),
@@ -1046,6 +1052,8 @@ impl DataTy {
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
+            StructType(_, _) => unimplemented!("TODO"),
+            SelfType => unimplemented!("TODO"),
             Array(_, _) => false,
             RawPtr(_) => true,
             Range => true,
@@ -1076,6 +1084,8 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
+            StructType(_, _) => unimplemented!("TODO"),
+            SelfType => unimplemented!("TODO"),
             Dead(_) => false,
         }
     }
@@ -1100,6 +1110,8 @@ impl DataTy {
                 }
                 found
             }
+            DataTyKind::StructType(_, _) => unimplemented!("TODO"),
+            DataTyKind::SelfType => unimplemented!("TODO"),
             DataTyKind::Array(elem_dty, _) => self.occurs_in(elem_dty),
             DataTyKind::ArrayShape(elem_dty, _) => self.occurs_in(elem_dty),
             DataTyKind::At(elem_dty, _) => self.occurs_in(elem_dty),
@@ -1125,6 +1137,8 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
+            StructType(_, _) => unimplemented!("TODO"),
+            SelfType => unimplemented!("TODO"),
         }
     }
 
@@ -1167,6 +1181,8 @@ impl DataTy {
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
             )),
+            StructType(_, _) => unimplemented!("TODO"),
+            SelfType => unimplemented!("TODO"),
             Array(dty, n) => DataTy::new(Array(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),

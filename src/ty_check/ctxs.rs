@@ -228,7 +228,13 @@ impl TyCtx {
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
-                }
+                },
+                TyKind::Data(DataTy {
+                    dty: d::StructType(_, _), ..
+                }) => unimplemented!("TODO"),
+                TyKind::Data(DataTy {
+                    dty: d::SelfType, ..
+                }) => unimplemented!("TODO"),
             }
         }
 

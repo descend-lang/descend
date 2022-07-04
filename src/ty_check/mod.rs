@@ -2317,6 +2317,8 @@ impl TyChecker {
                         Err(CtxError::KindedIdentNotFound(ident.clone()))?
                     }
                 }
+                DataTyKind::StructType(_, _) 
+                 | DataTyKind::SelfType => unimplemented!("TODO"),
                 DataTyKind::Ref(Provenance::Value(prv), own, mem, dty) => {
                     let elem_ty = Ty::new(TyKind::Data(dty.as_ref().clone()));
                     if !elem_ty.is_fully_alive() {

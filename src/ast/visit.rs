@@ -26,6 +26,7 @@ pub trait Visit: Sized {
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
     fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
+    fn visit_fun_decl(&mut self, fun_decl: &FunDecl) { walk_fun_decl(self, fun_decl) }
     fn visit_struct_def(&mut self, struct_def: &StructDef) { walk_struct_def(self, struct_def) }
     fn visit_trait_def(&mut self, trait_def: &TraitDef) { walk_trait_def(self, trait_def) }
     fn visit_impl_def(&mut self, impl_def: &ImplDef) { walk_impl_def(self, impl_def) }
@@ -113,6 +114,8 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
         DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
+        DataTyKind::StructType(_, _) => unimplemented!("TODO"),
+        DataTyKind::SelfType => unimplemented!("TODO"),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
@@ -332,6 +335,7 @@ pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
     let FunDef {
         name: _,
         generic_params,
+        conditions,
         param_decls: params,
         ret_dty,
         exec,
@@ -343,7 +347,26 @@ pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
     visitor.visit_dty(ret_dty);
     visitor.visit_exec(exec);
     walk_list!(visitor, visit_prv_rel, prv_rels);
+    unimplemented!("TODO visit conditions");
     visitor.visit_expr(body_expr)
+}
+
+pub fn walk_fun_decl<V: Visit>(visitor: &mut V, fun_def: &FunDecl) {
+    let FunDecl {
+        name: _,
+        generic_params,
+        conditions,
+        param_decls,
+        ret_dty,
+        exec,
+        prv_rels,
+    } = fun_def;
+    walk_list!(visitor, visit_ident_kinded, generic_params);
+    unimplemented!("TODO visit paramdecls");
+    visitor.visit_dty(ret_dty);
+    visitor.visit_exec(exec);
+    walk_list!(visitor, visit_prv_rel, prv_rels);
+    unimplemented!("TODO visit conditions");
 }
 
 pub fn walk_struct_def<V: Visit>(visitor: &mut V, struct_def: &StructDef) {
@@ -381,6 +404,8 @@ pub fn walk_item_def<V: Visit>(visitor: &mut V, item_def: &Item) {
     match item_def {
         Item::FunDef(fun_def) =>
             walk_fun_def(visitor, fun_def),
+        Item::FunDecl(fun_decl) =>
+            walk_fun_decl(visitor, fun_decl),
         Item::StructDef(struct_def) =>
             walk_struct_def(visitor, struct_def),
         Item::TraitDef(trait_def) =>

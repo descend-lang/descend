@@ -2242,6 +2242,9 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             dty: d::Tuple(tys), ..
         }) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect()),
         Data(desc::DataTy {
+            dty: d::StructType(_, _), ..
+        }) => unimplemented!("TODO"),
+        Data(desc::DataTy {
             dty: d::Array(ty, n),
             ..
         }) => cu::Ty::Array(Box::new(gen_ty(&Data(ty.as_ref().clone()), m)), n.clone()),
@@ -2326,6 +2329,11 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             dty: d::Dead(_), ..
         }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
+        }
+        Data(desc::DataTy {
+            dty: d::SelfType, ..
+        }) => {
+            panic!("Self types cannot be generated.")
         }
         Fn(_, _, _, _) => unimplemented!("needed?"),
         Dead(_) => panic!("Dead types cannot be generated."),
