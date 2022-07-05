@@ -52,6 +52,8 @@ pub enum TyError {
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
     UnexpectedType,
+    // The thread hierarchy dimension referred to does not exist
+    IllegalDimension,
     // TODO remove as soon as possible
     String(String),
 }

@@ -1,6 +1,6 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Ident, IdentKinded, Memory, Nat, Provenance, ThreadHierchyTy,
-    Ty, TyKind,
+    ArgKinded, DataTy, DataTyKind, Dim, Ident, IdentKinded, Memory, Nat, Provenance,
+    ThreadHierchyTy, Ty, TyKind,
 };
 use std::collections::HashMap;
 
@@ -104,9 +104,10 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
             infer_kargs_th_hierchies(map, th_hy1, th_hy2)
         }
         (
-            DataTyKind::SplitThreadHierchy(th_hy1, n1),
-            DataTyKind::SplitThreadHierchy(th_hy2, n2),
+            DataTyKind::SplitThreadHierchy(dim_compo1, th_hy1, n1),
+            DataTyKind::SplitThreadHierchy(dim_compo2, th_hy2, n2),
         ) => {
+            panic_if_neq!(dim_compo1, dim_compo2);
             infer_kargs_th_hierchies(map, th_hy1, th_hy2);
             infer_kargs_nats(map, n1, n2);
         }
@@ -144,27 +145,38 @@ fn infer_kargs_th_hierchies(
     mono_hierchy: &ThreadHierchyTy,
 ) {
     match (poly_hierchy, mono_hierchy) {
-        (
-            ThreadHierchyTy::BlockGrp(ln1, ln2, ln3, lm1, lm2, lm3),
-            ThreadHierchyTy::BlockGrp(rn1, rn2, rn3, rm1, rm2, rm3),
-        ) => {
-            infer_kargs_nats(map, ln1, rn1);
-            infer_kargs_nats(map, ln2, rn2);
-            infer_kargs_nats(map, ln3, rn3);
-            infer_kargs_nats(map, lm1, rm1);
-            infer_kargs_nats(map, lm2, rm2);
-            infer_kargs_nats(map, lm3, rm3);
+        (ThreadHierchyTy::BlockGrp(ldim1, ldim2), ThreadHierchyTy::BlockGrp(rdim1, rdim2)) => {
+            infer_dim(map, ldim1, rdim1);
+            infer_dim(map, ldim2, rdim2);
         }
-        (ThreadHierchyTy::ThreadGrp(ln1, ln2, ln3), ThreadHierchyTy::ThreadGrp(rn1, rn2, rn3)) => {
-            infer_kargs_nats(map, ln1, rn1);
-            infer_kargs_nats(map, ln2, rn2);
-            infer_kargs_nats(map, ln3, rn3);
+        (ThreadHierchyTy::ThreadGrp(ldim), ThreadHierchyTy::ThreadGrp(rdim)) => {
+            infer_dim(map, ldim, rdim);
         }
         (ThreadHierchyTy::WarpGrp(n1), ThreadHierchyTy::WarpGrp(n2)) => {
             infer_kargs_nats(map, n1, n2)
         }
         (ThreadHierchyTy::Warp, ThreadHierchyTy::Warp) => {}
         (ThreadHierchyTy::Thread, ThreadHierchyTy::Thread) => {}
+        _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
+    }
+}
+
+fn infer_dim(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
+    match (poly_dim, mono_dim) {
+        (Dim::XYZ(lx, ly, lz), Dim::XYZ(rx, ry, rz)) => {
+            infer_kargs_nats(map, lx, rx);
+            infer_kargs_nats(map, ly, ry);
+            infer_kargs_nats(map, lz, rz);
+        }
+        (Dim::XY(l1, l2), Dim::XY(r1, r2))
+        | (Dim::XZ(l1, l2), Dim::XZ(r1, r2))
+        | (Dim::YZ(l1, l2), Dim::YZ(r1, r2)) => {
+            infer_kargs_nats(map, l1, r1);
+            infer_kargs_nats(map, l2, r2);
+        }
+        (Dim::X(l), Dim::X(r)) | (Dim::Y(l), Dim::Y(r)) | (Dim::Z(l), Dim::Z(r)) => {
+            infer_kargs_nats(map, l, r)
+        }
         _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
     }
 }

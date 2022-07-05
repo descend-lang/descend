@@ -303,6 +303,7 @@ pub enum ExprKind {
     ParBranch(Box<Expr>, Vec<Ident>, Vec<Expr>),
     ParForWith(
         Option<Vec<Expr>>,
+        DimCompo,
         Option<Ident>,
         Box<Expr>,
         Vec<Ident>,
@@ -810,11 +811,61 @@ impl Ty {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum Dim {
+    XYZ(Nat, Nat, Nat),
+    XY(Nat, Nat),
+    XZ(Nat, Nat),
+    YZ(Nat, Nat),
+    X(Nat),
+    Y(Nat),
+    Z(Nat),
+}
+
+impl fmt::Display for Dim {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Dim::*;
+        match self {
+            XYZ(n1, n2, n3) => write!(f, "{}, {}, {}", n1, n2, n3),
+            XY(n1, n2) | XZ(n1, n2) | YZ(n1, n2) => write!(f, "{}, {}", n1, n2),
+            X(n) | Y(n) | Z(n) => write!(f, "{}", n),
+        }
+    }
+}
+
+impl Dim {
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use Dim::*;
+        match self {
+            XYZ(n1, n2, n3) => XYZ(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+                n3.subst_ident_kinded(ident_kinded, with),
+            ),
+            XY(n1, n2) => XY(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+            ),
+            XZ(n1, n2) => XZ(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+            ),
+            YZ(n1, n2) => YZ(
+                n1.subst_ident_kinded(ident_kinded, with),
+                n2.subst_ident_kinded(ident_kinded, with),
+            ),
+            X(n) => X(n.subst_ident_kinded(ident_kinded, with)),
+            Y(n) => Y(n.subst_ident_kinded(ident_kinded, with)),
+            Z(n) => Z(n.subst_ident_kinded(ident_kinded, with)),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ThreadHierchyTy {
     // BlockGrp(gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z)
-    BlockGrp(Nat, Nat, Nat, Nat, Nat, Nat),
+    BlockGrp(Dim, Dim),
     // ThreadGrp(blockDim.x, blockDim.y, blockDim.z)
-    ThreadGrp(Nat, Nat, Nat),
+    ThreadGrp(Dim),
     WarpGrp(Nat),
     Warp,
     Thread,
@@ -824,12 +875,8 @@ impl fmt::Display for ThreadHierchyTy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ThreadHierchyTy::*;
         match self {
-            BlockGrp(n1, n2, n3, m1, m2, m3) => write!(
-                f,
-                "BlockGrp<{}, {}, {}, ThreadGrp<{}, {}, {}>>",
-                n1, n2, n3, m1, m2, m3
-            ),
-            ThreadGrp(n1, n2, n3) => write!(f, "ThreadGrp<{}, {}, {}>", n1, n2, n3),
+            BlockGrp(d1, d2) => write!(f, "BlockGrp<{}, ThreadGrp<{}>>", d1, d2),
+            ThreadGrp(d) => write!(f, "ThreadGrp<{}>", d),
             WarpGrp(n) => write!(f, "WarpGrp<{}>", n),
             Warp => write!(f, "Warp"),
             Thread => write!(f, "Thread"),
@@ -841,24 +888,23 @@ impl ThreadHierchyTy {
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use ThreadHierchyTy::*;
         match self {
-            BlockGrp(n1, n2, n3, m1, m2, m3) => BlockGrp(
-                n1.subst_ident_kinded(ident_kinded, with),
-                n2.subst_ident_kinded(ident_kinded, with),
-                n3.subst_ident_kinded(ident_kinded, with),
-                m1.subst_ident_kinded(ident_kinded, with),
-                m2.subst_ident_kinded(ident_kinded, with),
-                m3.subst_ident_kinded(ident_kinded, with),
+            BlockGrp(d1, d2) => BlockGrp(
+                d1.subst_ident_kinded(ident_kinded, with),
+                d2.subst_ident_kinded(ident_kinded, with),
             ),
-            ThreadGrp(n1, n2, n3) => ThreadGrp(
-                n1.subst_ident_kinded(ident_kinded, with),
-                n2.subst_ident_kinded(ident_kinded, with),
-                n3.subst_ident_kinded(ident_kinded, with),
-            ),
+            ThreadGrp(d) => ThreadGrp(d.subst_ident_kinded(ident_kinded, with)),
             WarpGrp(n) => WarpGrp(n.subst_ident_kinded(ident_kinded, with)),
             Warp => Warp,
             Thread => Thread,
         }
     }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum DimCompo {
+    X,
+    Y,
+    Z,
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -882,7 +928,7 @@ pub enum DataTyKind {
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
     ThreadHierchy(Box<ThreadHierchyTy>),
-    SplitThreadHierchy(Box<ThreadHierchyTy>, Nat),
+    SplitThreadHierchy(DimCompo, Box<ThreadHierchyTy>, Nat),
     RawPtr(Box<DataTy>),
     Range,
     // Only for type checking purposes.
@@ -925,7 +971,7 @@ impl DataTy {
             Ref(_, Ownership::Shrd, _, _) => false,
             // FIXME thread hierarchies and their splits should be non-copyable!
             ThreadHierchy(_) => false,
-            SplitThreadHierchy(_, _) => false,
+            SplitThreadHierchy(_, _, _) => false,
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
@@ -954,7 +1000,7 @@ impl DataTy {
             | Ref(_, _, _, _)
             // FIXME Thread hierarchies and their splits should be non-copyable and can therefore be dead
             | ThreadHierchy(_)
-            | SplitThreadHierchy(_, _)
+            | SplitThreadHierchy(_, _, _)
             | At(_, _)
             | Array(_, _)
             | ArrayShape(_, _) => true,
@@ -973,7 +1019,7 @@ impl DataTy {
             DataTyKind::Scalar(_)
             | DataTyKind::Ident(_)
             | DataTyKind::ThreadHierchy(_)
-            | DataTyKind::SplitThreadHierchy(_, _)
+            | DataTyKind::SplitThreadHierchy(_, _, _)
             | DataTyKind::Range => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
             DataTyKind::Atomic(sty) => &self.dty == &DataTyKind::Scalar(sty.clone()),
@@ -1000,7 +1046,7 @@ impl DataTy {
             | Ident(_)
             | Range
             | ThreadHierchy(_)
-            | SplitThreadHierchy(_, _)
+            | SplitThreadHierchy(_, _, _)
             | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
@@ -1040,7 +1086,8 @@ impl DataTy {
             ThreadHierchy(th_hy) => DataTy::new(ThreadHierchy(Box::new(
                 th_hy.subst_ident_kinded(ident_kinded, with),
             ))),
-            SplitThreadHierchy(th_hy, n) => DataTy::new(SplitThreadHierchy(
+            SplitThreadHierchy(dim_compo, th_hy, n) => DataTy::new(SplitThreadHierchy(
+                dim_compo.clone(),
                 Box::new(th_hy.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
             )),
@@ -1163,8 +1210,8 @@ impl fmt::Display for Memory {
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum Exec {
     CpuThread,
-    GpuGrid,
-    GpuBlock,
+    GpuGrid(u8),
+    GpuBlock(u8),
     GpuWarp,
     GpuThread,
     View,
@@ -1184,8 +1231,8 @@ impl fmt::Display for Exec {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Exec::CpuThread => write!(f, "cpu.thread"),
-            Exec::GpuGrid => write!(f, "gpu.grid"),
-            Exec::GpuBlock => write!(f, "gpu.block"),
+            Exec::GpuGrid(dim_size) => write!(f, "gpu.grid{}d", dim_size),
+            Exec::GpuBlock(dim_size) => write!(f, "gpu.block{}d", dim_size),
             Exec::GpuWarp => write!(f, "gpu.warp"),
             Exec::GpuThread => write!(f, "gpu.thread"),
             Exec::View => write!(f, "view"),

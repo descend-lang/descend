@@ -189,7 +189,7 @@ impl TyCtx {
                     ..
                 })
                 | TyKind::Data(DataTy {
-                    dty: d::SplitThreadHierchy(_, _),
+                    dty: d::SplitThreadHierchy(_, _, _),
                     ..
                 })
                 | TyKind::Data(DataTy {

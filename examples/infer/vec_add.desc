@@ -11,7 +11,7 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
         &uniq gpu,
         // FIXME nothing stops me from passing the complete @-value via a move here
         (&uniq a_array, &shrd b_array),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
+        | grid: BlockGrp<X<64>, ThreadGrp<X<1024>>>,
           input: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n])
         | -[gpu.grid]-> () {
             let view_a = group_mut::<1024>(to_view_mut(input.0));

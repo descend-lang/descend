@@ -174,6 +174,7 @@ impl TyChecker {
                 )?,
             ExprKind::ParForWith(
                 decls,
+                par_dim,
                 parall_ident,
                 parall_collec,
                 input_idents,
@@ -184,6 +185,7 @@ impl TyChecker {
                 ty_ctx,
                 exec,
                 decls,
+                par_dim,
                 parall_ident,
                 parall_collec,
                 input_idents,
@@ -685,7 +687,7 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let parall_collec_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, parall_collec)?;
         if let TyKind::Data(DataTy {
-            dty: DataTyKind::SplitThreadHierchy(th, n),
+            dty: DataTyKind::SplitThreadHierchy(split_dim, th, n),
             ..
         }) = &parall_collec.ty.as_ref().unwrap().ty
         {
@@ -704,6 +706,7 @@ impl TyChecker {
                 )));
             }
             let idents_typed = Self::parbranch_parall_ident_dty_from_split(
+                split_dim,
                 branch_idents,
                 th.as_ref().clone(),
                 n.clone(),
@@ -732,37 +735,26 @@ impl TyChecker {
     }
 
     fn parbranch_parall_ident_dty_from_split(
+        split_dim: &DimCompo,
         idents: &[Ident],
         orig_th: ThreadHierchyTy,
         pos: Nat,
     ) -> TyResult<Vec<IdentTyped>> {
         let (lth, rth) = match orig_th {
-            ThreadHierchyTy::BlockGrp(m1, m2, m3, n1, n2, n3) => (
-                ThreadHierchyTy::BlockGrp(
-                    pos.clone(),
-                    m2.clone(),
-                    m3.clone(),
-                    n1.clone(),
-                    n2.clone(),
-                    n3.clone(),
-                ),
-                ThreadHierchyTy::BlockGrp(
-                    Nat::BinOp(BinOpNat::Sub, Box::new(m1), Box::new(pos)),
-                    m2,
-                    m3,
-                    n1,
-                    n2,
-                    n3,
-                ),
-            ),
-            ThreadHierchyTy::ThreadGrp(n1, n2, n3) => (
-                ThreadHierchyTy::ThreadGrp(pos.clone(), n2.clone(), n3.clone()),
-                ThreadHierchyTy::ThreadGrp(
-                    Nat::BinOp(BinOpNat::Sub, Box::new(n1), Box::new(pos)),
-                    n2,
-                    n3,
-                ),
-            ),
+            ThreadHierchyTy::BlockGrp(b_dim, t_dim) => {
+                let (lhs_split_dim, rhs_split_dim) = Self::split_dim(split_dim, pos, b_dim)?;
+                (
+                    ThreadHierchyTy::BlockGrp(lhs_split_dim, t_dim.clone()),
+                    ThreadHierchyTy::BlockGrp(rhs_split_dim, t_dim),
+                )
+            }
+            ThreadHierchyTy::ThreadGrp(t_dim) => {
+                let (lhs_split_dim, rhs_split_dim) = Self::split_dim(split_dim, pos, t_dim)?;
+                (
+                    ThreadHierchyTy::ThreadGrp(lhs_split_dim),
+                    ThreadHierchyTy::ThreadGrp(rhs_split_dim),
+                )
+            }
             _ => panic!("A non-splittable parallel resource should not exist here"),
         };
         let li = IdentTyped::new(
@@ -782,28 +774,130 @@ impl TyChecker {
         Ok(vec![li, ri])
     }
 
-    // TODO split up groupings, i.e., deal with TupleViews and require enough functions.
+    fn split_dim(split_dim: &DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
+        Ok(match dim {
+            Dim::XYZ(n1, n2, n3) => match split_dim {
+                DimCompo::X => (
+                    Dim::XYZ(pos.clone(), n2.clone(), n3.clone()),
+                    Dim::XYZ(
+                        Nat::BinOp(BinOpNat::Sub, Box::new(n1), Box::new(pos)),
+                        n2,
+                        n3,
+                    ),
+                ),
+                DimCompo::Y => (
+                    Dim::XYZ(n1.clone(), pos.clone(), n3.clone()),
+                    Dim::XYZ(
+                        n1,
+                        Nat::BinOp(BinOpNat::Sub, Box::new(n2), Box::new(pos)),
+                        n3,
+                    ),
+                ),
+                DimCompo::Z => (
+                    Dim::XYZ(n1.clone(), n2.clone(), pos.clone()),
+                    Dim::XYZ(
+                        n1,
+                        n2,
+                        Nat::BinOp(BinOpNat::Sub, Box::new(n3), Box::new(pos)),
+                    ),
+                ),
+            },
+            Dim::XY(n1, n2) => match split_dim {
+                DimCompo::X => (
+                    Dim::XY(pos.clone(), n2.clone()),
+                    Dim::XY(Nat::BinOp(BinOpNat::Sub, Box::new(n1), Box::new(pos)), n2),
+                ),
+                DimCompo::Y => (
+                    Dim::XY(n1.clone(), pos.clone()),
+                    Dim::XY(n1, Nat::BinOp(BinOpNat::Sub, Box::new(n2), Box::new(pos))),
+                ),
+                DimCompo::Z => return Err(TyError::IllegalDimension),
+            },
+            Dim::XZ(n1, n2) => match split_dim {
+                DimCompo::X => (
+                    Dim::XZ(pos.clone(), n2.clone()),
+                    Dim::XZ(Nat::BinOp(BinOpNat::Sub, Box::new(n1), Box::new(pos)), n2),
+                ),
+                DimCompo::Y => return Err(TyError::IllegalDimension),
+                DimCompo::Z => (
+                    Dim::XZ(n1.clone(), pos.clone()),
+                    Dim::XZ(n1, Nat::BinOp(BinOpNat::Sub, Box::new(n2), Box::new(pos))),
+                ),
+            },
+            Dim::YZ(n1, n2) => match split_dim {
+                DimCompo::X => return Err(TyError::IllegalDimension),
+                DimCompo::Y => (
+                    Dim::YZ(pos.clone(), n2.clone()),
+                    Dim::YZ(Nat::BinOp(BinOpNat::Sub, Box::new(n1), Box::new(pos)), n2),
+                ),
+                DimCompo::Z => (
+                    Dim::YZ(n1.clone(), pos.clone()),
+                    Dim::YZ(n1, Nat::BinOp(BinOpNat::Sub, Box::new(n2), Box::new(pos))),
+                ),
+            },
+            Dim::X(n) => {
+                if let DimCompo::X = split_dim {
+                    (
+                        Dim::X(pos.clone()),
+                        Dim::X(Nat::BinOp(BinOpNat::Sub, Box::new(n), Box::new(pos))),
+                    )
+                } else {
+                    return Err(TyError::IllegalDimension);
+                }
+            }
+            Dim::Y(n) => {
+                if let DimCompo::Y = split_dim {
+                    (
+                        Dim::Y(pos.clone()),
+                        Dim::Y(Nat::BinOp(BinOpNat::Sub, Box::new(n), Box::new(pos))),
+                    )
+                } else {
+                    return Err(TyError::IllegalDimension);
+                }
+            }
+            Dim::Z(n) => {
+                if let DimCompo::Z = split_dim {
+                    (
+                        Dim::Z(pos.clone()),
+                        Dim::Z(Nat::BinOp(BinOpNat::Sub, Box::new(n), Box::new(pos))),
+                    )
+                } else {
+                    return Err(TyError::IllegalDimension);
+                }
+            }
+        })
+    }
+
     fn ty_check_par_for(
         &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
         decls: &mut Option<Vec<Expr>>,
+        par_dim: &DimCompo,
         parall_ident: &Option<Ident>,
         parall_collec: &mut Expr,
         input_idents: &[Ident],
         input_exprs: &mut [Expr],
         body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        fn to_exec(parall_collec: &Expr) -> TyResult<Exec> {
-            match &parall_collec.ty.as_ref().unwrap().ty {
+        fn to_exec(parall_collec_ty: &TyKind) -> TyResult<Exec> {
+            match parall_collec_ty {
                 TyKind::Data(DataTy {
                     dty: DataTyKind::ThreadHierchy(th_hy),
                     ..
                 }) => match th_hy.as_ref() {
-                    ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => Ok(Exec::GpuGrid),
-                    ThreadHierchyTy::ThreadGrp(_, _, _) => Ok(Exec::GpuBlock),
-                    ThreadHierchyTy::WarpGrp(_) => Ok(Exec::GpuBlock),
+                    ThreadHierchyTy::BlockGrp(b_dim, _) => match b_dim {
+                        Dim::XYZ(_, _, _) => Ok(Exec::GpuGrid(3)),
+                        Dim::XY(_, _) | Dim::XZ(_, _) | Dim::YZ(_, _) => Ok(Exec::GpuGrid(2)),
+                        Dim::X(_) | Dim::Y(_) | Dim::Z(_) => Ok(Exec::GpuGrid(1)),
+                    },
+                    ThreadHierchyTy::ThreadGrp(t_dim) => match t_dim {
+                        Dim::XYZ(_, _, _) => Ok(Exec::GpuBlock(3)),
+                        Dim::XY(_, _) | Dim::XZ(_, _) | Dim::YZ(_, _) => Ok(Exec::GpuBlock(2)),
+                        Dim::X(_) | Dim::Y(_) | Dim::Z(_) => Ok(Exec::GpuBlock(1)),
+                    },
+                    ThreadHierchyTy::WarpGrp(_) => unimplemented!(),
                     ThreadHierchyTy::Warp => Ok(Exec::GpuWarp),
                     // TODO error instead?
                     ThreadHierchyTy::Thread => Ok(Exec::GpuThread),
@@ -848,7 +942,7 @@ impl TyChecker {
 
         let parall_collec_ty_ctx =
             self.ty_check_expr(kind_ctx, decl_ty_ctx, exec, parall_collec)?;
-        let allowed_exec = to_exec(parall_collec)?;
+        let allowed_exec = to_exec(&parall_collec.ty.as_ref().unwrap().ty)?;
         if allowed_exec != exec {
             return Err(TyError::String(format!(
                 "Trying to run a parallel for-loop over {:?} inside of {:?}",
@@ -861,9 +955,15 @@ impl TyChecker {
         }
 
         let input_idents_typed = TyChecker::type_input_idents(input_idents, input_exprs)?;
-        let parall_ident_typed =
-            TyChecker::parfor_parall_ident_ty_from_parall_collec(parall_ident, parall_collec)?;
-        let body_exec = TyChecker::exec_for_parall_collec(&parall_ident_typed)?;
+        let parall_ident_typed = TyChecker::parfor_parall_ident_ty_from_parall_collec(
+            par_dim,
+            parall_ident,
+            parall_collec,
+        )?;
+        let body_exec = match &parall_ident_typed {
+            Some(id_ty) => to_exec(&id_ty.ty.ty)?,
+            None => Exec::GpuThread,
+        };
         let mut frm_ty = input_idents_typed
             .into_iter()
             .map(FrameEntry::Var)
@@ -879,9 +979,7 @@ impl TyChecker {
 
         Ok((
             input_ty_ctx,
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::Unit,
-            )))),
+            Ty::new(TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))),
         ))
     }
 
@@ -927,6 +1025,7 @@ impl TyChecker {
     }
 
     fn parfor_parall_ident_ty_from_parall_collec(
+        dim: &DimCompo,
         parall_ident: &Option<Ident>,
         parall_collec: &Expr,
     ) -> TyResult<Option<IdentTyped>> {
@@ -938,13 +1037,22 @@ impl TyChecker {
                 dty: DataTyKind::ThreadHierchy(th_hy),
                 ..
             }) => match th_hy.as_ref() {
-                ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
-                    ThreadHierchyTy::ThreadGrp(m1.clone(), m2.clone(), m3.clone())
+                ThreadHierchyTy::BlockGrp(b_dim, t_dim) => {
+                    let parall_ident_dim = Self::remove_dim(dim, b_dim)?;
+                    match parall_ident_dim {
+                        Some(d) => ThreadHierchyTy::BlockGrp(d, t_dim.clone()),
+                        None => ThreadHierchyTy::ThreadGrp(t_dim.clone()),
+                    }
+                }
+                ThreadHierchyTy::ThreadGrp(t_dim) => {
+                    let parall_ident_dim = Self::remove_dim(dim, t_dim)?;
+                    match parall_ident_dim {
+                        Some(d) => ThreadHierchyTy::ThreadGrp(d),
+                        None => ThreadHierchyTy::Thread,
+                    }
                 }
                 ThreadHierchyTy::WarpGrp(_) => ThreadHierchyTy::Warp,
-                ThreadHierchyTy::Warp | ThreadHierchyTy::ThreadGrp(_, _, _) => {
-                    ThreadHierchyTy::Thread
-                }
+                ThreadHierchyTy::Warp => ThreadHierchyTy::Thread,
                 ThreadHierchyTy::Thread => {
                     return Err(TyError::String(
                         "Thread is not a parallel execution resources.".to_string(),
@@ -966,32 +1074,50 @@ impl TyChecker {
         )))
     }
 
-    fn exec_for_parall_collec(parall_ident_typed: &Option<IdentTyped>) -> TyResult<Exec> {
-        if parall_ident_typed.is_none() {
-            return Ok(Exec::GpuThread);
-        }
-        let body_exec = if let TyKind::Data(DataTy {
-            dty: DataTyKind::ThreadHierchy(th_hierchy),
-            ..
-        }) = &parall_ident_typed.as_ref().unwrap().ty.ty
-        {
-            match th_hierchy.as_ref() {
-                ThreadHierchyTy::WarpGrp(_) | ThreadHierchyTy::ThreadGrp(_, _, _) => Exec::GpuBlock,
-                ThreadHierchyTy::Warp => Exec::GpuWarp,
-                ThreadHierchyTy::Thread => Exec::GpuThread,
-                ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => {
-                    return Err(TyError::String(
-                        "Cannot parallelize over multiple Grids.".to_string(),
-                    ))
+    fn remove_dim(d_compo: &DimCompo, dim: &Dim) -> TyResult<Option<Dim>> {
+        Ok(match dim {
+            Dim::XYZ(n1, n2, n3) => match d_compo {
+                DimCompo::X => Some(Dim::YZ(n2.clone(), n3.clone())),
+                DimCompo::Y => Some(Dim::XZ(n1.clone(), n3.clone())),
+                DimCompo::Z => Some(Dim::YZ(n2.clone(), n3.clone())),
+            },
+            Dim::XY(n1, n2) => match d_compo {
+                DimCompo::X => Some(Dim::Y(n2.clone())),
+                DimCompo::Y => Some(Dim::X(n1.clone())),
+                DimCompo::Z => return Err(TyError::IllegalDimension),
+            },
+            Dim::XZ(n1, n2) => match d_compo {
+                DimCompo::X => Some(Dim::Z(n2.clone())),
+                DimCompo::Y => return Err(TyError::IllegalDimension),
+                DimCompo::Z => Some(Dim::X(n1.clone())),
+            },
+            Dim::YZ(n1, n2) => match d_compo {
+                DimCompo::X => return Err(TyError::IllegalDimension),
+                DimCompo::Y => Some(Dim::Z(n2.clone())),
+                DimCompo::Z => Some(Dim::Y(n1.clone())),
+            },
+            Dim::X(_) => {
+                if let DimCompo::X = d_compo {
+                    None
+                } else {
+                    return Err(TyError::IllegalDimension);
                 }
             }
-        } else {
-            panic!(
-                "Expected a thread hierarchy type but found {:?}.",
-                &parall_ident_typed.as_ref().unwrap().ty.ty
-            )
-        };
-        Ok(body_exec)
+            Dim::Y(_) => {
+                if let DimCompo::Y = d_compo {
+                    None
+                } else {
+                    return Err(TyError::IllegalDimension);
+                }
+            }
+            Dim::Z(_) => {
+                if let DimCompo::Z = d_compo {
+                    None
+                } else {
+                    return Err(TyError::IllegalDimension);
+                }
+            }
+        })
     }
 
     fn ty_check_lambda(
@@ -2142,8 +2268,8 @@ impl TyChecker {
         match exec {
             Exec::CpuThread => Some(Memory::CpuMem),
             Exec::GpuThread => Some(Memory::GpuLocal),
-            Exec::GpuGrid => Some(Memory::GpuLocal),
-            Exec::GpuBlock => Some(Memory::GpuLocal),
+            Exec::GpuGrid(_) => Some(Memory::GpuLocal),
+            Exec::GpuBlock(_) => Some(Memory::GpuLocal),
             Exec::GpuWarp => Some(Memory::GpuLocal),
             Exec::View => None,
         }
@@ -2231,24 +2357,18 @@ impl TyChecker {
         }
     }
 
-    fn accessible_memory(exec: Exec, mem: &Memory) -> TyResult<()> {
-        let gpu_exec_to_mem = vec![
-            (Exec::CpuThread, Memory::CpuMem),
-            (Exec::GpuThread, Memory::GpuGlobal),
-            (Exec::GpuThread, Memory::GpuShared),
-            (Exec::GpuThread, Memory::GpuLocal),
-            (Exec::GpuGrid, Memory::GpuGlobal),
-            (Exec::GpuGrid, Memory::GpuShared),
-            (Exec::GpuGrid, Memory::GpuLocal),
-            (Exec::GpuBlock, Memory::GpuGlobal),
-            (Exec::GpuBlock, Memory::GpuShared),
-            (Exec::GpuBlock, Memory::GpuLocal),
-            (Exec::GpuWarp, Memory::GpuGlobal),
-            (Exec::GpuWarp, Memory::GpuShared),
-            (Exec::GpuWarp, Memory::GpuLocal),
-        ];
+    fn allowed_mem_for_exec(exec: Exec) -> Vec<Memory> {
+        match exec {
+            Exec::CpuThread => vec![Memory::CpuMem],
+            Exec::GpuThread | Exec::GpuGrid(_) | Exec::GpuBlock(_) | Exec::GpuWarp => {
+                vec![Memory::GpuGlobal, Memory::GpuShared, Memory::GpuLocal]
+            }
+            Exec::View => vec![],
+        }
+    }
 
-        if gpu_exec_to_mem.contains(&(exec, mem.clone())) {
+    fn accessible_memory(exec: Exec, mem: &Memory) -> TyResult<()> {
+        if Self::allowed_mem_for_exec(exec).contains(mem) {
             Ok(())
         } else {
             Err(TyError::String(format!(
@@ -2333,7 +2453,7 @@ impl TyChecker {
                 }
                 //FIXME check well-formedness of nats
                 DataTyKind::ThreadHierchy(th_hy) => {}
-                DataTyKind::SplitThreadHierchy(th_hy, n) => {}
+                DataTyKind::SplitThreadHierchy(dim, th_hy, n) => {}
                 DataTyKind::Tuple(elem_dtys) => {
                     for elem_dty in elem_dtys {
                         self.ty_well_formed(

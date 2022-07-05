@@ -10,6 +10,8 @@ pub trait Visit: Sized {
     fn visit_mem(&mut self, mem: &Memory) { walk_mem(self, mem) }
     fn visit_prv(&mut self, prv: &Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &ScalarTy) {}
+    fn visit_dim_compo(&mut self, _dim_compo: &DimCompo) { }
+    fn visit_dim(&mut self, dim: &Dim) { walk_dim(self, dim) }
     fn visit_th_hierchy(&mut self, th_hierchy: &ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
     fn visit_dty(&mut self, dty: &DataTy) { walk_dty(self, dty) }
     fn visit_ty(&mut self, ty: &Ty) { walk_ty(self, ty) }
@@ -77,21 +79,28 @@ pub fn walk_prv<V: Visit>(visitor: &mut V, prv: &Provenance) {
     }
 }
 
+pub fn walk_dim<V: Visit>(visitor: &mut V, dim: &Dim) {
+    match dim {
+        Dim::XYZ(n1, n2, n3) => {
+            visitor.visit_nat(n1);
+            visitor.visit_nat(n2);
+            visitor.visit_nat(n3);
+        }
+        Dim::XY(n1, n2) | Dim::XZ(n1, n2) | Dim::YZ(n1, n2) => {
+            visitor.visit_nat(n1);
+            visitor.visit_nat(n2);
+        }
+        Dim::X(n) | Dim::Y(n) | Dim::Z(n) => visitor.visit_nat(n),
+    }
+}
+
 pub fn walk_th_hierchy<V: Visit>(visitor: &mut V, th_hierchy: &ThreadHierchyTy) {
     match th_hierchy {
-        ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3) => {
-            visitor.visit_nat(n1);
-            visitor.visit_nat(n2);
-            visitor.visit_nat(n3);
-            visitor.visit_nat(m1);
-            visitor.visit_nat(m2);
-            visitor.visit_nat(m3);
+        ThreadHierchyTy::BlockGrp(d1, d2) => {
+            visitor.visit_dim(d1);
+            visitor.visit_dim(d2);
         }
-        ThreadHierchyTy::ThreadGrp(n1, n2, n3) => {
-            visitor.visit_nat(n1);
-            visitor.visit_nat(n2);
-            visitor.visit_nat(n3);
-        }
+        ThreadHierchyTy::ThreadGrp(d) => visitor.visit_dim(d),
         ThreadHierchyTy::WarpGrp(n) => visitor.visit_nat(n),
         ThreadHierchyTy::Warp => {}
         ThreadHierchyTy::Thread => {}
@@ -104,7 +113,8 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
         DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
         DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
-        DataTyKind::SplitThreadHierchy(th_hy, n) => {
+        DataTyKind::SplitThreadHierchy(dim_compo, th_hy, n) => {
+            visitor.visit_dim_compo(dim_compo);
             visitor.visit_th_hierchy(th_hy);
             visitor.visit_nat(n);
         }
@@ -266,7 +276,8 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             walk_list!(visitor, visit_ident, branch_idents);
             walk_list!(visitor, visit_expr, branch_bodies);
         }
-        ExprKind::ParForWith(decls, par_elem, parall_collec, input_elems, input, body) => {
+        ExprKind::ParForWith(decls, par_dim, par_elem, parall_collec, input_elems, input, body) => {
+            visitor.visit_dim_compo(par_dim);
             for d in decls {
                 walk_list!(visitor, visit_expr, d)
             }

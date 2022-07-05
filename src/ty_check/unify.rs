@@ -291,23 +291,14 @@ impl Constrainable for DataTy {
             (DataTyKind::ThreadHierchy(th1), DataTyKind::ThreadHierchy(th2)) => {
                 match (th1.as_mut(), th2.as_mut()) {
                     (
-                        ThreadHierchyTy::BlockGrp(n1, n2, n3, n4, n5, n6),
-                        ThreadHierchyTy::BlockGrp(m1, m2, m3, m4, m5, m6),
+                        ThreadHierchyTy::BlockGrp(b_dim1, t_dim1),
+                        ThreadHierchyTy::BlockGrp(b_dim2, t_dim2),
                     ) => {
-                        n1.constrain(m1, constr_map, prv_rels)?;
-                        n2.constrain(m2, constr_map, prv_rels)?;
-                        n3.constrain(m3, constr_map, prv_rels)?;
-                        n4.constrain(m4, constr_map, prv_rels)?;
-                        n5.constrain(m5, constr_map, prv_rels)?;
-                        n6.constrain(m6, constr_map, prv_rels)
+                        b_dim1.constrain(b_dim2, constr_map, prv_rels)?;
+                        t_dim1.constrain(t_dim2, constr_map, prv_rels)
                     }
-                    (
-                        ThreadHierchyTy::ThreadGrp(n1, n2, n3),
-                        ThreadHierchyTy::ThreadGrp(m1, m2, m3),
-                    ) => {
-                        n1.constrain(m1, constr_map, prv_rels)?;
-                        n2.constrain(m2, constr_map, prv_rels)?;
-                        n3.constrain(m3, constr_map, prv_rels)
+                    (ThreadHierchyTy::ThreadGrp(dim1), ThreadHierchyTy::ThreadGrp(dim2)) => {
+                        dim1.constrain(dim2, constr_map, prv_rels)
                     }
                     (ThreadHierchyTy::WarpGrp(n), ThreadHierchyTy::WarpGrp(m)) => {
                         n.constrain(m, constr_map, prv_rels)
@@ -336,6 +327,44 @@ impl Constrainable for DataTy {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_dty(self);
+    }
+}
+
+impl Constrainable for Dim {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        match (self, other) {
+            (Dim::XYZ(ln1, ln2, ln3), Dim::XYZ(rn1, rn2, rn3)) => {
+                ln1.constrain(rn1, constr_map, prv_rels)?;
+                ln2.constrain(rn2, constr_map, prv_rels)?;
+                ln3.constrain(rn3, constr_map, prv_rels)
+            }
+            (Dim::XY(ln1, ln2), Dim::XY(rn1, rn2))
+            | (Dim::XZ(ln1, ln2), Dim::XZ(rn1, rn2))
+            | (Dim::YZ(ln1, ln2), Dim::YZ(rn1, rn2)) => {
+                ln1.constrain(rn1, constr_map, prv_rels)?;
+                ln2.constrain(rn2, constr_map, prv_rels)
+            }
+            (Dim::X(ln), Dim::X(rn)) | (Dim::Y(ln), Dim::Y(rn)) | (Dim::Z(ln), Dim::Z(rn)) => {
+                ln.constrain(rn, constr_map, prv_rels)
+            }
+            _ => Err(TyError::CannotUnify),
+        }
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_dim(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_dim(self);
     }
 }
 

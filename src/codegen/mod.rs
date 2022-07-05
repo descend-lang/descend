@@ -406,19 +406,26 @@ fn gen_stmt(
             comp_unit,
             idx_checks,
         ),
-        ParForWith(decls, parall_ident, parall_collec, input_idents, input_exprs, body) => {
-            gen_par_for(
-                decls,
-                parall_ident,
-                parall_collec,
-                input_idents,
-                input_exprs,
-                body,
-                codegen_ctx,
-                comp_unit,
-                idx_checks,
-            )
-        }
+        ParForWith(
+            decls,
+            par_dim,
+            parall_ident,
+            parall_collec,
+            input_idents,
+            input_exprs,
+            body,
+        ) => gen_par_for(
+            decls,
+            par_dim,
+            parall_ident,
+            parall_collec,
+            input_idents,
+            input_exprs,
+            body,
+            codegen_ctx,
+            comp_unit,
+            idx_checks,
+        ),
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => {
             match gen_expr(cond, codegen_ctx, comp_unit, dev_fun, idx_checks) {
@@ -963,7 +970,7 @@ fn gen_par_branch(
     idx_checks: bool,
 ) -> cu::Stmt {
     let inner_par_collec_ty = if let desc::TyKind::Data(desc::DataTy {
-        dty: desc::DataTyKind::SplitThreadHierchy(ty_hierchy, _),
+        dty: desc::DataTyKind::SplitThreadHierchy(dim_compo, ty_hierchy, _),
         ..
     }) = &split_parall_collec.ty.as_ref().unwrap().ty
     {
@@ -1061,10 +1068,10 @@ fn par_idx_and_sync_stmt(th_hy: &desc::ThreadHierchyTy) -> (desc::Nat, Option<cu
     // TODO Refactor
     //  The same things exists in ty_check where only threadHierchyTy for elem types is returned
     match th_hy {
-        desc::ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
+        desc::ThreadHierchyTy::BlockGrp(_, _) => {
             (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
         }
-        desc::ThreadHierchyTy::ThreadGrp(_, _, _) => (
+        desc::ThreadHierchyTy::ThreadGrp(_) => (
             desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
             Some(cu::Stmt::Expr(cu::Expr::FunCall {
                 fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
@@ -1145,6 +1152,7 @@ fn gen_parall_section(
 
 fn gen_par_for(
     decls: &Option<Vec<desc::Expr>>,
+    par_dim: &desc::DimCompo,
     parall_ident: &Option<desc::Ident>,
     parall_collec: &desc::Expr,
     input_idents: &[desc::Ident],
@@ -1575,7 +1583,7 @@ fn gen_expr(
         | For(_, _, _)
         | ForNat(_, _, _)
         | ParBranch(_, _, _)
-        | ParForWith(_, _, _, _, _, _) => panic!(
+        | ParForWith(_, _, _, _, _, _, _) => panic!(
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),
@@ -2426,7 +2434,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             ..
         })
         | Data(desc::DataTy {
-            dty: desc::DataTyKind::SplitThreadHierchy(_, _),
+            dty: desc::DataTyKind::SplitThreadHierchy(_, _, _),
             ..
         })
         | Data(desc::DataTy {
@@ -2444,8 +2452,8 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
 
 fn is_dev_fun(exec: desc::Exec) -> bool {
     match exec {
-        desc::Exec::GpuGrid
-        | desc::Exec::GpuBlock
+        desc::Exec::GpuGrid(_)
+        | desc::Exec::GpuBlock(_)
         | desc::Exec::GpuWarp
         | desc::Exec::GpuThread => true,
         desc::Exec::CpuThread | desc::Exec::View => false,
@@ -2871,59 +2879,6 @@ impl ShapeExpr {
         let mut count = 0;
         collect_and_rename_input_exprs_rec(self, &mut count, vec)
     }
-}
-
-// Precondition: Views are inlined in every function definition.
-fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) -> desc::FunDef {
-    use desc::*;
-
-    struct InlineParForFuns<'a> {
-        comp_unit: &'a [FunDef],
-    }
-    impl InlineParForFuns<'_> {
-        fn create_lambda_from_fun_def(&self, fun_def_name: &str) -> ExprKind {
-            match self
-                .comp_unit
-                .iter()
-                .find(|fun_def| fun_def.name == fun_def_name)
-            {
-                Some(FunDef {
-                    param_decls: params,
-                    ret_dty,
-                    exec,
-                    body_expr,
-                    ..
-                }) => ExprKind::Lambda(
-                    params.clone(),
-                    *exec,
-                    Box::new(ret_dty.clone()),
-                    Box::new(body_expr.clone()),
-                ),
-                None => {
-                    panic!("The referenced function cannot be found in the given compilation unit.")
-                }
-            }
-        }
-    }
-
-    impl VisitMut for InlineParForFuns<'_> {
-        fn visit_expr(&mut self, expr: &mut Expr) {
-            match &mut expr.expr {
-                ExprKind::ParForWith(_, _, _, _, _, body) => match &mut body.expr {
-                    ExprKind::PlaceExpr(PlaceExpr {
-                        pl_expr: PlaceExprKind::Ident(x),
-                        ..
-                    }) => body.expr = self.create_lambda_from_fun_def(&x.name),
-                    _ => visit_mut::walk_expr(self, body),
-                },
-                _ => visit_mut::walk_expr(self, expr),
-            }
-        }
-    }
-
-    let mut inliner = InlineParForFuns { comp_unit };
-    inliner.visit_fun_def(&mut fun_def);
-    fun_def
 }
 
 fn is_shape_ty(ty: &desc::Ty) -> bool {

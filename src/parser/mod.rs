@@ -370,10 +370,14 @@ peg::parser! {
                     branch.iter().map(|(_, b)| b.clone()).collect()))
             }
             decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
-            "parfor" __ par_ident:maybe_ident() __ "in" __ parall_collec:expression() __
+            "parfor" par_dim:(_ "(" _ par_dim:dim_component() _ ")" { par_dim })? __
+                par_ident:maybe_ident() __ "in" __ parall_collec:expression() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
             "from" __ input:expression() **<1,> (_ "," _) _ body:block() {
-                Expr::new(ExprKind::ParForWith(decls, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
+                Expr::new(ExprKind::ParForWith(decls, match par_dim {
+                    Some(pd) => pd,
+                    None => DimCompo::X,
+                }, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
@@ -387,6 +391,11 @@ peg::parser! {
         rule maybe_ident() -> Option<Ident> =
             i:ident() { Some(i) }
             / "_" { None }
+
+        rule dim_component() -> DimCompo =
+            "x" { DimCompo::X }
+        /   "y" { DimCompo::Y }
+        /   "z" { DimCompo::Z }
 
         rule block() -> Expr =
             prov_values:("<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _ { prov_values })?
@@ -543,27 +552,13 @@ peg::parser! {
             / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$d"))) }
 
         pub(crate) rule th_hy() -> ThreadHierchyTy =
-        "BlockGrp" _ "<" _ n1:nat() _ ns:("," _ n2:nat() _ "," _ n3:nat() _ { (n2, n3) })? "," _
-            "ThreadGrp" _ "<" _ m1:nat() _ ms:("," _ m2:nat() _ "," _ m3:nat() _ { (m2, m3) })?
-                ">" _ ">" {
-            let (n2, n3) = match ns {
-                Some(n2_n3) => n2_n3,
-                None => (Nat::Lit(1), Nat::Lit(1))
-            };
-            let (m2, m3) = match ms {
-                Some(m2_m3) => m2_m3,
-                None => (Nat::Lit(1), Nat::Lit(1))
-            };
-            ThreadHierchyTy::BlockGrp(n1, n2, n3, m1, m2, m3)
+        "BlockGrp" _ "<" _ b_dim:dim() _ "," _ "ThreadGrp" _ "<" _ t_dim:dim() _ ">" _ ">" {
+            ThreadHierchyTy::BlockGrp(b_dim, t_dim)
         }
-        / "ThreadGrp" _ "<" _ n1:nat() _ ns:("," _ n2:nat() _ "," _ n3:nat() _ { (n2, n3) })? ">" {
-            let (n2, n3) = match ns {
-                Some(n2_n3) => n2_n3,
-                None => (Nat::Lit(1), Nat::Lit(1))
-            };
-            ThreadHierchyTy::ThreadGrp(n1, n2, n3)
+        / "ThreadGrp" _ "<" _ t_dim:dim() _ ">" {
+            ThreadHierchyTy::ThreadGrp(t_dim)
         }
-        / "WarpGrp" _ "<" n:nat() _ ">" { ThreadHierchyTy::WarpGrp(n) }
+        / "WarpGrp" _ "<" _ n:nat() _ ">" { ThreadHierchyTy::WarpGrp(n) }
         / "Warp" { ThreadHierchyTy::Warp }
 
         pub(crate) rule ownership() -> Ownership
@@ -582,16 +577,32 @@ peg::parser! {
 
         pub(crate) rule execution_resource() -> Exec
             = "cpu.thread" { Exec::CpuThread }
-            / "gpu.grid" { Exec::GpuGrid }
-            / "gpu.block" { Exec::GpuBlock }
+            / "gpu.grid" dim:exec_dim() "d" { Exec::GpuGrid(dim) }
+            / "gpu.grid" { Exec::GpuGrid(1) }
+            / "gpu.block" dim:exec_dim() "d" { Exec::GpuBlock(dim) }
+            / "gpu.block" { Exec::GpuBlock(1) }
             / "gpu.warp" { Exec::GpuWarp }
             / "gpu.thread" { Exec::GpuThread }
+
+        rule exec_dim() -> u8
+            = "3" { 3 }
+            / "2" { 2 }
+            / "1" { 1 }
 
         pub(crate) rule kind() -> Kind
             = "nat" { Kind::Nat }
             / "mem" { Kind::Memory }
             / "ty" { Kind::Ty }
             / "prv" { Kind::Provenance }
+
+        rule dim() -> Dim
+            = "XYZ" _ "<" _ n1:nat() _ "," _ n2:nat() _ "," _ n3:nat() _ ">" { Dim::XYZ(n1, n2, n3) }
+            / "XY" _ "<" _ n1:nat() _ "," _ n2:nat() _ ">" { Dim::XY(n1, n2) }
+            / "XZ" _ "<" _ n1:nat() _ "," _ n2:nat() _ ">" { Dim::XZ(n1, n2) }
+            / "YZ" _ "<" _ n1:nat() _ "," _ n2:nat() _ ">" { Dim::YZ(n1, n2) }
+            / "X" _ "<" _ n:nat() _ ">" { Dim::X(n) }
+            / "Y" _ "<" _ n:nat() _ ">" { Dim::Y(n) }
+            / "Z" _ "<" _ n:nat() _ ">" { Dim::Z(n) }
 
         rule ident() -> Ident
             = begin:position!() ident:$(identifier()) end:position!() {
@@ -1025,7 +1036,7 @@ mod tests {
         );
         assert_eq!(
             descend::execution_resource("gpu.block"),
-            Ok(Exec::GpuBlock),
+            Ok(Exec::GpuBlock(1)),
             "does not recognize gpu.block memory kind"
         );
         assert_eq!(

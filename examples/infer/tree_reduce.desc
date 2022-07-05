@@ -7,7 +7,7 @@ fn reduce<n: nat, a: prv, b: prv>(
     exec::<64, 1024>(
         &uniq gpu,
         (&uniq a_array,),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
+        | grid: BlockGrp<X<64>, ThreadGrp<X<1024>>>,
           input: (&uniq gpu.global [i32; n])| -[gpu.grid]-> () {
             let block_group = group_mut::<1024>(to_view_mut(input.0));
             parfor block in grid with ib from block_group {
