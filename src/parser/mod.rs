@@ -92,10 +92,10 @@ fn replace_arg_kinded_idents(mut item_def: Item) -> Item {
             let generic_params = 
                 match item_def {
                     Item::FunDef(fun_def) =>  &fun_def.generic_params,
-                    Item::FunDecl(_) => unimplemented!("TODO"),
-                    Item::StructDef(_) => unimplemented!("TODO"),
-                    Item::TraitDef(_) => unimplemented!("TODO"),
-                    Item::ImplDef(_) => unimplemented!("TODO"),
+                    Item::FunDecl(fun_decl) =>&fun_decl.generic_params,
+                    Item::StructDef(struct_def) => &struct_def.generic_params,
+                    Item::TraitDef(trait_def) => &trait_def.generic_params,
+                    Item::ImplDef(impl_def) => &impl_def.generic_params,
                 };
             self.ident_names_to_kinds = generic_params
                 .iter()

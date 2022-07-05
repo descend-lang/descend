@@ -1,6 +1,6 @@
 struct Point {
-            x: i32,
-            y: i32
+    x: i32,
+    y: i32
 }
 trait Eq {
     const important_const: f32;

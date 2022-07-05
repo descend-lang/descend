@@ -32,6 +32,7 @@ pub trait VisitSimilar: Sized {
     fn visit_mutabilities(&mut self, _mutbl1: &Mutability, _mutbl2: &Mutability) {}
     fn visit_lits(&mut self, _lit1: &Lit, _lit2: &Lit) {}
     fn visit_idents(&mut self, _ident1: &Ident, _ident2: &Ident) {}
+    fn visit_where_clause_items(&mut self, _item1: &WhereClauseItem, _item2: &WhereClauseItem) {}
     fn visit_patterns(&mut self, pattern1: &Pattern, pattern2: &Pattern) {
         walk_patterns(self, pattern1, pattern2)
     }
@@ -39,8 +40,32 @@ pub trait VisitSimilar: Sized {
     fn visit_param_decls(&mut self, param_decl1: &ParamDecl, param_decl2: &ParamDecl) {
         walk_param_decls(self, param_decl1, param_decl2)
     }
+    fn visit_param_type_decls(&mut self, param_decl1: &ParamTypeDecl, param_decl2: &ParamTypeDecl) {
+        walk_param_type_decls(self, param_decl, param_decl2)
+    }
+    fn visit_assosiated_items(&mut self, ass_item1: &AssociatedItem, ass_item2: &AssociatedItem) {
+        walk_ass_items(self, ass_item1, ass_item2)
+    }
+    fn visit_struct_fields(&mut self, struct_field1: &StructField, struct_field2: &StructField) {
+        walk_struct_fields(self, struct_field1, struct_field2)
+    }
     fn visit_fun_defs(&mut self, fun_def1: &FunDef, fun_def2: &FunDef) {
         walk_fun_defs(self, fun_def1, fun_def2)
+    }
+    fn visit_fun_decls(&mut self, fun_decl1: &FunDecl, fun_decl2: &FunDecl) {
+        walk_fun_decls(self, fun_decl1, fun_decl2)
+    }
+    fn visit_struct_defs(&mut self, struct_def1: &StructDef, struct_def2: &StructDef) {
+        walk_struct_def(self, struct_def1, struct_def2)
+    }
+    fn visit_trait_defs(&mut self, trait_def1: &TraitDef, trait_def2: &TraitDef) {
+        walk_trait_defs(self, trait_def1, trait_def2)
+    }
+    fn visit_impl_defs(&mut self, impl_def1: &ImplDef, impl_def2: &ImplDef) {
+        walk_impl_defs(self, impl_def1, impl_def2)
+    }
+    fn visit_item_defs(&mut self, item_def1: &Item, item_def2: &Item) {
+        walk_item_defs(self, item_def1, item_def2)
     }
 }
 
@@ -409,6 +434,40 @@ pub fn walk_param_decls<V: VisitSimilar>(
     visitor.visit_mutability(mutbl)
 }
 
+pub fn walk_param_type_decls<V: VisitSimilar>(
+    visitor: &mut V,
+    param_decl1: &ParamTypeDecl,
+    param_decl2: &ParamTypeDecl,
+) {
+    let ParamTypeDecl { ty, mutbl } = param_decl;
+    visitor.visit_ty(ty);
+    visitor.visit_mutability(mutbl)
+}
+
+pub fn walk_ass_items<V: VisitSimilar>(
+    visitor: &mut V,
+    ass_item1: &AssociatedItem,
+    ass_item2: &AssociatedItem,
+) {
+    match (ass_item1, ass_item2) {
+        (AssociatedItem::FunDef(fun_def1), AssociatedItem::FunDef(fun_def2)) =>
+            visit_fun_defs(fun_def1, fun_def2),
+        (AssociatedItem::FunDecl(fun_decl1), AssociatedItem::FunDecl(fun_decl2)) =>
+            visit_fun_defs(fun_decl1, fun_decl2), 
+        (AssociatedItem::ConstItem(name1, ty1, expr1), AssociatedItem::ConstItem(name2, ty2, expr2)) =>
+            unimplemented!("TODO hier die visit_tys und visit_exprs aufrufen
+            oder nur die visit_ty für ein der beiden const-items?"),   
+    }
+}
+
+pub fn walk_struct_fields<V: VisitSimilar>(
+    visitor: &mut V,
+    struct_field1: &StructField,
+    struct_field2: &StructField,
+) {
+    unimplemented!("TODO");
+}
+
 pub fn walk_fun_defs<V: VisitSimilar>(visitor: &mut V, fun_def1: &FunDef, fun_def2: &FunDef) {
     let FunDef {
         name: _,
@@ -418,11 +477,31 @@ pub fn walk_fun_defs<V: VisitSimilar>(visitor: &mut V, fun_def1: &FunDef, fun_de
         exec,
         prv_rels,
         body_expr,
-    } = fun_def;
+    } = fun_def;  //TODO ist das hier wirklich richtig?
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_param_decl, params);
     visitor.visit_dty(ret_dty);
     visitor.visit_exec(exec);
     walk_list!(visitor, visit_prv_rel, prv_rels);
     visitor.visit_expr(body_expr)
+}
+
+pub fn walk_fun_decls<V: VisitSimilar>(visitor: &mut V, fun_decl1: &FunDecl, fun_decl2: &FunDecl) {
+    unimplemented!("TODO");
+}
+
+pub fn walk_struct_def<V: VisitSimilar>(visitor: &mut V, struct_def1: &StructDef, struct_def2: &StructDef) {
+    unimplemented!("TODO");
+}
+
+pub fn walk_trait_defs<V: VisitSimilar>(visitor: &mut V, trait_def1: &TraitDef, trait_def2: &TraitDef) {
+    unimplemented!("TODO");
+}
+
+pub fn walk_impl_defs<V: VisitSimilar>(visitor: &mut V, impl_def1: &ImplDef, impl_def2: &ImplDef) {
+    unimplemented!("TODO");
+}
+
+pub fn walk_item_defs<V: VisitSimilar>(visitor: &mut V, item_def1: &Item, item_def2: &Item) {
+    unimplemented!("TODO");
 }
