@@ -18,6 +18,7 @@ fn main() {
    let mut custom_final_output_file = false;
    let mut final_output_file = "".to_string();
    let mut descend_header = "cuda-examples/descend.cuh".to_string();
+   let mut disable_transpile = false;
 
    while !args.is_empty() {
       let curr_word = args.pop().expect("Error while parsing arguments");
@@ -31,6 +32,8 @@ fn main() {
          }
          "-cf" => 
             compile_file = args.pop().expect("-cf is missing file path"),
+         "-nt" => 
+            disable_transpile = true,
          _ => input_file = curr_word.clone()
       }
    }
@@ -49,8 +52,12 @@ fn main() {
          if custom_final_output_file {
             binary_output_file = final_output_file.to_owned();
          }
+
+         if !disable_transpile {
+            transpile(input_file.to_string(), cuda_output_file.to_string()).expect("Compiliation failed");
+         }
+
          fs::copy(compile_file.to_owned(), build_dir.to_owned() + "/main.cu").expect("Could not copy compile_file");
-         transpile(input_file.to_string(), cuda_output_file.to_string()).expect("Compiliation failed");
          compile_to_binary(build_dir.to_owned() + "/main.cu", binary_output_file.to_string()).expect("NVCC Failed");
          if mode == "run" {
             run(binary_output_file.to_string()).expect("Execution failed");
@@ -108,4 +115,3 @@ fn run(binary_path: String) -> Result<(), String> {
       Ok(())
    }
 }
-

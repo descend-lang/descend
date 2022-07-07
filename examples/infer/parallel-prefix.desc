@@ -134,6 +134,7 @@ fn prefix_scan<g_size: nat, b_size: nat, t_size: nat>(
 
                                 unsafe {
                                     flag = *raw_ptr_flag_offset;
+                                __threadfence();
                                     agg = *raw_ptr_agg_offset;
                                     prefix = *raw_ptr_prefix_offset
                                 };

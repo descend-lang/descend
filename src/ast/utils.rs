@@ -100,7 +100,7 @@ impl Visit for FreeKindedIdents {
                 let mut inner_free_idents = FreeKindedIdents::with_bound_idents(std::iter::once(
                     IdentKinded::new(ident, Kind::Nat),
                 ));
-                // inner_free_idents.visit_expr(body);
+                inner_free_idents.visit_expr(body);
                 // TODO I think this is not needed?
                 self.set.extend(inner_free_idents.set)
             }

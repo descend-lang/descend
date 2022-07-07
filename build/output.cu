@@ -19,8 +19,8 @@ auto prefix_scan(descend::i32 *const cpu_i_array,
             (&gpu), (&(*cpu_prefix_array)));
     descend::exec<g_size, b_size>(
         (&gpu),
-        [] __device__(descend::i32 *const p0, descend::i32 *const p1,
-                      descend::i32 *const p2, descend::i32 *const p3) -> void {
+        [] __device__(descend::i32 *const p0, descend::i32 *const volatile p1,
+                      descend::i32 *const volatile p2, descend::i32 *const volatile p3) -> void {
           {
             const auto gi_i = p0;
             const auto gi_flags = p1;
@@ -113,6 +113,8 @@ auto prefix_scan(descend::i32 *const cpu_i_array,
                       const auto raw_ptr_prefix_offset =
                           descend::offset_raw_ptr<descend::i32>(raw_ptr_prefix,
                                                                 0 - i);
+                      // __threadfence();
+                      // printf("Hallo Welt\n");
                       // unsafe
                       {
                         flag = (*raw_ptr_flag_offset);
