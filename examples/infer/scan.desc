@@ -10,7 +10,7 @@ fn scan_inplace<a: prv, m: nat>(
 }
 
 fn upsweep<a: prv>(
-    thread_grp: ThreadGrp<32>,
+    thread_grp: ThreadGrp<X<32>>,
     arr_ref: &a uniq gpu.shared [i32; 64]
 ) -[gpu.block]-> () {
     for_nat d in halved_range(32) {
@@ -30,7 +30,7 @@ fn downsweep_inplace_red_add<a: prv, d: nat>(
 }
 
 fn downsweep<a: prv>(
-    block: ThreadGrp<32>,
+    block: ThreadGrp<X<32>>,
     arr_ref: &a uniq gpu.shared [i32; 64]
 ) -[gpu.block]-> () <>{
     for_nat d in doubled_range(32) {
@@ -61,7 +61,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
     exec::<gridDim, 32>(
         &'h uniq gpu,
         (&'r shrd a_array, &'m uniq out_grp, &'k uniq block_sums_grp),
-        | grid: BlockGrp<gridDim, ThreadGrp<32>>,
+        | grid: BlockGrp<X<gridDim>, ThreadGrp<X<32>>>,
           inputs: (&'r shrd gpu.global [i32; n],
                   &'m uniq gpu.global [i32; n],
                   &'k uniq gpu.global [i32; gridDim])
@@ -133,7 +133,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
     exec::<gridDim, 64>(
         &'h uniq gpu,
         (&'m uniq out_array, &'k shrd block_sums),
-        | grid: BlockGrp<gridDim, ThreadGrp<64>>,
+        | grid: BlockGrp<X<gridDim>, ThreadGrp<X<64>>>,
           inputs: (&'m uniq gpu.global [i32; n], &'k shrd gpu.global [i32; gridDim])
         | -[gpu.grid]-> () {
             let scanned_vals =

@@ -30,7 +30,7 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
     >(
         &'i uniq gpu,
         (grouped_indices, grouped_results, &'j shrd d_data),
-        | grid: BlockGrp<4, ThreadGrp<16>>,
+        | grid: BlockGrp<X<4>, ThreadGrp<X<16>>>,
           inputs: (&'g shrd gpu.global [[[[u32; 16]]; 4]],
                   &'h uniq gpu.global [[[[i32; 16]]; 4]],
                   &'j shrd gpu.global [i32; m])

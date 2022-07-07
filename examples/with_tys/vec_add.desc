@@ -14,7 +14,7 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
     exec::<64, 1024, 'h, (&'r uniq gpu.global [i32; n], &'s shrd gpu.global [i32; n])>(
         &'h uniq gpu,
         (&'r uniq a_array, &'s shrd b_array),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
+        | grid: BlockGrp<X<64>, ThreadGrp<X<1024>>>,
           input: (&'r uniq gpu.global [i32; n], &'s shrd gpu.global [i32; n])
         | -[gpu.grid]-> () {
             let view_a: &'r uniq gpu.global [[i32; n]] =

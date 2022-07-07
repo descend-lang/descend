@@ -9,7 +9,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
     exec::<gs, bs, 'h, (&'r shrd gpu.global [i32; gs*bs], &'m uniq gpu.global [i32; gs])>(
         &'h uniq gpu,
         (&'r shrd a_array, &'m uniq out_array),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
+        | grid: BlockGrp<X<64>, ThreadGrp<X<1024>>>,
           inputs: (&'r shrd gpu.global [i32; gs*bs], &'m uniq gpu.global [i32; gs])| -[gpu.grid]-> () <>{
             let view_a = to_view::<'r, gpu.global, (gs*bs), i32>(inputs.0);
             let block_group = group::<bs, 'r, gpu.global, (gs*bs), i32>(view_a);
@@ -31,7 +31,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                     let active_half0 = active_halves.0;
                     let active_half1 = active_halves.1;
                     // Fixme: At thies point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
-                    par_branch split_thread_grp::<k, bs, 1, 1>(block) {
+                    par_branch split_thread_grp::<k, bs>(block) {
                         active =>
                             parfor _ in active
                             with a, b from active_half0, active_half1 {
@@ -42,7 +42,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                  };
                  let tmp_view2 = to_view_mut::<'f, gpu.shared, bs, i32>(&'f uniq tmp);
                  let tmp_res = (split 'u1 'u2 uniq 1 (*tmp_view2)).0;
-                 par_branch split_thread_grp::<1, bs, 1, 1>(block) {
+                 par_branch split_thread_grp::<1, bs>(block) {
                     single_thread =>
                         parfor _ in single_thread
                         with out, tmp_val from out_elem, tmp_res {

@@ -10,7 +10,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
         &uniq gpu,
         (&shrd a_array, &uniq out_array),
         // TODO remove type annotations
-        | grid: BlockGrp<gs, ThreadGrp<bs>>,
+        | grid: BlockGrp<X<gs>, ThreadGrp<X<bs>>>,
           inputs: (&shrd gpu.global [i32; gs*bs], &uniq gpu.global [i32; gs])| -[gpu.grid]-> () {
             let block_group = group::<1024>(to_view(inputs.0));
             let view_out = group_mut::<1>(to_view_mut(inputs.1));
