@@ -19,6 +19,7 @@ pub static ATOMIC_SET: &str = "atomic_set";
 pub static SHUFFLE_XOR: &str = "shuffle_xor";
 pub static BLOCK_DIM: &str = "block_dim";
 pub static BLOCK_ID_X: &str = "block_id_x";
+pub static THREADFENCE: &str = "threadfence";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -57,6 +58,7 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SHUFFLE_XOR, shuffle_xor_ty()),
         (BLOCK_DIM, block_dim_ty()),
         (BLOCK_ID_X, block_id_x_ty()),
+        (THREADFENCE, threadfence_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -220,6 +222,17 @@ fn block_id_x_ty() -> Ty {
         Exec::GpuBlock,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
             ScalarTy::I32
+        ))))),
+    ))
+}
+
+fn threadfence_ty() -> Ty {
+    Ty::new(TyKind::Fn(
+        vec![],
+        vec![],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Unit,
         ))))),
     ))
 }
