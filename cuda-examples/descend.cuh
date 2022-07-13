@@ -472,6 +472,10 @@ namespace descend {
     inline __device__ descend::i32 block_id_x() {
        return blockIdx.x;
     }
+
+    inline __device__ void threadfence() {
+       __threadfence();
+    }
 }
 
 #endif //DESCEND_DESCEND_CUH
