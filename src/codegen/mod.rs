@@ -1,7 +1,7 @@
 mod cu_ast;
 mod printer;
 
-use crate::ast as desc;
+use crate::ast::{self as desc, Item};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{utils, Mutability};
@@ -14,30 +14,39 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let fun_defs_to_be_generated = compil_unit
-        .fun_defs
+        .item_defs
         .iter()
-        .filter(|f| {
-            f.param_decls.iter().all(|p| {
-                !is_shape_ty(p.ty.as_ref().unwrap())
-                    && !matches!(
-                        &p.ty.as_ref().unwrap().ty,
-                        desc::TyKind::Data(desc::DataTy {
-                            dty: desc::DataTyKind::ThreadHierchy(_),
-                            ..
-                        })
-                    )
-            })
+        .filter_map(|item| {
+            match item {
+                Item::FunDef(f) =>
+                    if f.param_decls.iter().all(|p| {
+                        !is_shape_ty(p.ty.as_ref().unwrap())
+                            && !matches!(
+                                &p.ty.as_ref().unwrap().ty,
+                                desc::TyKind::Data(desc::DataTy {
+                                    dty: desc::DataTyKind::ThreadHierchy(_),
+                                    ..
+                                })
+                            )
+                        }) {
+                        Some(f)
+                    } else {
+                        None
+                    }
+                _ => None    
+            }
         })
         .cloned()
         .collect::<Vec<desc::FunDef>>();
-    let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
-        .chain(
-            fun_defs_to_be_generated
-                .iter()
-                .map(|fun_def| gen_fun_def(fun_def, &compil_unit.fun_defs, idx_checks)),
-        )
-        .collect::<cu::CuProgram>();
-    printer::print(&cu_program)
+        unimplemented!("TODO")
+    // let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
+    //     .chain(
+    //         fun_defs_to_be_generated
+    //             .iter()
+    //             .map(|fun_def| gen_fun_def(fun_def, &compil_unit.fun_defs, idx_checks)),
+    //     )
+    //     .collect::<cu::CuProgram>();
+    // printer::print(&cu_program)
 }
 
 // TODO extract into own module, hide ScopeCtx, and ParallCtx and provide wrapper functions in CodegenCtx
@@ -1690,7 +1699,7 @@ fn separate_param_decls_from_args(
 }
 
 fn get_data_param_tys(fun: &desc::Expr) -> Vec<desc::Ty> {
-    if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
+    if let desc::TyKind::Fn(_, _, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
         param_tys
             .iter()
             .filter(|p_ty| !is_shape_ty(&p_ty))
@@ -1708,6 +1717,7 @@ fn create_fun_ty_of_purely_data_tys(
 ) -> desc::Ty {
     desc::Ty::new(desc::TyKind::Fn(
         vec![],
+        vec![],
         data_param_tys,
         exec,
         Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.clone()))),
@@ -1721,8 +1731,9 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
         .map(|id_kinded| id_kinded.ident.name.as_str())
         .zip(gen_args)
         .collect();
-    if let desc::TyKind::Fn(_, param_tys, exec, ret_ty) = &fun.ty().ty {
+    if let desc::TyKind::Fn(_, _, param_tys, exec, ret_ty) = &fun.ty().ty {
         let fun_ty = desc::Ty::new(desc::TyKind::Fn(
+            vec![],
             vec![],
             param_tys.clone(),
             *exec,
@@ -2188,7 +2199,7 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ..
         }) => unimplemented!(),
         desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::Fn(_, _, _, _),
+            ty: desc::TyKind::Fn(_, _, _, _, _),
             ..
         }) => unimplemented!("needed?"),
         desc::ArgKinded::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
@@ -2242,7 +2253,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             dty: d::Tuple(tys), ..
         }) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect()),
         Data(desc::DataTy {
-            dty: d::StructType(_, _), ..
+            dty: d::StructMonoType(_), ..
         }) => unimplemented!("TODO"),
         Data(desc::DataTy {
             dty: d::Array(ty, n),
@@ -2330,12 +2341,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
-        Data(desc::DataTy {
-            dty: d::SelfType, ..
-        }) => {
-            panic!("Self types cannot be generated.")
-        }
-        Fn(_, _, _, _) => unimplemented!("needed?"),
+        Fn(_, _, _, _, _) => unimplemented!("needed?"),
         Dead(_) => panic!("Dead types cannot be generated."),
         Data(desc::DataTy {
             dty: desc::DataTyKind::ThreadHierchy(_),

@@ -1,5 +1,5 @@
 use crate::ast::{
-    BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
+    BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
     Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
 };
 
@@ -98,6 +98,7 @@ fn to_raw_ptr_ty() -> Ty {
 
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem, t_ty],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             Ownership::Uniq,
@@ -124,6 +125,7 @@ fn offset_raw_ptr_ty() -> Ty {
 
     Ty::new(TyKind::Fn(
         vec![t_ty],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::RawPtr(Box::new(
                 DataTy::new(DataTyKind::Ident(t.clone())),
@@ -156,6 +158,7 @@ fn atomic_set_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![p_prv, m_mem, t_ty],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(p),
@@ -182,6 +185,7 @@ fn shuffle_xor_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![d_dty],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(d.clone())))),
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
@@ -233,6 +237,7 @@ fn split_block_grp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat, m1_nat, m2_nat, m3_nat, n1_nat, n2_nat, n3_nat],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(
             DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::BlockGrp(
                 Nat::Ident(m1.clone()),
@@ -294,6 +299,7 @@ fn to_warps_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![n1_nat, n2_nat, n3_nat],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(
             DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
                 Nat::Ident(n1.clone()),
@@ -339,6 +345,7 @@ fn split_thread_grp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat, n1_nat, n2_nat, n3_nat],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(
             DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
                 Nat::Ident(n1.clone()),
@@ -440,6 +447,7 @@ fn split_warp_grp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat, n_nat],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(
             DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::WarpGrp(Nat::Ident(n.clone())))),
         )))],
@@ -467,6 +475,7 @@ fn split_warp_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![k_nat],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(
             DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::Warp)),
         )))],
@@ -495,6 +504,7 @@ fn split_warp_ty() -> Ty {
 fn gpu_device_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
             ScalarTy::I32,
         ))))],
@@ -519,6 +529,7 @@ fn load_atomic_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             Ownership::Shrd,
@@ -545,6 +556,7 @@ fn load_atomic_host_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
             Ownership::Shrd,
@@ -572,6 +584,7 @@ fn store_atomic_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r),
@@ -602,6 +615,7 @@ fn store_atomic_host_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r),
@@ -640,6 +654,7 @@ fn gpu_alloc_copy_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, d_dty],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
@@ -683,6 +698,7 @@ fn copy_to_host_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, d_dty],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
@@ -725,6 +741,7 @@ fn copy_to_gpu_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r1_prv, r2_prv, d_dty],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r1),
@@ -774,6 +791,7 @@ fn exec_ty() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![blocks_nat, threads_nat, r_prv, d_dty],
+        vec![],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                 Provenance::Ident(r),
@@ -783,6 +801,7 @@ fn exec_ty() -> Ty {
             )))),
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(d.clone())))),
             Ty::new(TyKind::Fn(
+                vec![],
                 vec![],
                 vec![
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
@@ -821,6 +840,7 @@ fn shared_alloc_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![t_ty],
         vec![],
+        vec![],
         Exec::GpuGrid,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::At(
             Box::new(DataTy::new(DataTyKind::Ident(t))),
@@ -858,6 +878,7 @@ fn to_view_ty(own: Ownership) -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem, n_nat, d_dty],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
             own,
@@ -910,6 +931,7 @@ fn group_ty(own: Ownership) -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![s_nat, r_prv, m_mem, n_nat, d_ty],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
             own,
@@ -948,6 +970,7 @@ fn bin_op() -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![t_ty],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
             t.clone(),
         ))))],
@@ -986,6 +1009,7 @@ fn join_ty(own: Ownership) -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem, o_nat, n_nat, d_dty],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
             own,
@@ -1045,6 +1069,7 @@ fn transpose_ty(own: Ownership) -> Ty {
     };
     Ty::new(TyKind::Fn(
         vec![r_prv, m_mem, n_nat, o_nat, d_ty],
+        vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
             own,

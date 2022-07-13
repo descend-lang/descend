@@ -1413,6 +1413,16 @@ impl IdentKinded {
             kind: kind.clone(),
         }
     }
+
+    pub fn arg_kinded(&self) -> ArgKinded {
+        match self.kind {
+            Kind::DataTy => ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(self.ident.clone()))),
+            Kind::Memory => ArgKinded::Memory(Memory::Ident(self.ident.clone())),
+            Kind::Nat => ArgKinded::Nat(Nat::Ident(self.ident.clone())),
+            Kind::Provenance => ArgKinded::Provenance(Provenance::Ident(self.ident.clone())),
+            Kind::Ty => ArgKinded::Ty(Ty::new(TyKind::Ident(self.ident.clone()))),
+        }
+    }
 }
 
 // FIXME Implement Hash

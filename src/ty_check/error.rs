@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind};
+use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, WhereClauseItem, Item, AssociatedItem};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -52,6 +52,9 @@ pub enum TyError {
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
     UnexpectedType,
+    UnexpectedItem,
+    WrongNumberOfGenericParams(usize, usize),
+    WrongKind(Kind, Kind),
     // TODO remove as soon as possible
     String(String),
 }
@@ -177,6 +180,13 @@ impl TyError {
                     eprintln!("{:?}", &self);
                 };
             }
+            TyError::WrongNumberOfGenericParams(expected, found) => {
+                eprintln!(
+                    "Wrong amount of generic arguments. Expected {}, found {}",
+                    expected,
+                    found
+                );
+            }
             err => {
                 eprintln!("{:?}", err);
             }
@@ -215,6 +225,8 @@ pub enum SubTyError {
 pub enum CtxError {
     //format!("Identifier: {} not found in context.", ident)),
     IdentNotFound(Ident),
+    TraitNotFound(String),
+    StructNotFound(String),
     //"Cannot find identifier {} in kinding context",
     KindedIdentNotFound(Ident),
     // "Typing Context is missing the provenance value {}",
@@ -225,6 +237,14 @@ pub enum CtxError {
     OutlRelNotDefined(Ident, Ident),
     // TODO move to TyError
     IllegalProjection,
+    // Multiple defined objects
+    MultipleDefinedGlobalFuns(String),
+    MultipleDefinedParam(String),
+    MultipleDefinedStructs(String),
+    MultipleDefinedTraits(String),
+    MultipleDefinedImplsForTrait(Ty, String),
+    TraitNotImplmented(WhereClauseItem),
+    FunNotImplemented(String),
 }
 
 impl From<CtxError> for SubTyError {

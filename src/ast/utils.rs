@@ -81,11 +81,12 @@ impl Visit for FreeKindedIdents {
             TyKind::Ident(ident) => self
                 .set
                 .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty))),
-            TyKind::Fn(idents_kinded, param_tys, _, ret_ty) => {
+            TyKind::Fn(idents_kinded, cons, param_tys, _, ret_ty) => {
                 if !idents_kinded.is_empty() {
                     panic!("Generic function types can not appear, only their instatiated counter parts.")
                 }
 
+                walk_list!(self, visit_where_clause_item, cons);
                 walk_list!(self, visit_ty, param_tys);
                 self.visit_ty(ret_ty)
             }

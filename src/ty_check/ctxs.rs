@@ -1,6 +1,7 @@
 use crate::ast::internal::{Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
+use crate::ty_check::constraint_check::*;
 use std::collections::{HashMap, HashSet};
 
 // TODO introduce proper struct
@@ -179,7 +180,7 @@ impl TyCtx {
 
             match &ty.ty {
                 TyKind::Ident(_)
-                | TyKind::Fn(_, _, _, _)
+                | TyKind::Fn(_, _, _, _, _)
                 | TyKind::Data(DataTy { dty: d::Range, .. })
                 | TyKind::Data(DataTy {
                     dty: d::Atomic(_), ..
@@ -230,10 +231,7 @@ impl TyCtx {
                     place_frame
                 },
                 TyKind::Data(DataTy {
-                    dty: d::StructType(_, _), ..
-                }) => unimplemented!("TODO"),
-                TyKind::Data(DataTy {
-                    dty: d::SelfType, ..
+                    dty: d::StructMonoType(_), ..
                 }) => unimplemented!("TODO"),
             }
         }
@@ -329,7 +327,7 @@ impl TyCtx {
                 pl,
                 match &pl_ty.ty {
                     TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
-                    TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
+                    TyKind::Fn(_, _,  _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(
                         Box::new(dty.clone()),
                     )))),
@@ -424,15 +422,9 @@ impl KindCtx {
         KindCtx { ctx: Vec::new() }
     }
 
-    pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> CtxResult<Self> {
-        let kind_ctx: Self = Self::new().append_idents(idents);
-        kind_ctx.well_kinded_prv_rels(&prv_rels)?;
-        Ok(kind_ctx.append_prv_rels(prv_rels))
-    }
-
     pub fn append_idents(mut self, idents: Vec<IdentKinded>) -> Self {
-        let mut entries: Vec<_> = idents.into_iter().map(KindingCtxEntry::Ident).collect();
-        self.ctx.append(&mut entries);
+        let entries: Vec<_> = idents.into_iter().map(KindingCtxEntry::Ident).collect();
+        self.ctx.extend(entries);
         self
     }
 
@@ -507,27 +499,33 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    items: HashMap<String, Ty>,
+    funs: HashMap<String, Ty>,
+    structs: HashMap<String, StructDef>,
+    traits: HashMap<String, TraitDef>,
+    pub theta: ConstraintEnv,
+}
+
+
+fn check_unique_names<'a, T: 'a + std::hash::Hash + Eq + ToString, I: std::iter::ExactSizeIterator<Item=&'a T>>(names: I, errs: &mut Vec<CtxError>) {
+    let mut names_set = HashSet::with_capacity(names.len());
+    names.for_each(|name|
+        if names_set.insert(name) {
+            errs.push(CtxError::MultipleDefinedParam(name.to_string()))
+    })
 }
 
 impl GlobalCtx {
     pub fn new() -> Self {
         GlobalCtx {
-            items: HashMap::new(),
+            funs: HashMap::new(),
+            structs: HashMap::new(),
+            traits: HashMap::new(),
+            theta: ConstraintEnv::new(),
         }
     }
 
-    pub fn append_from_fun_defs(mut self, gl_fun_defs: &[FunDef]) -> Self {
-        self.items.extend(
-            gl_fun_defs
-                .iter()
-                .map(|gl_fun_def| (gl_fun_def.name.clone(), gl_fun_def.ty())),
-        );
-        self
-    }
-
     pub fn append_fun_decls(mut self, fun_decls: &[(&str, Ty)]) -> Self {
-        self.items.extend(
+        self.funs.extend(
             fun_decls
                 .iter()
                 .map(|(name, ty)| (String::from(*name), ty.clone())),
@@ -535,10 +533,132 @@ impl GlobalCtx {
         self
     }
 
+    pub fn append_from_item_def(&mut self, item_defs: &[Item]) -> Vec::<CtxError> {
+        let mut impl_defs_names: HashSet<(Ty, String)> = HashSet::new();
+
+        item_defs.iter().fold(
+        Vec::<CtxError>::new(),
+        |mut errs, item_def| {
+            match item_def {
+                Item::FunDef(fun_def) => {
+                    let old_val = self.funs.insert(fun_def.name.clone(), fun_def.ty());
+                    if old_val.is_some() {
+                        errs.push(CtxError::MultipleDefinedGlobalFuns(fun_def.name.clone()));
+                    }
+                    check_unique_names(fun_def.generic_params.iter().map(|gen| &gen.ident.name), &mut errs);
+                    check_unique_names(fun_def.param_decls.iter().map(|fun_param| &fun_param.ident.name), &mut errs);
+                },
+                Item::StructDef(struct_def) => {
+                    let old_val = self.structs.insert(struct_def.name.clone(), struct_def.clone());
+                    if old_val.is_some() {
+                        errs.push(CtxError::MultipleDefinedStructs(struct_def.name.clone()));
+                    }
+                    check_unique_names(struct_def.generic_params.iter().map(|gen| &gen.ident.name), &mut errs);
+                    check_unique_names(struct_def.decls.iter().map(|decl| &decl.name), &mut errs);
+                },
+                Item::ImplDef(impl_def) => {
+                    //TODO check also names of associated items
+                    check_unique_names(impl_def.generic_params.iter().map(|gen| &gen.ident.name), &mut errs);
+                    //TODO associated items
+                    if let Some(trait_impl) = &impl_def.trait_impl {
+                        self.theta.append_constraint(&ConstraintScheme {
+                            generics: impl_def.generic_params.clone(),
+                            implican: impl_def.conditions.clone(),
+                            implied: WhereClauseItem {
+                                param: impl_def.ty.clone(),
+                                trait_bound: trait_impl.clone() } });
+
+                        if !impl_defs_names.insert((impl_def.ty.clone(), trait_impl.name.clone())) {
+                            errs.push(CtxError::MultipleDefinedImplsForTrait(impl_def.ty.clone(), trait_impl.name.clone()));
+                        }
+                    }
+                },
+                Item::TraitDef(trait_def) => {
+                    self.append_trait_def(&trait_def, &mut errs);
+                },
+            }
+            errs
+        })
+    }
+
+    fn append_trait_def(&mut self, t_def: &TraitDef, errs: &mut Vec<CtxError>) {
+        if self.traits.insert(t_def.name.clone(), t_def.clone()).is_some() {
+            errs.push(CtxError::MultipleDefinedTraits(t_def.name.clone()));
+        } else {
+            //TODO check also names of associated items
+            check_unique_names(t_def.generic_params.iter().map(|gen| &gen.ident.name), errs);
+
+            let self_ident = Ident::new("Self");
+            let self_generic = IdentKinded::new(&self_ident, Kind::Ty);
+            let self_ty = Ty::new(TyKind::Ident(self_ident.clone()));
+
+            let mut generics_tdef = Vec::with_capacity(t_def.generic_params.len() + 1);
+            generics_tdef.push(self_generic.clone());
+            generics_tdef.extend(t_def.generic_params.clone());
+            let trait_mono_type = TraitMonoType {
+                name: t_def.name.clone(),
+                generics: t_def.generic_params.iter().map(|gen| gen.arg_kinded()).collect() };
+            let self_impl_trait =
+                WhereClauseItem {
+                    param: self_ty.clone(),
+                    trait_bound: trait_mono_type };
+
+            t_def.decls.iter()
+                .for_each(|ass_item|
+                    match ass_item {
+                        AssociatedItem::FunDef(_) |
+                        AssociatedItem::FunDecl(_) => {
+                            let (ty, name) = 
+                                match ass_item {
+                                    AssociatedItem::FunDef(fun_def) => (fun_def.ty().ty, fun_def.name.clone()),
+                                    AssociatedItem::FunDecl(fun_decl) => (fun_decl.ty().ty, fun_decl.name.clone()),
+                                    _ => panic!("This cannot happen"),
+                                };
+
+                            if let TyKind::Fn(generics_fun, conditions_fun, args, exec, ret_ty)
+                                    = ty {
+                                let mut generics = Vec::with_capacity(generics_tdef.len() + generics_fun.len());
+                                generics.extend(generics_tdef.clone());
+                                generics.extend(generics_fun);
+                                let mut conditions = Vec::with_capacity(conditions_fun.len() + 1);
+                                conditions.push(self_impl_trait.clone());
+                                conditions.extend(conditions_fun);
+
+                                let ty = Ty::new(TyKind::Fn(generics, conditions, args, exec, ret_ty));
+                                if self.funs.insert(name, ty).is_some() {
+                                    errs.push(CtxError::MultipleDefinedTraits(t_def.name.clone()))
+                                }
+                            } else {
+                                panic!("FunDef without FunType!");
+                            }},
+                        AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),  
+                    });
+
+            let implican = vec![self_impl_trait];
+            t_def.supertraits_constraints().iter().for_each(|supertrait_cons| 
+                self.theta.append_constraint(&ConstraintScheme{ generics: generics_tdef.clone(), implican: implican.clone(), implied: supertrait_cons.clone() })
+            );
+        }
+    }
+
     pub fn fun_ty_by_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
-        match self.items.get(&ident.name) {
+        match self.funs.get(&ident.name) { 
             Some(ty) => Ok(ty),
             None => Err(CtxError::IdentNotFound(ident.clone())),
+        }
+    }
+
+    pub fn trait_ty_by_name(&self, name: &String) -> CtxResult<&TraitDef> {
+        match self.traits.get(name) {
+            Some(ty) => Ok(ty),
+            None => Err(CtxError::TraitNotFound(name.clone())),
+        }
+    }
+
+    pub fn struct_by_name(&self, name: &String) -> CtxResult<&StructDef> {
+        match self.structs.get(name) {
+            Some(ty) => Ok(ty),
+            None => Err(CtxError::StructNotFound(name.clone())),
         }
     }
 }
