@@ -61,11 +61,3 @@ fn computed_indexing() -> Res {
         descend::compile("examples/with_tys/computed_indexing.desc")?
     ))
 }
-
-#[test]
-fn traits() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/with_tys/traits.desc")?
-    ))
-}

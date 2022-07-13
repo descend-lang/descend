@@ -22,7 +22,8 @@ pub trait Visit: Sized {
     fn visit_mutability(&mut self, _mutbl: &Mutability) {}
     fn visit_lit(&mut self, _lit: &Lit) {}
     fn visit_ident(&mut self, _ident: &Ident) {}
-    fn visit_where_clause_item(&mut self, _item: &WhereClauseItem) {}
+    fn visit_where_clause_item(&mut self, w_item: &WhereClauseItem) { walk_where_clause_item(self, w_item) }
+    fn visit_trait_mono_ty(&mut self, traut_mono_ty: &TraitMonoType) { walk_trait_mono_ty(self, traut_mono_ty) }
     fn visit_pattern(&mut self, pattern: &Pattern) { walk_pattern(self, pattern) }
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
     fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
@@ -118,8 +119,7 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
         DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
-        DataTyKind::StructType(_, gen_args) => walk_list!(visitor, visit_arg_kinded, gen_args),
-        DataTyKind::SelfType => {},
+        DataTyKind::StructMonoType(struct_mono_ty) => walk_list!(visitor, visit_arg_kinded, &struct_mono_ty.generics),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
@@ -147,8 +147,9 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
 pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
     match &ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::Fn(gen_params, params, exec, ret_ty) => {
+        TyKind::Fn(gen_params, conditions, params, exec, ret_ty) => {
             walk_list!(visitor, visit_ident_kinded, gen_params);
+            walk_list!(visitor, visit_where_clause_item, conditions);
             walk_list!(visitor, visit_ty, params);
             visitor.visit_exec(exec);
             visitor.visit_ty(ret_ty)
@@ -327,6 +328,15 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
     }
 }
 
+pub fn walk_where_clause_item<V: Visit>(visitor: &mut V, w_item: &WhereClauseItem) {
+    visitor.visit_ty(&w_item.param);
+    visitor.visit_trait_mono_ty(&w_item.trait_bound);
+}
+
+pub fn walk_trait_mono_ty<V: Visit>(visitor: &mut V, trait_mono_ty: &TraitMonoType) {
+    walk_list!(visitor, visit_arg_kinded, &trait_mono_ty.generics);
+}
+
 pub fn walk_param_decl<V: Visit>(visitor: &mut V, param_decl: &ParamDecl) {
     let ParamDecl { ident, ty, mutbl } = param_decl;
     visitor.visit_ident(ident);
@@ -415,21 +425,24 @@ pub fn walk_trait_def<V: Visit>(visitor: &mut V, trait_def: &TraitDef) {
         name: _,
         generic_params,
         conditions,
-        decls
+        decls,
+        supertraits
     } = trait_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_where_clause_item, conditions);
     walk_list!(visitor, visit_assosiated_item, decls);
+    walk_list!(visitor, visit_trait_mono_ty, supertraits);
 }
 
 pub fn walk_impl_def<V: Visit>(visitor: &mut V, impl_def: &ImplDef) {
     let ImplDef {
-        name: _,
+        ty,
         generic_params,
         conditions,
         decls,
         trait_impl: _
     } = impl_def;
+    visitor.visit_ty(ty);
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_where_clause_item, conditions);
     walk_list!(visitor, visit_assosiated_item, decls);
@@ -439,8 +452,6 @@ pub fn walk_item_def<V: Visit>(visitor: &mut V, item_def: &Item) {
     match item_def {
         Item::FunDef(fun_def) =>
             walk_fun_def(visitor, fun_def),
-        Item::FunDecl(fun_decl) =>
-            walk_fun_decl(visitor, fun_decl),
         Item::StructDef(struct_def) =>
             walk_struct_def(visitor, struct_def),
         Item::TraitDef(trait_def) =>

@@ -20,32 +20,13 @@ pub mod visit_mut;
 
 #[derive(Clone, Debug)]
 pub struct CompilUnit<'a> {
-    pub fun_defs: Vec<FunDef>,
-    pub fun_decls: Vec<FunDecl>,
-    pub struct_defs: Vec<StructDef>,
-    pub trait_defs: Vec<TraitDef>,
-    pub impl_defs: Vec<ImplDef>,
+    pub item_defs: Vec<Item>,
     pub source: &'a SourceCode<'a>,
 }
 
 impl<'a> CompilUnit<'a> {
-    pub fn new(defs: Vec<Item>, source: &'a SourceCode<'a>) -> Self {
-        let mut fun_defs: Vec<FunDef> = Vec::with_capacity(defs.len());
-        let mut fun_decls: Vec<FunDecl> = Vec::with_capacity(defs.len());
-        let mut struct_defs: Vec<StructDef> = Vec::with_capacity(defs.len());
-        let mut trait_defs: Vec<TraitDef> = Vec::with_capacity(defs.len());
-        let mut impl_defs: Vec<ImplDef> = Vec::with_capacity(defs.len());
-        defs.iter()
-            .for_each(|f| {
-                match f {
-                    Item::FunDef(fun_def) => fun_defs.push(fun_def.clone()),
-                    Item::FunDecl(fun_decl) => fun_decls.push(fun_decl.clone()),
-                    Item::StructDef(struct_def) => struct_defs.push(struct_def.clone()),
-                    Item::TraitDef(trait_def) => trait_defs.push(trait_def.clone()),
-                    Item::ImplDef(impl_def) => impl_defs.push(impl_def.clone()),
-                }
-            });
-        CompilUnit { fun_defs, fun_decls, struct_defs, trait_defs, impl_defs, source }
+    pub fn new(item_defs: Vec<Item>, source: &'a SourceCode<'a>) -> Self {
+        CompilUnit { item_defs, source }
     }
 }
 
@@ -53,7 +34,6 @@ impl<'a> CompilUnit<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     FunDef(FunDef),
-    FunDecl(FunDecl),
     StructDef(StructDef),
     TraitDef(TraitDef),
     ImplDef(ImplDef)
@@ -91,26 +71,27 @@ pub struct StructDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: DataTy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TraitDef {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
     pub conditions: Vec<WhereClauseItem>,
     pub decls: Vec<AssociatedItem>,
+    pub supertraits: Vec<TraitMonoType>
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplDef {
-    pub name: String,
+    pub ty: Ty,
     pub generic_params: Vec<IdentKinded>,
     pub conditions: Vec<WhereClauseItem>,
     pub decls: Vec<AssociatedItem>,
-    pub trait_impl: Option<String>
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StructField {
-    pub name: String,
-    pub ty: DataTy,
+    pub trait_impl: Option<TraitMonoType>
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,10 +101,56 @@ pub enum AssociatedItem {
     ConstItem(String, Ty, Option<Expr>)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct WhereClauseItem {
-    pub param: String,
-    pub trait_bound: String,
+    pub param: Ty,
+    pub trait_bound: TraitMonoType,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct TraitMonoType {
+    pub name: String,
+    pub generics: Vec<ArgKinded>
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct StructMonoType {
+    pub name: String,
+    pub generics: Vec<ArgKinded>
+}
+
+pub trait SubstKindedIdents {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self;
+}
+
+impl SubstKindedIdents for TraitMonoType {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        TraitMonoType {
+            name: self.name.clone(),
+            generics: self.generics.iter().map(|arg|
+                arg.subst_ident_kinded(ident_kinded, with)).collect()
+        }
+    }
+}
+
+impl SubstKindedIdents for WhereClauseItem {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        WhereClauseItem {
+            param: self.param.subst_ident_kinded(ident_kinded, with),
+            trait_bound: self.trait_bound.subst_ident_kinded(ident_kinded, with)
+        }
+    }
+}
+
+impl TraitDef {
+    pub fn supertraits_constraints(&self) -> Vec<WhereClauseItem> {
+        let self_ident = Ident::new("Self");
+        let self_ty = Ty::new(TyKind::Ident(self_ident.clone()));
+
+        self.supertraits.iter().map(|supertrait| 
+            WhereClauseItem { param: self_ty.clone(), trait_bound: supertrait.clone() }
+        ).collect()
+    }
 }
 
 impl FunDef {
@@ -135,6 +162,24 @@ impl FunDef {
             .collect();
         Ty::new(TyKind::Fn(
             self.generic_params.clone(),
+            self.conditions.clone(),
+            param_tys,
+            self.exec,
+            Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
+        ))
+    }
+}
+
+impl FunDecl {
+    pub fn ty(&self) -> Ty {
+        let param_tys: Vec<_> = self
+            .param_decls
+            .iter()
+            .map(|p_decl| p_decl.ty.clone())
+            .collect();
+        Ty::new(TyKind::Fn(
+            self.generic_params.clone(),
+            self.conditions.clone(),
             param_tys,
             self.exec,
             Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
@@ -641,6 +686,29 @@ impl ArgKinded {
     }
 }
 
+impl SubstKindedIdents for ArgKinded {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        match self {
+            ArgKinded::Ident(ident) =>
+                if ident.name == ident_kinded.ident.name {
+                    with.clone()
+                } else {
+                    ArgKinded::Ident(ident.clone())
+                },
+            ArgKinded::Nat(nat) =>
+                ArgKinded::Nat(nat.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::Memory(mem) =>
+                ArgKinded::Memory(mem.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::Ty(ty) =>
+                ArgKinded::Ty(ty.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::DataTy(dty) =>
+                ArgKinded::DataTy(dty.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::Provenance(prov) =>
+                ArgKinded::Provenance(prov.subst_ident_kinded(ident_kinded, with)),
+        }
+    }
+}
+
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct PlaceExpr {
@@ -786,7 +854,7 @@ pub struct Ty {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind {
     Data(DataTy),
-    Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
+    Fn(Vec<IdentKinded>, Vec<WhereClauseItem>, Vec<Ty>, Exec, Box<Ty>),
     Ident(Ident),
     Dead(Box<Ty>),
 }
@@ -848,7 +916,7 @@ impl Ty {
     pub fn copyable(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
-            TyKind::Fn(_, _, _, _) => true,
+            TyKind::Fn(_, _, _, _, _) => true,
             TyKind::Ident(_) => false,
             TyKind::Dead(_) => panic!(
                 "This case is not expected to mean anything.\
@@ -860,18 +928,23 @@ impl Ty {
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
+            TyKind::Ident(_) | TyKind::Fn(_, _, _, _, _) => true, //TODO Can types from where clauses be dead?
             TyKind::Dead(_) => false,
         }
     }
 
     pub fn eq_structure(&self, other: &Self) -> bool {
         match (&self.ty, &other.ty) {
-            (TyKind::Fn(gps1, ptys1, exec1, ret_ty1), TyKind::Fn(gps2, ptys2, exec2, ret_ty2)) => {
+            (TyKind::Fn(gps1, cons1, ptys1, exec1, ret_ty1),
+             TyKind::Fn(gps2, cons2, ptys2, exec2, ret_ty2)) => {
                 let mut res = true;
                 for (gp1, gp2) in gps1.iter().zip(gps2) {
                     res &= gp1 == gp2;
                 }
+                //TODO passt das hier?
+                res &= cons1.iter().zip(cons2).fold(true, |res, (c1, c2)|
+                    res & c1.param.eq_structure(&c2.param) & (c1.trait_bound == c2.trait_bound)
+                );
                 for (pty1, pty2) in ptys1.iter().zip(ptys2) {
                     res &= pty1.eq_structure(pty2);
                 }
@@ -888,7 +961,7 @@ impl Ty {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
-            TyKind::Fn(_, param_tys, _, ret_ty) => {
+            TyKind::Fn(_, _, param_tys, _, ret_ty) => {
                 param_tys
                     .iter()
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
@@ -897,13 +970,19 @@ impl Ty {
             TyKind::Ident(_) | TyKind::Dead(_) => false,
         }
     }
+}
 
-    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+impl SubstKindedIdents for Ty {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match &self.ty {
             // TODO mutate and do not create a new type (also this drops the span).
             TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
-            TyKind::Fn(gen_params, params, exec, ret) => Ty::new(TyKind::Fn(
+            TyKind::Fn(gen_params, conditions, params, exec, ret) => Ty::new(TyKind::Fn(
                 gen_params.clone(),
+                conditions
+                    .iter()
+                    .map(|con| 
+                        con.subst_ident_kinded(ident_kinded, with)).collect(),
                 params
                     .iter()
                     .map(|param| param.subst_ident_kinded(ident_kinded, with))
@@ -957,8 +1036,8 @@ impl fmt::Display for ThreadHierchyTy {
     }
 }
 
-impl ThreadHierchyTy {
-    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+impl SubstKindedIdents for ThreadHierchyTy {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use ThreadHierchyTy::*;
         match self {
             SplitGrp(th, n) => SplitGrp(
@@ -1003,8 +1082,7 @@ pub enum DataTyKind {
     // [[ dty; n ]]
     ArrayShape(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
-    StructType(String, Vec<ArgKinded>),
-    SelfType,
+    StructMonoType(StructMonoType),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
     ThreadHierchy(Box<ThreadHierchyTy>),
@@ -1052,8 +1130,7 @@ impl DataTy {
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            StructType(_, _) => unimplemented!("TODO"),
-            SelfType => unimplemented!("TODO"),
+            StructMonoType(_) => unimplemented!("TODO"),
             Array(_, _) => false,
             RawPtr(_) => true,
             Range => true,
@@ -1084,8 +1161,7 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
-            StructType(_, _) => unimplemented!("TODO"),
-            SelfType => unimplemented!("TODO"),
+            StructMonoType(_) => unimplemented!("TODO"),
             Dead(_) => false,
         }
     }
@@ -1110,8 +1186,7 @@ impl DataTy {
                 }
                 found
             }
-            DataTyKind::StructType(_, _) => unimplemented!("TODO"),
-            DataTyKind::SelfType => unimplemented!("TODO"),
+            DataTyKind::StructMonoType(_) => unimplemented!("TODO"),
             DataTyKind::Array(elem_dty, _) => self.occurs_in(elem_dty),
             DataTyKind::ArrayShape(elem_dty, _) => self.occurs_in(elem_dty),
             DataTyKind::At(elem_dty, _) => self.occurs_in(elem_dty),
@@ -1137,12 +1212,13 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
-            StructType(_, _) => unimplemented!("TODO"),
-            SelfType => unimplemented!("TODO"),
+            StructMonoType(_) => unimplemented!("TODO"),
         }
     }
+}
 
-    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+impl SubstKindedIdents for DataTy {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use DataTyKind::*;
         match &self.dty {
             Scalar(_) | Atomic(_) | Range => self.clone(),
@@ -1181,8 +1257,12 @@ impl DataTy {
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
             )),
-            StructType(_, _) => unimplemented!("TODO"),
-            SelfType => unimplemented!("TODO"),
+            StructMonoType(struct_mono_ty) =>
+                DataTy::new(DataTyKind::StructMonoType(super::ast::StructMonoType{
+                    name: struct_mono_ty.name.clone(),
+                    generics: struct_mono_ty.generics.iter().map(|gen_arg|
+                        gen_arg.subst_ident_kinded(ident_kinded, with)).collect()
+                })),
             Array(dty, n) => DataTy::new(Array(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
@@ -1213,7 +1293,7 @@ pub enum Provenance {
     Ident(Ident),
 }
 
-impl Provenance {
+impl SubstKindedIdents for Provenance {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         if ident_kinded.kind == Kind::Provenance {
             match self {
@@ -1251,7 +1331,7 @@ pub enum Memory {
     Ident(Ident),
 }
 
-impl Memory {
+impl SubstKindedIdents for Memory {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Memory {
         if ident_kinded.kind == Kind::Memory {
             match self {
@@ -1386,8 +1466,10 @@ impl Nat {
             Nat::App(_, _) => unimplemented!(),
         }
     }
+}
 
-    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Nat {
+impl SubstKindedIdents for Nat {
+    fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Nat {
         if ident_kinded.kind == Kind::Nat {
             match self {
                 Nat::Ident(id) if id == &ident_kinded.ident => match with {

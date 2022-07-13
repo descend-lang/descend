@@ -92,7 +92,6 @@ fn replace_arg_kinded_idents(mut item_def: Item) -> Item {
             let generic_params = 
                 match item_def {
                     Item::FunDef(fun_def) =>  &fun_def.generic_params,
-                    Item::FunDecl(fun_decl) =>&fun_decl.generic_params,
                     Item::StructDef(struct_def) => &struct_def.generic_params,
                     Item::TraitDef(trait_def) => &trait_def.generic_params,
                     Item::ImplDef(impl_def) => &impl_def.generic_params,
@@ -175,7 +174,6 @@ peg::parser! {
 
         pub(crate) rule item() -> Item
             = result:(f: fun_def() { Item::FunDef(f) }
-            / f: fun_decl() { Item::FunDecl(f) }
             / s: struct_def() { Item::StructDef(s) }
             / t: trait_def() { Item::TraitDef(t) }
             / i: inherent_impl_def() { Item::ImplDef(i) }
@@ -244,41 +242,42 @@ peg::parser! {
                     decls,
                 }
             }
-            
+        
         pub(crate) rule trait_def() -> TraitDef 
-            = "trait" __ name:identifier() _ g:generic_params()?  _  w:where_clause()?
-            supertrait:(_ ":" _ i:identifier(){i})? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
+            = "trait" __ name:identifier() _ g:generic_params()?
+            supertraits:(":" _ t:trait_mono_ty() ** (_ "+" _) {t})?
+            _ w:where_clause()? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
                 let generic_params = g.unwrap_or(vec![]);
                 let mut conditions = w.unwrap_or(vec![]);
-                match supertrait {
-                    Some(supertrait) => {
-                        let pred = WhereClauseItem{param: String::from("Self"), trait_bound: supertrait};
-                        conditions.push(pred)},
-                    None => ()
-                };
                 TraitDef {
                     name,
                     generic_params,
                     conditions,
                     decls,
+                    supertraits: supertraits.unwrap_or(vec![])
                 }
             }
 
+        rule trait_mono_ty() -> TraitMonoType
+            = name:identifier() generic_args:(_ "<" _ generic_args:(k:kind_argument() ** (_ "," _) {k}) _ ">" { generic_args })? { 
+                TraitMonoType { name, generics: generic_args.unwrap_or(vec![]) }
+            }
+
         pub(crate) rule inherent_impl_def() -> ImplDef    
-            = "impl" __ g:generic_params()? _ name:identifier() _ w:where_clause()? _
+            = "impl" __ g:generic_params()? _ ty:ty() _ w:where_clause()? _
             "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
                 let conditions = w.unwrap_or(vec![]);
-                ImplDef { name, generic_params, conditions, decls, trait_impl: None}
+                ImplDef { ty, generic_params, conditions, decls, trait_impl: None}
             }
 
         pub(crate) rule trait_impl_def() -> ImplDef 
-            = "impl" __ g:generic_params()? _ name:identifier() _ "for" _
-            trait_name:identifier() _ w:where_clause()? _ "{" _
+            = "impl" __ g:generic_params()? _ ty:ty() __ "for" __
+            trait_impl:trait_mono_ty() _ w:where_clause()? _ "{" _
             decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
                 let conditions = w.unwrap_or(vec![]);
-                ImplDef { name, generic_params, conditions, decls, trait_impl: Some(trait_name)}
+                ImplDef { ty, generic_params, conditions, decls, trait_impl: Some(trait_impl)}
         }
 
         rule struct_field() -> StructField
@@ -330,7 +329,7 @@ peg::parser! {
             }
         
         rule where_clause_item() -> WhereClauseItem 
-            = param:identifier() _ ":" _ trait_bound:identifier() {
+            = param:ty() _ ":" _ trait_bound:trait_mono_ty() {
                 WhereClauseItem{param, trait_bound}
             }
 
@@ -365,15 +364,16 @@ peg::parser! {
         rule shorthand_self() -> ParamDecl
             = ref_params:("&" _ prov:(prv:provenance() __ { prv })? own:ownership() __
             mem:memory_kind() __ { (prov, own, mem) })? mutbl:(m:mutability() __ {m})? "self" {
+                let self_dtykind = DataTyKind::Ident(Ident::new("Self"));
                 let s_type = match ref_params {
                     Some(ref_params) => {
                         let (prov, own, mem) = ref_params;
                         DataTyKind::Ref(match prov {
                             Some(prv) => prv,
                             None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$r")))
-                        }, own, mem, Box::new(DataTy::new(DataTyKind::SelfType)))
+                        }, own, mem, Box::new(DataTy::new(self_dtykind)))
                     }
-                    None => DataTyKind::SelfType    
+                    None => self_dtykind    
                 };
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
                 ParamDecl{ ident: Ident::new("self"), ty: Some(Ty::new(TyKind::Data(DataTy::new(s_type)))), mutbl}
@@ -732,17 +732,17 @@ peg::parser! {
                 }
             }
 
-
         pub(crate) rule ty() -> Ty
-            = begin:position!() dty:dty() end:position!() {
-                Ty::with_span(TyKind::Data(dty), Span::new(begin, end))
+            = begin:position!() res:(ident:ident() !(_ "<") {TyKind::Ident(ident)} // !"<" prevents to parse structs with generics params
+            / dty:dty() {TyKind::Data(dty)}) end:position!() { //TODO other types should be also possible
+                Ty::with_span(res, Span::new(begin, end))
             }
 
         /// Parse a type token
         pub(crate) rule dty() -> DataTy
             = first:dty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
                 mems.into_iter().fold(DataTy::new(first), |prev,mem| DataTy::new(DataTyKind::At(Box::new(prev), mem)))
-            }
+            } 
 
         /// Helper for "type @ memory" left-recursion
         rule dty_term() -> DataTyKind
@@ -757,10 +757,10 @@ peg::parser! {
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
             / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
             / name:identifier() _ "<" _ params:(k:kind_argument() ** (_ "," _) {k}) _ ">"
-                { DataTyKind::StructType(name, params) }
+                { DataTyKind::StructMonoType( StructMonoType{ name, generics: params })}
             // this could be also a structType. That is decided later
             / name:ident() { DataTyKind::Ident(name) }
-            / "Self" { DataTyKind::SelfType }
+            / "Self" { DataTyKind::Ident(Ident::new("Self")) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTyKind::Array(Box::new(t), n) }
             / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
@@ -2250,13 +2250,17 @@ mod tests {
         let result = descend::struct_def(src).expect("Cannot parse empty struct with generics");
 
         let name = String::from("Test");
-        let gen_param1 = Ident::new("T");
-        let gen_param2 = Ident::new("Q");
+        let gen_param1 = Ident::with_span(String::from("T"), Span::new(12, 13));
+        let gen_param2 = Ident::with_span(String::from("Q"), Span::new(19, 20));
         let generic_params: Vec<IdentKinded> = vec![
             IdentKinded::new(&gen_param1, Kind::Ty),
             IdentKinded::new(&gen_param2, Kind::Ty)];
         let conditions: Vec<WhereClauseItem> = vec![
-            WhereClauseItem{param: String::from("Q"), trait_bound: String::from("Number")}];
+            WhereClauseItem{
+                param: Ty::with_span(
+                    TyKind::Ident(Ident::with_span(String::from("Q"), Span::new(32, 33))),
+                    Span::new(32, 33)),
+                trait_bound: TraitMonoType { name: String::from("Number"), generics: vec![] }}];
         let decls: Vec<StructField> = vec![];
 
         assert_eq!(result,
@@ -2315,7 +2319,7 @@ mod tests {
         ];
 
         assert_eq!(result,
-            TraitDef {name, generic_params, conditions, decls});        
+            TraitDef {name, generic_params, conditions, decls, supertraits: vec![]});        
     }
 
     #[test]
@@ -2326,10 +2330,28 @@ mod tests {
         }"#;
 
         let result = descend::trait_def(src).expect("Cannot parse empty struct");
-        let conditions = vec![
-            WhereClauseItem{param: String::from("Self"), trait_bound: String::from("Eq")},
+        let supertraits = vec![
+            TraitMonoType { name: String::from("Eq"), generics: vec![] },
         ];
-        assert_eq!(result.conditions, conditions);
+        assert_eq!(result.conditions, vec![]);
+        assert_eq!(result.supertraits, supertraits);
+        assert_eq!(result.decls.len(), 2);
+    }
+
+    #[test]
+    fn compil_trait_decl3() {
+        let src = r#"trait Ord: Eq + Eq2 {
+            fn lt(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+            fn le(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+        }"#;
+
+        let result = descend::trait_def(src).expect("Cannot parse empty struct");
+        let supertraits = vec![
+            TraitMonoType { name: String::from("Eq"), generics: vec![] },
+            TraitMonoType { name: String::from("Eq2"), generics: vec![] },
+        ];
+        assert_eq!(result.conditions, vec![]);
+        assert_eq!(result.supertraits, supertraits);
         assert_eq!(result.decls.len(), 2);
     }
 
@@ -2400,10 +2422,10 @@ mod tests {
                     if let TyKind::Data(dataty) = ty {
                         assert_eq!(dataty,
                             DataTy::with_span(
-                                DataTyKind::StructType(String::from("Point"), vec![
+                                DataTyKind::StructMonoType(StructMonoType{ name: String::from("Point"), generics: vec![
                                     ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                                     ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                                ]),
+                                ]}),
                                 Span::new(59, 64)));
                     } else {
                         panic!("Cannot recognize datatype");
@@ -2436,7 +2458,7 @@ mod tests {
                     if let TyKind::Data(dataty) = ty {
                         assert_eq!(dataty,
                             DataTy::with_span(
-                                DataTyKind::StructType(String::from("Point"), vec![]),
+                                DataTyKind::StructMonoType(StructMonoType{ name: String::from("Point"), generics: vec![] }),
                                 Span::new(59, 64)));
                     } else {
                         panic!("Cannot recognize datatype");
