@@ -54,6 +54,8 @@ pub enum TyError {
     UnexpectedType,
     UnexpectedItem,
     WrongNumberOfGenericParams(usize, usize),
+    MissingStructField(String),
+    UnexpectedNumberOfStructFields(usize, usize),
     WrongKind(Kind, Kind),
     // TODO remove as soon as possible
     String(String),

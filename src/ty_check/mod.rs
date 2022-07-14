@@ -136,14 +136,8 @@ impl TyChecker {
 
             match self.gl_ctx.trait_ty_by_name(&trait_impl.name) {
                 Ok(trait_def_self_borrow) => {
-                    let trait_def = trait_def_self_borrow.clone(); //Resolves borrowing problems             
-                    if trait_def.generic_params.len() == trait_impl.generics.len() {
-                        iter_TyResult_to_TyResult!(trait_def.generic_params.iter().zip(trait_impl.generics.iter()).map(|(gen, arg)|
-                            TyChecker::check_arg_has_correct_kind(&gen.kind, arg)
-                        ))
-                    } else {
-                        Err(TyError::WrongNumberOfGenericParams(trait_def.generic_params.len(), trait_impl.generics.len()))
-                    }?;
+                    let trait_def = trait_def_self_borrow.clone(); //Resolves borrowing problems
+                    Self::check_args_have_correct_kinds(&trait_def.generic_params, &trait_impl.generics)?;
 
                     let mut monotypes = Vec::with_capacity(trait_def.generic_params.len() + 1);
                     monotypes.push(impl_def.ty.clone());
@@ -410,8 +404,8 @@ impl TyChecker {
             ExprKind::DepApp(ef, k_args) => {
                 unimplemented!()
             }
-            ExprKind::StructInst(_, _, _) => {
-                unimplemented!("TODO")
+            ExprKind::StructInst(name, generic_args, inst_exprs) => {
+                self.ty_check_new_struct(kind_ctx, ty_ctx, exec, name, generic_args, inst_exprs)?
             }
             ExprKind::Ref(prv, own, pl_expr) => {
                 self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv, *own, pl_expr)?
@@ -498,6 +492,67 @@ impl TyChecker {
         //}
         expr.ty = Some(ty);
         Ok(res_ty_ctx)
+    }
+
+    fn ty_check_new_struct(
+        &mut self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        struct_name: &String,
+        generic_args: &Vec<ArgKinded>,
+        inst_exprs: &mut Vec<(Ident, Expr)>
+    ) -> TyResult<(TyCtx, Ty)> {
+        let struct_def_orginal = self.gl_ctx.struct_by_name(struct_name)?;
+        let struct_def = struct_def_orginal.clone(); // Prevent borrowing errors
+        Self::check_args_have_correct_kinds(&struct_def.generic_params, generic_args)?;
+        iter_TyResult_to_TyResult!(generic_args.iter().map(|gen_arg|
+            match gen_arg {
+                ArgKinded::Ty(ty) =>
+                    self.ty_well_formed(kind_ctx, &ty_ctx, exec, ty),
+                _ =>
+                    unimplemented!("TODO"),
+            }))?;
+        match 
+            struct_def.decls
+            .iter()
+            .try_fold((ty_ctx, Vec::new()), |(mut ty_ctx, mut errs), field| {
+                match inst_exprs.iter_mut().find(|(ident, _)| ident.name == field.name) {
+                    Some((_, expr)) => {
+                        ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
+                        let expected_ty =
+                            struct_def.generic_params
+                            .iter()
+                            .zip(generic_args.iter())
+                            .fold(field.ty.clone(), |ty, (gen, arg)|
+                                ty.subst_ident_kinded(gen, arg));
+                        if &Ty::new(TyKind::Data(expected_ty)) != expr.ty.as_ref().unwrap() {
+                            errs.push(TyError::UnexpectedType)
+                        }
+                    },
+                    None => errs.push(TyError::MissingStructField(field.name.clone()))
+                }
+                Ok((ty_ctx, errs))
+        }) {
+            Ok((ty_ctx, errs)) =>
+            if errs.is_empty() {
+                if struct_def.decls.len() == inst_exprs.len() {
+                    let struct_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::StructMonoType(
+                        StructMonoType {
+                            name: struct_name.clone(),
+                            generics: generic_args.clone()
+                        }
+                    ))));
+            
+                    Ok((ty_ctx, struct_ty))
+                } else {
+                    Err(TyError::UnexpectedNumberOfStructFields(struct_def.decls.len(), inst_exprs.len()))
+                }
+            } else {
+                Err(TyError::MultiError(errs))
+            },
+            Err(err) => Err(err),
+        }
     }
 
     fn ty_check_range(
@@ -1856,12 +1911,7 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Vec<IdentKinded>, Vec<Ty>, Ty, Ty)> {
         let res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, ef)?;
         if let TyKind::Fn(gen_params, cons, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
-            if gen_params.len() < k_args.len() {
-                return Err(TyError::WrongNumberOfGenericParams(gen_params.len(), k_args.len()));
-            }
-            for (gp, kv) in gen_params.iter().zip(&*k_args) {
-                Self::check_arg_has_correct_kind( &gp.kind, kv)?;
-            }
+            Self::check_args_have_correct_kinds(gen_params, &k_args.to_vec())?;
             let subst_param_tys: Vec<_> = param_tys
                 .iter()
                 .map(|ty| TyChecker::subst_ident_kinded(gen_params, k_args, ty))
@@ -1900,6 +1950,19 @@ impl TyChecker {
         }
         subst_ty
     }
+
+    fn check_args_have_correct_kinds(
+        expected: &Vec<IdentKinded>,
+        kv: &Vec<ArgKinded>
+    ) -> TyResult<()> {
+            if expected.len() == kv.len() {
+                iter_TyResult_to_TyResult!(expected.iter().zip(kv.iter()).map(|(gen, arg)|
+                    TyChecker::check_arg_has_correct_kind(&gen.kind, arg)
+                ))
+            } else {
+                Err(TyError::WrongNumberOfGenericParams(expected.len(), kv.len()))
+            }
+        }
 
     fn check_arg_has_correct_kind(
         expected: &Kind,
@@ -2579,19 +2642,8 @@ impl TyChecker {
                 }
                 DataTyKind::StructMonoType(struct_mono_ty) => {
                     let StructMonoType { name, generics } = struct_mono_ty;
-                    match self.gl_ctx.struct_by_name(name) {
-                        Ok(struct_def) => {
-                            if struct_def.generic_params.len() == generics.len() {
-                                iter_TyResult_to_TyResult!(struct_def.generic_params.iter().zip(generics.iter()).map(|(gen, arg)|
-                                    TyChecker::check_arg_has_correct_kind(&gen.kind, arg)
-                                ))
-                            } else {
-                                Err(TyError::WrongNumberOfGenericParams(struct_def.generic_params.len(), generics.len()))
-                            }
-                        },
-                        Err(err) => Err(TyError::from(err))
-                    }?;
-                    //TODO check if names of attributes are also correct
+                    let struct_def = self.gl_ctx.struct_by_name(name)?;
+                    Self::check_args_have_correct_kinds(&struct_def.generic_params, generics)?;
                     iter_TyResult_to_TyResult!(generics.iter().map(|arg|
                         match arg {
                             ArgKinded::Ty(ty) =>
@@ -2748,18 +2800,8 @@ impl TyChecker {
 
     fn ty_well_formed_where_clause_item(&self, where_clause_item: &WhereClauseItem) -> TyResult<()> {
         let TraitMonoType { name, generics } = &where_clause_item.trait_bound;
-        match self.gl_ctx.trait_ty_by_name(name) {
-            Ok(trait_def) => {
-                if trait_def.generic_params.len() == generics.len() {
-                    iter_TyResult_to_TyResult!(trait_def.generic_params.iter().zip(generics.iter()).map(|(gen, arg)|
-                        TyChecker::check_arg_has_correct_kind(&gen.kind, arg)
-                    ))
-                } else {
-                    Err(TyError::WrongNumberOfGenericParams(trait_def.generic_params.len(), generics.len()))
-                }
-            },
-            Err(err) => Err(TyError::from(err))
-        }
+        let trait_def = self.gl_ctx.trait_ty_by_name(name)?;
+        Self::check_args_have_correct_kinds(&trait_def.generic_params, generics)
     }
 }
 
