@@ -481,17 +481,15 @@ peg::parser! {
                     s:nat() __ view:place_expression() end:position!() {
                 Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
             }
-            p:(p:place_expression() "." {p})? begin:position!() func:ident() place_end:position!() _
+            e:(e:expression() "." {e})? begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {{
                 let args =
-                    match p {
+                    match e {
                         Some(place_expr) => {
-                            let firstArg = //TODO Ownership should not be Shrd
-                                Expr::new(ExprKind::Ref(None, Ownership::Shrd, place_expr));
                             let mut result = Vec::with_capacity(args.len());
-                            result.push(firstArg);
+                            result.push(place_expr);
                             let mut args = args.clone();
                             result.append(&mut args);
                             result

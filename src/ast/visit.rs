@@ -147,9 +147,7 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
 pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
     match &ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::Fn(gen_params, conditions, params, exec, ret_ty) => {
-            walk_list!(visitor, visit_ident_kinded, gen_params);
-            walk_list!(visitor, visit_where_clause_item, conditions);
+        TyKind::Fn(params, exec, ret_ty) => {
             walk_list!(visitor, visit_ty, params);
             visitor.visit_exec(exec);
             visitor.visit_ty(ret_ty)

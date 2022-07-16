@@ -180,7 +180,7 @@ impl TyCtx {
 
             match &ty.ty {
                 TyKind::Ident(_)
-                | TyKind::Fn(_, _, _, _, _)
+                | TyKind::Fn(_, _, _)
                 | TyKind::Data(DataTy { dty: d::Range, .. })
                 | TyKind::Data(DataTy {
                     dty: d::Atomic(_), ..
@@ -327,7 +327,7 @@ impl TyCtx {
                 pl,
                 match &pl_ty.ty {
                     TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
-                    TyKind::Fn(_, _,  _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
+                    TyKind::Fn(_, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(
                         Box::new(dty.clone()),
                     )))),
@@ -499,7 +499,7 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    funs: HashMap<String, Ty>,
+    funs: HashMap<String, TypeScheme>,
     structs: HashMap<String, StructDef>,
     traits: HashMap<String, TraitDef>,
     pub theta: ConstraintEnv,
@@ -524,7 +524,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn append_fun_decls(mut self, fun_decls: &[(&str, Ty)]) -> Self {
+    pub fn append_fun_decls(mut self, fun_decls: &[(&str, TypeScheme)]) -> Self {
         self.funs.extend(
             fun_decls
                 .iter()
@@ -610,21 +610,25 @@ impl GlobalCtx {
                         AssociatedItem::FunDecl(_) => {
                             let (ty, name) = 
                                 match ass_item {
-                                    AssociatedItem::FunDef(fun_def) => (fun_def.ty().ty, fun_def.name.clone()),
-                                    AssociatedItem::FunDecl(fun_decl) => (fun_decl.ty().ty, fun_decl.name.clone()),
+                                    AssociatedItem::FunDef(fun_def) => (fun_def.ty(), fun_def.name.clone()),
+                                    AssociatedItem::FunDecl(fun_decl) => (fun_decl.ty(), fun_decl.name.clone()),
                                     _ => panic!("This cannot happen"),
                                 };
 
-                            if let TyKind::Fn(generics_fun, conditions_fun, args, exec, ret_ty)
-                                    = ty {
-                                let mut generics = Vec::with_capacity(generics_tdef.len() + generics_fun.len());
+                            if let TyKind::Fn(args, exec, ret_ty) = ty.mono_ty.ty {
+                                let mut generics = Vec::with_capacity(generics_tdef.len() + ty.generic_params.len());
                                 generics.extend(generics_tdef.clone());
-                                generics.extend(generics_fun);
-                                let mut conditions = Vec::with_capacity(conditions_fun.len() + 1);
+                                generics.extend(ty.generic_params.clone());
+                                let mut conditions = Vec::with_capacity(ty.conditions.len() + 1);
                                 conditions.push(self_impl_trait.clone());
-                                conditions.extend(conditions_fun);
+                                conditions.extend(ty.conditions.clone());
 
-                                let ty = Ty::new(TyKind::Fn(generics, conditions, args, exec, ret_ty));
+                                let ty =
+                                    TypeScheme {
+                                        generic_params: generics,
+                                        conditions,
+                                        mono_ty: Ty::new(TyKind::Fn(args, exec, ret_ty))
+                                    };
                                 if self.funs.insert(name, ty).is_some() {
                                     errs.push(CtxError::MultipleDefinedTraits(t_def.name.clone()))
                                 }
@@ -641,7 +645,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn fun_ty_by_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
+    pub fn fun_ty_by_ident(&self, ident: &Ident) -> CtxResult<&TypeScheme> {
         match self.funs.get(&ident.name) { 
             Some(ty) => Ok(ty),
             None => Err(CtxError::IdentNotFound(ident.clone())),

@@ -14,7 +14,7 @@ pub fn infer_kinded_args_from_mono_ty(
     subst_ret_ty: &Ty,
     mono_ty: &Ty,
 ) -> Vec<ArgKinded> {
-    if let TyKind::Fn(_, _, mono_param_tys, _, mono_ret_ty) = &mono_ty.ty {
+    if let TyKind::Fn(mono_param_tys, _, mono_ret_ty) = &mono_ty.ty {
         if mono_param_tys.len() != subst_param_tys.len() {
             panic!("Unexpected difference in amount of paramters.")
         }
@@ -76,13 +76,9 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
         (TyKind::Ident(id), _) => insert_checked!(map, ArgKinded::Ty, id, mono_ty),
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         (
-            TyKind::Fn(gen_params1, cons1, params1, exec1, ret_ty1),
-            TyKind::Fn(gen_params2, cons2, params2, exec2, ret_ty2),
+            TyKind::Fn(params1, exec1, ret_ty1),
+            TyKind::Fn(params2, exec2, ret_ty2),
         ) => {
-            if !gen_params1.is_empty() || !gen_params2.is_empty() {
-                panic!("Unexpected top-level function type.")
-            }
-            assert!(cons1.len() == 0 && cons2.len() == 0);
             infer_from_lists!(infer_kargs_tys, map, params1, params2);
             panic_if_neq!(exec1, exec2);
             infer_kargs_tys(map, ret_ty1, ret_ty2)

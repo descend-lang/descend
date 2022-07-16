@@ -40,39 +40,22 @@ fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap
 }
 
 pub(super) fn inst_fn_ty_scheme(
-    idents_kinded: &[IdentKinded],
-    param_tys: &[Ty],
-    exec: Exec,
-    ret_ty: &Ty,
-) -> TyResult<Ty> {
-    let mono_idents: Vec<_> = idents_kinded
-        .iter()
-        .map(|i| match i.kind {
-            Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
-            Kind::DataTy => {
-                ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
-            }
-            Kind::Nat => ArgKinded::Nat(fresh_ident(&i.ident.name, Nat::Ident)),
-            Kind::Memory => ArgKinded::Memory(fresh_ident(&i.ident.name, Memory::Ident)),
-            Kind::Provenance => {
-                ArgKinded::Provenance(fresh_ident(&i.ident.name, Provenance::Ident))
-            }
-        })
-        .collect();
+    tyscheme: &TypeScheme
+) -> Ty {
+    let mono_idents: Vec<_> = tyscheme.generic_params.iter().map(|i| match i.kind {
+        Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
+        Kind::DataTy => {
+            ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
+        }
+        Kind::Nat => ArgKinded::Nat(fresh_ident(&i.ident.name, Nat::Ident)),
+        Kind::Memory => ArgKinded::Memory(fresh_ident(&i.ident.name, Memory::Ident)),
+        Kind::Provenance => {
+            ArgKinded::Provenance(fresh_ident(&i.ident.name, Provenance::Ident))
+        }
+    })
+    .collect();
 
-    let mono_param_tys = param_tys
-        .iter()
-        .map(|ty| TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ty))
-        .collect();
-    let mono_ret_ty = TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
-
-    Ok(Ty::new(TyKind::Fn(
-        vec![],
-        vec![],
-        mono_param_tys,
-        exec,
-        Box::new(mono_ret_ty),
-    )))
+    tyscheme.instantiate(&mono_idents).as_mono().unwrap()
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -185,14 +168,9 @@ impl Constrainable for Ty {
             (TyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
             (_, TyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
             (
-                TyKind::Fn(idents_kinded1, cons1, param_tys1, exec1, ret_ty1),
-                TyKind::Fn(idents_kinded2, cons2, param_tys2, exec2, ret_ty2),
+                TyKind::Fn(param_tys1, exec1, ret_ty1),
+                TyKind::Fn(param_tys2, exec2, ret_ty2),
             ) => {
-                assert!(idents_kinded1.is_empty());
-                assert!(idents_kinded2.is_empty());
-                assert!(cons1.is_empty());
-                assert!(cons2.is_empty());
-
                 if exec1 != exec2 {
                     return Err(TyError::CannotUnify);
                 }

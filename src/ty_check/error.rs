@@ -57,6 +57,7 @@ pub enum TyError {
     MissingStructField(String),
     UnexpectedNumberOfStructFields(usize, usize),
     WrongKind(Kind, Kind),
+    UnfullfilledConstraint(WhereClauseItem),
     // TODO remove as soon as possible
     String(String),
 }

@@ -1699,7 +1699,7 @@ fn separate_param_decls_from_args(
 }
 
 fn get_data_param_tys(fun: &desc::Expr) -> Vec<desc::Ty> {
-    if let desc::TyKind::Fn(_, _, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
+    if let desc::TyKind::Fn(param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
         param_tys
             .iter()
             .filter(|p_ty| !is_shape_ty(&p_ty))
@@ -1716,8 +1716,6 @@ fn create_fun_ty_of_purely_data_tys(
     ret_dty: &desc::DataTy,
 ) -> desc::Ty {
     desc::Ty::new(desc::TyKind::Fn(
-        vec![],
-        vec![],
         data_param_tys,
         exec,
         Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.clone()))),
@@ -1731,10 +1729,8 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
         .map(|id_kinded| id_kinded.ident.name.as_str())
         .zip(gen_args)
         .collect();
-    if let desc::TyKind::Fn(_, _, param_tys, exec, ret_ty) = &fun.ty().ty {
+    if let desc::TyKind::Fn(param_tys, exec, ret_ty) = &fun.ty().mono_ty.ty {
         let fun_ty = desc::Ty::new(desc::TyKind::Fn(
-            vec![],
-            vec![],
             param_tys.clone(),
             *exec,
             ret_ty.clone(),
@@ -2199,7 +2195,7 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ..
         }) => unimplemented!(),
         desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::Fn(_, _, _, _, _),
+            ty: desc::TyKind::Fn(_, _, _),
             ..
         }) => unimplemented!("needed?"),
         desc::ArgKinded::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
@@ -2341,7 +2337,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
-        Fn(_, _, _, _, _) => unimplemented!("needed?"),
+        Fn(_, _, _) => unimplemented!("needed?"),
         Dead(_) => panic!("Dead types cannot be generated."),
         Data(desc::DataTy {
             dty: desc::DataTyKind::ThreadHierchy(_),

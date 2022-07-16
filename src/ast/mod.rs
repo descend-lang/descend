@@ -154,36 +154,40 @@ impl TraitDef {
 }
 
 impl FunDef {
-    pub fn ty(&self) -> Ty {
+    pub fn ty(&self) -> TypeScheme {
         let param_tys: Vec<_> = self
             .param_decls
             .iter()
             .map(|p_decl| p_decl.ty.as_ref().unwrap().clone())
             .collect();
-        Ty::new(TyKind::Fn(
-            self.generic_params.clone(),
-            self.conditions.clone(),
-            param_tys,
-            self.exec,
-            Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
-        ))
+        TypeScheme {
+            generic_params: self.generic_params.clone(),
+            conditions: self.conditions.clone(),
+            mono_ty: Ty::new(TyKind::Fn(
+                param_tys,
+                self.exec,
+                Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
+            ))
+        }
     }
 }
 
 impl FunDecl {
-    pub fn ty(&self) -> Ty {
+    pub fn ty(&self) -> TypeScheme {
         let param_tys: Vec<_> = self
             .param_decls
             .iter()
             .map(|p_decl| p_decl.ty.clone())
             .collect();
-        Ty::new(TyKind::Fn(
-            self.generic_params.clone(),
-            self.conditions.clone(),
-            param_tys,
-            self.exec,
-            Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
-        ))
+        TypeScheme {
+            generic_params: self.generic_params.clone(),
+            conditions: self.conditions.clone(),
+            mono_ty: Ty::new(TyKind::Fn(
+                param_tys,
+                self.exec,
+                Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
+            ))
+        }
     }
 }
 
@@ -844,6 +848,59 @@ impl fmt::Display for PlaceExpr {
 
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
+pub struct TypeScheme {
+    pub generic_params: Vec<IdentKinded>,
+    pub conditions: Vec<WhereClauseItem>,
+    pub mono_ty: Ty
+}
+
+impl TypeScheme {
+    pub fn new(ty: Ty) -> Self {
+        TypeScheme {
+            generic_params: vec![],
+            conditions: vec![],
+            mono_ty: ty
+        }
+    }
+
+    pub fn is_mono(&self) -> bool {
+        self.generic_params.len() == 0 && self.conditions.len() == 0
+    }
+
+    pub fn as_mono(&self) -> Option<Ty> {
+        if self.is_mono() {
+            Some(self.mono_ty.clone())
+        } else {
+            None
+        }
+    }
+
+    fn substitute<T: SubstKindedIdents + Clone>(&self, x: &T, with: &[ArgKinded]) -> T {
+        self.generic_params[0..with.len()]
+            .iter()
+            .zip(with.iter())
+            .fold(x.clone(), |x, (ident_kinded, with)|
+                x.subst_ident_kinded(ident_kinded, with))
+    }
+
+    pub fn instantiate(&self, with: &[ArgKinded]) -> Self {
+        assert!(self.generic_params.len() >= with.len());
+        TypeScheme {
+            generic_params: self.generic_params[with.len()..].to_vec(),
+            conditions:
+                self.conditions
+                .iter()
+                .map(|con|
+                    self.substitute(con, with))
+                .collect(),
+            mono_ty:
+                self.substitute(&self.mono_ty, with),
+        }
+    }
+}
+
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Ty {
     pub ty: TyKind,
     pub constraints: Vec<Constraint>,
@@ -854,7 +911,7 @@ pub struct Ty {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind {
     Data(DataTy),
-    Fn(Vec<IdentKinded>, Vec<WhereClauseItem>, Vec<Ty>, Exec, Box<Ty>),
+    Fn(Vec<Ty>, Exec, Box<Ty>),
     Ident(Ident),
     Dead(Box<Ty>),
 }
@@ -916,7 +973,7 @@ impl Ty {
     pub fn copyable(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
-            TyKind::Fn(_, _, _, _, _) => true,
+            TyKind::Fn(_, _, _) => true,
             TyKind::Ident(_) => false,
             TyKind::Dead(_) => panic!(
                 "This case is not expected to mean anything.\
@@ -928,23 +985,16 @@ impl Ty {
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::Ident(_) | TyKind::Fn(_, _, _, _, _) => true, //TODO Can types from where clauses be dead?
+            TyKind::Ident(_) | TyKind::Fn( _, _, _) => true,
             TyKind::Dead(_) => false,
         }
     }
 
     pub fn eq_structure(&self, other: &Self) -> bool {
         match (&self.ty, &other.ty) {
-            (TyKind::Fn(gps1, cons1, ptys1, exec1, ret_ty1),
-             TyKind::Fn(gps2, cons2, ptys2, exec2, ret_ty2)) => {
+            (TyKind::Fn(ptys1, exec1, ret_ty1),
+             TyKind::Fn(ptys2, exec2, ret_ty2)) => {
                 let mut res = true;
-                for (gp1, gp2) in gps1.iter().zip(gps2) {
-                    res &= gp1 == gp2;
-                }
-                //TODO passt das hier?
-                res &= cons1.iter().zip(cons2).fold(true, |res, (c1, c2)|
-                    res & c1.param.eq_structure(&c2.param) & (c1.trait_bound == c2.trait_bound)
-                );
                 for (pty1, pty2) in ptys1.iter().zip(ptys2) {
                     res &= pty1.eq_structure(pty2);
                 }
@@ -961,7 +1011,7 @@ impl Ty {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
-            TyKind::Fn(_, _, param_tys, _, ret_ty) => {
+            TyKind::Fn(param_tys, _, ret_ty) => {
                 param_tys
                     .iter()
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
@@ -977,12 +1027,7 @@ impl SubstKindedIdents for Ty {
         match &self.ty {
             // TODO mutate and do not create a new type (also this drops the span).
             TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
-            TyKind::Fn(gen_params, conditions, params, exec, ret) => Ty::new(TyKind::Fn(
-                gen_params.clone(),
-                conditions
-                    .iter()
-                    .map(|con| 
-                        con.subst_ident_kinded(ident_kinded, with)).collect(),
+            TyKind::Fn(params, exec, ret) => Ty::new(TyKind::Fn(
                 params
                     .iter()
                     .map(|param| param.subst_ident_kinded(ident_kinded, with))
