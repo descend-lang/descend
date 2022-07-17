@@ -70,13 +70,20 @@ pub(super) struct ConstrainMap {
 }
 
 impl ConstrainMap {
-    fn new() -> Self {
+    pub fn new() -> Self {
         ConstrainMap {
             ty_unifier: HashMap::new(),
             dty_unifier: HashMap::new(),
             nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.ty_unifier.clear();
+        self.dty_unifier.clear();
+        self.nat_unifier.clear();
+        self.mem_unifier.clear();
     }
 }
 
@@ -154,6 +161,76 @@ pub(super) trait Constrainable {
 
     fn occurs_check<S: Constrainable>(ident_kinded: &IdentKinded, s: &S) -> bool {
         s.free_idents().contains(ident_kinded)
+    }
+}
+
+impl Constrainable for ArgKinded {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        match (self, other) {
+            (ArgKinded::Ident(_), ArgKinded::Ident(_)) =>
+                unimplemented!("needed?"),
+            (ArgKinded::DataTy(dt1), ArgKinded::DataTy(dt2)) =>
+                dt1.constrain(dt2, constr_map, prv_rels),
+            (ArgKinded::Memory(mem1), ArgKinded::Memory(mem2)) =>
+                mem1.constrain(mem2, constr_map, prv_rels), 
+            (ArgKinded::Nat(nat1), ArgKinded::Nat(nat2)) =>
+                nat1.constrain(nat2, constr_map, prv_rels),      
+            (ArgKinded::Provenance(prov1), ArgKinded::Provenance(prov2)) =>
+                prov1.constrain(prov2, constr_map, prv_rels), 
+            (ArgKinded::Ty(ty1), ArgKinded::Ty(ty2)) =>
+                ty1.constrain(ty2, constr_map, prv_rels),
+            _ => 
+                Err(TyError::CannotUnify)
+        }
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_arg_kinded(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_arg_kinded(self);
+    }
+}
+
+impl Constrainable for WhereClauseItem {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        if self.trait_bound.name != other.trait_bound.name {
+            return Err(TyError::CannotUnify);
+        }
+
+        self.param.constrain(&mut other.param, constr_map, prv_rels)?;
+
+        assert!(self.trait_bound.generics.len() == other.trait_bound.generics.len());
+        self.trait_bound.generics
+            .iter_mut()
+            .zip(other.trait_bound.generics.iter_mut())
+            .try_for_each(|(arg_ty1, arg_ty2)|
+                arg_ty1.constrain(arg_ty2, constr_map, prv_rels))
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_where_clause_item(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_where_clause_item(self);
     }
 }
 

@@ -1,6 +1,10 @@
-use crate::ast::{IdentKinded, WhereClauseItem, ArgKinded, SubstKindedIdents};
+use crate::ast::{IdentKinded, WhereClauseItem};
 
-#[derive(Debug, Clone)]
+use crate::ty_check::unify::{ConstrainMap, Constrainable};
+
+use super::unify::substitute;
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConstraintScheme {
     pub generics: Vec<IdentKinded>,
     pub implican: Vec<WhereClauseItem>,
@@ -20,12 +24,6 @@ impl ConstraintScheme {
     pub fn is_where_clause_item(&self) -> bool {
         self.generics.len() == 0 && self.implican.len() == 0
     }
-
-    pub fn subst_ident_kinded(&mut self, ident_kinded: &IdentKinded, with: &ArgKinded) {
-        if !self.generics.contains(ident_kinded) {
-            self.implican.iter_mut().for_each(|wc| *wc = wc.subst_ident_kinded(ident_kinded, with))
-        }
-    }
 }
 
 impl ConstraintEnv {
@@ -41,11 +39,37 @@ impl ConstraintEnv {
         self.theta.extend(cons.clone());
     }
 
-    pub fn remove_constraints(&mut self, cons: &Vec<ConstraintScheme>) -> bool {
-        unimplemented!("TODO");
+    pub fn remove_constraints(&mut self, cons: &Vec<ConstraintScheme>) {
+        cons.iter().for_each(|con_remove| {
+            self.theta
+            .swap_remove(
+                self.theta
+                .iter()
+                .position(|con|
+                    con == con_remove).unwrap()
+                );
+        });
     }
 
-    pub fn check_predicate(&self, constraint: &WhereClauseItem) -> bool {
-        unimplemented!("TODO");
+    pub fn check_predicate(&self, goal: &WhereClauseItem) -> bool {
+        let mut constr_map = ConstrainMap::new();
+        let mut prv_rels = Vec::new();
+
+        self.theta.iter().find(|con| {
+            constr_map.clear();
+            prv_rels.clear();
+            
+            let mut goal_clone = goal.clone();
+
+            if goal_clone.constrain(&mut con.implied.clone(), &mut constr_map, &mut prv_rels).is_ok() {
+                con.implican.iter().fold(true, |res, c| {
+                    let mut goal = c.clone();
+                    substitute(&constr_map, &mut goal);
+                    res && self.check_predicate(&goal)
+                })
+            } else {
+                false
+            }
+        }).is_some()
     }
 }
