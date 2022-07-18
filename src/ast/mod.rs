@@ -858,6 +858,22 @@ impl Dim {
             Z(n) => Z(n.subst_ident_kinded(ident_kinded, with)),
         }
     }
+
+    pub fn remove_dim(&self, dim_compo: DimCompo) -> Option<Self> {
+        match (self, dim_compo) {
+            (Dim::XYZ(n1, n2, n3), DimCompo::X) => Some(Dim::YZ(n2.clone(), n3.clone())),
+            (Dim::XYZ(n1, n2, n3), DimCompo::Y) => Some(Dim::XZ(n1.clone(), n3.clone())),
+            (Dim::XYZ(n1, n2, n3), DimCompo::Z) => Some(Dim::XY(n1.clone(), n2.clone())),
+            (Dim::XY(n1, n2), DimCompo::X) => Some(Dim::Y(n2.clone())),
+            (Dim::XY(n1, n2), DimCompo::Y) => Some(Dim::X(n1.clone())),
+            (Dim::XZ(n1, n2), DimCompo::X) => Some(Dim::Z(n2.clone())),
+            (Dim::XZ(n1, n2), DimCompo::Z) => Some(Dim::X(n1.clone())),
+            (Dim::YZ(n1, n2), DimCompo::Y) => Some(Dim::Z(n2.clone())),
+            (Dim::YZ(n1, n2), DimCompo::Z) => Some(Dim::Y(n1.clone())),
+            (Dim::X(_), DimCompo::X) | (Dim::Y(_), DimCompo::Y) | (Dim::Z(_), DimCompo::Z) => None,
+            _ => panic!("provided dimension component does not exist"),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -900,7 +916,7 @@ impl ThreadHierchyTy {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum DimCompo {
     X,
     Y,

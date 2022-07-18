@@ -1,0 +1,93 @@
+fn fan1<n: nat, t:nat, r1: prv, r2: prv>(
+    grid: BlockGrp<X<n/512>, ThreadGrp<X<512>>>,
+    inputs: (&r1 uniq gpu.global [f32; n*n], &r2 shrd gpu.global [f32; n*n])
+) -[gpu.grid]-> () {
+    let (m_cuda, a_cuda) = inputs;
+    par_branch split_thread_grp::<(n-1-t)>(to_thread_grp(grid)) {
+        active => {
+            let m = group_mut::<n>(to_view_mut(m_cuda));
+            let a = group::<n>(to_view(a_cuda));
+            let (_, part_m) = split uniq (t+1) (*m);
+            let (_, part_a) = split shrd (t+1) (*a);
+
+            parfor _ in active
+            with part_m_row, part_a_row
+            from part_m, part_a {
+                let a_row = a[t];
+                part_m_row[t] = part_a_row[t] / a_row[t]
+            }
+        },
+        inactive => { () }
+    }
+}
+
+// fn fan2<>(
+//     grid: BlockGrp<(n/4, n/4), ThreadGrp<(4, 4)>,
+//     m_cuda: &shrd [f32; n*n],
+//     a_cuda: &uniq [f32; n*n],
+//     b_cuda: &uniq [f32; n]
+// ) -[gpu.grid]-> {
+//     par_branch split_xy_thread_grp_x::<n-1-t>(to_thread_grp(grid)) {
+//         active_x =>
+//             par_branch split_xy_thread_grp_y::<n-t>(active_x) {
+//                 active_xy => {
+//                     let m = group::<n>(to_view(m_cuda));
+//                     let a = group_mut::<n>(to_view_mut(a_cuda));
+//                     let b = to_view_mut(b_cuda);
+//                     let (_, part_m) = split shrd (t+1) mat;
+//                     let (prev_a, part_a) = split uniq (t+1) a;
+//                     let prev_a_row = &shrd *prev_a[t];
+//                     let (_, part_b) = split uniq (t+1) b;
+//                     parfor(x) threads in active_xy
+//                     with part_m_row, part_a_row, part_b_elem
+//                     from part_m, part_a, part_b {
+//                         // TODO split par_a_row in y dimension at t
+//                         parfor(y) _ in threads with prev_a_elem from prev_a_row, part_a_row {
+//                             *part_a_row = part_a_row - part_m_row[t] * (*prev_a_elem)
+//                         }
+//                         // TODO global_idx.y == 0 { write to b }
+//                     }
+//                 }
+//                 inactive => { () }
+//             }
+//         inactive => { () }
+//     }
+// }
+
+fn gaussian<n: nat>(
+    m: &uniq cpu.mem [f32; n*n],
+    a: &uniq cpu.mem [f32; n*n],
+    b: &uniq cpu.mem [f32; n]
+) -[cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+    let mut m_cuda = gpu_alloc_copy(&uniq gpu, &shrd *m);
+    let a_cuda = gpu_alloc_copy(&uniq gpu, &shrd *a);
+    let b_cuda = gpu_alloc_copy(&uniq gpu, &shrd *b);
+
+    for_nat t in range(0,n-1) {
+        exec::<(n/512), 512>(&uniq gpu, (&uniq m_cuda, &shrd a_cuda),
+        | grid: BlockGrp<X<n/512>, ThreadGrp<X<512>>>, inputs: (&r1 uniq gpu.global [f32; n*n], &r2 shrd gpu.global [f32; n*n]) | -[gpu.grid]-> () {
+            par_branch split_thread_grp::<(n-1-t)>(to_thread_grp(grid)) {
+                active => {
+                    let m = group_mut::<n>(to_view_mut(inputs.0));
+                    let a = group::<n>(to_view(inputs.1));
+                    let (_, part_m) = split uniq (t+1) (*m);
+                    let (_, part_a) = split shrd (t+1) (*a);
+
+                    parfor _ in active
+                    with part_m_row, part_a_row
+                    from part_m, part_a {
+                        let a_row = a[t];
+                        part_m_row[t] = part_a_row[t] / a_row[t]
+                    }
+                },
+                inactive => { () }
+            }
+        })
+        //exec::<(n/4, n/4), (4, 4)>(&uniq gpu, (&uniq m_cuda, &uniq a_cuda, &uniq b_cuda), fan2::<n, t>);
+    };
+
+    copy_to_host(&shrd m_cuda, m);
+    copy_to_host(&shrd a_cuda, a);
+    copy_to_host(&shrd b_cuda, b)
+}

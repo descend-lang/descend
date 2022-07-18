@@ -143,9 +143,10 @@ impl TyChecker {
             ExprKind::App(ef, k_args, args) => {
                 self.ty_check_app(kind_ctx, ty_ctx, exec, ef, k_args, args)?
             }
-            // TODO remove
             ExprKind::DepApp(ef, k_args) => {
-                unimplemented!()
+                let (ty_ctx, _, _, _, fun_ty) =
+                    self.ty_check_dep_app(kind_ctx, ty_ctx, exec, ef, k_args)?;
+                (ty_ctx, fun_ty)
             }
             ExprKind::Ref(prv, own, pl_expr) => {
                 self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv, *own, pl_expr)?
@@ -942,13 +943,14 @@ impl TyChecker {
 
         let parall_collec_ty_ctx =
             self.ty_check_expr(kind_ctx, decl_ty_ctx, exec, parall_collec)?;
-        let allowed_exec = to_exec(&parall_collec.ty.as_ref().unwrap().ty)?;
-        if allowed_exec != exec {
-            return Err(TyError::String(format!(
-                "Trying to run a parallel for-loop over {:?} inside of {:?}",
-                parall_collec, exec
-            )));
-        }
+        // TODO do we need this check?
+        // let allowed_exec = to_exec(&parall_collec.ty.as_ref().unwrap().ty)?;
+        // if allowed_exec != exec {
+        //     return Err(TyError::String(format!(
+        //         "Trying to run a parallel for-loop over {:?} inside of {:?}",
+        //         parall_collec, exec
+        //     )));
+        // }
         let mut input_ty_ctx = parall_collec_ty_ctx;
         for e in input_exprs.iter_mut() {
             input_ty_ctx = self.ty_check_expr(kind_ctx, input_ty_ctx, exec, e)?;
@@ -1878,6 +1880,7 @@ impl TyChecker {
                     IdentTyped::new(ident.clone(), Ty::new(ident_ty.clone()), *mutbl);
                 Ok(ty_ctx.append_ident_typed(ident_with_annotated_ty))
             }
+            (Pattern::Wildcard, _) => Ok(ty_ctx),
             (
                 Pattern::Tuple(patterns),
                 TyKind::Data(DataTy {
@@ -1927,9 +1930,7 @@ impl TyChecker {
             TyChecker::infer_pattern_ty(kind_ctx, ty_ctx_e, pattern, pattern_ty, e_ty)?;
         Ok((
             ty_ctx_with_idents,
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::Unit,
-            )))),
+            Ty::new(TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))),
         ))
     }
 
@@ -1951,9 +1952,7 @@ impl TyChecker {
             let ty_ctx_with_ident = ty_ctx.append_ident_typed(ident_with_ty);
             Ok((
                 ty_ctx_with_ident,
-                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-                    ScalarTy::Unit,
-                )))),
+                Ty::new(TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))),
             ))
         } else {
             Err(TyError::MutabilityNotAllowed(ty.clone()))

@@ -45,6 +45,31 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
     struct ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap<String, Kind>,
     }
+    impl ReplaceArgKindedIdents {
+        fn subst_in_gen_args(&self, gen_args: &mut [ArgKinded]) {
+            for gen_arg in gen_args {
+                if let ArgKinded::Ident(ident) = gen_arg {
+                    let to_be_kinded = ident.clone();
+                    match self.ident_names_to_kinds.get(&ident.name).unwrap() {
+                        Kind::Provenance => {
+                            *gen_arg = ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
+                        }
+                        Kind::Memory => *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded)),
+                        Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
+                        Kind::Ty => {
+                            // TODO how to deal with View??!! This is a problem!
+                            //  Ident only for Ty but not for DataTy or ViewTy?
+                            *gen_arg = ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
+                                DataTyKind::Ident(to_be_kinded),
+                            ))))
+                        }
+                        _ => panic!("This kind can not be referred to with an identifier."),
+                    }
+                }
+            }
+        }
+    }
+
     impl VisitMut for ReplaceArgKindedIdents {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
@@ -53,31 +78,13 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                         .extend(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
                     self.visit_expr(body)
                 }
+                ExprKind::DepApp(f, gen_args) => {
+                    self.visit_expr(f);
+                    self.subst_in_gen_args(gen_args);
+                }
                 ExprKind::App(f, gen_args, args) => {
                     self.visit_expr(f);
-                    for gen_arg in gen_args {
-                        if let ArgKinded::Ident(ident) = gen_arg {
-                            let to_be_kinded = ident.clone();
-                            match self.ident_names_to_kinds.get(&ident.name).unwrap() {
-                                Kind::Provenance => {
-                                    *gen_arg =
-                                        ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
-                                }
-                                Kind::Memory => {
-                                    *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded))
-                                }
-                                Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
-                                Kind::Ty => {
-                                    // TODO how to deal with View??!! This is a problem!
-                                    //  Ident only for Ty but not for DataTy or ViewTy?
-                                    *gen_arg = ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
-                                        DataTyKind::Ident(to_be_kinded),
-                                    ))))
-                                }
-                                _ => panic!("This kind can not be referred to with an identifier."),
-                            }
-                        }
-                    }
+                    self.subst_in_gen_args(gen_args);
                     walk_list!(self, visit_expr, args)
                 }
                 ExprKind::ForNat(ident, _, body) => {

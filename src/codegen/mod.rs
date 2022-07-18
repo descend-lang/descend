@@ -3,8 +3,7 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit::Visit;
-use crate::ast::visit_mut::VisitMut;
-use crate::ast::{utils, Mutability};
+use crate::ast::DimCompo;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -416,7 +415,7 @@ fn gen_stmt(
             body,
         ) => gen_par_for(
             decls,
-            par_dim,
+            *par_dim,
             parall_ident,
             parall_collec,
             input_idents,
@@ -529,7 +528,7 @@ fn gen_decl_init(
     dev_fun: bool,
     idx_checks: bool,
     ident: &desc::Ident,
-    mutbl: Mutability,
+    mutbl: desc::Mutability,
     e: &desc::Expr,
 ) -> cu::Stmt {
     if is_shape_ty(e.ty.as_ref().unwrap()) {
@@ -826,15 +825,28 @@ fn gen_exec(
     // FIXME only allows Lambdas
     let (dev_fun, free_kinded_idents) =
         if let desc::ExprKind::Lambda(params, _, _, body) = &fun.expr {
-            let parall_collec = params[0].ident.clone();
+            let parall_collec = params[0].clone();
             let mut fresh_parall_codegen_ctx = CodegenCtx {
                 parall_ctx: ParallCtx::new(),
                 shape_ctx: codegen_ctx.shape_ctx.clone(),
             };
             codegen_ctx.shape_ctx.push_scope();
+            let (grp_dim, block_dim) = if let desc::TyKind::Data(desc::DataTy {
+                dty: desc::DataTyKind::ThreadHierchy(th_hierchy),
+                ..
+            }) = &parall_collec.ty.unwrap().ty
+            {
+                if let desc::ThreadHierchyTy::BlockGrp(grp_dim, block_dim) = th_hierchy.as_ref() {
+                    (grp_dim.clone(), block_dim.clone())
+                } else {
+                    panic!("the input to exec must always be BlockGrp")
+                }
+            } else {
+                panic!("the first argument to the gpu function must be a BlockGrp")
+            };
             fresh_parall_codegen_ctx.parall_ctx.insert(
-                &parall_collec.name.clone(),
-                ParallelityCollec::Ident(parall_collec),
+                &parall_collec.ident.name.clone(),
+                ParallelityCollec::Grid(grp_dim, block_dim),
             );
 
             // Remember to inline input shape expression
@@ -870,7 +882,7 @@ fn gen_exec(
             ];
 
             let free_kinded_idents = {
-                let mut free_kinded_idents = utils::FreeKindedIdents::new();
+                let mut free_kinded_idents = desc::utils::FreeKindedIdents::new();
                 free_kinded_idents.visit_expr(&body.clone());
                 free_kinded_idents
                     .set
@@ -969,18 +981,18 @@ fn gen_par_branch(
     comp_unit: &[desc::FunDef],
     idx_checks: bool,
 ) -> cu::Stmt {
-    let inner_par_collec_ty = if let desc::TyKind::Data(desc::DataTy {
-        dty: desc::DataTyKind::SplitThreadHierchy(dim_compo, ty_hierchy, _),
-        ..
-    }) = &split_parall_collec.ty.as_ref().unwrap().ty
-    {
-        ty_hierchy
-    } else {
-        panic!("Exepected SplitThreadHierarchy as input to par_branch.")
-    };
-    let (pindex, sync_stmt) = par_idx_and_sync_stmt(inner_par_collec_ty);
+    // let inner_par_collec_ty = if let desc::TyKind::Data(desc::DataTy {
+    //     dty: desc::DataTyKind::SplitThreadHierchy(dim_compo, ty_hierchy, _),
+    //     ..
+    // }) = &split_parall_collec.ty.as_ref().unwrap().ty
+    // {
+    //     ty_hierchy
+    // } else {
+    //     panic!("Exepected SplitThreadHierarchy as input to par_branch.")
+    // };
     let split_par_collec =
         ParallelityCollec::create_from(split_parall_collec, &codegen_ctx.parall_ctx);
+    // let (pindex, sync_stmt) = par_idx_and_sync_stmt(&split_par_collec, inner_par_collec_ty);
 
     codegen_ctx.push_scope();
     codegen_ctx.parall_ctx.insert(
@@ -1018,23 +1030,31 @@ fn gen_par_branch(
     );
     codegen_ctx.drop_scope();
 
-    let parall_cond_res = gen_parall_cond(&pindex, &split_par_collec);
-    if let Some((Some(parall_cond), _)) = parall_cond_res {
-        cu::Stmt::Seq(vec![
-            cu::Stmt::IfElse {
-                cond: parall_cond,
-                true_body: Box::new(fst_branch),
-                false_body: Box::new(snd_branch),
-            },
-            if let Some(s) = sync_stmt {
-                s
-            } else {
-                cu::Stmt::Skip
-            },
-        ])
-    } else {
-        panic!("Unexpected error: did not get parallel condition.")
-    }
+    let split_cond = gen_par_branch_cond(&split_par_collec);
+    cu::Stmt::Seq(vec![
+        cu::Stmt::IfElse {
+            cond: split_cond,
+            true_body: Box::new(fst_branch),
+            false_body: Box::new(snd_branch),
+        },
+        gen_sync_stmt(&split_par_collec),
+    ])
+    // if let Some((Some(parall_cond), _)) = parall_cond_res {
+    //     cu::Stmt::Seq(vec![
+    //         cu::Stmt::IfElse {
+    //             cond: parall_cond,
+    //             true_body: Box::new(fst_branch),
+    //             false_body: Box::new(snd_branch),
+    //         },
+    //         if let Some(s) = sync_stmt {
+    //             s
+    //         } else {
+    //             cu::Stmt::Skip
+    //         },
+    //     ])
+    // } else {
+    //     panic!("Unexpected error: did not get parallel condition.")
+    // }
 
     // incr_label_counter();
     // let sync_error = if let Some(sync) = sync_stmt {
@@ -1064,57 +1084,92 @@ fn gen_par_branch(
     // };
 }
 
-fn par_idx_and_sync_stmt(th_hy: &desc::ThreadHierchyTy) -> (desc::Nat, Option<cu::Stmt>) {
-    // TODO Refactor
-    //  The same things exists in ty_check where only threadHierchyTy for elem types is returned
-    match th_hy {
-        desc::ThreadHierchyTy::BlockGrp(_, _) => {
-            (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
-        }
-        desc::ThreadHierchyTy::ThreadGrp(_) => (
-            desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
-            Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                template_args: vec![],
-                args: vec![],
-            })),
-        ),
-        desc::ThreadHierchyTy::WarpGrp(_) => (
+fn gen_sync_stmt(par_collec: &ParallelityCollec) -> cu::Stmt {
+    match par_collec {
+        ParallelityCollec::Split {
+            dim,
+            pos,
+            coll_size,
+            parall_collec,
+        } => gen_sync_stmt(parall_collec),
+        ParallelityCollec::Grid(_, _) | ParallelityCollec::ToThreadGrp(_) => cu::Stmt::Skip,
+        ParallelityCollec::Block(_) => cu::Stmt::Expr(cu::Expr::FunCall {
+            fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+            template_args: vec![],
+            args: vec![],
+        }),
+        _ => unimplemented!(),
+    }
+}
+
+fn par_idx_and_sync_stmt(
+    parall_collec: &ParallelityCollec,
+    th_hy: &desc::ThreadHierchyTy,
+) -> (desc::Nat, Option<cu::Stmt>) {
+    if let ParallelityCollec::ToThreadGrp { .. } = parall_collec {
+        (
             desc::Nat::BinOp(
-                desc::BinOpNat::Div,
+                desc::BinOpNat::Add,
+                Box::new(desc::Nat::BinOp(
+                    desc::BinOpNat::Mul,
+                    Box::new(desc::Nat::Ident(desc::Ident::new("blockDim.x"))),
+                    Box::new(desc::Nat::Ident(desc::Ident::new("blockIdx.x"))),
+                )),
                 Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-                Box::new(desc::Nat::Lit(32)),
             ),
-            Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                template_args: vec![],
-                args: vec![],
-            })),
-        ),
-        desc::ThreadHierchyTy::Warp => (
-            desc::Nat::BinOp(
-                desc::BinOpNat::Mod,
-                Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-                Box::new(desc::Nat::Lit(32)),
+            None,
+        )
+    } else {
+        match th_hy {
+            desc::ThreadHierchyTy::BlockGrp(_, _) => {
+                (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
+            }
+            desc::ThreadHierchyTy::ThreadGrp(_) => (
+                desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
+                Some(cu::Stmt::Expr(cu::Expr::FunCall {
+                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                    template_args: vec![],
+                    args: vec![],
+                })),
             ),
-            Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
-                template_args: vec![],
-                args: vec![],
-            })),
-        ),
-        desc::ThreadHierchyTy::Thread => {
-            panic!("This should never happen.")
+            desc::ThreadHierchyTy::WarpGrp(_) => (
+                desc::Nat::BinOp(
+                    desc::BinOpNat::Div,
+                    Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+                    Box::new(desc::Nat::Lit(32)),
+                ),
+                Some(cu::Stmt::Expr(cu::Expr::FunCall {
+                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+                    template_args: vec![],
+                    args: vec![],
+                })),
+            ),
+            desc::ThreadHierchyTy::Warp => (
+                desc::Nat::BinOp(
+                    desc::BinOpNat::Mod,
+                    Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+                    Box::new(desc::Nat::Lit(32)),
+                ),
+                Some(cu::Stmt::Expr(cu::Expr::FunCall {
+                    fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
+                    template_args: vec![],
+                    args: vec![],
+                })),
+            ),
+            desc::ThreadHierchyTy::Thread => {
+                panic!("This should never happen.")
+            }
         }
     }
 }
 
 fn gen_parall_section(
     parall_ident: &Option<desc::Ident>,
+    par_dim: desc::DimCompo,
+    parall_coll: &ParallelityCollec,
     input_idents: &[desc::Ident],
     input_exprs: &[desc::Expr],
     body: &desc::Expr,
-    pindex: &desc::Nat,
     codegen_ctx: &mut CodegenCtx,
     comp_unit: &[desc::FunDef],
     idx_checks: bool,
@@ -1125,7 +1180,7 @@ fn gen_parall_section(
         let parall_ident = parall_ident.as_ref().unwrap().clone();
         codegen_ctx.parall_ctx.insert(
             &parall_ident.name.clone(),
-            ParallelityCollec::Ident(parall_ident),
+            parall_coll.proj_with_remain_dim(par_dim),
         );
     }
 
@@ -1135,14 +1190,8 @@ fn gen_parall_section(
         .zip(input_exprs)
     {
         let input_arg_shape = ShapeExpr::create_from(input_expr, &codegen_ctx.shape_ctx);
-
-        codegen_ctx.shape_ctx.insert(
-            &ident,
-            ShapeExpr::Idx {
-                shape: Box::new(input_arg_shape),
-                idx: pindex.clone(),
-            },
-        );
+        let par_distrib = input_arg_shape.par_distrib_shape(par_dim, parall_coll);
+        codegen_ctx.shape_ctx.insert(&ident, par_distrib);
     }
     let stmt = gen_stmt(body, false, codegen_ctx, comp_unit, true, idx_checks);
 
@@ -1152,7 +1201,7 @@ fn gen_parall_section(
 
 fn gen_par_for(
     decls: &Option<Vec<desc::Expr>>,
-    par_dim: &desc::DimCompo,
+    par_dim: desc::DimCompo,
     parall_ident: &Option<desc::Ident>,
     parall_collec: &desc::Expr,
     input_idents: &[desc::Ident],
@@ -1162,31 +1211,32 @@ fn gen_par_for(
     comp_unit: &[desc::FunDef],
     idx_checks: bool,
 ) -> cu::Stmt {
-    let th_hy = if let desc::TyKind::Data(desc::DataTy {
-        dty: desc::DataTyKind::ThreadHierchy(th_hy),
-        ..
-    }) = &parall_collec.ty.as_ref().unwrap().ty
-    {
-        th_hy.as_ref()
-    } else {
-        panic!("exepcted thread hierarchy for parfor")
-    };
-    let (pindex, _) = par_idx_and_sync_stmt(th_hy);
-    let pcoll = ParallelityCollec::create_from(parall_collec, &codegen_ctx.parall_ctx);
-    let offset_pindex = match gen_parall_cond(&pindex, &pcoll) {
-        Some((_, ParallRange::Range(lower, _))) => {
-            desc::Nat::BinOp(desc::BinOpNat::Sub, Box::new(pindex), Box::new(lower))
-        }
-        None => pindex,
-        _ => panic!("Did not expect a split parallel collection."),
-    };
+    // let th_hy = if let desc::TyKind::Data(desc::DataTy {
+    //     dty: desc::DataTyKind::ThreadHierchy(th_hy),
+    //     ..
+    // }) = &parall_collec.ty.as_ref().unwrap().ty
+    // {
+    //     th_hy.as_ref()
+    // } else {
+    //     panic!("exepcted thread hierarchy for parfor")
+    // };
+    // let (pindex, _) = par_idx_and_sync_stmt(&pcoll, th_hy);
+    // let offset_pindex = match gen_parall_cond(&pindex, &pcoll) {
+    //     Some((_, ParallRange::Range(lower, _))) => {
+    //         desc::Nat::BinOp(desc::BinOpNat::Sub, Box::new(pindex), Box::new(lower))
+    //     }
+    //     None => pindex,
+    //     _ => panic!("Did not expect a split parallel collection."),
+    // };
 
+    let pcoll = ParallelityCollec::create_from(parall_collec, &codegen_ctx.parall_ctx);
     let par_section = gen_parall_section(
         parall_ident,
+        par_dim,
+        &pcoll,
         input_idents,
         inputs,
         body,
-        &offset_pindex,
         codegen_ctx,
         comp_unit,
         idx_checks,
@@ -1405,7 +1455,7 @@ fn gen_expr(
         }
         Lambda(params, exec, ty, body) => CheckedExpr::Expr(cu::Expr::Lambda {
             captures: {
-                let mut free_idents = utils::FreeKindedIdents::new();
+                let mut free_idents = desc::utils::FreeKindedIdents::new();
                 free_idents.visit_expr(body);
                 free_idents.set.iter().map(|ki| ki.ident.clone()).collect()
             },
@@ -1519,7 +1569,7 @@ fn gen_expr(
                 .iter()
                 .find(|fun_def| fun_def.name == ident.name)
                 .expect("Cannot find function definition.");
-            let inst_fun = partial_app_gen_args(fun_def, &kinded_args);
+            let inst_fun = partial_app_gen_args(fun_def, kinded_args);
             gen_expr(&inst_fun, codegen_ctx, comp_unit, dev_fun, idx_checks)
         }
         Array(elems) => CheckedExpr::Expr(cu::Expr::InitializerList {
@@ -1985,81 +2035,130 @@ enum ParallRange {
     SplitRange(desc::Nat, desc::Nat, desc::Nat),
 }
 
-fn gen_parall_cond(
-    pid: &desc::Nat,
-    parall_collec: &ParallelityCollec,
-) -> Option<(Option<cu::Expr>, ParallRange)> {
-    match parall_collec {
-        ParallelityCollec::Ident(_) => None,
-        ParallelityCollec::Proj { parall_expr, i } => {
-            if let Some((cond, ParallRange::SplitRange(l, m, u))) =
-                gen_parall_cond(pid, parall_expr)
-            {
-                let (cond_stmt, range) = if *i == 0 {
-                    (
-                        cu::Expr::BinOp {
-                            op: cu::BinOp::Lt,
-                            lhs: Box::new(cu::Expr::Nat(pid.clone())),
-                            rhs: Box::new(cu::Expr::Nat(m.clone())),
-                        },
-                        ParallRange::Range(l, m),
-                    )
-                } else if *i == 1 {
-                    (
-                        cu::Expr::BinOp {
-                            op: cu::BinOp::Ge,
-                            lhs: Box::new(cu::Expr::Nat(pid.clone())),
-                            rhs: Box::new(cu::Expr::Nat(m.clone())),
-                        },
-                        ParallRange::Range(m, u),
-                    )
-                } else {
-                    panic!("Split can only create a 2-tuple.")
-                };
-
-                if let Some(c) = cond {
-                    Some((
-                        Some(cu::Expr::BinOp {
-                            op: cu::BinOp::And,
-                            lhs: Box::new(cond_stmt),
-                            rhs: Box::new(c),
-                        }),
-                        range,
-                    ))
-                } else {
-                    Some((Some(cond_stmt), range))
-                }
-            } else {
-                panic!()
-            }
+fn gen_par_branch_cond(split_collec: &ParallelityCollec) -> cu::Expr {
+    if let ParallelityCollec::Split {
+        dim,
+        pos,
+        coll_size,
+        parall_collec,
+    } = split_collec
+    {
+        cu::Expr::BinOp {
+            op: cu::BinOp::Lt,
+            lhs: Box::new(cu::Expr::Nat(par_distrib_idx(*dim, parall_collec))),
+            rhs: Box::new(cu::Expr::Nat(pos.clone())),
         }
-        ParallelityCollec::Split {
-            pos,
-            coll_size,
-            parall_expr,
-        } => {
-            if let Some((cond, ParallRange::Range(l, u))) = gen_parall_cond(pid, parall_expr) {
-                Some((
-                    cond,
-                    ParallRange::SplitRange(
-                        l.clone(),
-                        desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(l), Box::new(pos.clone())),
-                        u,
-                    ),
-                ))
-            } else {
-                Some((
-                    Some(cu::Expr::BinOp {
-                        op: cu::BinOp::Lt,
-                        lhs: Box::new(cu::Expr::Nat(pid.clone())),
-                        rhs: Box::new(cu::Expr::Nat(pos.clone())),
-                    }),
-                    ParallRange::SplitRange(desc::Nat::Lit(0), pos.clone(), coll_size.clone()),
-                ))
-            }
-        }
+        // match parall_collec.as_ref() {
+        //     ParallelityCollec::Grid(_, _) => cu::Expr::BinOp {
+        //         op: cu::BinOp::Lt,
+        //         lhs: Box::new(cu::Expr::Nat(par_distrib_idx(*dim, parall_collec))),
+        //         rhs: Box::new(cu::Expr::Nat(pos.clone())),
+        //     },
+        //     ParallelityCollec::Block(_) => cu::Expr::BinOp {
+        //         op: cu::BinOp::Lt,
+        //         lhs: Box::new(cu::Expr::Nat(par_distrib_idx(*dim, parall_collec))),
+        //         rhs: Box::new(cu::Expr::Nat(pos.clone())),
+        //     },
+        //     ParallelityCollec::ToThreadGrp(block_grp) => {
+        //         todo!()
+        //     }
+        //     ParallelityCollec::Proj { .. } => cu::Expr::BinOp {
+        //         op: cu::BinOp::Lt,
+        //         lhs: Box::new(cu::Expr::Nat(par_distrib_idx(*dim, parall_collec))),
+        //         rhs: Box::new(cu::Expr::Nat(pos.clone())),
+        //     },
+        //     ParallelityCollec::Split { .. } | ParallelityCollec::Thread => {
+        //         panic!("this should never happen")
+        //     }
+        // }
+    } else {
+        panic!("this should never happen")
     }
 }
+
+// TODO remove?
+// fn gen_parall_cond(
+//     pid: &desc::Nat,
+//     parall_collec: &ParallelityCollec,
+// ) -> Option<(Option<cu::Expr>, ParallRange)> {
+//     match parall_collec {
+//         ParallelityCollec::Proj { parall_expr, i } => {
+//             if let Some((cond, ParallRange::SplitRange(l, m, u))) =
+//                 gen_parall_cond(pid, parall_expr)
+//             {
+//                 let (cond_stmt, range) = if *i == 0 {
+//                     (
+//                         cu::Expr::BinOp {
+//                             op: cu::BinOp::Lt,
+//                             lhs: Box::new(cu::Expr::Nat(pid.clone())),
+//                             rhs: Box::new(cu::Expr::Nat(m.clone())),
+//                         },
+//                         ParallRange::Range(l, m),
+//                     )
+//                 } else if *i == 1 {
+//                     (
+//                         cu::Expr::BinOp {
+//                             op: cu::BinOp::Ge,
+//                             lhs: Box::new(cu::Expr::Nat(pid.clone())),
+//                             rhs: Box::new(cu::Expr::Nat(m.clone())),
+//                         },
+//                         ParallRange::Range(m, u),
+//                     )
+//                 } else {
+//                     panic!("Split can only create a 2-tuple.")
+//                 };
+//
+//                 if let Some(c) = cond {
+//                     Some((
+//                         Some(cu::Expr::BinOp {
+//                             op: cu::BinOp::And,
+//                             lhs: Box::new(cond_stmt),
+//                             rhs: Box::new(c),
+//                         }),
+//                         range,
+//                     ))
+//                 } else {
+//                     Some((Some(cond_stmt), range))
+//                 }
+//             } else {
+//                 panic!()
+//             }
+//         }
+//         ParallelityCollec::Split {
+//             dim,
+//             pos,
+//             coll_size,
+//             parall_collec: parall_expr,
+//         } => {
+//             if let Some((cond, ParallRange::Range(l, u))) = gen_parall_cond(pid, parall_expr) {
+//                 Some((
+//                     cond,
+//                     ParallRange::SplitRange(
+//                         l.clone(),
+//                         desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(l), Box::new(pos.clone())),
+//                         u,
+//                     ),
+//                 ))
+//             } else {
+//                 Some((
+//                     Some(cu::Expr::BinOp {
+//                         op: cu::BinOp::Lt,
+//                         lhs: Box::new(cu::Expr::Nat(pid.clone())),
+//                         rhs: Box::new(cu::Expr::Nat(pos.clone())),
+//                     }),
+//                     ParallRange::SplitRange(desc::Nat::Lit(0), pos.clone(), coll_size.clone()),
+//                 ))
+//             }
+//         }
+//         ParallelityCollec::ToThreadGrp(parall_expr) => gen_parall_cond(
+//             &desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
+//             parall_expr,
+//         ),
+//         ParallelityCollec::Grid(_, _) | ParallelityCollec::Block(_) | ParallelityCollec::Thread => {
+//             panic!("")
+//         }
+//     }
+// }
 
 fn gen_shape(
     shape_expr: &ShapeExpr,
@@ -2486,16 +2585,22 @@ fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
 
 #[derive(Debug, Clone)]
 enum ParallelityCollec {
-    Ident(desc::Ident),
+    Grid(desc::Dim, desc::Dim),
+    Block(desc::Dim),
+    Thread,
+    // Distrib(desc::DimCompo, Box<ParallelityCollec>),
+    Split {
+        dim: desc::DimCompo,
+        pos: desc::Nat,
+        coll_size: desc::Nat,
+        parall_collec: Box<ParallelityCollec>,
+    },
+    //Ident(desc::Ident),
     Proj {
         parall_expr: Box<ParallelityCollec>,
         i: usize,
     },
-    Split {
-        pos: desc::Nat,
-        coll_size: desc::Nat,
-        parall_expr: Box<ParallelityCollec>,
-    },
+    ToThreadGrp(Box<ParallelityCollec>),
 }
 
 impl ParallelityCollec {
@@ -2507,33 +2612,55 @@ impl ParallelityCollec {
                     ..
                 }) = &f.expr
                 {
-                    if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP
-                        || ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK_GRP
-                        || ident.name == crate::ty_check::pre_decl::SPLIT_WARP_GRP
+                    use crate::ty_check::pre_decl::*;
+                    if ident.name == SPLIT_THREAD_GRP
+                        || ident.name == SPLIT_XY_THREAD_GRP_X
+                        || ident.name == SPLIT_XY_THREAD_GRP_Y
+                        || ident.name == SPLIT_BLOCK_GRP
+                        || ident.name == SPLIT_XY_BLOCK_GRP_X
+                        || ident.name == SPLIT_XY_BLOCK_GRP_Y
+                        || ident.name == SPLIT_WARP_GRP
                     {
                         if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
                             (&gen_args[0], &gen_args[1], args.first())
                         {
+                            let dim = if ident.name == SPLIT_THREAD_GRP
+                                || ident.name == SPLIT_XY_THREAD_GRP_X
+                                || ident.name == SPLIT_BLOCK_GRP
+                                || ident.name == SPLIT_XY_BLOCK_GRP_X
+                            {
+                                DimCompo::X
+                            } else {
+                                DimCompo::Y
+                            };
                             return ParallelityCollec::Split {
+                                dim,
                                 pos: k.clone(),
                                 coll_size: n.clone(),
-                                parall_expr: Box::new(ParallelityCollec::create_from(
+                                parall_collec: Box::new(ParallelityCollec::create_from(
                                     p, parall_ctx,
                                 )),
                             };
                         }
                         panic!("Cannot create `split` for parallel collection from the provided arguments.");
-                    } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
-                        if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
-                            return ParallelityCollec::Split {
-                                pos: k.clone(),
-                                coll_size: desc::Nat::Lit(32),
-                                parall_expr: Box::new(ParallelityCollec::create_from(
-                                    p, parall_ctx,
-                                )),
-                            };
+                    // } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
+                    //     if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
+                    //         return ParallelityCollec::Split {
+                    //             pos: k.clone(),
+                    //             coll_size: desc::Nat::Lit(32),
+                    //             parall_collec: Box::new(ParallelityCollec::create_from(
+                    //                 p, parall_ctx,
+                    //             )),
+                    //         };
+                    //     }
+                    //     panic!("Cannot create `split` from the provided arguments.");
+                    } else if ident.name == crate::ty_check::pre_decl::TO_THREAD_GRP {
+                        if let Some(p) = args.first() {
+                            return ParallelityCollec::ToThreadGrp(Box::new(
+                                ParallelityCollec::create_from(p, parall_ctx),
+                            ));
                         }
-                        panic!("Cannot create `split` from the provided arguments.");
+                        panic!("Cannot create `to_thread_grp` from the provided argument.");
                     } else {
                         unimplemented!()
                     }
@@ -2581,6 +2708,48 @@ impl ParallelityCollec {
                 "It is not possible to take references of Grids or Blocks.\
                 This should never happen."
             ),
+        }
+    }
+
+    fn proj_with_remain_dim(&self, dim: desc::DimCompo) -> Self {
+        match self {
+            ParallelityCollec::Grid(grid_dim, block_dim) => match grid_dim.remove_dim(dim) {
+                Some(remaining_dim) => ParallelityCollec::Grid(remaining_dim, block_dim.clone()),
+                None => ParallelityCollec::Block(block_dim.clone()),
+            },
+            ParallelityCollec::Block(block_dim) => match block_dim.remove_dim(dim) {
+                Some(remaining_dim) => ParallelityCollec::Block(remaining_dim),
+                None => ParallelityCollec::Thread,
+            },
+            ParallelityCollec::Proj { parall_expr, i } => {
+                todo!()
+            }
+            ParallelityCollec::ToThreadGrp(parall_collec) => {
+                // FIXME assumes that grid and block have the same dimensionality
+                match parall_collec.as_ref() {
+                    ParallelityCollec::Grid(grid_dim, block_dim) => {
+                        let remain_grid_dim = grid_dim.remove_dim(dim);
+                        let remain_block_dim = block_dim.remove_dim(dim);
+                        match (remain_grid_dim, remain_block_dim) {
+                            (Some(remain_grid_dim), Some(remain_block_dim)) => {
+                                ParallelityCollec::Grid(remain_grid_dim, remain_block_dim)
+                            }
+                            // (Some(remain_grid_dim), None) => ParallelityCollec::Grid(remain_grid_dim, block_dim),
+                            // (None, Some(remain_block_dim)) => ParallelityCollec::Grid(remain_grid_dim, remain_block_dim),
+                            (None, None) => ParallelityCollec::Thread,
+                            _ => todo!(),
+                        }
+                    }
+                    ParallelityCollec::Proj { .. } => todo!(),
+                    ParallelityCollec::Block(_)
+                    | ParallelityCollec::Split { .. }
+                    | ParallelityCollec::ToThreadGrp(_)
+                    | ParallelityCollec::Thread => panic!("unexpected"),
+                }
+            }
+            ParallelityCollec::Split { .. } | ParallelityCollec::Thread => {
+                panic!("cannot project out of this parall collec for dimension")
+            }
         }
     }
 }
@@ -2710,6 +2879,13 @@ impl ShapeExpr {
                     ..
                 },
             ) => ShapeExpr::create_pl_expr_shape(ple, shape_ctx),
+            desc::ExprKind::Index(pl_expr, idx) => ShapeExpr::Idx {
+                idx: idx.clone(),
+                shape: Box::new(ShapeExpr::create_from(
+                    &desc::Expr::new(desc::ExprKind::PlaceExpr(pl_expr.clone())),
+                    shape_ctx,
+                )),
+            },
             _ => {
                 panic!(
                     "Expected a function application, identifer or projection, but found {:?}",
@@ -2878,6 +3054,79 @@ impl ShapeExpr {
         let vec = vec![];
         let mut count = 0;
         collect_and_rename_input_exprs_rec(self, &mut count, vec)
+    }
+
+    fn par_distrib_shape(&self, dim: desc::DimCompo, parall_coll: &ParallelityCollec) -> Self {
+        ShapeExpr::Idx {
+            idx: par_distrib_idx(dim, parall_coll),
+            shape: Box::new(self.clone()),
+        }
+    }
+}
+
+fn par_distrib_idx(dim: desc::DimCompo, parall_coll: &ParallelityCollec) -> desc::Nat {
+    match parall_coll {
+        ParallelityCollec::Grid(_, _) => desc::Nat::Ident(desc::Ident::new(match dim {
+            desc::DimCompo::X => "blockIdx.x",
+            desc::DimCompo::Y => "blockIdx.y",
+            desc::DimCompo::Z => "blockIdx.z",
+        })),
+        ParallelityCollec::Block(_) => desc::Nat::Ident(desc::Ident::new(match dim {
+            desc::DimCompo::X => "threadIdx.x",
+            desc::DimCompo::Y => "threadIdx.y",
+            desc::DimCompo::Z => "threadIdx.z",
+        })),
+        ParallelityCollec::ToThreadGrp(block_grp) => {
+            let (block_dim, thread_idx) = match dim {
+                desc::DimCompo::X => (
+                    desc::Nat::Ident(desc::Ident::new("blockDim.x")),
+                    desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
+                ),
+                desc::DimCompo::Y => (
+                    desc::Nat::Ident(desc::Ident::new("blockDim.y")),
+                    desc::Nat::Ident(desc::Ident::new("threadIdx.y")),
+                ),
+                desc::DimCompo::Z => (
+                    desc::Nat::Ident(desc::Ident::new("blockDim.z")),
+                    desc::Nat::Ident(desc::Ident::new("threadIdx.z")),
+                ),
+            };
+            desc::Nat::BinOp(
+                desc::BinOpNat::Add,
+                Box::new(desc::Nat::BinOp(
+                    desc::BinOpNat::Mul,
+                    Box::new(par_distrib_idx(dim, block_grp.as_ref())),
+                    Box::new(block_dim),
+                )),
+                Box::new(thread_idx),
+            )
+        }
+        ParallelityCollec::Proj {
+            parall_expr: split,
+            i,
+        } => {
+            if let ParallelityCollec::Split {
+                pos, parall_collec, ..
+            } = split.as_ref()
+            {
+                if *i == 0 {
+                    par_distrib_idx(dim, parall_collec.as_ref())
+                } else if *i == 1 {
+                    desc::Nat::BinOp(
+                        desc::BinOpNat::Sub,
+                        Box::new(par_distrib_idx(dim, parall_collec.as_ref())),
+                        Box::new(pos.clone()),
+                    )
+                } else {
+                    panic!("trying to project out non-exsisting component from split parallel collection")
+                }
+            } else {
+                panic!("expected split parallel collection")
+            }
+        }
+        ParallelityCollec::Split { .. } | ParallelityCollec::Thread => {
+            panic!("this should never happen")
+        }
     }
 }
 
