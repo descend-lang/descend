@@ -481,17 +481,18 @@ peg::parser! {
                     s:nat() __ view:place_expression() end:position!() {
                 Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
             }
-            e:(e:expression() "." {e})? begin:position!() func:ident() place_end:position!() _
+            e:(p:place_expression() "." _ { Expr::new(ExprKind::PlaceExpr(p)) }
+                / "(" _ e:expression() _ ")" _ "." _ { e })?
+                begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {{
                 let args =
                     match e {
                         Some(place_expr) => {
-                            let mut result = Vec::with_capacity(args.len());
+                            let mut result = Vec::with_capacity(args.len() + 1);
                             result.push(place_expr);
-                            let mut args = args.clone();
-                            result.append(&mut args);
+                            result.extend(args.clone());
                             result
                         },
                         None => args,
