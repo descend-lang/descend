@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, WhereClauseItem, Item, AssociatedItem};
+use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, WhereClauseItem};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -58,6 +58,7 @@ pub enum TyError {
     UnexpectedNumberOfStructFields(usize, usize),
     WrongKind(Kind, Kind),
     UnfullfilledConstraint(WhereClauseItem),
+    IllegalProjection(String),
     // TODO remove as soon as possible
     String(String),
 }
@@ -238,8 +239,6 @@ pub enum CtxError {
     PrvIdentNotFound(Ident),
     // format!("{} is not defined as outliving {}.", l, s)
     OutlRelNotDefined(Ident, Ident),
-    // TODO move to TyError
-    IllegalProjection,
     // Multiple defined objects
     MultipleDefinedGlobalFuns(String),
     MultipleDefinedParam(String),

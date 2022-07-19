@@ -70,10 +70,35 @@ pub struct StructDef {
     pub decls: Vec<StructField>,
 }
 
+impl StructDef {
+    pub fn get_field(&self, name: &String) -> Option<&StructField> {
+        self.decls
+        .iter()
+        .find(|struct_field|
+            struct_field.name == *name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructField {
     pub name: String,
     pub ty: DataTy,
+}
+
+impl StructDef {
+    pub fn ty(&self) -> TypeScheme {
+        TypeScheme {
+            generic_params: self.generic_params.clone(),
+            conditions: self.conditions.clone(),
+            mono_ty:
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::StructMonoType(
+                    StructMonoType {
+                        name: self.name.clone(),
+                        generics: self.generic_params.iter()
+                            .map(|gen| gen.arg_kinded()).collect()
+                    }))))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,7 +271,6 @@ impl Expr {
             match &pl_expr.pl_expr {
                 PlaceExprKind::Ident(ident) => idents.any(|name| ident.name == *name),
                 PlaceExprKind::Proj(tuple, _) => pl_expr_contains_name_in(tuple, idents),
-                PlaceExprKind::StructAcess(dstruct, _) => pl_expr_contains_name_in(dstruct, idents),
                 PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
             }
         }
@@ -289,19 +313,13 @@ impl Expr {
                                     let mut tuple_expr =
                                         Expr::new(ExprKind::PlaceExpr(tuple.as_ref().clone()));
                                     self.visit_expr(&mut tuple_expr);
-                                    *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), *i));
+                                    *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), i.clone()));
                                 },
                                 PlaceExprKind::Deref(deref_expr) => {
                                     let mut ref_expr =
                                         Expr::new(ExprKind::PlaceExpr(deref_expr.as_ref().clone()));
                                     self.visit_expr(&mut ref_expr);
                                     *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
-                                },
-                                PlaceExprKind::StructAcess(dstruct, name) => {
-                                    let mut struct_expr =
-                                        Expr::new(ExprKind::PlaceExpr(dstruct.as_ref().clone()));
-                                    self.visit_expr(&mut struct_expr);
-                                    *expr = Expr::new(ExprKind::StructAcess(Box::new(struct_expr), name.clone()));
                                 },
                             }
                         }
@@ -400,6 +418,12 @@ impl Expr {
     }
 }
 
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum ProjEntry {
+    TupleAccess(usize),
+    StructAccess(String),
+}
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
@@ -413,8 +437,7 @@ pub enum ExprKind {
     // e.g., structName <generic1> { name: String::from("Test") }
     StructInst(String, Vec<ArgKinded>, Vec<(Ident, Expr)>),
     // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
-    Proj(Box<Expr>, usize),
-    StructAcess(Box<Expr>, String),
+    Proj(Box<Expr>, ProjEntry),
     // Borrow Expressions
     Ref(Option<String>, Ownership, PlaceExpr),
     BorrowIndex(Option<String>, Ownership, PlaceExpr, Nat),
@@ -732,8 +755,7 @@ pub enum SplitTag {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExprKind {
-    Proj(Box<PlaceExpr>, usize),
-    StructAcess(Box<PlaceExpr>, String),
+    Proj(Box<PlaceExpr>, ProjEntry),
     Deref(Box<PlaceExpr>),
     Ident(Ident),
 }
@@ -762,7 +784,6 @@ impl PlaceExpr {
             PlaceExprKind::Proj(ple, _) => ple.is_place(),
             PlaceExprKind::Ident(_) => true,
             PlaceExprKind::Deref(_) => false,
-            PlaceExprKind::StructAcess(ple, _) => ple.is_place(),
         }
     }
 
@@ -773,7 +794,6 @@ impl PlaceExpr {
                 PlaceExprKind::Proj(pl_expr, _) => self.prefix_of(pl_expr),
                 PlaceExprKind::Deref(pl_expr) => self.prefix_of(pl_expr),
                 PlaceExprKind::Ident(_) => false,
-                PlaceExprKind::StructAcess(pl_expr, _) => self.prefix_of(&pl_expr),
             }
         } else {
             true
@@ -800,28 +820,16 @@ impl PlaceExpr {
                 let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
-                        pl.path.push(*n);
+                        pl = pl.push(n);
                         (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
-                    _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
+                    _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
                 }
             }
             PlaceExprKind::Ident(ident) => (
                 internal::PlaceCtx::Hole,
                 internal::Place::new(ident.clone(), vec![]),
             ),
-            // PlaceExprKind::StructAcess(inner_ple, name) => {
-            //     let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-            //     match pl_ctx {
-            //         internal::PlaceCtx::Hole => {
-            //             pl.path.push(*n);
-            //             (pl_ctx, internal::Place::new(pl.ident, pl.path))
-            //         }
-            //         _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
-            //     }
-            // },
-            PlaceExprKind::StructAcess(_, _) =>
-                unimplemented!("TODO PlaceCtx erweitern"),
         }
     }
 
@@ -837,11 +845,13 @@ impl PlaceExpr {
 impl fmt::Display for PlaceExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.pl_expr {
-            PlaceExprKind::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
+            PlaceExprKind::Proj(pl_expr, n) =>
+               match n {
+                ProjEntry::TupleAccess(n) => write!(f, "{}.{}", pl_expr, n),
+                ProjEntry::StructAccess(n) => write!(f, "{}.{}", pl_expr, n),
+               },
             PlaceExprKind::Deref(pl_expr) => write!(f, "*{}", pl_expr),
             PlaceExprKind::Ident(ident) => write!(f, "{}", ident),
-            PlaceExprKind::StructAcess(pl_expr, name) =>
-                write!(f, "{}.{}", pl_expr, name),
         }
     }
 }

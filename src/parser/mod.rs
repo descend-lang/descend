@@ -468,12 +468,12 @@ peg::parser! {
             // To achieve this, move the first _ in front of ns.
             e:(@) ns:("." _ n:nat_literal() {n})+ {
                 ns.into_iter().fold(e,
-                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
+                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), ProjEntry::TupleAccess(n)))
                 )
             }
             e:(@) ns:("." _ n:identifier() {n})+ {
                 ns.into_iter().fold(e,
-                    |prev, n| Expr::new(ExprKind::StructAcess(Box::new(prev), n))
+                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), ProjEntry::StructAccess(n)))
                 )
             }
             begin:position!() "split" __ r1:(prv:prov_value() __ { prv })?
@@ -651,10 +651,12 @@ peg::parser! {
             = precedence!{
                 "*" _ deref:@ { PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref))) }
                 --
-                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n))}
+                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(
+                    Box::new(proj), ProjEntry::TupleAccess(n)))}
                 // The !(_ "(") makes sure this is not a method call on a struct
                 struct_access:@ _ "." _ i:identifier() !(_ "(") {
-                    PlaceExpr::new(PlaceExprKind::StructAcess(Box::new(struct_access), i)) }
+                    PlaceExpr::new(PlaceExprKind::Proj(
+                        Box::new(struct_access), ProjEntry::StructAccess(i))) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -1403,7 +1405,7 @@ mod tests {
             descend::place_expression("x.0"),
             Ok(PlaceExpr::new(PlaceExprKind::Proj(
                 Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                0
+                ProjEntry::TupleAccess(0)
             ))),
             "does not recognize place expression projection `x.0`"
         );
@@ -1412,7 +1414,7 @@ mod tests {
             Ok(PlaceExpr::new(PlaceExprKind::Deref(Box::new(
                 PlaceExpr::new(PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    0
+                    ProjEntry::TupleAccess(0)
                 ))
             )))),
             "does not recognize place expression `*x.0`"
@@ -1429,7 +1431,7 @@ mod tests {
             Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
                 PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    0
+                    ProjEntry::TupleAccess(0)
                 )
             )))),
             "does not recognize place expression projection `x.0`"
@@ -1439,7 +1441,7 @@ mod tests {
             Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
                 PlaceExprKind::Deref(Box::new(PlaceExpr::new(PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    0
+                    ProjEntry::TupleAccess(0)
                 ))))
             )))),
             "does not recognize place expression `*x.0`"
@@ -1456,7 +1458,7 @@ mod tests {
                     vec![ArgKinded::Ident(Ident::new("x"))],
                     vec![]
                 ))),
-                zero_literal
+                ProjEntry::TupleAccess(zero_literal)
             ))),
             "does not recognize projection on function application"
         );
@@ -1474,7 +1476,7 @@ mod tests {
                         Ident::new("z")
                     ))))
                 ]))),
-                one_literal
+                ProjEntry::TupleAccess(one_literal)
             ))),
             "does not recognize projection on tuple view expression"
         );
@@ -1557,7 +1559,7 @@ mod tests {
                 PlaceExprKind::Deref(Box::new(PlaceExpr::new(PlaceExprKind::Deref(Box::new(
                     PlaceExpr::new(PlaceExprKind::Proj(
                         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                        7
+                        ProjEntry::TupleAccess(7)
                     ))
                 )))))
             ))))
@@ -1568,9 +1570,9 @@ mod tests {
                 PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Proj(
                         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                        2
+                        ProjEntry::TupleAccess(2)
                     ))),
-                    3
+                    ProjEntry::TupleAccess(3)
                 )
             ))))
         );

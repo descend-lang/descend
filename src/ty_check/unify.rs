@@ -5,7 +5,7 @@ use crate::ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::TyError;
 use crate::ty_check::subty::multiple_outlives;
-use crate::ty_check::{TyChecker, TyResult};
+use crate::ty_check::TyResult;
 use std::collections::{HashMap, HashSet};
 
 pub(super) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {

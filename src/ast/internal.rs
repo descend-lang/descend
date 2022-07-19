@@ -3,7 +3,7 @@
 
 // TODO specific access modifiers
 
-use super::{Ident, Ownership, PlaceExpr, Ty};
+use super::{Ident, Ownership, PlaceExpr, Ty, ProjEntry};
 use crate::ast::{Mutability, PlaceExprKind};
 use std::collections::HashSet;
 
@@ -59,29 +59,35 @@ pub struct Loan {
     pub own: Ownership,
 }
 
-pub type Path = Vec<usize>;
+pub type Path = Vec<ProjEntry>;
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Place {
     pub ident: Ident,
     pub path: Path,
 }
+
 impl Place {
     pub fn new(ident: Ident, path: Path) -> Self {
         Place { ident, path }
     }
 
+    pub fn push(mut self, n: &ProjEntry) -> Self {
+        self.path.push(n.clone());
+        self
+    }
+
     pub fn to_place_expr(&self) -> PlaceExpr {
         self.path.iter().fold(
             PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
-            |pl_expr, path_entry| {
-                PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), *path_entry))
-            },
+            |pl_expr, path_entry| 
+                PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), path_entry.clone()))
         )
     }
 }
 
 pub enum PlaceCtx {
-    Proj(Box<PlaceCtx>, usize),
+    Proj(Box<PlaceCtx>, ProjEntry),
     Deref(Box<PlaceCtx>),
     Hole,
 }

@@ -4,6 +4,8 @@ use crate::ty_check::error::CtxError;
 use crate::ty_check::constraint_check::*;
 use std::collections::{HashMap, HashSet};
 
+use super::TyResult;
+
 // TODO introduce proper struct
 pub(super) type TypedPlace = (internal::Place, Ty);
 
@@ -170,11 +172,6 @@ impl TyCtx {
     }
 
     fn explode_places(ident: &Ident, ty: &Ty) -> Vec<TypedPlace> {
-        fn proj(mut pl: internal::Place, idx: usize) -> internal::Place {
-            pl.path.push(idx);
-            pl
-        }
-
         fn explode(pl: internal::Place, ty: Ty) -> Vec<TypedPlace> {
             use DataTyKind as d;
 
@@ -223,7 +220,7 @@ impl TyCtx {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index = explode(
-                            proj(pl.clone(), index),
+                            pl.clone().push(&ProjEntry::TupleAccess(index)),
                             Ty::new(TyKind::Data(proj_ty.clone())),
                         );
                         place_frame.append(&mut exploded_index);
@@ -231,8 +228,19 @@ impl TyCtx {
                     place_frame
                 },
                 TyKind::Data(DataTy {
-                    dty: d::StructMonoType(_), ..
-                }) => unimplemented!("TODO"),
+                    dty: d::StructMonoType(struct_ty), ..
+                }) => {
+                    let mut place_frame = vec![(pl.clone(), ty.clone())];
+                    let struct_def: &StructDef = unimplemented!("TODO find struct_def");
+                    struct_def.decls.iter().for_each(|field| {
+                        let mut exploded_index = explode(
+                            pl.clone().push(&ProjEntry::StructAccess(field.name.clone())),
+                            Ty::new(TyKind::Data(field.ty.clone())),
+                        );
+                        place_frame.append(&mut exploded_index);
+                    });
+                    place_frame
+                },
             }
         }
 
@@ -254,46 +262,29 @@ impl TyCtx {
         }
     }
 
-    pub fn place_ty(&self, place: &internal::Place) -> CtxResult<Ty> {
-        fn proj_ty(ty: Ty, path: &[usize]) -> CtxResult<Ty> {
-            let mut res_ty = ty;
-            for n in path {
-                match &res_ty.ty {
-                    TyKind::Data(DataTy {
-                        dty: DataTyKind::Tuple(elem_tys),
-                        ..
-                    }) => {
-                        if elem_tys.len() <= *n {
-                            return Err(CtxError::IllegalProjection);
-                        }
-                        res_ty = Ty::new(TyKind::Data(elem_tys[*n].clone()));
-                    }
-                    t => {
-                        panic!(
-                            "Trying to project element data type of a non tuple type:\n {:?}",
-                            t
-                        )
-                    }
-                }
-            }
-            Ok(res_ty)
+    pub fn place_ty(&self, place: &internal::Place) -> TyResult<Ty> {
+        fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
+            unimplemented!("TODO use method proj_elem_ty from ty_check")
         }
+
         let ident_ty = self.ty_of_ident(&place.ident)?;
-        proj_ty(ident_ty.clone(), &place.path)
+        place.path.iter().try_fold(ident_ty.clone(), |res, pathEntry|
+            proj_elem_ty(&res, pathEntry)
+        )
     }
 
     pub fn set_place_ty(mut self, pl: &internal::Place, pl_ty: Ty) -> Self {
-        fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[usize], part_ty: Ty) -> Ty {
+        fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[ProjEntry], part_ty: Ty) -> Ty {
             if path.is_empty() {
                 return part_ty;
             }
 
-            let idx = path.first().unwrap();
-            match orig_ty.ty {
-                TyKind::Data(DataTy {
+            let projentry = path.first().unwrap();
+            match (orig_ty.ty, projentry) {
+                (TyKind::Data(DataTy {
                     dty: DataTyKind::Tuple(mut elem_tys),
                     ..
-                }) => {
+                }), ProjEntry::TupleAccess(idx)) => {
                     elem_tys[*idx] = if let TyKind::Data(dty) = set_ty_for_path_in_ty(
                         Ty::new(TyKind::Data(elem_tys[*idx].clone())),
                         &path[1..],
@@ -305,8 +296,15 @@ impl TyCtx {
                     } else {
                         panic!("Trying create non-data type as part of data type.")
                     };
+                    
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys))))
-                }
+                },
+                (TyKind::Data(DataTy {
+                    dty: DataTyKind::StructMonoType(mut struct_ty),
+                    ..
+                }), ProjEntry::StructAccess(attr_name)) => {
+                    unimplemented!("TODO how to find struct_def?")
+                },
                 _ => panic!("Path not compatible with type."),
             }
         }

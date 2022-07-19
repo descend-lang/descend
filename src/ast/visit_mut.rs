@@ -165,7 +165,6 @@ pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
         },
-        PlaceExprKind::StructAcess(pl_expr, _) => visitor.visit_pl_expr(pl_expr),
     }
 }
 
@@ -272,7 +271,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             walk_list!(visitor, visit_expr, elems);
         }
         ExprKind::Proj(e, _) => visitor.visit_expr(e),
-        ExprKind::StructAcess(e, _) => visitor.visit_expr(e),
         ExprKind::For(ident, coll, body) => {
             visitor.visit_ident(ident);
             visitor.visit_expr(coll);

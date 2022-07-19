@@ -1,7 +1,7 @@
 mod cu_ast;
 mod printer;
 
-use crate::ast::{self as desc, Item};
+use crate::ast::{self as desc, Item, ProjEntry};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{utils, Mutability};
@@ -463,13 +463,14 @@ fn gen_let(
                         idx_checks,
                         tp,
                         &desc::Expr::with_type(
-                            desc::ExprKind::Proj(Box::new(e.clone()), i),
-                            match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), i) {
-                                Ok(ty) => ty,
-                                Err(err) => {
-                                    panic!("Cannot project tuple element type at {}", i)
-                                }
-                            },
+                            desc::ExprKind::Proj(Box::new(e.clone()), ProjEntry::TupleAccess(i)),
+                            todo!("use proj_elem_ty-method")
+                            // match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), i) {
+                            //     Ok(ty) => ty,
+                            //     Err(err) => {
+                            //         panic!("Cannot project tuple element type at {}", i)
+                            //     }
+                            // },
                         ),
                     )
                 })
@@ -1203,12 +1204,11 @@ fn gen_expr(
                 gen_expr(tuple, codegen_ctx, comp_unit, dev_fun, idx_checks).map(|e| {
                     cu::Expr::Proj {
                         tuple: Box::new(e),
-                        n: *idx,
+                        n: idx.clone(),
                     }
                 })
             }
         }
-        StructAcess(_, _) => unimplemented!("TODO"),
         BinOp(op, lhs, rhs) => {
             gen_bin_op_expr(op, lhs, rhs, codegen_ctx, comp_unit, dev_fun, idx_checks)
         }
@@ -1849,20 +1849,20 @@ fn gen_pl_expr(
             // FIXME this does not work when there are tuples inside of shape tuples
             Some(p) if shape_ctx.contains_key(&p.ident.name) => gen_shape(
                 shape_ctx.get(&p.ident.name),
-                p.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
+                p.path.iter().map(|n| 
+                    match n {
+                        ProjEntry::TupleAccess(n) => desc::Nat::Lit(*n),
+                        _ => todo!("TODO"),
+                    }).collect(),
                 shape_ctx,
                 comp_unit,
                 idx_checks,
             ),
             _ => cu::Expr::Proj {
                 tuple: Box::new(gen_pl_expr(pl.as_ref(), shape_ctx, comp_unit, idx_checks)),
-                n: *n,
+                n: n.clone(),
             },
         },
-        desc::PlaceExpr {
-            pl_expr: desc::PlaceExprKind::StructAcess(_, _),
-            ..
-        } => unimplemented!("TODO"),
         desc::PlaceExpr {
             pl_expr: desc::PlaceExprKind::Deref(ple),
             ..
@@ -1873,7 +1873,11 @@ fn gen_pl_expr(
             match ple.to_place() {
                 Some(pl) if shape_ctx.contains_key(&pl.ident.name) => gen_shape(
                     shape_ctx.get(&pl.ident.name),
-                    pl.path.iter().map(|n| desc::Nat::Lit(*n)).collect(),
+                    pl.path.iter().map(|n|
+                        match n {
+                            ProjEntry::TupleAccess(n) => desc::Nat::Lit(*n),
+                            _ => todo!("TODO"),
+                        }).collect(),
                     shape_ctx,
                     comp_unit,
                     idx_checks,
@@ -2039,8 +2043,13 @@ fn gen_shape(
             gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
         }
         (ShapeExpr::Proj { shape, i }, _) => {
-            path.push(desc::Nat::Lit(*i));
-            gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
+            match i {
+                ProjEntry::TupleAccess(i) => {
+                    path.push(desc::Nat::Lit(*i));
+                    gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
+                },
+                _ => todo!("Are here also non tuple accesses allowed?"),
+            }
         }
         (ShapeExpr::SplitAt { pos, shape }, _) => {
             let proj = path.pop();
@@ -2453,9 +2462,13 @@ impl ParallelityCollec {
             desc::ExprKind::PlaceExpr(pl_expr) => {
                 ParallelityCollec::create_parall_pl_expr(pl_expr, parall_ctx)
             }
-            desc::ExprKind::Proj(expr, i) => ParallelityCollec::Proj {
-                parall_expr: Box::new(ParallelityCollec::create_from(expr, parall_ctx)),
-                i: *i,
+            desc::ExprKind::Proj(expr, i) =>
+            match i {
+                ProjEntry::TupleAccess(i) => ParallelityCollec::Proj {
+                    parall_expr: Box::new(ParallelityCollec::create_from(expr, parall_ctx)),
+                    i: *i,
+                },
+                _ => todo!("TODO"),
             },
             _ => panic!(
                 "Expected a function application, identifer or projection, but found {:?}",
@@ -2476,14 +2489,16 @@ impl ParallelityCollec {
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Proj(pp, i),
                 ..
-            } => ParallelityCollec::Proj {
-                parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
-                i: *i,
-            },
-            desc::PlaceExpr {
-                pl_expr: desc::PlaceExprKind::StructAcess(_, _),
-                ..
-            } => unimplemented!("TODO"),
+            } =>
+                match i {
+                    ProjEntry::TupleAccess(i) => 
+                        ParallelityCollec::Proj {
+                            parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
+                            i: i.clone(),
+                        },
+                    _ => todo!("Are here also non tuple accesses allowed?"),
+                }
+           ,
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Deref(_),
                 ..
@@ -2537,7 +2552,7 @@ enum ShapeExpr {
     },
     Proj {
         shape: Box<ShapeExpr>,
-        i: usize,
+        i: ProjEntry,
     },
     SplitAt {
         pos: desc::Nat,
@@ -2609,7 +2624,7 @@ impl ShapeExpr {
             }
             desc::ExprKind::Proj(expr, i) => ShapeExpr::Proj {
                 shape: Box::new(ShapeExpr::create_from(expr, shape_ctx)),
-                i: *i,
+                i: i.clone(),
             },
             desc::ExprKind::Tuple(elems) => ShapeExpr::create_tuple_shape(elems, shape_ctx),
             desc::ExprKind::Ref(
@@ -2653,12 +2668,8 @@ impl ShapeExpr {
                 ..
             } => ShapeExpr::Proj {
                 shape: Box::new(ShapeExpr::create_pl_expr_shape(vv, shape_ctx)),
-                i: *i,
+                i: i.clone(),
             },
-            desc::PlaceExpr {
-                pl_expr: desc::PlaceExprKind::StructAcess(_, _),
-                ..
-            } => unimplemented!("TODO"),
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Deref(_),
                 ..

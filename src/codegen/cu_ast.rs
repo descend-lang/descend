@@ -1,4 +1,4 @@
-use crate::ast::Nat;
+use crate::ast::{Nat, ProjEntry};
 
 pub(super) type CuProgram = Vec<Item>;
 
@@ -93,7 +93,7 @@ pub(super) enum Expr {
     },
     Proj {
         tuple: Box<Expr>,
-        n: usize,
+        n: ProjEntry,
     },
     InitializerList {
         elems: Vec<Expr>,

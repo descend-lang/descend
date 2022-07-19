@@ -194,7 +194,13 @@ impl std::fmt::Display for Expr {
             UnOp { op, arg } => write!(f, "{}{}", op, arg),
             BinOp { op, lhs, rhs } => write!(f, "{} {} {}", lhs, op, rhs),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
-            Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
+            Proj { tuple, n } =>
+                match n {
+                    crate::ast::ProjEntry::TupleAccess(n) =>
+                        write!(f, "{}.{}", tuple, n),
+                    crate::ast::ProjEntry::StructAccess(n) =>
+                        write!(f, "{}.{}", tuple, n),
+                },
             InitializerList { elems } => {
                 write!(f, "{{")?;
                 fmt_vec(f, elems, ", ")?;
