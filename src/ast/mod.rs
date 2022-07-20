@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::fmt;
 use std::fmt::Formatter;
 
@@ -70,15 +70,6 @@ pub struct StructDef {
     pub decls: Vec<StructField>,
 }
 
-impl StructDef {
-    pub fn get_field(&self, name: &String) -> Option<&StructField> {
-        self.decls
-        .iter()
-        .find(|struct_field|
-            struct_field.name == *name)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructField {
     pub name: String,
@@ -87,16 +78,25 @@ pub struct StructField {
 
 impl StructDef {
     pub fn ty(&self) -> TypeScheme {
+        let struct_ty = StructType {
+            name: self.name.clone(),
+            attributes: BTreeMap::from_iter(
+                self.decls.iter()
+                .map(|field|
+                    (field.name.clone(),
+                    self.generic_params.iter()
+                    .fold(Ty::new(TyKind::Data(field.ty.clone())), |res, gen| {
+                        res.subst_ident_kinded(gen, &gen.arg_kinded())
+                    })))),
+            generic_args: self.generic_params.iter()
+            .map(|gen| gen.arg_kinded()).collect(),
+        };
+
         TypeScheme {
             generic_params: self.generic_params.clone(),
             conditions: self.conditions.clone(),
             mono_ty:
-                Ty::new(TyKind::Data(DataTy::new(DataTyKind::StructMonoType(
-                    StructMonoType {
-                        name: self.name.clone(),
-                        generics: self.generic_params.iter()
-                            .map(|gen| gen.arg_kinded()).collect()
-                    }))))
+                Ty::new(TyKind::Data(DataTy::new(DataTyKind::StructType(struct_ty))))
         }
     }
 }
@@ -139,9 +139,16 @@ pub struct TraitMonoType {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct StructMonoType {
+pub struct StructType {
     pub name: String,
-    pub generics: Vec<ArgKinded>
+    pub attributes: BTreeMap<String, Ty>,
+    pub generic_args: Vec<ArgKinded>,
+}
+
+impl StructType {
+    pub fn get_ty(&self, name: &String) -> Option<&Ty> {
+        self.attributes.get(name)
+    }
 }
 
 pub trait SubstKindedIdents {
@@ -308,19 +315,19 @@ impl Expr {
                                     {
                                         *expr = subst_expr.clone();
                                     }
-                                },
+                                }
                                 PlaceExprKind::Proj(tuple, i) => {
                                     let mut tuple_expr =
                                         Expr::new(ExprKind::PlaceExpr(tuple.as_ref().clone()));
                                     self.visit_expr(&mut tuple_expr);
                                     *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), i.clone()));
-                                },
+                                }
                                 PlaceExprKind::Deref(deref_expr) => {
                                     let mut ref_expr =
                                         Expr::new(ExprKind::PlaceExpr(deref_expr.as_ref().clone()));
                                     self.visit_expr(&mut ref_expr);
                                     *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
-                                },
+                                }
                             }
                         }
                     }
@@ -1137,7 +1144,7 @@ pub enum DataTyKind {
     // [[ dty; n ]]
     ArrayShape(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
-    StructMonoType(StructMonoType),
+    StructType(StructType),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
     ThreadHierchy(Box<ThreadHierchyTy>),
@@ -1185,7 +1192,7 @@ impl DataTy {
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            StructMonoType(_) => unimplemented!("TODO"),
+            StructType(_) => unimplemented!("TODO struct_def needed"),
             Array(_, _) => false,
             RawPtr(_) => true,
             Range => true,
@@ -1216,7 +1223,7 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
-            StructMonoType(_) => unimplemented!("TODO"),
+            StructType(_) => unimplemented!("TODO attribute of struct needed"),
             Dead(_) => false,
         }
     }
@@ -1241,7 +1248,7 @@ impl DataTy {
                 }
                 found
             }
-            DataTyKind::StructMonoType(_) => unimplemented!("TODO"),
+            DataTyKind::StructType(_) => unimplemented!("TODO"),
             DataTyKind::Array(elem_dty, _) => self.occurs_in(elem_dty),
             DataTyKind::ArrayShape(elem_dty, _) => self.occurs_in(elem_dty),
             DataTyKind::At(elem_dty, _) => self.occurs_in(elem_dty),
@@ -1267,7 +1274,7 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
-            StructMonoType(_) => unimplemented!("TODO"),
+            StructType(_) => unimplemented!("TODO struct_def needed"),
         }
     }
 }
@@ -1312,11 +1319,15 @@ impl SubstKindedIdents for DataTy {
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
             )),
-            StructMonoType(struct_mono_ty) =>
-                DataTy::new(DataTyKind::StructMonoType(super::ast::StructMonoType{
-                    name: struct_mono_ty.name.clone(),
-                    generics: struct_mono_ty.generics.iter().map(|gen_arg|
-                        gen_arg.subst_ident_kinded(ident_kinded, with)).collect()
+            StructType(struct_ty) =>
+                DataTy::new(DataTyKind::StructType(super::ast::StructType{
+                    name: struct_ty.name.clone(),
+                    attributes: BTreeMap::from_iter(
+                        struct_ty.attributes.iter().map(|(name, ty)|
+                            (name.clone(), ty.subst_ident_kinded(ident_kinded, with))
+                        )),
+                    generic_args: struct_ty.generic_args.iter().map(|gen_arg|
+                        gen_arg.subst_ident_kinded(ident_kinded, with)).collect(),
                 })),
             Array(dty, n) => DataTy::new(Array(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),

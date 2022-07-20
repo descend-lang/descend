@@ -2258,7 +2258,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             dty: d::Tuple(tys), ..
         }) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect()),
         Data(desc::DataTy {
-            dty: d::StructMonoType(_), ..
+            dty: d::StructType(_), ..
         }) => unimplemented!("TODO"),
         Data(desc::DataTy {
             dty: d::Array(ty, n),

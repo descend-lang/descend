@@ -5,13 +5,13 @@ mod utils;
 use crate::ast::*;
 use core::iter;
 use error::ParseError;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, BTreeMap, BTreeSet};
 
 use crate::error::ErrorReported;
 pub use source::*;
 
 use crate::ast::visit_mut::{VisitMut, walk_struct_def, walk_impl_def,
-    walk_trait_def, walk_fun_def, walk_ty};
+    walk_trait_def, walk_fun_def, walk_ty, walk_dty};
 
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
@@ -116,20 +116,21 @@ fn replace_arg_kinded_idents(mut item_def: Item) -> Item {
 }
 
 //Distinguish between type variables and struct names without generic params
+//and initialize attribute map of struct_types
 fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
      struct DistinguisherBetweenTyVarsAndStructNames {
-        struct_names_without_generics: HashSet<String>,
-        type_vars_in_scope: HashSet<String>,
+        structs: BTreeMap<String, StructDef>,
+        type_vars_in_scope: BTreeSet<String>,
     }
 
     impl DistinguisherBetweenTyVarsAndStructNames {
         fn new(items: &Vec<Item>) -> Self {
             DistinguisherBetweenTyVarsAndStructNames {
-                struct_names_without_generics: HashSet::from_iter(
+                structs: BTreeMap::from_iter(
                     items.iter().filter_map(|item| 
                         if let Item::StructDef(struct_def) = item {
                             if struct_def.generic_params.len() == 0 {
-                                Some(struct_def.name.clone())
+                                Some((struct_def.name.clone(), struct_def.clone()))
                             } else {
                                 None
                             }
@@ -137,9 +138,8 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
                             None
                         }
                     )),
-                type_vars_in_scope: HashSet::new()
+                type_vars_in_scope: BTreeSet::new()
             }
-            
         }
 
         fn add_generics(&mut self, generics: &Vec<IdentKinded>) {
@@ -192,18 +192,14 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
         fn visit_ty(&mut self, ty: &mut Ty) {
             match &ty.ty {
                 TyKind::Ident(name) => {
-                    let is_struct_name =
-                        self.struct_names_without_generics.contains(&name.name);
+                    let struct_def =
+                        self.structs.get(&name.name);
                     let is_type_ident =
                         self.type_vars_in_scope.contains(&name.name);
 
-                    match (is_struct_name, is_type_ident) {
-                        (true, false) =>
-                            ty.ty = TyKind::Data(DataTy::new(DataTyKind::StructMonoType(
-                                StructMonoType {
-                                    name: name.name.clone(),
-                                    generics: vec![],
-                            }))),
+                    match (struct_def.is_some(), is_type_ident) {
+                        (true, false) => 
+                            ty.ty = struct_def.unwrap().ty().mono_ty.ty,
                         (false, true) =>
                             (),
                         (false, false) => {
@@ -219,6 +215,31 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
                 },
                 _ => walk_ty(self, ty)
             }
+        }
+
+        fn visit_dty(&mut self, dty: &mut DataTy) {
+            match dty.dty {
+                DataTyKind::StructType(struct_ty) => {
+                    assert!(struct_ty.attributes.len() == 0);
+                    if let Some(struct_def) = self.structs.get(&struct_ty.name) {
+                        let inst_struct_mono = struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
+                        if let TyKind::Data(dataty) = inst_struct_mono.ty {
+                            if let DataTyKind::StructType(inst_struct_ty) = dataty.dty {
+                                struct_ty.attributes = inst_struct_ty.attributes;
+                            } else {
+                                panic!("Instantiated struct def should have struct type")
+                            }
+                        } else {
+                            panic!("Instantiated struct def should have struct type")
+                        }
+                    } else {
+                        panic!("TODO print some err instead of panic")
+                    }
+                }
+                _ => (),
+            };
+
+            walk_dty(self, dty)
         }
     }
 
@@ -876,7 +897,8 @@ peg::parser! {
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
             / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
             / name:identifier() _ "<" _ params:(k:kind_argument() ** (_ "," _) {k}) _ ">"
-                { DataTyKind::StructMonoType( StructMonoType{ name, generics: params })}
+                { DataTyKind::StructType( StructType{
+                    name, attributes: BTreeMap::new(), generic_args: params, })}
             // this could be also a structType. That is decided later
             / name:ident() { DataTyKind::Ident(name) }
             / "Self" { DataTyKind::Ident(Ident::new("Self")) }
@@ -2535,38 +2557,46 @@ mod tests {
         let result = descend::compil_unit(src).expect("Cannot use struct datatypes");
         assert_eq!(result.len(), 1);
 
-        if let Item::FunDef(fun_def) = &result[0] {
-            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
-                if let ExprKind::Let(_, ty, _) = &expr.expr {
-                    let ty = ty.clone().unwrap().ty;
-                    if let TyKind::Data(dataty) = ty {
-                        assert_eq!(dataty,
-                            DataTy::with_span(
-                                DataTyKind::StructMonoType(StructMonoType{
-                                        name: String::from("Point"),
-                                        generics: vec![
-                                    ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                                    ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                                ]}),
-                                Span::new(59, 64)));
+        let letty =
+            if let Item::FunDef(fun_def) = &result[0] {
+                if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                    if let ExprKind::Let(_, ty, _) = &expr.expr {
+                        ty.clone().unwrap().ty
                     } else {
-                        panic!("Cannot recognize datatype");
+                        panic!("Cannot recognize let expr");
                     }
                 } else {
-                    panic!("Cannot recognize let expr");
+                    panic!("Cannot recognize block expr");
                 }
             } else {
-                panic!("Cannot recognize block expr");
-            }
+                panic!("Cannot recognize fundef");
+            };
+
+        if let TyKind::Data(dataty) = letty {
+            assert_eq!(dataty,
+                DataTy::with_span(
+                    DataTyKind::StructType(StructType{
+                            name: String::from("Point"),
+                            attributes: BTreeMap::new(),
+                            generic_args: vec![
+                                ArgKinded::DataTy(DataTy::new(
+                                    DataTyKind::Scalar(ScalarTy::I32))),
+                                ArgKinded::DataTy(DataTy::new(
+                                    DataTyKind::Scalar(ScalarTy::I32))),
+                            ],
+                        }),
+                    Span::new(59, 64)));
         } else {
-            panic!("Cannot recognize fundef");
+            panic!("Cannot recognize datatype");
         }
     }
 
     #[test]
-    fn test_struct_datatype2() { //TODO dont work yet
+    fn test_struct_datatype2() {
         let src = r#"
-        struct Point;
+        struct Point {
+            x: i32
+        }
         fn main() -[cpu.thread] -> (){
             let p: Point = x
         }
@@ -2576,28 +2606,90 @@ mod tests {
             .expect("Cannot use struct datatypes").item_defs;
         assert_eq!(result.len(), 2);
 
-        if let Item::FunDef(fun_def) = &result[1] {
-            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
-                if let ExprKind::Let(_, ty, _) = &expr.expr {
-                    let ty = ty.clone().unwrap().ty;
-                    if let TyKind::Data(dataty) = ty {
-                        assert_eq!(dataty,
-                            DataTy::with_span(
-                                DataTyKind::StructMonoType(StructMonoType{
-                                    name: String::from("Point"),
-                                    generics: vec![] }),
-                                Span::new(59, 64)));
+        let letty = 
+            if let Item::FunDef(fun_def) = &result[1] {
+                if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                    if let ExprKind::Let(_, ty, _) = &expr.expr {
+                        ty.clone().unwrap().ty
                     } else {
-                        panic!("Cannot recognize datatype");
+                        panic!("Cannot recognize let expr");
                     }
                 } else {
-                    panic!("Cannot recognize let expr");
+                    panic!("Cannot recognize block expr");
                 }
             } else {
-                panic!("Cannot recognize block expr");
-            }
+                panic!("Cannot recognize fundef");
+            };
+
+        let mut struct_ty = StructType{
+            name: String::from("Point"),
+            attributes: BTreeMap::new(),
+            generic_args: vec![],
+        };
+        struct_ty.attributes.insert(String::from("x"), Ty::new(
+            TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))));
+
+        if let TyKind::Data(dataty) = letty {
+            assert_eq!(dataty,
+                DataTy::with_span(
+                    DataTyKind::StructType(struct_ty),
+                    Span::new(59, 64)));
         } else {
-            panic!("Cannot recognize fundef");
+            panic!("Cannot recognize datatype");
+        }
+    }
+
+    #[test]
+    fn test_struct_datatype3() {
+        let src = r#"
+        struct Point<T> {
+            x: T,
+            y: T
+        }
+        fn main() -[cpu.thread] -> (){
+            let p: Point<i32> = x
+        }
+        "#;
+        let result = parse(
+            &SourceCode::new(String::from(src)))
+            .expect("Cannot use struct datatypes").item_defs;
+        assert_eq!(result.len(), 2);
+
+        let letty = 
+            if let Item::FunDef(fun_def) = &result[1] {
+                if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                    if let ExprKind::Let(_, ty, _) = &expr.expr {
+                        ty.clone().unwrap().ty
+                    } else {
+                        panic!("Cannot recognize let expr");
+                    }
+                } else {
+                    panic!("Cannot recognize block expr");
+                }
+            } else {
+                panic!("Cannot recognize fundef");
+            };
+
+        let mut struct_ty = StructType{
+            name: String::from("Point"),
+            attributes: BTreeMap::new(),
+            generic_args: vec![
+                ArgKinded::DataTy(DataTy::new(
+                    DataTyKind::Scalar(ScalarTy::I32)))
+            ],
+        };
+        struct_ty.attributes.insert(String::from("x"), Ty::new(
+            TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))));
+        struct_ty.attributes.insert(String::from("y"), Ty::new(
+            TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))));
+
+        if let TyKind::Data(dataty) = letty {
+            assert_eq!(dataty,
+                DataTy::with_span(
+                    DataTyKind::StructType(struct_ty),
+                    Span::new(59, 64)));
+        } else {
+            panic!("Cannot recognize datatype");
         }
     }
 }

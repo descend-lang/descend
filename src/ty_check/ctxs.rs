@@ -1,5 +1,6 @@
 use crate::ast::internal::{Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
+use crate::ty_check::proj_elem_ty;
 use crate::ty_check::error::CtxError;
 use crate::ty_check::constraint_check::*;
 use std::collections::{HashMap, HashSet};
@@ -228,14 +229,13 @@ impl TyCtx {
                     place_frame
                 },
                 TyKind::Data(DataTy {
-                    dty: d::StructMonoType(struct_ty), ..
+                    dty: d::StructType(struct_ty), ..
                 }) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
-                    let struct_def: &StructDef = unimplemented!("TODO find struct_def");
-                    struct_def.decls.iter().for_each(|field| {
+                    struct_ty.attributes.iter().for_each(|(name, ty)| {
                         let mut exploded_index = explode(
-                            pl.clone().push(&ProjEntry::StructAccess(field.name.clone())),
-                            Ty::new(TyKind::Data(field.ty.clone())),
+                            pl.clone().push(&ProjEntry::StructAccess(name.clone())),
+                            ty.clone()
                         );
                         place_frame.append(&mut exploded_index);
                     });
@@ -263,10 +263,6 @@ impl TyCtx {
     }
 
     pub fn place_ty(&self, place: &internal::Place) -> TyResult<Ty> {
-        fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
-            unimplemented!("TODO use method proj_elem_ty from ty_check")
-        }
-
         let ident_ty = self.ty_of_ident(&place.ident)?;
         place.path.iter().try_fold(ident_ty.clone(), |res, pathEntry|
             proj_elem_ty(&res, pathEntry)
@@ -300,10 +296,21 @@ impl TyCtx {
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys))))
                 },
                 (TyKind::Data(DataTy {
-                    dty: DataTyKind::StructMonoType(mut struct_ty),
+                    dty: DataTyKind::StructType(mut struct_ty),
                     ..
                 }), ProjEntry::StructAccess(attr_name)) => {
-                    unimplemented!("TODO how to find struct_def?")
+                    *struct_ty.attributes.get_mut(attr_name).unwrap() =
+                        if let TyKind::Data(dty) = set_ty_for_path_in_ty(
+                            struct_ty.attributes.get(attr_name).unwrap().clone(),
+                            &path[1..],
+                            part_ty,
+                        ).ty {
+                            Ty::new(TyKind::Data(dty))
+                        } else {
+                            panic!("Trying create non-data type as part of data type.")
+                        };
+                    
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::StructType(struct_ty))))
                 },
                 _ => panic!("Path not compatible with type."),
             }
@@ -507,7 +514,7 @@ pub(super) struct GlobalCtx {
 fn check_unique_names<'a, T: 'a + std::hash::Hash + Eq + ToString, I: std::iter::ExactSizeIterator<Item=&'a T>>(names: I, errs: &mut Vec<CtxError>) {
     let mut names_set = HashSet::with_capacity(names.len());
     names.for_each(|name|
-        if names_set.insert(name) {
+        if !names_set.insert(name) {
             errs.push(CtxError::MultipleDefinedParam(name.to_string()))
     })
 }

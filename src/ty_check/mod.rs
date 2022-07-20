@@ -525,15 +525,9 @@ impl TyChecker {
                 res
         })?;
         if errs.is_empty() {
-            if struct_def.decls.len() == inst_exprs.len() {
-                let struct_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::StructMonoType(
-                    StructMonoType {
-                        name: struct_name.clone(),
-                        generics: generic_args.clone()
-                    }
-                ))));
-        
-                Ok((ty_ctx, struct_ty))
+            if struct_def.decls.len() == inst_exprs.len() {        
+                Ok((ty_ctx,
+                    struct_def.ty().instantiate(generic_args).as_mono().unwrap()))
             } else {
                 Err(TyError::UnexpectedNumberOfStructFields(struct_def.decls.len(), inst_exprs.len()))
             }
@@ -1997,7 +1991,7 @@ impl TyChecker {
         }
 
         let tuple_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
-        let elem_ty = self.proj_elem_ty(e.ty.as_ref().unwrap(), i);
+        let elem_ty = proj_elem_ty(e.ty.as_ref().unwrap(), i);
 
         Ok((tuple_ty_ctx, elem_ty?))
     }
@@ -2503,19 +2497,16 @@ impl TyChecker {
                 }
             },
             (TyKind::Data(DataTy {
-                dty: DataTyKind::StructMonoType(struct_dt),
+                dty: DataTyKind::StructType(struct_dt),
                 ..
-            }), ProjEntry::StructAccess(attr_name)) => {
-                let struct_def = self.gl_ctx.struct_by_name(&struct_dt.name)?;
-
-                if let Some(field) = struct_def.get_field(attr_name) {
-                    Ok((Ty::new(TyKind::Data(field.ty.clone())), mem, passed_prvs))
+            }), ProjEntry::StructAccess(attr_name)) =>
+                if let Some(ty) = struct_dt.get_ty(attr_name) {
+                    Ok((ty.clone(), mem, passed_prvs))
                 } else {
                     Err(TyError::String(
                         "Trying to access non existing struct attribute.".to_string(),
                     ))
-                }
-            },
+                },
             (TyKind::Ident(_), _) => Err(TyError::String(
                 "Type unspecified. Cannot project from potentially non tuple/non struct type.".to_string(),
             )),
@@ -2638,16 +2629,12 @@ impl TyChecker {
                         Err(CtxError::KindedIdentNotFound(ident.clone()))?
                     }
                 }
-                DataTyKind::StructMonoType(struct_mono_ty) => {
-                    let StructMonoType { name, generics } = struct_mono_ty;
+                DataTyKind::StructType(struct_mono_ty) => {
+                    let StructType { name , attributes, generic_args} = struct_mono_ty;
                     let struct_def = self.gl_ctx.struct_by_name(name)?;
-                    Self::check_args_have_correct_kinds(&struct_def.generic_params, generics)?;
-                    iter_TyResult_to_TyResult!(generics.iter().map(|arg|
-                        match arg {
-                            ArgKinded::Ty(ty) =>
-                                self.ty_well_formed(kind_ctx, ty_ctx, exec, ty),   
-                            _ => unimplemented!("TODO"),
-                        } 
+                    Self::check_args_have_correct_kinds(&struct_def.generic_params, generic_args)?;
+                    iter_TyResult_to_TyResult!(attributes.iter().map(|(_, ty)|
+                        self.ty_well_formed(kind_ctx, ty_ctx, exec, ty)
                     ))?;
                 },
                 DataTyKind::Ref(Provenance::Value(prv), own, mem, dty) => {
@@ -2797,39 +2784,37 @@ impl TyChecker {
         let TraitMonoType { name, generics } = &where_clause_item.trait_bound;
         let trait_def = self.gl_ctx.trait_ty_by_name(name)?;
         Self::check_args_have_correct_kinds(&trait_def.generic_params, generics)
-    }
-
-    pub fn proj_elem_ty(&self, ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
-        match (&ty.ty, proj) {
-            (TyKind::Data(DataTy {
-                dty: DataTyKind::Tuple(dtys),
-                ..
-            }), ProjEntry::TupleAccess(i)) => match dtys.get(*i) {
-                Some(dty) => Ok(Ty::new(TyKind::Data(dty.clone()))),
-                None => Err(TyError::IllegalProjection(format!(
-                    "Cannot project element `{}` from tuple with {} elements.",
-                    i,
-                    dtys.len()
-                ))),
-            },
-            (TyKind::Data(DataTy {
-                dty: DataTyKind::StructMonoType(struct_ty),
-                ..
-            }), ProjEntry::StructAccess(attr_name)) => {
-                let struct_def = &self.gl_ctx.struct_by_name(&struct_ty.name)?;
-                match struct_def.get_field(&struct_ty.name) {
-                    Some(struct_field) => 
-                        Ok(Ty::new(TyKind::Data(struct_field.ty.clone()))),
-                    None => Err(TyError::IllegalProjection(format!(
-                        "Cannot project element `{}` from struct {}.",
-                        attr_name,
-                        struct_ty.name
-                    )))
-                }
-            },
-            _ => Err(TyError::IllegalProjection(
-                "Unexpected type or projection access.".to_string(),
-            )),
-        }
     }    
+}
+
+pub fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
+    match (&ty.ty, proj) {
+        (TyKind::Data(DataTy {
+            dty: DataTyKind::Tuple(dtys),
+            ..
+        }), ProjEntry::TupleAccess(i)) => match dtys.get(*i) {
+            Some(dty) => Ok(Ty::new(TyKind::Data(dty.clone()))),
+            None => Err(TyError::IllegalProjection(format!(
+                "Cannot project element `{}` from tuple with {} elements.",
+                i,
+                dtys.len()
+            ))),
+        },
+        (TyKind::Data(DataTy {
+            dty: DataTyKind::StructType(struct_ty),
+            ..
+        }), ProjEntry::StructAccess(attr_name)) =>
+            match struct_ty.get_ty(attr_name) {
+                Some(ty) => 
+                    Ok(ty.clone()),
+                None => Err(TyError::IllegalProjection(format!(
+                    "Cannot project element `{}` from struct {}.",
+                    attr_name,
+                    struct_ty.name
+                )))
+            },
+        _ => Err(TyError::IllegalProjection(
+            "Unexpected type or projection access.".to_string(),
+        )),
+    }
 }

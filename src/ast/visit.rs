@@ -119,7 +119,12 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
         DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
-        DataTyKind::StructMonoType(struct_mono_ty) => walk_list!(visitor, visit_arg_kinded, &struct_mono_ty.generics),
+        DataTyKind::StructType(struct_ty) => {
+            struct_ty.attributes.iter().for_each(|(_, ty)|
+                visitor.visit_ty(ty)
+            );
+            walk_list!(visitor, visit_arg_kinded, &struct_ty.generic_args);;
+        }
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
