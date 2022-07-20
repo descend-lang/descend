@@ -448,12 +448,12 @@ pub fn walk_impl_def<V: VisitMut>(visitor: &mut V, impl_def: &mut ImplDef) {
 pub fn walk_item_def<V: VisitMut>(visitor: &mut V, item_def: &mut Item) {
     match item_def {
         Item::FunDef(fun_def) =>
-            walk_fun_def(visitor, fun_def),
+            visitor.visit_fun_def(fun_def),
         Item::StructDef(struct_def) =>
-            walk_struct_def(visitor, struct_def),
+            visitor.visit_struct_def(struct_def),
         Item::TraitDef(trait_def) =>
-            walk_trait_def(visitor, trait_def),
+            visitor.visit_trait_def(trait_def),
         Item::ImplDef(impl_def) =>
-            walk_impl_def(visitor, impl_def)
+            visitor.visit_impl_def(impl_def),
     }
 }

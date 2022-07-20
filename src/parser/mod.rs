@@ -5,22 +5,27 @@ mod utils;
 use crate::ast::*;
 use core::iter;
 use error::ParseError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::ErrorReported;
 pub use source::*;
 
-use crate::ast::visit_mut::VisitMut;
+use crate::ast::visit_mut::{VisitMut, walk_struct_def, walk_impl_def,
+    walk_trait_def, walk_fun_def, walk_ty};
+
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
-    Ok(CompilUnit::new(
+    let mut item_defs =
         parser
-            .parse()
-            .map_err(|err| err.emit())?
-            .into_iter()
-            .map(replace_arg_kinded_idents)
-            .collect::<Vec<Item>>(),
+        .parse()
+        .map_err(|err| err.emit())?
+        .into_iter()
+        .map(replace_arg_kinded_idents)
+        .collect::<Vec<Item>>();
+    replace_tyidents_struct_names(&mut item_defs);
+    Ok(CompilUnit::new(
+        item_defs,
         source,
     ))
 }
@@ -108,6 +113,119 @@ fn replace_arg_kinded_idents(mut item_def: Item) -> Item {
     };
     replace.visit_item_def(&mut item_def);
     item_def
+}
+
+//Distinguish between type variables and struct names without generic params
+fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
+     struct DistinguisherBetweenTyVarsAndStructNames {
+        struct_names_without_generics: HashSet<String>,
+        type_vars_in_scope: HashSet<String>,
+    }
+
+    impl DistinguisherBetweenTyVarsAndStructNames {
+        fn new(items: &Vec<Item>) -> Self {
+            DistinguisherBetweenTyVarsAndStructNames {
+                struct_names_without_generics: HashSet::from_iter(
+                    items.iter().filter_map(|item| 
+                        if let Item::StructDef(struct_def) = item {
+                            if struct_def.generic_params.len() == 0 {
+                                Some(struct_def.name.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    )),
+                type_vars_in_scope: HashSet::new()
+            }
+            
+        }
+
+        fn add_generics(&mut self, generics: &Vec<IdentKinded>) {
+            self.type_vars_in_scope.extend(
+                generics
+                .iter()
+                .map(|gen|
+                    gen.ident.name.clone()));
+        }
+
+        fn remove_generics(&mut self, generics: &Vec<IdentKinded>) {
+            generics
+            .iter()
+            .for_each(|gen| {
+                self.type_vars_in_scope.remove(&gen.ident.name);
+            });
+        }
+    }
+
+    impl VisitMut for DistinguisherBetweenTyVarsAndStructNames {
+        fn visit_item_def(&mut self, item_def: &mut Item) { 
+            match item_def {
+                Item::FunDef(fun_def) => {
+                    self.visit_fun_def(fun_def);
+                },
+                Item::StructDef(struct_def) => {
+                    self.add_generics(&struct_def.generic_params);
+                    walk_struct_def(self, struct_def);
+                    self.remove_generics(&struct_def.generic_params);
+                },
+                Item::TraitDef(trait_def) => {
+                    self.add_generics(&trait_def.generic_params);
+                    walk_trait_def(self, trait_def);
+                    self.remove_generics(&trait_def.generic_params);
+                },
+                Item::ImplDef(impl_def) => {
+                    self.add_generics(&impl_def.generic_params);
+                    walk_impl_def(self, impl_def);
+                    self.remove_generics(&impl_def.generic_params);
+                },
+            }
+         }
+
+        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
+            self.add_generics(&fun_def.generic_params);
+            walk_fun_def(self, fun_def);
+            self.remove_generics(&fun_def.generic_params);
+        }
+
+        fn visit_ty(&mut self, ty: &mut Ty) {
+            match &ty.ty {
+                TyKind::Ident(name) => {
+                    let is_struct_name =
+                        self.struct_names_without_generics.contains(&name.name);
+                    let is_type_ident =
+                        self.type_vars_in_scope.contains(&name.name);
+
+                    match (is_struct_name, is_type_ident) {
+                        (true, false) =>
+                            ty.ty = TyKind::Data(DataTy::new(DataTyKind::StructMonoType(
+                                StructMonoType {
+                                    name: name.name.clone(),
+                                    generics: vec![],
+                            }))),
+                        (false, true) =>
+                            (),
+                        (false, false) => {
+                            println!("Ident {} not found", name);
+                            panic!("IdentNotFound")}, //TODO collect errs instead of panic
+                            // self.errs.push(
+                            //     TyError::from(CtxError::IdentNotFound(name.clone()))),
+                        (true, true) => 
+                            panic!("AmbiguousIdentifier"),
+                            // self.errs.push(
+                            //     TyError::from(CtxError::AmbiguousIdentifier(name.clone()))),
+                    }
+                },
+                _ => walk_ty(self, ty)
+            }
+        }
+    }
+
+    let mut d =
+        DistinguisherBetweenTyVarsAndStructNames::new(items);
+    items.iter_mut().for_each(|item|
+        d.visit_item_def(item));
 }
 
 pub mod error {
@@ -1135,6 +1253,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn ty_identifier() {
         assert_eq!(
             descend::ty("T"),
@@ -2423,7 +2542,9 @@ mod tests {
                     if let TyKind::Data(dataty) = ty {
                         assert_eq!(dataty,
                             DataTy::with_span(
-                                DataTyKind::StructMonoType(StructMonoType{ name: String::from("Point"), generics: vec![
+                                DataTyKind::StructMonoType(StructMonoType{
+                                        name: String::from("Point"),
+                                        generics: vec![
                                     ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                                     ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                                 ]}),
@@ -2445,21 +2566,26 @@ mod tests {
     #[test]
     fn test_struct_datatype2() { //TODO dont work yet
         let src = r#"
+        struct Point;
         fn main() -[cpu.thread] -> (){
             let p: Point = x
         }
         "#;
-        let result = descend::compil_unit(src).expect("Cannot use struct datatypes");
-        assert_eq!(result.len(), 1);
+        let result = parse(
+            &SourceCode::new(String::from(src)))
+            .expect("Cannot use struct datatypes").item_defs;
+        assert_eq!(result.len(), 2);
 
-        if let Item::FunDef(fun_def) = &result[0] {
+        if let Item::FunDef(fun_def) = &result[1] {
             if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
                 if let ExprKind::Let(_, ty, _) = &expr.expr {
                     let ty = ty.clone().unwrap().ty;
                     if let TyKind::Data(dataty) = ty {
                         assert_eq!(dataty,
                             DataTy::with_span(
-                                DataTyKind::StructMonoType(StructMonoType{ name: String::from("Point"), generics: vec![] }),
+                                DataTyKind::StructMonoType(StructMonoType{
+                                    name: String::from("Point"),
+                                    generics: vec![] }),
                                 Span::new(59, 64)));
                     } else {
                         panic!("Cannot recognize datatype");
