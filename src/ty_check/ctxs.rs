@@ -538,26 +538,30 @@ impl GlobalCtx {
         Vec::<CtxError>::new(),
         |mut errs, item_def| {
             match item_def {
-                Item::FunDef(fun_def) => {
-                    let old_val = self.funs.insert(fun_def.name.clone(), fun_def.ty());
-                    if old_val.is_some() {
-                        errs.push(CtxError::MultipleDefinedGlobalFuns(fun_def.name.clone()));
-                    }
-                    check_unique_names(fun_def.generic_params.iter().map(|gen| &gen.ident.name), &mut errs);
-                    check_unique_names(fun_def.param_decls.iter().map(|fun_param| &fun_param.ident.name), &mut errs);
-                },
+                Item::FunDef(fun_def) => 
+                    self.append_fun_def(fun_def, &mut errs),
                 Item::StructDef(struct_def) => {
-                    let old_val = self.structs.insert(struct_def.name.clone(), struct_def.clone());
+                    let old_val =
+                        self.structs.insert(struct_def.name.clone(), struct_def.clone());
                     if old_val.is_some() {
                         errs.push(CtxError::MultipleDefinedStructs(struct_def.name.clone()));
                     }
-                    check_unique_names(struct_def.generic_params.iter().map(|gen| &gen.ident.name), &mut errs);
-                    check_unique_names(struct_def.decls.iter().map(|decl| &decl.name), &mut errs);
+                    check_unique_names(struct_def.generic_params.iter()
+                        .map(|gen| &gen.ident.name), &mut errs);
+                    check_unique_names(struct_def.decls.iter()
+                        .map(|decl| &decl.name), &mut errs);
                 },
                 Item::ImplDef(impl_def) => {
-                    //TODO check also names of associated items
-                    check_unique_names(impl_def.generic_params.iter().map(|gen| &gen.ident.name), &mut errs);
-                    //TODO associated items
+                    check_unique_names(impl_def.generic_params.iter()
+                        .map(|gen| &gen.ident.name), &mut errs);
+                    check_unique_names(impl_def.decls.iter()
+                        .map(|decl| 
+                            match decl {
+                                AssociatedItem::FunDef(fun_def) => &fun_def.name,
+                                AssociatedItem::ConstItem(name, _, _) => name,
+                                AssociatedItem::FunDecl(fun_decl) => &fun_decl.name,
+                            }
+                    ), &mut errs);
                     if let Some(trait_impl) = &impl_def.trait_impl {
                         self.theta.append_constraint(&ConstraintScheme {
                             generics: impl_def.generic_params.clone(),
@@ -569,22 +573,51 @@ impl GlobalCtx {
                         if !impl_defs_names.insert((impl_def.ty.clone(), trait_impl.name.clone())) {
                             errs.push(CtxError::MultipleDefinedImplsForTrait(impl_def.ty.clone(), trait_impl.name.clone()));
                         }
+                    } else {
+                        impl_def.decls.iter().for_each(|decl|
+                            match decl {
+                                AssociatedItem::FunDef(fun_def) =>
+                                    self.append_fun_def(fun_def, &mut errs),
+                                AssociatedItem::ConstItem(_, _, _) =>
+                                    todo!("TODO"),
+                                AssociatedItem::FunDecl(fun_decl) =>
+                                    errs.push(CtxError::UnexpectedItem(fun_decl.name.clone())),
+                            }
+                        );
                     }
                 },
-                Item::TraitDef(trait_def) => {
-                    self.append_trait_def(&trait_def, &mut errs);
-                },
+                Item::TraitDef(trait_def) =>
+                    self.append_trait_def(&trait_def, &mut errs),
             }
             errs
         })
+    }
+
+    fn append_fun_def(&mut self, fun_def: &FunDef, errs: &mut Vec<CtxError>) {
+        let old_val = self.funs.insert(fun_def.name.clone(), fun_def.ty());
+        if old_val.is_some() {
+            errs.push(CtxError::MultipleDefinedGlobalFuns(fun_def.name.clone()));
+        }
+        check_unique_names(fun_def.generic_params.iter()
+            .map(|gen| &gen.ident.name), errs);
+        check_unique_names(fun_def.param_decls.iter()
+            .map(|fun_param| &fun_param.ident.name), errs);
     }
 
     fn append_trait_def(&mut self, t_def: &TraitDef, errs: &mut Vec<CtxError>) {
         if self.traits.insert(t_def.name.clone(), t_def.clone()).is_some() {
             errs.push(CtxError::MultipleDefinedTraits(t_def.name.clone()));
         } else {
-            //TODO check also names of associated items
-            check_unique_names(t_def.generic_params.iter().map(|gen| &gen.ident.name), errs);
+            check_unique_names(t_def.generic_params.iter()
+                .map(|gen| &gen.ident.name), errs);
+            check_unique_names(t_def.decls.iter()
+                .map(|decl| 
+                    match decl {
+                        AssociatedItem::FunDef(fun_def) => &fun_def.name,
+                        AssociatedItem::ConstItem(name, _, _) => name,
+                        AssociatedItem::FunDecl(fun_decl) => &fun_decl.name,
+                    }
+            ), errs);
 
             let self_ident = Ident::new("Self");
             let self_generic = IdentKinded::new(&self_ident, Kind::Ty);
@@ -595,7 +628,8 @@ impl GlobalCtx {
             generics_tdef.extend(t_def.generic_params.clone());
             let trait_mono_type = TraitMonoType {
                 name: t_def.name.clone(),
-                generics: t_def.generic_params.iter().map(|gen| gen.arg_kinded()).collect() };
+                generics: t_def.generic_params.iter()
+                    .map(|gen| gen.arg_kinded()).collect() };
             let self_impl_trait =
                 WhereClauseItem {
                     param: self_ty.clone(),
@@ -608,8 +642,10 @@ impl GlobalCtx {
                         AssociatedItem::FunDecl(_) => {
                             let (ty, name) = 
                                 match ass_item {
-                                    AssociatedItem::FunDef(fun_def) => (fun_def.ty(), fun_def.name.clone()),
-                                    AssociatedItem::FunDecl(fun_decl) => (fun_decl.ty(), fun_decl.name.clone()),
+                                    AssociatedItem::FunDef(fun_def) =>
+                                        (fun_def.ty(), fun_def.name.clone()),
+                                    AssociatedItem::FunDecl(fun_decl) =>
+                                        (fun_decl.ty(), fun_decl.name.clone()),
                                     _ => panic!("This cannot happen"),
                                 };
 
@@ -638,7 +674,10 @@ impl GlobalCtx {
 
             let implican = vec![self_impl_trait];
             t_def.supertraits_constraints().iter().for_each(|supertrait_cons| 
-                self.theta.append_constraint(&ConstraintScheme{ generics: generics_tdef.clone(), implican: implican.clone(), implied: supertrait_cons.clone() })
+                self.theta.append_constraint(&ConstraintScheme{
+                    generics: generics_tdef.clone(),
+                    implican: implican.clone(),
+                    implied: supertrait_cons.clone() })
             );
         }
     }

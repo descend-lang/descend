@@ -247,6 +247,7 @@ pub enum CtxError {
     MultipleDefinedImplsForTrait(Ty, String),
     TraitNotImplmented(WhereClauseItem),
     FunNotImplemented(String),
+    UnexpectedItem(String),
 }
 
 impl From<CtxError> for SubTyError {
