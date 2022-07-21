@@ -1043,7 +1043,17 @@ impl SubstKindedIdents for Ty {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match &self.ty {
             // TODO mutate and do not create a new type (also this drops the span).
-            TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
+            TyKind::Data(dty) =>
+                match &dty.dty {
+                    DataTyKind::Ident(ident)
+                        if ident_kinded.kind == Kind::Ty && with.kind() == Kind::Ty && ident.name == ident_kinded.ident.name => 
+                        if let ArgKinded::Ty(ty) = with {
+                            ty.clone()
+                        } else {
+                            panic!("This cannot happen")
+                        },
+                    _ => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
+                },
             TyKind::Fn(params, exec, ret) => Ty::new(TyKind::Fn(
                 params
                     .iter()
@@ -1057,6 +1067,7 @@ impl SubstKindedIdents for Ty {
                     match with {
                         ArgKinded::Ident(idk) => Ty::new(TyKind::Ident(idk.clone())),
                         ArgKinded::Ty(ty) => ty.clone(),
+                        ArgKinded::DataTy(dty) => Ty::new(TyKind::Data(dty.clone())),
                         _ => panic!("Trying to substitute type identifier with non-type value."),
                     }
                 } else {

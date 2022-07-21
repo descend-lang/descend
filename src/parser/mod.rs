@@ -129,11 +129,7 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
                 structs: BTreeMap::from_iter(
                     items.iter().filter_map(|item| 
                         if let Item::StructDef(struct_def) = item {
-                            if struct_def.generic_params.len() == 0 {
-                                Some((struct_def.name.clone(), struct_def.clone()))
-                            } else {
-                                None
-                            }
+                            Some((struct_def.name.clone(), struct_def.clone()))
                         } else {
                             None
                         }
@@ -218,7 +214,7 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
         }
 
         fn visit_dty(&mut self, dty: &mut DataTy) {
-            match dty.dty {
+            match &mut dty.dty {
                 DataTyKind::StructType(struct_ty) => {
                     assert!(struct_ty.attributes.len() == 0);
                     if let Some(struct_def) = self.structs.get(&struct_ty.name) {
@@ -2642,7 +2638,7 @@ mod tests {
     #[test]
     fn test_struct_datatype3() {
         let src = r#"
-        struct Point<T> {
+        struct Point<T: ty> {
             x: T,
             y: T
         }
