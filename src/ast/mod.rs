@@ -1192,7 +1192,8 @@ impl DataTy {
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            StructType(_) => unimplemented!("TODO struct_def needed"),
+            StructType(struct_ty) =>
+                struct_ty.attributes.iter().any(|(_, ty)| ty.non_copyable()),
             Array(_, _) => false,
             RawPtr(_) => true,
             Range => true,
@@ -1223,7 +1224,9 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
-            StructType(_) => unimplemented!("TODO attribute of struct needed"),
+            StructType(struct_ty) =>
+                struct_ty.attributes.iter()
+                .fold(true, |acc, (_, ty)| acc & ty.is_fully_alive()),
             Dead(_) => false,
         }
     }
@@ -1274,7 +1277,9 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
-            StructType(_) => unimplemented!("TODO struct_def needed"),
+            StructType(struct_ty) => struct_ty.attributes
+                .iter()
+                .any(|(_, ty)| ty.contains_ref_to_prv(prv_val_name)),
         }
     }
 }

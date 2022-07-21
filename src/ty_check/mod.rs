@@ -93,7 +93,8 @@ impl TyChecker {
         let ty_ctx = TyCtx::new();
 
         iter_TyResult_to_TyResult!(struct_def.decls.iter().map(|struct_field| {
-            self.ty_well_formed(&kind_ctx, &ty_ctx, Exec::View, &Ty::new(TyKind::Data(struct_field.ty.clone()))) //TODO exec = View???
+            self.ty_well_formed(&kind_ctx, &ty_ctx, Exec::View,
+                &Ty::new(TyKind::Data(struct_field.ty.clone()))) //TODO exec = View???
         }))
     }
 
@@ -274,7 +275,7 @@ impl TyChecker {
                 }
             );
 
-            ass_items_to_check.iter().for_each(|ass_item|
+            ass_items_to_check.iter().for_each(|_|
                 errors.push(TyError::UnexpectedItem)
             );
 
@@ -288,7 +289,18 @@ impl TyChecker {
                 Err(TyError::MultiError(errors))
             }
         } else {
-            unimplemented!("TODO")
+            let kind_ctx = kind_ctx.append_idents(impl_def.generic_params.clone());
+
+            iter_TyResult_to_TyResult!(impl_def.decls.iter_mut().map(|decl|
+                match decl {
+                    AssociatedItem::FunDecl(_) => 
+                        Err(TyError::UnexpectedItem),
+                    AssociatedItem::FunDef(fun_def) =>
+                        self.ty_check_fun_def(kind_ctx.clone(), fun_def),
+                    AssociatedItem::ConstItem(_, _, _) =>
+                        unimplemented!("TODO"),
+                }
+            ))
         }
     }
 
@@ -501,7 +513,6 @@ impl TyChecker {
                 _ =>
                     unimplemented!("TODO"),
             }))?;
-        //TODO check conditions
         let (ty_ctx, errs) = 
             struct_def.decls
             .iter()
@@ -525,9 +536,17 @@ impl TyChecker {
                 res
         })?;
         if errs.is_empty() {
-            if struct_def.decls.len() == inst_exprs.len() {        
-                Ok((ty_ctx,
-                    struct_def.ty().instantiate(generic_args).as_mono().unwrap()))
+            if struct_def.decls.len() == inst_exprs.len() {      
+                let res_ty = struct_def.ty().instantiate(generic_args);
+                if let Some(unfulfilled_con) =
+                    res_ty.conditions
+                    .iter()
+                    .find(|con|
+                        !self.gl_ctx.theta.check_predicate(con)) {
+                    Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))
+                } else {
+                    Ok((ty_ctx, res_ty.as_mono().unwrap()))
+                }
             } else {
                 Err(TyError::UnexpectedNumberOfStructFields(struct_def.decls.len(), inst_exprs.len()))
             }
@@ -1907,12 +1926,19 @@ impl TyChecker {
         let fun_ty_subs = fun_ty.instantiate(k_args);
         let fun_mono_ty = unify::inst_fn_ty_scheme(&fun_ty_subs);
 
-        //TODO check where-clauses
-
-        Ok((
-            fun_ty_subs,
-            fun_mono_ty,
-        ))
+        //TODO cannt check conditions if some generic_args must be infered
+        if let Some(unfulfilled_con) =
+            fun_ty_subs.conditions
+            .iter()
+            .find(|con|
+                !self.gl_ctx.theta.check_predicate(con)) {
+            Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))
+        } else {
+            Ok((
+                fun_ty_subs,
+                fun_mono_ty,
+            ))
+        }        
     }
 
     fn check_args_have_correct_kinds(
