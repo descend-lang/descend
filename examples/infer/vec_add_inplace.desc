@@ -1,0 +1,22 @@
+fn vec_add_inplace<n: nat>(
+    h_vec_a: &uniq cpu.mem [i32; n],
+    h_vec_b: &shrd cpu.mem [i32; n]
+) -[cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+    let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec_a);
+    let b_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec_b);
+    exec::<64, 1024>(
+        &uniq gpu,
+        (&uniq a_array, &shrd b_array),
+        | grid: BlockGrp<64, ThreadGrp<1024>>, vec: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n]) | -[gpu.grid]-> () {
+            let groups_a = group_mut::<1024>(to_view_mut(vec.0));
+            let groups_b = group::<1024>(to_view(vec.1));
+            parfor block in grid with g_a, g_b from groups_a, groups_b {
+                parfor _ in block with v_a, v_b from g_a, g_b {
+                    *v_a = *v_a + *v_b
+                }
+            }
+        }
+    );
+    copy_to_host(&shrd a_array, h_vec_a)
+}

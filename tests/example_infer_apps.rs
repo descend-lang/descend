@@ -87,3 +87,11 @@ fn computed_indexing() -> Res {
         descend::compile("examples/infer/computed_indexing.desc")?
     ))
 }
+
+#[test]
+fn vec_add_inplace() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/vec_add_inplace.desc")?
+    ))
+}

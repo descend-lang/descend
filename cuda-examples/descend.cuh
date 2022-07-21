@@ -405,6 +405,46 @@ auto exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
 }
 
+// required to launch kernels that utilize grid synchronization
+template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
+auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
+    CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
+    // check whether  the given GPU supports cooperative launches
+    int supports_coop_launch = 0;
+    CHECK_CUDA_ERR( cudaDeviceGetAttribute(&supports_coop_launch, cudaDevAttrCooperativeLaunch, *gpu) );
+    if (supports_coop_launch != 1){
+        return;
+    }
+    // check whether the given grid/block dimensions guarantee co-residency of all blocks on the GPU
+    // (needed for grid synchronization)
+    int max_blocks_per_sm = 0;
+    cudaDeviceProp device_prop;
+    CHECK_CUDA_ERR( cudaGetDeviceProperties(&device_prop, *gpu) );
+    CHECK_CUDA_ERR( cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &max_blocks_per_sm,
+            (void *) launch<F, Args...>,
+            num_threads,
+            0
+    ));
+    if (num_blocks > max_blocks_per_sm * device_prop.multiProcessorCount) {
+        return;
+    }
+    dim3 dim_block(num_threads, 1, 1);
+    dim3 dim_grid(num_blocks, 1, 1);
+    void* launch_args[] = {(void *) &f, (void *) &args...};
+#ifdef BENCH
+    Timing timing{};
+    timing.record_begin();
+#endif
+    cudaLaunchCooperativeKernel((void *) launch<F, Args...>, dim_grid, dim_block, launch_args);
+#ifdef BENCH
+    timing.record_end();
+    benchmark.current_run().insert_timing(timing);
+#endif
+    CHECK_CUDA_ERR( cudaPeekAtLastError() );
+    CHECK_CUDA_ERR( cudaDeviceSynchronize() );
+}
+
 template <typename T>
 __device__ void atomic_set(bool *address, bool val)
 {
