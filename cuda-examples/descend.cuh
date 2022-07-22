@@ -196,6 +196,7 @@ extern const i32 NO_ERROR = -1;
 using u32 = std::uint32_t;
 // FIXME there is no way to guarantee that float holds 32 bits
 using f32 = float;
+using f64 = double;
 
 template<typename T, std::size_t n>
 using array = std::array<T, n>;
@@ -409,11 +410,12 @@ auto exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
 template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
 auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
     CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
-    // check whether  the given GPU supports cooperative launches
+    // check if the GPU supports cooperative launches
     int supports_coop_launch = 0;
     CHECK_CUDA_ERR( cudaDeviceGetAttribute(&supports_coop_launch, cudaDevAttrCooperativeLaunch, *gpu) );
     if (supports_coop_launch != 1){
-        return;
+        std::cerr << "Error: GPU does not support cooperative launches!";
+        exit(EXIT_FAILURE);
     }
     // check whether the given grid/block dimensions guarantee co-residency of all blocks on the GPU
     // (needed for grid synchronization)
@@ -427,7 +429,8 @@ auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> vo
             0
     ));
     if (num_blocks > max_blocks_per_sm * device_prop.multiProcessorCount) {
-        return;
+        std::cerr << "Error: Given grid/block dimensions do not guarantee co-residency of all blocks on the GPU when launching the given kernel!";
+        exit(EXIT_FAILURE);
     }
     dim3 dim_block(num_threads, 1, 1);
     dim3 dim_grid(num_blocks, 1, 1);
