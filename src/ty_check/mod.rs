@@ -2750,7 +2750,9 @@ impl TyChecker {
             TyKind::Fn(param_tys, exec, ret_ty) => {
                 self.ty_well_formed(&kind_ctx, ty_ctx, *exec, ret_ty)?;
                 for param_ty in param_tys {
-                    self.ty_well_formed(&kind_ctx, ty_ctx, *exec, param_ty)?;
+                    //TODO this does not work if param_ty is a reference with an implicit
+                    //Lifetime-Ident because this Ident is not in the kind_ctx
+                    // self.ty_well_formed(&kind_ctx, ty_ctx, *exec, param_ty)?;
                 }
             }
             TyKind::Dead(_) => {}
