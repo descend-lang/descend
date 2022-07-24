@@ -469,8 +469,8 @@ peg::parser! {
             }
 
         rule kind_parameter() -> IdentKinded
-            = name:ident() _ ":" _ kind:kind() {
-                IdentKinded::new(&name, kind)
+            = name:ident() kind:(_ ":" _ kind:kind() {kind})? {
+                IdentKinded::new(&name, kind.unwrap_or(Kind::Ty))
             }
   
         rule fun_parameter() -> ParamDecl

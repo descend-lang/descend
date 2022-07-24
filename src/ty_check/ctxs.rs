@@ -515,7 +515,7 @@ fn check_unique_names<'a, T: 'a + std::hash::Hash + Eq + ToString, I: std::iter:
     let mut names_set = HashSet::with_capacity(names.len());
     names.for_each(|name|
         if !names_set.insert(name) {
-            errs.push(CtxError::MultipleDefinedParam(name.to_string()))
+            errs.push(CtxError::MultipleDefinedItems(name.to_string()))
     })
 }
 
@@ -670,8 +670,8 @@ impl GlobalCtx {
                                         conditions,
                                         mono_ty: Ty::new(TyKind::Fn(args, exec, ret_ty))
                                     };
-                                if self.funs.insert(name, ty).is_some() {
-                                    errs.push(CtxError::MultipleDefinedTraits(t_def.name.clone()))
+                                if self.funs.insert(name.clone(), ty).is_some() {
+                                    errs.push(CtxError::MultipleDefinedItems(name))
                                 }
                             } else {
                                 panic!("FunDef without FunType!");

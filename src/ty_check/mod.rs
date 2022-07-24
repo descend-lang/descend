@@ -1912,6 +1912,11 @@ impl TyChecker {
                 // place should be an identifier referring to a globally declared function
                 if let Ok(fun_ty) = self.gl_ctx.fun_ty_by_ident(&place.ident) {
                     //TODO how to set a type for ef which is a typescheme?
+
+                    //TODO this is now the function monotype, not the function type
+                    //Is this a problem?
+                    ef.ty = Some(fun_ty.mono_ty.clone());
+
                     fun_ty.clone()
                 } else {
                     panic!("function place-expr is not a identifier for a globally declared function")

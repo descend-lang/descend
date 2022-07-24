@@ -4,17 +4,19 @@ extern crate descend;
 
 macro_rules! assert_compile {
     ($src: expr) => {
-        let res = descend::compile($src);
+        let res = descend::compile_src($src);
         if let Err(error) = res {
             eprintln!("{}\n{:#?}", $src, error);
             panic!("Unexpted error while typechecking");
+        } else {
+            println!("{}", res.unwrap())
         }
     };
 }
 
 macro_rules! assert_err_compile {
     ($src: expr) => {
-        let res = descend::compile($src);
+        let res = descend::compile_src($src);
         if let Ok(gen_code) = res {
             eprintln!("{}\n{}", $src, gen_code);
             panic!("This should not typecheck");
@@ -295,17 +297,17 @@ fn test_unimplmented_method_impl_def() {
 #[test]
 fn test_multiple_gl_fun_with_same_name() {
     let src = r#"
-    fn foo() -[cpu.thread]-> () {
+    fn foo() -[cpu.thread]-> i32 {
         42
     }
     "#;
     assert_compile!(src);
 
     let src = r#"
-    fn foo() -[cpu.thread]-> () {
+    fn foo() -[cpu.thread]-> i32 {
         42
     }
-    fn foo() -[cpu.thread]-> () {
+    fn foo() -[cpu.thread]-> i32 {
         42
     }
     "#;
@@ -325,6 +327,8 @@ fn test_multiple_structs_with_same_name() {
     "#;
     assert_err_compile!(src);
 }
+
+#[ignore]
 #[test]
 fn test_multiple_structs_and_traits_with_same_name() {
     let src = r#"
@@ -359,14 +363,14 @@ fn test_multiple_attributes_in_struct_with_same_name() {
 #[test]
 fn test_multiple_fun_params_in_struct_with_same_name() {
     let src = r#"
-    fn foo(x: i32, y: f32) -[cpu.thread]-> () {
+    fn foo(x: i32, y: f32) -[cpu.thread]-> i32 {
         42
     }
     "#;
     assert_compile!(src);
 
     let src = r#"
-    fn foo(x: i32, x: f32) -[cpu.thread]-> () {
+    fn foo(x: i32, x: f32) -[cpu.thread]-> i32 {
         42
     }
     "#;
@@ -378,7 +382,7 @@ fn test_multiple_ass_funs_with_same_name() {
     let src = r#"
     trait Test {
         fn foo(x: i32, y: f32) -[cpu.thread]-> () {
-            42
+            ()
         }
         fn foo2(x: i32, y: f32) -[cpu.thread]-> ();
     }
@@ -388,7 +392,7 @@ fn test_multiple_ass_funs_with_same_name() {
     let src = r#"
     trait Test {
         fn foo(x: i32, y: f32) -[cpu.thread]-> () {
-            42
+            ()
         }
         fn foo(x: i32, y: f32) -[cpu.thread]-> ();
     }
@@ -399,12 +403,12 @@ fn test_multiple_ass_funs_with_same_name() {
 #[test]
 fn test_multiple_generics_with_same_name() {
     let src = r#"
-    struct Test<X: Nat, Y: Nat> { x: X, y: Y }
+    struct Test<X: nat, Y: nat> { x: X, y: Y }
     "#;
     assert_compile!(src);
 
     let src = r#"
-    struct Test<X: Nat, X: Nat> { x: X, y: Y }
+    struct Test<X: nat, X: nat> { x: X, y: Y }
     "#;
     assert_err_compile!(src);
 }
@@ -440,15 +444,7 @@ fn test_invalid_type_in_fn() {
 
     let src = r#"
     struct T {}
-    fn foo(x: Ta) -[cpu.thread]-> () {
-        42
-    }
-    "#;
-    assert_err_compile!(src);
-
-    let src = r#"
-    struct T {}
-    fn foo(x: Ty) -[cpu.thread]-> () {
+    fn foo(x: ty) -[cpu.thread]-> () {
         42
     }
     "#;
@@ -585,7 +581,7 @@ fn test_invalid_number_generics_trait() {
 #[test]
 fn test_invalid_generic_kind() {
     let src = r#"
-    struct Point<X: Ty, Y: Nat> {
+    struct Point<X: ty, Y: nat> {
         x: X,
         y: Y
     }
@@ -595,7 +591,7 @@ fn test_invalid_generic_kind() {
     assert_compile!(src);
 
     let src = r#"
-    struct Point<X: Ty, Y: Nat> {
+    struct Point<X: ty, Y: nat> {
         x: X,
         y: Y
     }
@@ -605,7 +601,7 @@ fn test_invalid_generic_kind() {
     assert_err_compile!(src);
 
     let src = r#"
-    struct Point<X: Ty, Y: Nat> {
+    struct Point<X: ty, Y: nat> {
         x: X,
         y: Y
     }
@@ -670,7 +666,7 @@ fn test_unfullfilled_constraints2() {
     let src = r#"
     trait Eq {
         fn foo(x: i32) -[cpu.thread]-> bool {
-            42
+            false
         }
     }
     trait Ord: Eq {

@@ -241,7 +241,7 @@ pub enum CtxError {
     OutlRelNotDefined(Ident, Ident),
     // Multiple defined objects
     MultipleDefinedGlobalFuns(String),
-    MultipleDefinedParam(String),
+    MultipleDefinedItems(String),
     MultipleDefinedStructs(String),
     MultipleDefinedTraits(String),
     MultipleDefinedImplsForTrait(Ty, String),

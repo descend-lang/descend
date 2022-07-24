@@ -69,6 +69,30 @@ impl std::fmt::Display for Item {
                 write!(f, "{}", body)?;
                 writeln!(f, "\n}}")
             }
+            Item::StructDef {
+                name,
+                templ_params,
+                attributes
+            } => {
+                if !templ_params.is_empty() {
+                    write!(f, "template<")?;
+                    fmt_vec(f, templ_params, ", ")?;
+                    writeln!(f, ">")?;
+                }
+
+                writeln!(f, "struct {} {{", name)?;
+                attributes.iter().try_for_each(|(name, ty)|
+                    writeln!(f, "{} {};", ty, name)
+                )?;
+                writeln!(f, "\n}}")
+            },
+            Item::Namespace(name, items) => {
+                writeln!(f, "namespace {} {{", name)?;
+                items.iter().try_for_each(|item|
+                    writeln!(f, "{}\n\n", item)
+                )?;
+                writeln!(f, "\n}}")
+            }
         }
     }
 }
@@ -168,7 +192,7 @@ impl std::fmt::Display for Expr {
                 is_dev_fun,
             } => {
                 let dev_qual = if *is_dev_fun { "__device__" } else { "" };
-                writeln!(f, "[");
+                writeln!(f, "[")?;
                 fmt_vec(f, &captures, ",")?;
                 writeln!(f, "] {} (", dev_qual)?;
                 fmt_vec(f, &params, ",\n")?;
@@ -201,6 +225,17 @@ impl std::fmt::Display for Expr {
                     crate::ast::ProjEntry::StructAccess(n) =>
                         write!(f, "{}.{}", tuple, n),
                 },
+            StructInst { name, template_args, args }  => {
+                write!(f, "{}", name)?;
+                if template_args.len() > 0 {
+                    write!(f, "<")?;
+                    fmt_vec(f, template_args, ", ")?;
+                    write!(f, ">")?;
+                }
+                write!(f, " {{\n")?;
+                fmt_vec(f, args, ",\n")?;
+                write!(f, "\n}}")
+            }
             InitializerList { elems } => {
                 write!(f, "{{")?;
                 fmt_vec(f, elems, ", ")?;

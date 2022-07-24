@@ -13,6 +13,12 @@ pub(super) enum Item {
         body: Stmt,
         is_dev_fun: bool,
     },
+    StructDef {
+        name: String,
+        templ_params: Vec<TemplParam>,
+        attributes: Vec<(String, Ty)>
+    },
+    Namespace(String, Vec<Item>),
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +100,11 @@ pub(super) enum Expr {
     Proj {
         tuple: Box<Expr>,
         n: ProjEntry,
+    },
+    StructInst {
+        name: String,
+        template_args: Vec<TemplateArg>,
+        args: Vec<Expr>,
     },
     InitializerList {
         elems: Vec<Expr>,

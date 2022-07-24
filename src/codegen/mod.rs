@@ -1,11 +1,12 @@
 mod cu_ast;
 mod printer;
 
-use crate::ast::{self as desc, Item, ProjEntry};
+use crate::ast::{self as desc, Item, ProjEntry, AssociatedItem};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{utils, Mutability};
 use cu_ast as cu;
+use core::panic;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -13,7 +14,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
-    let fun_defs_to_be_generated = compil_unit
+    //TODO collect declarations of functions and structs to avoid compiler errors when print items in false order
+    let items_to_be_generated = compil_unit
         .item_defs
         .iter()
         .filter_map(|item| {
@@ -29,24 +31,26 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
                                 })
                             )
                         }) {
-                        Some(f)
+                        Some(Item::FunDef(f.clone()))
                     } else {
                         None
-                    }
-                _ => None    
+                    },
+                Item::StructDef(struct_def) =>
+                    Some(Item::StructDef(struct_def.clone())),
+                Item::ImplDef(impl_def) =>
+                    Some(Item::ImplDef(impl_def.clone())), //TODO remove all functions which should not be generated
+                Item::TraitDef(_) => None    
             }
         })
-        .cloned()
-        .collect::<Vec<desc::FunDef>>();
-        unimplemented!("TODO")
-    // let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
-    //     .chain(
-    //         fun_defs_to_be_generated
-    //             .iter()
-    //             .map(|fun_def| gen_fun_def(fun_def, &compil_unit.fun_defs, idx_checks)),
-    //     )
-    //     .collect::<cu::CuProgram>();
-    // printer::print(&cu_program)
+        .collect::<Vec<desc::Item>>();
+    let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
+        .chain(
+            items_to_be_generated
+                .iter()
+                .map(|item_def| gen_item_def(item_def, &compil_unit.item_defs, idx_checks)),
+        )
+        .collect::<cu::CuProgram>();
+    printer::print(&cu_program)
 }
 
 // TODO extract into own module, hide ScopeCtx, and ParallCtx and provide wrapper functions in CodegenCtx
@@ -149,12 +153,93 @@ impl CheckedExpr {
     fn expr(&self) -> &cu::Expr {
         match self {
             Self::Expr(e) => e,
-            Self::ExprIdxCheck(c, e) => panic!("expected expr, found idxCheck"),
+            Self::ExprIdxCheck(_, _) => panic!("expected expr, found idxCheck"),
         }
     }
 }
 
-fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bool) -> cu::Item {
+fn find_function_def<'a>(name: &str, comp_unit: &'a [desc::Item]) -> Option<&'a desc::FunDef> {
+    comp_unit.iter().filter_map(|item|
+        match item {
+            Item::FunDef(fun_def) => Some(vec![fun_def]),
+            Item::ImplDef(impl_def) =>
+                Some(impl_def.decls.iter().filter_map(|ass_item|
+                    match ass_item {
+                        AssociatedItem::FunDef(fun_def) => Some(fun_def),
+                        AssociatedItem::ConstItem(_, _, _) => None,
+                        AssociatedItem::FunDecl(_) => panic!("ImplDef should not contain fun_decls"),
+                    }
+                ).collect()),
+            _ => None,
+        }
+    )
+    .into_iter()
+    .flatten()
+    .find(|fun_def|
+        fun_def.name == name)
+}
+
+fn gen_item_def(item: &desc::Item, comp_unit: &[desc::Item], idx_checks: bool) -> cu::Item {
+    match item {
+        Item::FunDef(fun_def) => gen_fun_def(fun_def, comp_unit, idx_checks),
+        Item::StructDef(struct_def) => gen_struct_def(struct_def),
+        Item::ImplDef(impl_def) => gen_impl_def(impl_def, comp_unit, idx_checks),
+        Item::TraitDef(_) => panic!("Cannot generate code for a trait!"),
+    }
+}
+
+fn gen_impl_def_name(impl_def: &desc::ImplDef) -> String {
+    String::from(
+        if impl_def.trait_impl.is_some() {
+            "impl_TODO_for_TODO" //TODO print types
+        } else {
+            "impl_TODO" //TODO to print types
+        })
+}
+
+fn gen_impl_def(impl_def: &desc::ImplDef, comp_unit: &[desc::Item], idx_checks: bool) -> cu::Item {
+    let desc::ImplDef{
+        ty,
+        generic_params,
+        conditions: _,
+        decls,
+        trait_impl: _,
+    } = impl_def;
+
+    cu::Item::Namespace(gen_impl_def_name(impl_def),
+        decls.iter().map(|ass_item|
+            match ass_item {
+                AssociatedItem::FunDef(fun_def) =>
+                    unimplemented!("TODO get function types from context?"),
+                AssociatedItem::FunDecl(_) =>
+                    panic!("Function declarations inside of impls are not allowed"),
+                AssociatedItem::ConstItem(_, _, _) =>
+                    unimplemented!("TODO"),
+            }
+        ).collect()
+    )
+}
+
+fn gen_struct_def(struct_def: &desc::StructDef) -> cu::Item {
+    let desc::StructDef{
+        name,
+        generic_params,
+        conditions: _,
+        decls,
+    } = struct_def;
+
+    cu::Item::StructDef {
+        name: name.clone(),
+        templ_params: gen_templ_params(generic_params),
+        attributes:
+            decls.iter().map(|struct_field|
+                (struct_field.name.clone(),
+                    gen_ty(&desc::TyKind::Data(struct_field.ty.clone()), desc::Mutability::Mut))
+            ).collect()
+     }
+}
+
+fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::Item], idx_checks: bool) -> cu::Item {
     let desc::FunDef {
         name,
         generic_params: ty_idents,
@@ -193,7 +278,7 @@ fn gen_stmt(
     expr: &desc::Expr,
     return_value: bool,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
@@ -444,7 +529,7 @@ fn gen_stmt(
 
 fn gen_let(
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
     pattern: &desc::Pattern,
@@ -464,13 +549,12 @@ fn gen_let(
                         tp,
                         &desc::Expr::with_type(
                             desc::ExprKind::Proj(Box::new(e.clone()), ProjEntry::TupleAccess(i)),
-                            todo!("use proj_elem_ty-method")
-                            // match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), i) {
-                            //     Ok(ty) => ty,
-                            //     Err(err) => {
-                            //         panic!("Cannot project tuple element type at {}", i)
-                            //     }
-                            // },
+                            match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), &ProjEntry::TupleAccess(i)) {
+                                Ok(ty) => ty,
+                                Err(err) => {
+                                    panic!("Cannot project tuple element type at {}\nError:{:?}", i, err)
+                                }
+                            },
                         ),
                     )
                 })
@@ -499,7 +583,7 @@ fn gen_let(
 
 fn gen_decl_init(
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
     ident: &desc::Ident,
@@ -595,7 +679,7 @@ fn gen_if_else(
     e_tt: &desc::Expr,
     e_ff: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
@@ -624,7 +708,7 @@ fn gen_if(
     cond: cu_ast::Expr,
     e_tt: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
@@ -646,7 +730,7 @@ fn gen_for_each(
     coll_expr: &desc::Expr,
     body: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
@@ -709,7 +793,7 @@ fn gen_for_range(
     range: &desc::Expr,
     body: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
@@ -762,7 +846,7 @@ fn gen_exec(
     input_expr: &desc::Expr,
     fun: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     idx_checks: bool,
 ) -> CheckedExpr {
     // Prepare parameter declarations for inputs
@@ -943,7 +1027,7 @@ fn gen_par_for(
     inputs: &[desc::Expr],
     body: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     idx_checks: bool,
 ) -> cu::Stmt {
     fn gen_parall_section(
@@ -953,7 +1037,7 @@ fn gen_par_for(
         body: &desc::Expr,
         pindex: &desc::Nat,
         codegen_ctx: &mut CodegenCtx,
-        comp_unit: &[desc::FunDef],
+        comp_unit: &[desc::Item],
         idx_checks: bool,
     ) -> cu::Stmt {
         codegen_ctx.push_scope();
@@ -994,7 +1078,7 @@ fn gen_par_for(
             dty: desc::DataTyKind::ThreadHierchy(th_hy),
             ..
         }) => match th_hy.as_ref() {
-            desc::ThreadHierchyTy::BlockGrp(_, _, _, m1, m2, m3) => {
+            desc::ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => {
                 (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
             }
             desc::ThreadHierchyTy::ThreadGrp(_, _, _) => (
@@ -1111,7 +1195,7 @@ fn gen_par_for(
 
 fn gen_check_idx_stmt(
     expr: &desc::Expr,
-    comp_unit: &[desc::FunDef],
+    _: &[desc::Item],
     is_dev_fun: bool,
     idx_checks: bool,
 ) -> cu::Stmt {
@@ -1177,7 +1261,7 @@ fn gen_check_idx_stmt(
 fn gen_expr(
     expr: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
 ) -> CheckedExpr {
@@ -1419,15 +1503,26 @@ fn gen_expr(
         },
         DepApp(fun, kinded_args) => {
             let ident = extract_ident(fun);
-            let fun_def = comp_unit
-                .iter()
-                .find(|fun_def| fun_def.name == ident.name)
+            let fun_def = find_function_def(&ident.name, comp_unit)
                 .expect("Cannot find function definition.");
             let inst_fun = partial_app_gen_args(fun_def, &kinded_args);
             gen_expr(&inst_fun, codegen_ctx, comp_unit, dev_fun, idx_checks)
         }
-        StructInst(_, _, _) => {
-            unimplemented!("TODO");
+        StructInst(name, args, attributes) => {
+            //TODO make sure the order of the attributes are the same like in the struct def
+            CheckedExpr::Expr(cu::Expr::StructInst {
+                name: name.clone(),
+                template_args: gen_args_kinded(args),
+                args:
+                    attributes
+                    .iter()
+                    .map(|(_, expr)|
+                        match gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                            CheckedExpr::Expr(expr) => expr,
+                            CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                        }
+                    ).collect()
+                })
         }
         Array(elems) => CheckedExpr::Expr(cu::Expr::InitializerList {
             elems: elems
@@ -1508,7 +1603,7 @@ fn gen_bin_op_expr(
     lhs: &desc::Expr,
     rhs: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     dev_fun: bool,
     idx_checks: bool,
 ) -> CheckedExpr {
@@ -1581,7 +1676,7 @@ fn gen_idx_into_shape(
     pl_expr: &desc::PlaceExpr,
     idx: &desc::Nat,
     shape_ctx: &ShapeCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     idx_checks: bool,
 ) -> cu::Expr {
     let collec_shape = ShapeExpr::create_from(
@@ -1605,7 +1700,7 @@ fn create_lambda_no_shape_args(
     generic_args: &[desc::ArgKinded],
     args: &[desc::Expr],
     codegen_ctx: &mut CodegenCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
 ) -> Option<(desc::Expr, Vec<desc::Expr>)> {
     // FIXME doesn't work for predeclared functions which expect a shape type argument
     match &fun.expr {
@@ -1624,9 +1719,7 @@ fn create_lambda_no_shape_args(
             pl_expr: desc::PlaceExprKind::Ident(f),
             ..
         }) => {
-            let fun_def = comp_unit
-                .iter()
-                .find(|fun_def| fun_def.name == f.name)
+            let fun_def = find_function_def(&f.name, comp_unit)
                 .expect("Cannot find function definition.");
             if !contains_shape_or_th_hierchy_params(&fun_def.param_decls) {
                 return None;
@@ -1814,7 +1907,7 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
 fn gen_pl_expr(
     pl_expr: &desc::PlaceExpr,
     shape_ctx: &ShapeCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     idx_checks: bool,
 ) -> cu::Expr {
     match &pl_expr {
@@ -1976,7 +2069,7 @@ fn gen_shape(
     shape_expr: &ShapeExpr,
     mut path: Vec<desc::Nat>,
     shape_ctx: &ShapeCtx,
-    comp_unit: &[desc::FunDef],
+    comp_unit: &[desc::Item],
     idx_checks: bool,
 ) -> cu::Expr {
     fn gen_indexing(expr: cu::Expr, path: &[desc::Nat]) -> cu::Expr {
@@ -2320,7 +2413,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             let tty = Box::new(gen_ty(
                 &Data(match ty.as_ref() {
                     desc::DataTy {
-                        dty: d::Array(elem_ty, _),
+                        dty: d::Array(_, _),
                         ..
                     } => panic!("should never happen"),
                     _ => ty.as_ref().clone(),
@@ -2807,18 +2900,15 @@ impl ShapeExpr {
 }
 
 // Precondition: Views are inlined in every function definition.
-fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) -> desc::FunDef {
+fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::Item]) -> desc::FunDef {
     use desc::*;
 
     struct InlineParForFuns<'a> {
-        comp_unit: &'a [FunDef],
+        comp_unit: &'a [desc::Item],
     }
     impl InlineParForFuns<'_> {
         fn create_lambda_from_fun_def(&self, fun_def_name: &str) -> ExprKind {
-            match self
-                .comp_unit
-                .iter()
-                .find(|fun_def| fun_def.name == fun_def_name)
+            match find_function_def(fun_def_name, self.comp_unit)
             {
                 Some(FunDef {
                     param_decls: params,
@@ -2854,7 +2944,9 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &[desc::FunDef]) ->
         }
     }
 
-    let mut inliner = InlineParForFuns { comp_unit };
+    let mut inliner = InlineParForFuns { 
+        comp_unit
+     };
     inliner.visit_fun_def(&mut fun_def);
     fun_def
 }
