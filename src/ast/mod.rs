@@ -1081,7 +1081,6 @@ impl SubstKindedIdents for Ty {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ThreadHierchyTy {
-    SplitGrp(Box<ThreadHierchyTy>, Nat),
     // BlockGrp(gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z)
     BlockGrp(Nat, Nat, Nat, Nat, Nat, Nat),
     // ThreadGrp(blockDim.x, blockDim.y, blockDim.z)
@@ -1095,7 +1094,6 @@ impl fmt::Display for ThreadHierchyTy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ThreadHierchyTy::*;
         match self {
-            SplitGrp(th, n) => write!(f, "Split<{},{}>", th, n),
             BlockGrp(n1, n2, n3, m1, m2, m3) => write!(
                 f,
                 "BlockGrp<{}, {}, {}, ThreadGrp<{}, {}, {}>>",
@@ -1113,10 +1111,6 @@ impl SubstKindedIdents for ThreadHierchyTy {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         use ThreadHierchyTy::*;
         match self {
-            SplitGrp(th, n) => SplitGrp(
-                Box::new(th.subst_ident_kinded(ident_kinded, with)),
-                n.subst_ident_kinded(ident_kinded, with),
-            ),
             BlockGrp(n1, n2, n3, m1, m2, m3) => BlockGrp(
                 n1.subst_ident_kinded(ident_kinded, with),
                 n2.subst_ident_kinded(ident_kinded, with),
@@ -1159,6 +1153,7 @@ pub enum DataTyKind {
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
     ThreadHierchy(Box<ThreadHierchyTy>),
+    SplitThreadHierchy(Box<ThreadHierchyTy>, Nat),
     RawPtr(Box<DataTy>),
     Range,
     // Only for type checking purposes.
@@ -1199,7 +1194,9 @@ impl DataTy {
             Ident(_) => true,
             Ref(_, Ownership::Uniq, _, _) => true,
             Ref(_, Ownership::Shrd, _, _) => false,
+            // FIXME thread hierarchies and their splits should be non-copyable!
             ThreadHierchy(_) => false,
+            SplitThreadHierchy(_, _) => false,
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
@@ -1228,7 +1225,9 @@ impl DataTy {
             | Atomic(_)
             | Ident(_)
             | Ref(_, _, _, _)
+            // FIXME Thread hierarchies and their splits should be non-copyable and can therefore be dead
             | ThreadHierchy(_)
+            | SplitThreadHierchy(_, _)
             | At(_, _)
             | Array(_, _)
             | ArrayShape(_, _) => true,
@@ -1250,6 +1249,7 @@ impl DataTy {
             DataTyKind::Scalar(_)
             | DataTyKind::Ident(_)
             | DataTyKind::ThreadHierchy(_)
+            | DataTyKind::SplitThreadHierchy(_, _)
             | DataTyKind::Range => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
             DataTyKind::Atomic(sty) => &self.dty == &DataTyKind::Scalar(sty.clone()),
@@ -1272,7 +1272,13 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTyKind::*;
         match &self.dty {
-            Scalar(_) | Atomic(_) | Ident(_) | Range | ThreadHierchy(_) | Dead(_) => false,
+            Scalar(_)
+            | Atomic(_)
+            | Ident(_)
+            | Range
+            | ThreadHierchy(_)
+            | SplitThreadHierchy(_, _)
+            | Dead(_) => false,
             Ref(prv, _, _, ty) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = prv {
                     prv_val_name == prv_val_n
@@ -1316,6 +1322,10 @@ impl SubstKindedIdents for DataTy {
             ThreadHierchy(th_hy) => DataTy::new(ThreadHierchy(Box::new(
                 th_hy.subst_ident_kinded(ident_kinded, with),
             ))),
+            SplitThreadHierchy(th_hy, n) => DataTy::new(SplitThreadHierchy(
+                Box::new(th_hy.subst_ident_kinded(ident_kinded, with)),
+                n.subst_ident_kinded(ident_kinded, with),
+            )),
             Ref(prv, own, mem, dty) => DataTy::new(Ref(
                 prv.subst_ident_kinded(ident_kinded, with),
                 *own,

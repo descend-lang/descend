@@ -361,41 +361,44 @@ fn split_thread_grp_ty() -> TypeScheme {
         ident: n3.clone(),
         kind: Kind::Nat,
     };
+    let input_th_hy = Box::new(ThreadHierchyTy::ThreadGrp(
+        Nat::Ident(n1.clone()),
+        Nat::Ident(n2.clone()),
+        Nat::Ident(n3.clone()),
+    ));
+    let input_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
+        input_th_hy.clone(),
+    ))));
     TypeScheme {
         generic_params: vec![k_nat, n1_nat, n2_nat, n3_nat],
         conditions: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
-                vec![Ty::new(TyKind::Data(DataTy::new(
-                    DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::ThreadGrp(
-                        Nat::Ident(n1.clone()),
-                        Nat::Ident(n2.clone()),
-                        Nat::Ident(n3.clone()),
-                    ))),
-                )))],
+                vec![input_ty],
                 Exec::View,
-                Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
-                    DataTy::new(DataTyKind::ThreadHierchy(Box::new(
-                        ThreadHierchyTy::ThreadGrp(
-                            Nat::Ident(k.clone()),
-                            Nat::Ident(n2.clone()),
-                            Nat::Ident(n3.clone()),
-                        ),
-                    ))),
-                    DataTy::new(DataTyKind::ThreadHierchy(Box::new(
-                        ThreadHierchyTy::ThreadGrp(
-                            Nat::BinOp(
-                                BinOpNat::Sub,
-                                Box::new(Nat::Ident(n1)),
-                                Box::new(Nat::Ident(k)),
-                            ),
-                            Nat::Ident(n2.clone()),
-                            Nat::Ident(n3.clone()),
-                        ),
-                    ))),
-                ]))))),
+                Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::SplitThreadHierchy(input_th_hy, Nat::Ident(k))))))
+                // Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
+                //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
+                //         ThreadHierchyTy::ThreadGrp(
+                //             Nat::Ident(k.clone()),
+                //             Nat::Ident(n2.clone()),
+                //             Nat::Ident(n3.clone()),
+                //         ),
+                //     ))),
+                //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
+                //         ThreadHierchyTy::ThreadGrp(
+                //             Nat::BinOp(
+                //                 BinOpNat::Sub,
+                //                 Box::new(Nat::Ident(n1)),
+                //                 Box::new(Nat::Ident(k)),
+                //             ),
+                //             Nat::Ident(n2.clone()),
+                //             Nat::Ident(n3.clone()),
+                //         ),
+                //     ))),
+                // ]))))),
             ))
-        }
+    }
 }
 
 fn join_thread_grp_ty() -> TypeScheme {
