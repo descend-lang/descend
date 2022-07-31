@@ -1,4 +1,4 @@
-use crate::ast::{IdentKinded, WhereClauseItem};
+use crate::ast::{IdentKinded, Constraint};
 
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
 
@@ -7,8 +7,8 @@ use super::unify::substitute;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstraintScheme {
     pub generics: Vec<IdentKinded>,
-    pub implican: Vec<WhereClauseItem>,
-    pub implied: WhereClauseItem
+    pub implican: Vec<Constraint>,
+    pub implied: Constraint
 }
 
 #[derive(Debug, Clone)]
@@ -17,11 +17,11 @@ pub struct ConstraintEnv {
 }
 
 impl ConstraintScheme {
-    pub fn new(implied: &WhereClauseItem) -> Self {
+    pub fn new(implied: &Constraint) -> Self {
         ConstraintScheme { generics: vec![], implican: vec![], implied: implied.clone() }
     }
 
-    pub fn is_where_clause_item(&self) -> bool {
+    pub fn is_constraint(&self) -> bool {
         self.generics.len() == 0 && self.implican.len() == 0
     }
 }
@@ -51,7 +51,7 @@ impl ConstraintEnv {
         });
     }
 
-    pub fn check_predicate(&self, goal: &WhereClauseItem) -> bool {
+    pub fn check_constraint(&self, goal: &Constraint) -> bool {
         let mut constr_map = ConstrainMap::new();
         let mut prv_rels = Vec::new();
 
@@ -65,7 +65,7 @@ impl ConstraintEnv {
                 con.implican.iter().fold(true, |res, c| {
                     let mut goal = c.clone();
                     substitute(&constr_map, &mut goal);
-                    res && self.check_predicate(&goal)
+                    res && self.check_constraint(&goal)
                 })
             } else {
                 false

@@ -98,7 +98,7 @@ fn to_raw_ptr_ty() -> TypeScheme {
 
     TypeScheme {
         generic_params: vec![r_prv, m_mem, t_ty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -128,7 +128,7 @@ fn offset_raw_ptr_ty() -> TypeScheme {
 
     TypeScheme {
         generic_params: vec![t_ty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -164,7 +164,7 @@ fn atomic_set_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![p_prv, m_mem, t_ty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -194,7 +194,7 @@ fn shuffle_xor_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![d_dty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -249,7 +249,7 @@ fn split_block_grp_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![k_nat, m1_nat, m2_nat, m3_nat, n1_nat, n2_nat, n3_nat],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(
@@ -314,7 +314,7 @@ fn to_warps_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![n1_nat, n2_nat, n3_nat],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(
@@ -371,7 +371,7 @@ fn split_thread_grp_ty() -> TypeScheme {
     ))));
     TypeScheme {
         generic_params: vec![k_nat, n1_nat, n2_nat, n3_nat],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![input_ty],
@@ -471,7 +471,7 @@ fn split_warp_grp_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![k_nat, n_nat],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(
@@ -502,7 +502,7 @@ fn split_warp_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![k_nat],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(
@@ -558,7 +558,7 @@ fn load_atomic_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r_prv, m_mem],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -589,7 +589,7 @@ fn load_atomic_host_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r_prv, m_mem],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -620,7 +620,7 @@ fn store_atomic_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r_prv, m_mem],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -655,7 +655,7 @@ fn store_atomic_host_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r_prv, m_mem],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -698,7 +698,7 @@ fn gpu_alloc_copy_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r1_prv, r2_prv, d_dty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -745,7 +745,7 @@ fn copy_to_host_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r1_prv, r2_prv, d_dty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -791,7 +791,7 @@ fn copy_to_gpu_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r1_prv, r2_prv, d_dty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![
@@ -844,7 +844,7 @@ fn exec_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![blocks_nat, threads_nat, r_prv, d_dty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
         Ty::new(TyKind::Fn(
             vec![
@@ -893,7 +893,7 @@ fn shared_alloc_ty() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![t_ty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![],
@@ -935,7 +935,7 @@ fn to_view_ty(own: Ownership) -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r_prv, m_mem, n_nat, d_dty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -991,7 +991,7 @@ fn group_ty(own: Ownership) -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![s_nat, r_prv, m_mem, n_nat, d_ty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -1033,7 +1033,7 @@ fn bin_op() -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![t_ty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
@@ -1075,7 +1075,7 @@ fn join_ty(own: Ownership) -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r_prv, m_mem, o_nat, n_nat, d_dty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -1138,7 +1138,7 @@ fn transpose_ty(own: Ownership) -> TypeScheme {
     };
     TypeScheme {
         generic_params: vec![r_prv, m_mem, n_nat, o_nat, d_ty],
-        conditions: vec![],
+        constraints: vec![],
         mono_ty:
             Ty::new(TyKind::Fn(
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(

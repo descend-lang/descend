@@ -233,13 +233,13 @@ impl TyCtx {
                     place_frame
                 },
                 TyKind::Data(DataTy {
-                    dty: d::StructType(struct_ty), ..
+                    dty: d::Struct(struct_ty), ..
                 }) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
-                    struct_ty.attributes.iter().for_each(|(name, ty)| {
+                    struct_ty.attributes.iter().for_each(|field| {
                         let mut exploded_index = explode(
-                            pl.clone().push(&ProjEntry::StructAccess(name.clone())),
-                            ty.clone()
+                            pl.clone().push(&ProjEntry::StructAccess(field.name.clone())),
+                            Ty::new(TyKind::Data(field.ty.clone()))
                         );
                         place_frame.append(&mut exploded_index);
                     });
@@ -268,8 +268,8 @@ impl TyCtx {
 
     pub fn place_ty(&self, place: &internal::Place) -> TyResult<Ty> {
         let ident_ty = self.ty_of_ident(&place.ident)?;
-        place.path.iter().try_fold(ident_ty.clone(), |res, pathEntry|
-            proj_elem_ty(&res, pathEntry)
+        place.path.iter().try_fold(ident_ty.clone(), |res, path_entry|
+            proj_elem_ty(&res, path_entry)
         )
     }
 
@@ -300,21 +300,21 @@ impl TyCtx {
                     Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys))))
                 },
                 (TyKind::Data(DataTy {
-                    dty: DataTyKind::StructType(mut struct_ty),
+                    dty: DataTyKind::Struct(mut struct_ty),
                     ..
                 }), ProjEntry::StructAccess(attr_name)) => {
-                    *struct_ty.attributes.get_mut(attr_name).unwrap() =
+                    *struct_ty.get_ty_mut(attr_name).unwrap() =
                         if let TyKind::Data(dty) = set_ty_for_path_in_ty(
-                            struct_ty.attributes.get(attr_name).unwrap().clone(),
+                            Ty::new(TyKind::Data(struct_ty.get_ty(attr_name).unwrap().clone())),
                             &path[1..],
                             part_ty,
                         ).ty {
-                            Ty::new(TyKind::Data(dty))
+                            dty
                         } else {
                             panic!("Trying create non-data type as part of data type.")
                         };
                     
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::StructType(struct_ty))))
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Struct(struct_ty))))
                 },
                 _ => panic!("Path not compatible with type."),
             }
@@ -543,7 +543,7 @@ impl GlobalCtx {
     }
 
     pub fn append_from_item_def(&mut self, item_defs: &[Item]) -> Vec::<CtxError> {
-        let mut impl_defs_names: HashSet<(Ty, String)> = HashSet::new();
+        let mut impl_defs_names: HashSet<(DataTy, String)> = HashSet::new();
 
         item_defs.iter().fold(
         Vec::<CtxError>::new(),
@@ -576,13 +576,15 @@ impl GlobalCtx {
                     if let Some(trait_impl) = &impl_def.trait_impl {
                         self.theta.append_constraint(&ConstraintScheme {
                             generics: impl_def.generic_params.clone(),
-                            implican: impl_def.conditions.clone(),
-                            implied: WhereClauseItem {
-                                param: impl_def.ty.clone(),
+                            implican: impl_def.constraints.clone(),
+                            implied: Constraint {
+                                param: impl_def.dty.clone(),
                                 trait_bound: trait_impl.clone() } });
 
-                        if !impl_defs_names.insert((impl_def.ty.clone(), trait_impl.name.clone())) {
-                            errs.push(CtxError::MultipleDefinedImplsForTrait(impl_def.ty.clone(), trait_impl.name.clone()));
+                        if !impl_defs_names.insert((impl_def.dty.clone(), trait_impl.name.clone())) {
+                            errs.push(
+                                CtxError::MultipleDefinedImplsForTrait(
+                                    Ty::new(TyKind::Data(impl_def.dty.clone())), trait_impl.name.clone()));
                         }
                     } else {
                         impl_def.decls.iter().for_each(|decl|
@@ -631,8 +633,8 @@ impl GlobalCtx {
             ), errs);
 
             let self_ident = Ident::new("Self");
-            let self_generic = IdentKinded::new(&self_ident, Kind::Ty);
-            let self_ty = Ty::new(TyKind::Ident(self_ident.clone()));
+            let self_generic = IdentKinded::new(&self_ident, Kind::DataTy);
+            let self_ty = DataTy::new(DataTyKind::Ident(self_ident.clone()));
 
             let mut generics_tdef = Vec::with_capacity(t_def.generic_params.len() + 1);
             generics_tdef.push(self_generic.clone());
@@ -642,7 +644,7 @@ impl GlobalCtx {
                 generics: t_def.generic_params.iter()
                     .map(|gen| gen.arg_kinded()).collect() };
             let self_impl_trait =
-                WhereClauseItem {
+                Constraint {
                     param: self_ty.clone(),
                     trait_bound: trait_mono_type };
 
@@ -664,14 +666,14 @@ impl GlobalCtx {
                                 let mut generics = Vec::with_capacity(generics_tdef.len() + ty.generic_params.len());
                                 generics.extend(generics_tdef.clone());
                                 generics.extend(ty.generic_params.clone());
-                                let mut conditions = Vec::with_capacity(ty.conditions.len() + 1);
-                                conditions.push(self_impl_trait.clone());
-                                conditions.extend(ty.conditions.clone());
+                                let mut constraints = Vec::with_capacity(ty.constraints.len() + 1);
+                                constraints.push(self_impl_trait.clone());
+                                constraints.extend(ty.constraints.clone());
 
                                 let ty =
                                     TypeScheme {
                                         generic_params: generics,
-                                        conditions,
+                                        constraints,
                                         mono_ty: Ty::new(TyKind::Fn(args, exec, ret_ty))
                                     };
                                 if self.funs.insert(name.clone(), ty).is_some() {

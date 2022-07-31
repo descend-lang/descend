@@ -11,7 +11,7 @@ use crate::error::ErrorReported;
 pub use source::*;
 
 use crate::ast::visit_mut::{VisitMut, walk_struct_def, walk_impl_def,
-    walk_trait_def, walk_fun_def, walk_ty, walk_dty};
+    walk_trait_def, walk_fun_def, walk_dty};
 
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
@@ -115,10 +115,33 @@ fn replace_arg_kinded_idents(mut item_def: Item) -> Item {
     item_def
 }
 
+//Replace the special ident "Self" in impls with the type of the impl
+fn replace_self_in_impls(impl_def: &mut ImplDef) {
+    struct ReplaceSelfInImpl {
+        impl_dty: DataTy
+    }
+
+    impl VisitMut for ReplaceSelfInImpl {
+        fn visit_dty(&mut self, dty: &mut DataTy) {
+            match &dty.dty {
+                DataTyKind::Ident(ident) => {
+                    if ident.name == "Self" {
+                        *dty = self.impl_dty.clone();
+                    }
+                },
+                _ => walk_dty(self, dty)
+            }
+        }
+    }
+
+    ReplaceSelfInImpl{impl_dty: impl_def.dty.clone()}.visit_impl_def(impl_def)
+}
+
 //Distinguish between type variables and struct names without generic params
-//and initialize attribute map of struct_types
+//and initialize attributes list of struct_types
+//and replace Self in impls
 fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
-     struct DistinguisherBetweenTyVarsAndStructNames {
+    struct DistinguisherBetweenTyVarsAndStructNames {
         structs: BTreeMap<String, StructDef>,
         type_vars_in_scope: BTreeSet<String>,
     }
@@ -172,6 +195,7 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
                     self.remove_generics(&trait_def.generic_params);
                 },
                 Item::ImplDef(impl_def) => {
+                    replace_self_in_impls(impl_def);
                     self.add_generics(&impl_def.generic_params);
                     walk_impl_def(self, impl_def);
                     self.remove_generics(&impl_def.generic_params);
@@ -185,9 +209,9 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
             self.remove_generics(&fun_def.generic_params);
         }
 
-        fn visit_ty(&mut self, ty: &mut Ty) {
-            match &ty.ty {
-                TyKind::Ident(name) => {
+        fn visit_dty(&mut self, dty: &mut DataTy) {
+            match &mut dty.dty {
+                DataTyKind::Ident(name) => {
                     let struct_def =
                         self.structs.get(&name.name);
                     let is_type_ident =
@@ -195,32 +219,25 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
 
                     match (struct_def.is_some(), is_type_ident) {
                         (true, false) => 
-                            ty.ty = struct_def.unwrap().ty().mono_ty.ty,
-                        (false, true) =>
+                            dty.dty =
+                                match struct_def.unwrap().ty().mono_ty.ty {
+                                    TyKind::Data(dty) => dty.dty,
+                                    _ => panic!("Struct should have a Datatype!"),
+                                },
+                        (false, true) | (false, false) =>
                             (),
-                        (false, false) => {
-                            println!("Ident {} not found", name);
-                            panic!("IdentNotFound")}, //TODO collect errs instead of panic
-                            // self.errs.push(
-                            //     TyError::from(CtxError::IdentNotFound(name.clone()))),
                         (true, true) => 
                             panic!("AmbiguousIdentifier"),
                             // self.errs.push(
                             //     TyError::from(CtxError::AmbiguousIdentifier(name.clone()))),
                     }
                 },
-                _ => walk_ty(self, ty)
-            }
-        }
-
-        fn visit_dty(&mut self, dty: &mut DataTy) {
-            match &mut dty.dty {
-                DataTyKind::StructType(struct_ty) => {
+                DataTyKind::Struct(struct_ty) => {
                     assert!(struct_ty.attributes.len() == 0);
                     if let Some(struct_def) = self.structs.get(&struct_ty.name) {
                         let inst_struct_mono = struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
                         if let TyKind::Data(dataty) = inst_struct_mono.ty {
-                            if let DataTyKind::StructType(inst_struct_ty) = dataty.dty {
+                            if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
                                 struct_ty.attributes = inst_struct_ty.attributes;
                             } else {
                                 panic!("Instantiated struct def should have struct type")
@@ -231,11 +248,9 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
                     } else {
                         panic!("TODO print some err instead of panic")
                     }
-                }
-                _ => (),
-            };
-
-            walk_dty(self, dty)
+                },
+                _ => walk_dty(self, dty)
+            }
         }
     }
 
@@ -311,8 +326,8 @@ peg::parser! {
             = result:(f: fun_def() { Item::FunDef(f) }
             / s: struct_def() { Item::StructDef(s) }
             / t: trait_def() { Item::TraitDef(t) }
-            / i: inherent_impl_def() { Item::ImplDef(i) }
-            / i: trait_impl_def() { Item::ImplDef(i)}) {
+            / i: trait_impl_def() { Item::ImplDef(i) }
+            / i: inherent_impl_def() { Item::ImplDef(i) }) {
                 result
             }    
 
@@ -325,11 +340,11 @@ peg::parser! {
                     Some(generic_params) => generic_params,
                     None => vec![]
                 };
-                let conditions = w.unwrap_or(vec![]);
+                let constraints = w.unwrap_or(vec![]);
                 FunDef {
                     name,
                     generic_params,
-                    conditions,
+                    constraints,
                     param_decls,
                     ret_dty,
                     exec,
@@ -348,11 +363,11 @@ peg::parser! {
                         Some(x) => x,
                         None => Vec::new()
                     };
-                let conditions = w.unwrap_or(vec![]);
+                let constraints = w.unwrap_or(vec![]);
                 FunDecl {
                     name,
                     generic_params,
-                    conditions,
+                    constraints,
                     param_decls,
                     ret_dty,
                     exec,
@@ -365,7 +380,7 @@ peg::parser! {
             struct_fields:(u:("{" t:(_ s:(struct_field() ** (_ "," _)) _ {s})? "}" {t}) {Some(u)}
                             / ";" {None}) _ {
                 let generic_params = g.unwrap_or(vec![]);
-                let conditions = w.unwrap_or(vec![]);
+                let constraints = w.unwrap_or(vec![]);
                 let decls: Vec<StructField> = match struct_fields {
                     Some(struct_fields) => match struct_fields {Some(s) => s, None => vec![]},
                     None => vec![]
@@ -373,7 +388,7 @@ peg::parser! {
                 StructDef {
                     name,
                     generic_params,
-                    conditions,
+                    constraints,
                     decls,
                 }
             }
@@ -383,11 +398,11 @@ peg::parser! {
             supertraits:(":" _ t:trait_mono_ty() ** (_ "+" _) {t})?
             _ w:where_clause()? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
                 let generic_params = g.unwrap_or(vec![]);
-                let mut conditions = w.unwrap_or(vec![]);
+                let mut constraints = w.unwrap_or(vec![]);
                 TraitDef {
                     name,
                     generic_params,
-                    conditions,
+                    constraints,
                     decls,
                     supertraits: supertraits.unwrap_or(vec![])
                 }
@@ -399,20 +414,20 @@ peg::parser! {
             }
 
         pub(crate) rule inherent_impl_def() -> ImplDef    
-            = "impl" __ g:generic_params()? _ ty:ty() _ w:where_clause()? _
+            = "impl" __ g:generic_params()? _ dty:dty() _ w:where_clause()? _
             "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
-                let conditions = w.unwrap_or(vec![]);
-                ImplDef { ty, generic_params, conditions, decls, trait_impl: None}
+                let constraints = w.unwrap_or(vec![]);
+                ImplDef { dty, generic_params, constraints, decls, trait_impl: None}
             }
 
         pub(crate) rule trait_impl_def() -> ImplDef 
-            = "impl" __ g:generic_params()? _ ty:ty() __ "for" __
-            trait_impl:trait_mono_ty() _ w:where_clause()? _ "{" _
+            = "impl" __ g:generic_params()? _ trait_impl:trait_mono_ty() __ "for" __
+            dty:dty() _ w:where_clause()? _ "{" _
             decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
-                let conditions = w.unwrap_or(vec![]);
-                ImplDef { ty, generic_params, conditions, decls, trait_impl: Some(trait_impl)}
+                let constraints = w.unwrap_or(vec![]);
+                ImplDef { dty, generic_params, constraints, decls, trait_impl: Some(trait_impl)}
         }
 
         rule struct_field() -> StructField
@@ -424,8 +439,8 @@ peg::parser! {
             = ass_item:(f:fun_def() {AssociatedItem::FunDef(f)}
             / f:fun_decl() {AssociatedItem::FunDecl(f)}
             / const_item:("const" __ name:identifier() _ ":"
-                _ ty:ty() expr:(_ "=" _ e:expression() {e})? _
-                ";" {AssociatedItem::ConstItem(name, ty, expr)})) {
+                _ dty:dty() expr:(_ "=" _ e:expression() {e})? _
+                ";" {AssociatedItem::ConstItem(name, dty, expr)})) {
                     ass_item
             }
 
@@ -458,19 +473,19 @@ peg::parser! {
         //         }
         //     }
            
-        rule where_clause() -> Vec<WhereClauseItem>
+        rule where_clause() -> Vec<Constraint>
             = "where" __ i:(where_clause_item() ** (_ "," _)) {
                 i
             }
         
-        rule where_clause_item() -> WhereClauseItem 
-            = param:ty() _ ":" _ trait_bound:trait_mono_ty() {
-                WhereClauseItem{param, trait_bound}
+        rule where_clause_item() -> Constraint 
+            = param:dty() _ ":" _ trait_bound:trait_mono_ty() {
+                Constraint{param, trait_bound}
             }
 
         rule kind_parameter() -> IdentKinded
             = name:ident() kind:(_ ":" _ kind:kind() {kind})? {
-                IdentKinded::new(&name, kind.unwrap_or(Kind::Ty))
+                IdentKinded::new(&name, kind.unwrap_or(Kind::DataTy))
             }
   
         rule fun_parameter() -> ParamDecl
@@ -869,9 +884,8 @@ peg::parser! {
             }
 
         pub(crate) rule ty() -> Ty
-            = begin:position!() res:(ident:ident() !(_ "<") {TyKind::Ident(ident)} // !"<" prevents to parse structs with generics params
-            / dty:dty() {TyKind::Data(dty)}) end:position!() { //TODO other types should be also possible
-                Ty::with_span(res, Span::new(begin, end))
+            = begin:position!() dty:dty() end:position!() {
+                Ty::with_span(TyKind::Data(dty), Span::new(begin, end))
             }
 
         /// Parse a type token
@@ -893,8 +907,8 @@ peg::parser! {
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
             / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
             / name:identifier() _ "<" _ params:(k:kind_argument() ** (_ "," _) {k}) _ ">"
-                { DataTyKind::StructType( StructType{
-                    name, attributes: BTreeMap::new(), generic_args: params, })}
+                { DataTyKind::Struct( StructDataType{
+                    name, attributes: vec![], generic_args: params, })}
             // this could be also a structType. That is decided later
             / name:ident() { DataTyKind::Ident(name) }
             / "Self" { DataTyKind::Ident(Ident::new("Self")) }
@@ -960,6 +974,7 @@ peg::parser! {
             = "nat" { Kind::Nat }
             / "mem" { Kind::Memory }
             / "ty" { Kind::Ty }
+            / "dty" { Kind::DataTy }
             / "prv" { Kind::Provenance }
 
         rule ident() -> Ident
@@ -1271,7 +1286,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn ty_identifier() {
         assert_eq!(
             descend::ty("T"),
@@ -2141,7 +2155,7 @@ mod tests {
         let intended = FunDef {
             name,
             param_decls: params,
-            conditions: vec![],
+            constraints: vec![],
             exec,
             prv_rels,
             body_expr: Expr::new(ExprKind::Block(
@@ -2341,11 +2355,11 @@ mod tests {
 
         let name = String::from("Test");
         let generic_params: Vec<IdentKinded> = vec![];
-        let conditions: Vec<WhereClauseItem> = vec![];
+        let constraints: Vec<Constraint> = vec![];
         let decls: Vec<StructField> = vec![];
 
         assert_eq!(result,
-            StructDef {name, generic_params, conditions, decls});
+            StructDef {name, generic_params, constraints, decls});
     }
 
     #[test]
@@ -2355,11 +2369,11 @@ mod tests {
 
         let name = String::from("Test");
         let generic_params: Vec<IdentKinded> = vec![];
-        let conditions: Vec<WhereClauseItem> = vec![];
+        let constraints: Vec<Constraint> = vec![];
         let decls: Vec<StructField> = vec![];
 
         assert_eq!(result,
-            StructDef {name, generic_params, conditions, decls})
+            StructDef {name, generic_params, constraints, decls})
     }
 
     #[test]
@@ -2369,7 +2383,7 @@ mod tests {
 
         let name = String::from("Test");
         let generic_params: Vec<IdentKinded> = vec![];
-        let conditions: Vec<WhereClauseItem> = vec![];
+        let constraints: Vec<Constraint> = vec![];
         let name_a = String::from("a");
         let name_b = String::from("b");
         let ty_a = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
@@ -2379,30 +2393,30 @@ mod tests {
         let decls: Vec<StructField> = vec![field1, field2];
 
         assert_eq!(result,
-            StructDef {name, generic_params, conditions, decls});
+            StructDef {name, generic_params, constraints, decls});
     }
 
     #[test]
     fn compil_struct_decl4() {
-        let src = "struct Test<T: ty, Q: ty> where Q:Number { }";
+        let src = "struct Test<T: dty, Q: dty> where Q:Number { }";
         let result = descend::struct_def(src).expect("Cannot parse empty struct with generics");
 
         let name = String::from("Test");
         let gen_param1 = Ident::with_span(String::from("T"), Span::new(12, 13));
-        let gen_param2 = Ident::with_span(String::from("Q"), Span::new(19, 20));
+        let gen_param2 = Ident::with_span(String::from("Q"), Span::new(20, 21));
         let generic_params: Vec<IdentKinded> = vec![
-            IdentKinded::new(&gen_param1, Kind::Ty),
-            IdentKinded::new(&gen_param2, Kind::Ty)];
-        let conditions: Vec<WhereClauseItem> = vec![
-            WhereClauseItem{
-                param: Ty::with_span(
-                    TyKind::Ident(Ident::with_span(String::from("Q"), Span::new(32, 33))),
+            IdentKinded::new(&gen_param1, Kind::DataTy),
+            IdentKinded::new(&gen_param2, Kind::DataTy)];
+        let constraints: Vec<Constraint> = vec![
+            Constraint{
+                param: DataTy::with_span(
+                    DataTyKind::Ident(Ident::with_span(String::from("Q"), Span::new(34, 35))),
                     Span::new(32, 33)),
                 trait_bound: TraitMonoType { name: String::from("Number"), generics: vec![] }}];
         let decls: Vec<StructField> = vec![];
 
         assert_eq!(result,
-            StructDef {name, generic_params, conditions, decls});
+            StructDef {name, generic_params, constraints, decls});
     }
 
     #[test]
@@ -2413,8 +2427,6 @@ mod tests {
                 false
             }
         }"#;
-        //TODO parser error when use unnamed parameter in funDef are not very intuitive...
-
         let result = descend::trait_def(src).expect("Cannot parse trait");
 
         assert_eq!(result.decls.len(), 2);
@@ -2431,12 +2443,12 @@ mod tests {
 
         let name = String::from("Eq");
         let generic_params: Vec<IdentKinded> = vec![];
-        let conditions: Vec<WhereClauseItem> = vec![];
+        let constraints: Vec<Constraint> = vec![];
         let decls: Vec<AssociatedItem> = vec![
             AssociatedItem::FunDecl(
                 FunDecl{name: String::from("eq"),
                     generic_params: vec![],
-                    conditions: vec![],
+                    constraints: vec![],
                     param_decls: params1,
                     ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
                     exec: Exec::CpuThread,
@@ -2444,7 +2456,7 @@ mod tests {
             AssociatedItem::FunDef(
                 FunDef{name: String::from("eq2"),
                     generic_params: vec![],
-                    conditions: vec![],
+                    constraints: vec![],
                     param_decls: params2,
                     ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
                     exec: Exec::CpuThread,
@@ -2457,7 +2469,7 @@ mod tests {
         ];
 
         assert_eq!(result,
-            TraitDef {name, generic_params, conditions, decls, supertraits: vec![]});        
+            TraitDef {name, generic_params, constraints, decls, supertraits: vec![]});        
     }
 
     #[test]
@@ -2471,7 +2483,7 @@ mod tests {
         let supertraits = vec![
             TraitMonoType { name: String::from("Eq"), generics: vec![] },
         ];
-        assert_eq!(result.conditions, vec![]);
+        assert_eq!(result.constraints, vec![]);
         assert_eq!(result.supertraits, supertraits);
         assert_eq!(result.decls.len(), 2);
     }
@@ -2488,7 +2500,7 @@ mod tests {
             TraitMonoType { name: String::from("Eq"), generics: vec![] },
             TraitMonoType { name: String::from("Eq2"), generics: vec![] },
         ];
-        assert_eq!(result.conditions, vec![]);
+        assert_eq!(result.constraints, vec![]);
         assert_eq!(result.supertraits, supertraits);
         assert_eq!(result.decls.len(), 2);
     }
@@ -2510,10 +2522,10 @@ mod tests {
                 self.x == other.x && self.y == other.y
             }
         }
-        struct GenericStruct<N: nat, Q: ty, S: ty> where Q: Number, S: SomeTrait {
+        struct GenericStruct<N: nat, Q: dty, S: dty> where Q: Number, S: SomeTrait {
             x: T
         }
-        impl <T: ty, Q: ty, S: ty> GenericStruct where S: SomeTrait, Q: Number {
+        impl <T: dty, Q: dty, S: dty> GenericStruct where S: SomeTrait, Q: Number {
             fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Point) -[cpu.thread]-> bool {
                 self.x == other.x && self.x == other.y
             }
@@ -2571,9 +2583,9 @@ mod tests {
         if let TyKind::Data(dataty) = letty {
             assert_eq!(dataty,
                 DataTy::with_span(
-                    DataTyKind::StructType(StructType{
+                    DataTyKind::Struct(StructDataType{
                             name: String::from("Point"),
-                            attributes: BTreeMap::new(),
+                            attributes: vec![],
                             generic_args: vec![
                                 ArgKinded::DataTy(DataTy::new(
                                     DataTyKind::Scalar(ScalarTy::I32))),
@@ -2617,18 +2629,21 @@ mod tests {
                 panic!("Cannot recognize fundef");
             };
 
-        let mut struct_ty = StructType{
+        let struct_ty = StructDataType{
             name: String::from("Point"),
-            attributes: BTreeMap::new(),
+            attributes: vec![
+                StructField {
+                    name: String::from("x"),
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+                }
+            ],
             generic_args: vec![],
         };
-        struct_ty.attributes.insert(String::from("x"), Ty::new(
-            TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))));
 
         if let TyKind::Data(dataty) = letty {
             assert_eq!(dataty,
                 DataTy::with_span(
-                    DataTyKind::StructType(struct_ty),
+                    DataTyKind::Struct(struct_ty),
                     Span::new(59, 64)));
         } else {
             panic!("Cannot recognize datatype");
@@ -2638,7 +2653,7 @@ mod tests {
     #[test]
     fn test_struct_datatype3() {
         let src = r#"
-        struct Point<T: ty> {
+        struct Point<T: dty> {
             x: T,
             y: T
         }
@@ -2666,26 +2681,106 @@ mod tests {
                 panic!("Cannot recognize fundef");
             };
 
-        let mut struct_ty = StructType{
+        let struct_ty = StructDataType{
             name: String::from("Point"),
-            attributes: BTreeMap::new(),
+            attributes: vec![
+                StructField {
+                    name: String::from("x"),
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+                },
+                StructField {
+                    name: String::from("y"),
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+                }
+            ],
             generic_args: vec![
                 ArgKinded::DataTy(DataTy::new(
                     DataTyKind::Scalar(ScalarTy::I32)))
             ],
         };
-        struct_ty.attributes.insert(String::from("x"), Ty::new(
-            TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))));
-        struct_ty.attributes.insert(String::from("y"), Ty::new(
-            TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))));
 
         if let TyKind::Data(dataty) = letty {
             assert_eq!(dataty,
                 DataTy::with_span(
-                    DataTyKind::StructType(struct_ty),
+                    DataTyKind::Struct(struct_ty),
                     Span::new(59, 64)));
         } else {
             panic!("Cannot recognize datatype");
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_and_trait() {
+        let src = r#"
+        struct Point {
+            x: i32,
+            y: i32
+        }
+        trait Eq {
+            fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+        }
+        impl Eq for Point {
+            fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+                self.x == other.x && self.y == other.y
+            }
+        }
+        impl Eq for i32 {
+            fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+                self == other
+            }
+        }
+        "#;
+        let result = parse(
+            &SourceCode::new(String::from(src)))
+            .expect("Cannot parse structs, traits and impls").item_defs;
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_replace_self() {
+        let src = r#"
+        struct Point {
+            x: i32,
+            y: i32
+        }
+        impl Point {
+            fn getX(self) -[cpu.thread]-> i32 {
+                self.x
+            }
+        }
+        "#;
+        let struct_ty = StructDataType{
+            name: String::from("Point"),
+            attributes: vec![
+                StructField {
+                    name: String::from("x"),
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+                },
+                StructField {
+                    name: String::from("y"),
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+                }
+            ],
+            generic_args: vec![],
+        };
+        let result = parse(
+            &SourceCode::new(String::from(src)))
+            .expect("Cannot parse structs and impl").item_defs;
+        assert_eq!(result.len(), 2);
+        if let Item::ImplDef(impl_def) = &result[1] {
+            assert_eq!(impl_def.decls.len(), 1);
+            if let AssociatedItem::FunDef(fun_def) = &impl_def.decls[0] {
+                assert_eq!(fun_def.param_decls.len(), 1);
+                assert_eq!(fun_def.param_decls[0].ident.name, "self");
+                assert_eq!(fun_def.param_decls[0].ty.as_ref().unwrap(),
+                    &Ty::new(TyKind::Data(DataTy::new(DataTyKind::Struct(
+                        struct_ty
+                    )))))
+            } else {
+                panic!("Does not recognize FunDef")
+            }
+        } else {
+            panic!("Does not recognize ImplDef")
         }
     }
 }

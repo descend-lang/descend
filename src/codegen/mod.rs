@@ -1,7 +1,7 @@
 mod cu_ast;
 mod printer;
 
-use crate::ast::{self as desc, Item, ProjEntry, AssociatedItem};
+use crate::ast::{self as desc, Item, ProjEntry, AssociatedItem, FunDef};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{utils, Mutability};
@@ -11,44 +11,133 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+//Copy all default implementations from implemented trait to this impl
+fn add_inherited_fun_defs(impl_def: &mut desc::ImplDef, comp_unit: &[desc::Item]) {
+    if let Some(trait_ty) = &impl_def.trait_impl {
+        let trait_def =
+            match
+                comp_unit.iter().find(|item_def|
+                    if let Item::TraitDef(trait_def) = item_def {
+                        trait_def.name == trait_ty.name
+                    } else {
+                        false
+                    }
+                ).unwrap() {
+            Item::TraitDef(trait_def) => trait_def,
+            _ => panic!("This cannot happen"),
+            };
+
+        trait_def.decls.iter().for_each(|decl|
+            match decl {
+                AssociatedItem::FunDef(fun_def) =>
+                    if impl_def.decls.iter().find(|ass_item|
+                        match ass_item {
+                            AssociatedItem::FunDef(fun_def_impl) =>
+                                fun_def_impl.name == fun_def.name,
+                            AssociatedItem::FunDecl(_) =>
+                                panic!("ImplDef should not contain fun_decls"),
+                            AssociatedItem::ConstItem(_, _, _) =>
+                                false    
+                        }
+                        ).is_none() {
+                        impl_def.decls.push(AssociatedItem::FunDef(fun_def.clone()))  
+                    },
+                AssociatedItem::FunDecl(_) => (),
+                AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
+            }
+        );
+    }
+}
+
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
-    //TODO collect declarations of functions and structs to avoid compiler errors when print items in false order
-    let items_to_be_generated = compil_unit
-        .item_defs
-        .iter()
-        .filter_map(|item| {
-            match item {
-                Item::FunDef(f) =>
-                    if f.param_decls.iter().all(|p| {
-                        !is_shape_ty(p.ty.as_ref().unwrap())
-                            && !matches!(
-                                &p.ty.as_ref().unwrap().ty,
-                                desc::TyKind::Data(desc::DataTy {
-                                    dty: desc::DataTyKind::ThreadHierchy(_),
-                                    ..
-                                })
-                            )
-                        }) {
-                        Some(Item::FunDef(f.clone()))
-                    } else {
-                        None
-                    },
-                Item::StructDef(struct_def) =>
-                    Some(Item::StructDef(struct_def.clone())),
-                Item::ImplDef(impl_def) =>
-                    Some(Item::ImplDef(impl_def.clone())), //TODO remove all functions which should not be generated
-                Item::TraitDef(_) => None    
-            }
+    fn generate_fun(f: &FunDef) -> bool {
+        f.param_decls.iter().all(|p| {
+            !is_shape_ty(p.ty.as_ref().unwrap())
+                && !matches!(
+                    &p.ty.as_ref().unwrap().ty,
+                    desc::TyKind::Data(desc::DataTy {
+                        dty: desc::DataTyKind::ThreadHierchy(_),
+                        ..
+                    })
+                )
         })
-        .collect::<Vec<desc::Item>>();
-    let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
-        .chain(
-            items_to_be_generated
-                .iter()
-                .map(|item_def| gen_item_def(item_def, &compil_unit.item_defs, idx_checks)),
-        )
+    }
+
+    let items = compil_unit.item_defs.iter().filter_map(|item|
+        match item {
+            Item::ImplDef(impl_def) => {
+                let mut impl_def = impl_def.clone();
+                add_inherited_fun_defs(&mut impl_def, &compil_unit.item_defs);
+                Some(Item::ImplDef(impl_def))
+            },
+            Item::TraitDef(_) => None,
+            item => Some(item.clone()),
+        }
+    ).collect::<Vec<_>>();
+
+    let mut struct_decls = Vec::new();
+    let mut struct_defs = Vec::new();
+    let mut fun_decls = Vec::new();
+    let mut fun_defs = Vec::new();
+
+    items
+        .iter()
+        .for_each(|item|
+            match item {
+                Item::FunDef(fun_def) => {
+                    if generate_fun(fun_def) {
+                        fun_decls.push(gen_fun_decl(fun_def));
+                        fun_defs.push(gen_fun_def(fun_def, &items, idx_checks));
+                    }
+                },
+                Item::StructDef(struct_def) => {
+                    struct_decls.push(gen_struct_decl(struct_def));
+                    struct_defs.push(gen_struct_def(struct_def));
+                },
+                Item::ImplDef(impl_def) =>
+                    impl_def.decls.iter().for_each(|decl|
+                        match decl {
+                            AssociatedItem::FunDef(fun_def) => {
+                                if generate_fun(fun_def) {
+                                    if impl_def.generic_params.len() > 0{
+                                        let mut fun_def = fun_def.clone();
+                                        fun_def.generic_params =
+                                            impl_def.generic_params.clone()
+                                            .into_iter().chain(
+                                                fun_def.generic_params.into_iter()
+                                            ).collect();
+                                        fun_decls.push(gen_fun_decl(&fun_def));
+                                        fun_defs.push(gen_fun_def(&fun_def, 
+                                            &items, idx_checks));
+                                    } else {
+                                        fun_decls.push(gen_fun_decl(fun_def));
+                                        fun_defs.push(gen_fun_def(fun_def,
+                                            &items, idx_checks));
+                                    }
+                                }
+                            },
+                            AssociatedItem::FunDecl(_) => 
+                                panic!("associated items within a impl cannot include fun_decls"),
+                            AssociatedItem::ConstItem(_, _, _) =>
+                                unimplemented!("TODO")    
+                        }
+                    ),
+                Item::TraitDef(_) => (),
+            }
+    );
+
+    let cu_program =
+        std::iter::once(cu::Item::Include("descend.cuh".to_string()))
+        .chain(std::iter::once(cu::Item::EmptyLine))
+        .chain(struct_decls)
+        .chain(std::iter::once(cu::Item::EmptyLine))
+        .chain(fun_decls)
+        .chain(std::iter::once(cu::Item::EmptyLine))
+        .chain(struct_defs)
+        .chain(std::iter::once(cu::Item::EmptyLine))
+        .chain(fun_defs)
         .collect::<cu::CuProgram>();
     printer::print(&cu_program)
 }
@@ -159,72 +248,54 @@ impl CheckedExpr {
 }
 
 fn find_function_def<'a>(name: &str, comp_unit: &'a [desc::Item]) -> Option<&'a desc::FunDef> {
-    comp_unit.iter().filter_map(|item|
-        match item {
-            Item::FunDef(fun_def) => Some(vec![fun_def]),
-            Item::ImplDef(impl_def) =>
-                Some(impl_def.decls.iter().filter_map(|ass_item|
-                    match ass_item {
-                        AssociatedItem::FunDef(fun_def) => Some(fun_def),
-                        AssociatedItem::ConstItem(_, _, _) => None,
-                        AssociatedItem::FunDecl(_) => panic!("ImplDef should not contain fun_decls"),
+    comp_unit.iter().fold(None, |option, item|
+        if option.is_none() {
+            match item {
+                Item::FunDef(fun_def) =>
+                    if fun_def.name == name {
+                        Some(fun_def)
+                    } else {
+                        None
+                    },
+                Item::ImplDef(impl_def) =>
+                    if let Some(AssociatedItem::FunDef(fun_def)) = 
+                        impl_def.decls.iter().find(|ass_item|
+                            match ass_item {
+                                AssociatedItem::FunDef(fun_def) =>
+                                    if fun_def.name == name {
+                                        true
+                                    } else {
+                                        false
+                                    },
+                                AssociatedItem::ConstItem(_, _, _) => false,
+                                AssociatedItem::FunDecl(_) =>
+                                    panic!("ImplDef should not contain fun_decls"),
+                            }
+                        ) {
+                        Some(fun_def)
+                    } else {
+                        None
                     }
-                ).collect()),
-            _ => None,
+                _ => None,
+            }
+        } else {
+            option
         }
     )
-    .into_iter()
-    .flatten()
-    .find(|fun_def|
-        fun_def.name == name)
 }
 
-fn gen_item_def(item: &desc::Item, comp_unit: &[desc::Item], idx_checks: bool) -> cu::Item {
-    match item {
-        Item::FunDef(fun_def) => gen_fun_def(fun_def, comp_unit, idx_checks),
-        Item::StructDef(struct_def) => gen_struct_def(struct_def),
-        Item::ImplDef(impl_def) => gen_impl_def(impl_def, comp_unit, idx_checks),
-        Item::TraitDef(_) => panic!("Cannot generate code for a trait!"),
+fn gen_struct_decl(struct_def: &desc::StructDef) -> cu::Item {
+    cu::Item::StructDecl {
+        name: struct_def.name.clone(),
+        templ_params: gen_templ_params(&struct_def.generic_params)
     }
-}
-
-fn gen_impl_def_name(impl_def: &desc::ImplDef) -> String {
-    String::from(
-        if impl_def.trait_impl.is_some() {
-            "impl_TODO_for_TODO" //TODO print types
-        } else {
-            "impl_TODO" //TODO to print types
-        })
-}
-
-fn gen_impl_def(impl_def: &desc::ImplDef, comp_unit: &[desc::Item], idx_checks: bool) -> cu::Item {
-    let desc::ImplDef{
-        ty: _,
-        generic_params: _,
-        conditions: _,
-        decls,
-        trait_impl: _,
-    } = impl_def;
-
-    cu::Item::Namespace(gen_impl_def_name(impl_def),
-        decls.iter().map(|ass_item|
-            match ass_item {
-                AssociatedItem::FunDef(fun_def) =>
-                    unimplemented!("TODO get function types from context?"),
-                AssociatedItem::FunDecl(_) =>
-                    panic!("Function declarations inside of impls are not allowed"),
-                AssociatedItem::ConstItem(_, _, _) =>
-                    unimplemented!("TODO"),
-            }
-        ).collect()
-    )
 }
 
 fn gen_struct_def(struct_def: &desc::StructDef) -> cu::Item {
     let desc::StructDef{
         name,
         generic_params,
-        conditions: _,
+        constraints: _,
         decls,
     } = struct_def;
 
@@ -235,14 +306,37 @@ fn gen_struct_def(struct_def: &desc::StructDef) -> cu::Item {
             decls.iter().map(|struct_field|
                 (struct_field.name.clone(),
                     gen_ty(&desc::TyKind::Data(struct_field.ty.clone()), desc::Mutability::Mut))
-            ).collect()
+            ).collect(),
      }
+}
+
+fn gen_fun_decl(fun_def: &desc::FunDef) -> cu::Item {
+    let desc::FunDef {
+        name,
+        generic_params,
+        constraints: _,
+        param_decls: params,
+        ret_dty: ret_ty,
+        exec,
+        prv_rels: _,
+        body_expr:_ ,
+    } = fun_def;
+
+    cu::Item::FunDecl {
+        name: name.clone(),
+        templ_params: gen_templ_params(generic_params),
+        params: gen_param_decls(params),
+        ret_ty: gen_ty(
+            &desc::TyKind::Data(ret_ty.clone()), 
+            desc::Mutability::Mut),
+        is_dev_fun: is_dev_fun(*exec)
+    }
 }
 
 fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::Item], idx_checks: bool) -> cu::Item {
     let desc::FunDef {
         name,
-        generic_params: ty_idents,
+        generic_params,
         param_decls: params,
         ret_dty: ret_ty,
         exec,
@@ -252,7 +346,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::Item], idx_checks: bool
 
     cu::Item::FunDef {
         name: name.clone(),
-        templ_params: gen_templ_params(ty_idents),
+        templ_params: gen_templ_params(generic_params),
         params: gen_param_decls(params),
         ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut),
         body: gen_stmt(
@@ -1607,14 +1701,32 @@ fn gen_expr(
             gen_expr(&inst_fun, codegen_ctx, comp_unit, dev_fun, idx_checks)
         }
         StructInst(name, args, attributes) => {
-            //TODO make sure the order of the attributes are the same like in the struct def
+            //Make sure the order of the attributes are the same like in the struct def
+            let struct_def =
+                if let Item::StructDef(struct_def) =
+                    comp_unit.iter().find(|item|
+                        match item {
+                            Item::StructDef(struct_def) => struct_def.name == *name,
+                            _ => false
+                        }
+                    ).unwrap() {
+                    struct_def
+                } else { 
+                    panic!("This cannot happen")
+                };
+            let attributes =
+                struct_def.decls.iter().map(|field|
+                    &attributes.iter().find(|(name, _)|
+                        name.name == field.name)
+                    .unwrap().1
+                );
+
             CheckedExpr::Expr(cu::Expr::StructInst {
                 name: name.clone(),
                 template_args: gen_args_kinded(args),
                 args:
                     attributes
-                    .iter()
-                    .map(|(_, expr)|
+                    .map(|expr|
                         match gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
                             CheckedExpr::Expr(expr) => expr,
                             CheckedExpr::ExprIdxCheck(_, expr) => expr,
@@ -2451,8 +2563,17 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             dty: d::Tuple(tys), ..
         }) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect()),
         Data(desc::DataTy {
-            dty: d::StructType(_), ..
-        }) => unimplemented!("TODO"),
+            dty: d::Struct(struct_ty), ..
+        }) => cu::Ty::Struct(
+            struct_ty.name.clone(), 
+            struct_ty.generic_args.iter().map(|gen_arg|
+                match gen_arg {
+                    desc::ArgKinded::DataTy(dty) =>
+                        gen_ty(&Data(dty.clone()), m),
+                    _ => unimplemented!("TODO"),
+                }
+            ).collect()
+        ),
         Data(desc::DataTy {
             dty: d::Array(ty, n),
             ..

@@ -1,4 +1,4 @@
-use crate::ast::utils::{fresh_ident, FreeKindedIdents};
+use crate::ast::utils::{FreeKindedIdents, fresh_name};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
@@ -32,30 +32,23 @@ pub(super) fn sub_unify<C: Constrainable>(
     Ok(outlives_ctx)
 }
 
-fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
+pub(super) fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
     let mut constr_map = ConstrainMap::new();
     let mut prv_rels = Vec::new();
     t1.constrain(t2, &mut constr_map, &mut prv_rels)?;
     Ok((constr_map, prv_rels))
 }
 
-pub(super) fn inst_fn_ty_scheme(
+pub(super) fn inst_ty_scheme(
     tyscheme: &TypeScheme
-) -> Ty {
-    let mono_idents: Vec<_> = tyscheme.generic_params.iter().map(|i| match i.kind {
-        Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
-        Kind::DataTy => {
-            ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
-        }
-        Kind::Nat => ArgKinded::Nat(fresh_ident(&i.ident.name, Nat::Ident)),
-        Kind::Memory => ArgKinded::Memory(fresh_ident(&i.ident.name, Memory::Ident)),
-        Kind::Provenance => {
-            ArgKinded::Provenance(fresh_ident(&i.ident.name, Provenance::Ident))
-        }
-    })
-    .collect();
+) -> (Ty, Vec<Constraint>) {
+    let inst_tyscheme = tyscheme.instantiate(
+        &tyscheme.generic_params.iter().map(|i|
+            i.arg_kinded_with_name(fresh_name(&i.ident.name))
+        ).collect::<Vec<_>>()
+    );
 
-    tyscheme.instantiate(&mono_idents).as_mono().unwrap()
+    (inst_tyscheme.mono_ty, inst_tyscheme.constraints)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -201,7 +194,7 @@ impl Constrainable for ArgKinded {
     }
 }
 
-impl Constrainable for WhereClauseItem {
+impl Constrainable for Constraint {
     fn constrain(
         &mut self,
         other: &mut Self,
@@ -224,13 +217,13 @@ impl Constrainable for WhereClauseItem {
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
         let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_where_clause_item(self);
+        free_idents.visit_constraint(self);
         free_idents.set
     }
 
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_where_clause_item(self);
+        apply_subst.visit_constraint(self);
     }
 }
 
@@ -327,6 +320,32 @@ impl Constrainable for DataTy {
                 .iter_mut()
                 .zip(elem_dtys2)
                 .try_for_each(|(dty1, dty2)| dty1.constrain(dty2, constr_map, prv_rels)),
+            (DataTyKind::Struct(struct_1), DataTyKind::Struct(struct_2)) => {
+                if struct_1.name != struct_2.name {
+                    return Err(TyError::CannotUnify);
+                }
+                assert!(struct_1.generic_args.len() == struct_2.generic_args.len());
+                assert!(struct_1.attributes.len() == struct_2.attributes.len());
+                struct_1.generic_args
+                .iter_mut()
+                .zip(struct_2.generic_args.iter_mut())
+                .try_for_each(|(gen1, gen2)|
+                    gen1.constrain(gen2, constr_map, prv_rels)
+                )?;
+                struct_1.attributes
+                .iter_mut()
+                .try_for_each(|attr1|
+                    attr1.ty.constrain(&mut
+                        struct_2.attributes
+                        .iter_mut()
+                        .find(|attr2|
+                            attr1.name == attr2.name)
+                        .unwrap()
+                        .ty,
+                        constr_map,
+                        prv_rels)
+                )
+            }
             (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
                 n1.constrain(n2, constr_map, prv_rels)

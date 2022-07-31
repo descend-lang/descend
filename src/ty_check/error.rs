@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, WhereClauseItem};
+use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, Constraint};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -57,7 +57,7 @@ pub enum TyError {
     MissingStructField(String),
     UnexpectedNumberOfStructFields(usize, usize),
     WrongKind(Kind, Kind),
-    UnfullfilledConstraint(WhereClauseItem),
+    UnfullfilledConstraint(Constraint),
     IllegalProjection(String),
     // TODO remove as soon as possible
     String(String),
@@ -245,7 +245,7 @@ pub enum CtxError {
     MultipleDefinedStructs(String),
     MultipleDefinedTraits(String),
     MultipleDefinedImplsForTrait(Ty, String),
-    TraitNotImplmented(WhereClauseItem),
+    TraitNotImplmented(Constraint),
     FunNotImplemented(String),
     UnexpectedItem(String),
 }

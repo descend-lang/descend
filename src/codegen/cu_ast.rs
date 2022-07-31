@@ -4,7 +4,15 @@ pub(super) type CuProgram = Vec<Item>;
 
 // TODO big difference in sizes beteween variants
 pub(super) enum Item {
+    EmptyLine,
     Include(String),
+    FunDecl {
+        name: String,
+        templ_params: Vec<TemplParam>,
+        params: Vec<ParamDecl>,
+        ret_ty: Ty,
+        is_dev_fun: bool,
+    },
     FunDef {
         name: String,
         templ_params: Vec<TemplParam>,
@@ -13,12 +21,15 @@ pub(super) enum Item {
         body: Stmt,
         is_dev_fun: bool,
     },
+    StructDecl {
+        name: String,
+        templ_params: Vec<TemplParam>,
+    },
     StructDef {
         name: String,
         templ_params: Vec<TemplParam>,
         attributes: Vec<(String, Ty)>
     },
-    Namespace(String, Vec<Item>),
 }
 
 #[derive(Clone, Debug)]
@@ -178,6 +189,7 @@ pub(super) enum Ty {
     Scalar(ScalarTy),
     Atomic(ScalarTy),
     Tuple(Vec<Ty>),
+    Struct(String, Vec<Ty>),
     Array(Box<Ty>, Nat),
     CArray(Box<Ty>, Nat),
     Buffer(Box<Ty>, BufferKind),

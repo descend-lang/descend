@@ -110,6 +110,24 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
             infer_from_lists!(infer_kargs_dtys, map, elem_dtys1, elem_dtys2)
         }
+        (DataTyKind::Struct(struct_1), DataTyKind::Struct(struct_2)) => {
+            assert!(struct_1.name == struct_2.name);
+            assert!(struct_1.generic_args.len() == struct_2.generic_args.len());
+            assert!(struct_1.attributes.len() == struct_2.attributes.len());
+            struct_1.attributes
+            .iter()
+            .for_each(|attr1|
+                infer_kargs_dtys(
+                    map,
+                    &attr1.ty,
+                    &struct_2.attributes
+                    .iter()
+                    .find(|attr2|
+                        attr1.name == attr2.name)
+                    .unwrap()
+                    .ty)
+            )
+        }
         (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
             infer_kargs_dtys(map, dty1, dty2);
             infer_kargs_nats(map, n1, n2);

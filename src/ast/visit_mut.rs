@@ -22,7 +22,7 @@ pub trait VisitMut: Sized {
     fn visit_mutability(&mut self, _mutbl: &mut Mutability) {}
     fn visit_lit(&mut self, _lit: &mut Lit) {}
     fn visit_ident(&mut self, _ident: &mut Ident) {}
-    fn visit_where_clause_item(&mut self, w_item: &mut WhereClauseItem) { walk_where_clause_item(self, w_item) }
+    fn visit_constraint(&mut self, constraint: &mut Constraint) { walk_constraint(self, constraint) }
     fn visit_trait_mono_ty(&mut self, traut_mono_ty: &mut TraitMonoType) { walk_trait_mono_ty(self, traut_mono_ty) }
     fn visit_pattern(&mut self, pattern: &mut Pattern) { walk_pattern(self, pattern) }
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
@@ -120,9 +120,9 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_nat(n);
         }
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
-        DataTyKind::StructType(struct_ty) => {
-            struct_ty.attributes.iter_mut().for_each(|(_, ty)|
-                visitor.visit_ty(ty)
+        DataTyKind::Struct(struct_ty) => {
+            struct_ty.attributes.iter_mut().for_each(|field|
+                visitor.visit_dty(&mut field.ty)
             );
             walk_list!(visitor, visit_arg_kinded, &mut struct_ty.generic_args);
         }
@@ -330,9 +330,9 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
     }
 }
 
-pub fn walk_where_clause_item<V: VisitMut>(visitor: &mut V, w_item: &mut WhereClauseItem) {
-    visitor.visit_ty(&mut w_item.param);
-    visitor.visit_trait_mono_ty(&mut w_item.trait_bound);
+pub fn walk_constraint<V: VisitMut>(visitor: &mut V, constraint: &mut Constraint) {
+    visitor.visit_dty(&mut constraint.param);
+    visitor.visit_trait_mono_ty(&mut constraint.trait_bound);
 }
 
 pub fn walk_trait_mono_ty<V: VisitMut>(visitor: &mut V, trait_mono_ty: &mut TraitMonoType) {
@@ -359,7 +359,7 @@ pub fn walk_ass_item<V: VisitMut>(visitor: &mut V, ass_item: &mut AssociatedItem
         AssociatedItem::FunDef(fun_def) => visitor.visit_fun_def(fun_def),
         AssociatedItem::FunDecl(fun_decl) => visitor.visit_fun_decl(fun_decl),
         AssociatedItem::ConstItem(_, ty, expr_op) => {
-            visitor.visit_ty(ty);
+            visitor.visit_dty(ty);
             if let Some(expr) = expr_op {
                 visitor.visit_expr(expr);
             }
@@ -376,7 +376,7 @@ pub fn walk_fun_def<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDef) {
     let FunDef {
         name: _,
         generic_params,
-        conditions,
+        constraints,
         param_decls,
         ret_dty,
         exec,
@@ -384,7 +384,7 @@ pub fn walk_fun_def<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDef) {
         body_expr,
     } = fun_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
-    walk_list!(visitor, visit_where_clause_item, conditions);
+    walk_list!(visitor, visit_constraint, constraints);
     walk_list!(visitor, visit_param_decl, param_decls);
     visitor.visit_dty(ret_dty);
     visitor.visit_exec(exec);
@@ -396,14 +396,14 @@ pub fn walk_fun_decl<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDecl) {
     let FunDecl {
         name: _,
         generic_params,
-        conditions,
+        constraints,
         param_decls,
         ret_dty,
         exec,
         prv_rels,
     } = fun_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
-    walk_list!(visitor, visit_where_clause_item, conditions);
+    walk_list!(visitor, visit_constraint, constraints);
     walk_list!(visitor, visit_param_type_decl, param_decls);
     visitor.visit_dty(ret_dty);
     visitor.visit_exec(exec);
@@ -414,11 +414,11 @@ pub fn walk_struct_def<V: VisitMut>(visitor: &mut V, struct_def: &mut StructDef)
     let StructDef {
         name: _,
         generic_params,
-        conditions,
+        constraints,
         decls
     } = struct_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
-    walk_list!(visitor, visit_where_clause_item, conditions);
+    walk_list!(visitor, visit_constraint, constraints);
     walk_list!(visitor, visit_struct_field, decls);
 }
 
@@ -426,27 +426,27 @@ pub fn walk_trait_def<V: VisitMut>(visitor: &mut V, trait_def: &mut TraitDef) {
     let TraitDef {
         name: _,
         generic_params,
-        conditions,
+        constraints,
         decls,
         supertraits,
     } = trait_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
-    walk_list!(visitor, visit_where_clause_item, conditions);
+    walk_list!(visitor, visit_constraint, constraints);
     walk_list!(visitor, visit_assosiated_item, decls);
     walk_list!(visitor, visit_trait_mono_ty, supertraits);
 }
 
 pub fn walk_impl_def<V: VisitMut>(visitor: &mut V, impl_def: &mut ImplDef) {
     let ImplDef {
-        ty,
+        dty,
         generic_params,
-        conditions,
+        constraints,
         decls,
         trait_impl: _
     } = impl_def;
-    visitor.visit_ty(ty);
+    visitor.visit_dty(dty);
     walk_list!(visitor, visit_ident_kinded, generic_params);
-    walk_list!(visitor, visit_where_clause_item, conditions);
+    walk_list!(visitor, visit_constraint, constraints);
     walk_list!(visitor, visit_assosiated_item, decls);
 }
 

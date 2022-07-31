@@ -44,7 +44,32 @@ fn clang_format(code: &str) -> String {
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Item::EmptyLine => writeln!(f),
             Item::Include(path) => write!(f, "#include \"{}\"", path),
+            Item::FunDecl {
+                name,
+                templ_params,
+                params,
+                ret_ty,
+                is_dev_fun } => {
+                if !templ_params.is_empty() {
+                    write!(f, "template<")?;
+                    fmt_vec(f, templ_params, ", ")?;
+                    writeln!(f, ">")?;
+                }
+                write!(
+                    f,
+                    "{}auto {}(",
+                    if *is_dev_fun { "__device__ " } else { "" },
+                    name
+                )?;
+                if !params.is_empty() {
+                    writeln!(f)?;
+                    fmt_vec(f, params, ",\n")?;
+                    writeln!(f)?;
+                }
+                write!(f, ") -> {};", ret_ty)
+            },
             Item::FunDef {
                 name,
                 templ_params,
@@ -58,41 +83,49 @@ impl std::fmt::Display for Item {
                     fmt_vec(f, templ_params, ", ")?;
                     writeln!(f, ">")?;
                 }
-                writeln!(
+                write!(
                     f,
                     "{}auto {}(",
                     if *is_dev_fun { "__device__ " } else { "" },
                     name
                 )?;
-                fmt_vec(f, params, ",\n")?;
-                writeln!(f, "\n) -> {} {{", ret_ty)?;
+                if !params.is_empty() {
+                    writeln!(f)?;
+                    fmt_vec(f, params, ",\n")?;
+                    writeln!(f)?;
+                }
+                writeln!(f, ") -> {} {{", ret_ty)?;
                 write!(f, "{}", body)?;
                 writeln!(f, "\n}}")
-            }
-            Item::StructDef {
+            },
+            Item::StructDecl{
                 name,
-                templ_params,
-                attributes
+                templ_params
             } => {
                 if !templ_params.is_empty() {
                     write!(f, "template<")?;
                     fmt_vec(f, templ_params, ", ")?;
-                    writeln!(f, ">")?;
+                    writeln!(f, ">\n")?;
+                }
+                write!(f, "struct {};", name)
+            },
+            Item::StructDef {
+                name,
+                templ_params,
+                attributes,
+            } => {
+                if !templ_params.is_empty() {
+                    write!(f, "template<")?;
+                    fmt_vec(f, templ_params, ", ")?;
+                    writeln!(f, ">\n")?;
                 }
 
                 writeln!(f, "struct {} {{", name)?;
                 attributes.iter().try_for_each(|(name, ty)|
                     writeln!(f, "{} {};", ty, name)
                 )?;
-                writeln!(f, "\n}}")
+                writeln!(f, "}};")
             },
-            Item::Namespace(name, items) => {
-                writeln!(f, "namespace {} {{", name)?;
-                items.iter().try_for_each(|item|
-                    writeln!(f, "{}\n\n", item)
-                )?;
-                writeln!(f, "\n}}")
-            }
         }
     }
 }
@@ -364,6 +397,15 @@ impl std::fmt::Display for Ty {
                 write!(f, "descend::tuple<")?;
                 fmt_vec(f, tys, ", ")?;
                 write!(f, ">")
+            }
+            Struct(name, generics) => {
+                if !generics.is_empty() {
+                    write!(f, "struct {}<", name)?;
+                    fmt_vec(f, generics, ", ")?;
+                    write!(f, ">")
+                } else {
+                    write!(f, "struct {}", name)
+                }
             }
             Buffer(ty, buff_kind) => match buff_kind {
                 BufferKind::CpuMem => write!(f, "HeapBuffer<{}>", ty),
