@@ -1,4 +1,4 @@
-use crate::ast::utils::{FreeKindedIdents, fresh_name};
+use crate::ast::utils::{FreeKindedIdents, fresh_ident};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
@@ -44,8 +44,17 @@ pub(super) fn inst_ty_scheme(
 ) -> (Ty, Vec<Constraint>) {
     let inst_tyscheme = tyscheme.instantiate(
         &tyscheme.generic_params.iter().map(|i|
-            i.arg_kinded_with_name(fresh_name(&i.ident.name))
-        ).collect::<Vec<_>>()
+            match i.kind {
+                Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
+                Kind::DataTy => {
+                    ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
+                }
+                Kind::Nat => ArgKinded::Nat(fresh_ident(&i.ident.name, Nat::Ident)),
+                Kind::Memory => ArgKinded::Memory(fresh_ident(&i.ident.name, Memory::Ident)),
+                Kind::Provenance => {
+                    ArgKinded::Provenance(fresh_ident(&i.ident.name, Provenance::Ident))
+                }
+        }).collect::<Vec<_>>()
     );
 
     (inst_tyscheme.mono_ty, inst_tyscheme.constraints)
