@@ -122,6 +122,16 @@ pub struct ImplDef {
     pub trait_impl: Option<TraitMonoType>
 }
 
+impl ImplDef {
+    pub fn ty(&self) -> TypeScheme {
+        TypeScheme {
+            generic_params: self.generic_params.clone(),
+            constraints: self.constraints.clone(),
+            mono_ty: Ty::new(TyKind::Data(self.dty.clone()))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssociatedItem {
     FunDef(FunDef),
@@ -168,8 +178,71 @@ impl StructDataType {
     }
 }
 
-pub trait SubstKindedIdents {
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct FunctionName {
+    pub name: String,
+    pub fun_kind: FunctionKind
+}
+
+impl FunctionName {
+    pub fn global_fun(name: &str) -> Self {
+        FunctionName {
+            name: String::from(name),
+            fun_kind: FunctionKind::GlobalFun
+        }
+    }
+
+    pub fn from_impl(name: &str, impl_def: &ImplDef) -> Self {
+        let trait_name = 
+            if impl_def.trait_impl.is_some() {
+                Some(impl_def.trait_impl.unwrap().name)
+            } else {
+                None
+            };
+        FunctionName {
+            name: String::from(name),
+            fun_kind: FunctionKind::ImplFun(impl_def.ty(), trait_name)
+        }
+    }
+
+    pub fn from_trait(name: &str, trait_def: &TraitDef) -> Self {
+        FunctionName {
+            name: String::from(name),
+            fun_kind: FunctionKind::TraitFun(trait_def.name)
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum Path {
+    Empty,
+    DataTy(DataTy),
+    InferFromFirstArg, //Replaced in type_checking through DataTy
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum FunctionKind {
+    GlobalFun,
+    //Typescheme of impl, and (if existing) trait which is implemented
+    ImplFun(TypeScheme, Option<String>),
+    TraitFun(String),
+}
+
+pub trait SubstKindedIdents where Self: Sized + Clone {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self;
+    
+    fn subst_idents_kinded<'a, 'b, I, J>(&self, ident_kinded: I, with: J) -> Self
+    where
+        I: ExactSizeIterator<Item = &'a IdentKinded>,
+        J: ExactSizeIterator<Item = &'b ArgKinded>
+    {
+        assert!(ident_kinded.len() == with.len());
+        ident_kinded
+        .zip(with)
+        .fold(self.clone(), |res, (ident, with)|
+            res.subst_ident_kinded(ident, with)
+        )
+    }
 }
 
 impl SubstKindedIdents for TraitMonoType {
@@ -482,8 +555,9 @@ pub enum ExprKind {
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     Lambda(Vec<ParamDecl>, Exec, Box<DataTy>, Box<Expr>),
     // Function application
-    // e_f(e_1, ..., e_n)
-    App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
+    // Struct::<T>::e_f(e_1, ..., e_n)
+    // FunctionKind is inferred while typechecking
+    App(Path, Option<FunctionKind>, Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
     // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),

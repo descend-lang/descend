@@ -246,7 +246,10 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_dty(dty);
             visitor.visit_expr(expr)
         }
-        ExprKind::App(f, gen_args, args) => {
+         ExprKind::App(path, _, f, gen_args, args) => {
+            if let Path::DataTy(dty) = path {
+                visitor.visit_dty(dty);
+            }
             visitor.visit_expr(f);
             walk_list!(visitor, visit_arg_kinded, gen_args);
             walk_list!(visitor, visit_expr, args);

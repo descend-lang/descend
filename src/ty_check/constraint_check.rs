@@ -29,24 +29,43 @@ impl ConstraintScheme {
 impl ConstraintEnv {
     pub fn new() -> Self {
         Self { theta: Vec::new() }
-    } 
+    }
 
-    pub fn append_constraint(&mut self, con: &ConstraintScheme) {
+    pub fn append_constraint_scheme(&mut self, con: &ConstraintScheme) {
         self.theta.push(con.clone());
     }
 
-    pub fn append_constraints(&mut self, cons: &Vec<ConstraintScheme>) {
+    pub fn append_constraint_schemes(&mut self, cons: &Vec<ConstraintScheme>) {
         self.theta.extend(cons.clone());
     }
 
-    pub fn remove_constraints(&mut self, cons: &Vec<ConstraintScheme>) {
+    pub fn append_constraints(&mut self, cons: &Vec<Constraint>) {
+        self.theta.extend(cons.iter().map(|con| ConstraintScheme::new(con)));
+    }
+
+    pub fn remove_constraints(&mut self, cons: &Vec<Constraint>) {
+        cons.iter().for_each(|con_remove| {
+            let con_remove = ConstraintScheme::new(con_remove);
+            self.theta
+            .swap_remove(
+                self.theta
+                .iter()
+                .rev()
+                .position(|con|
+                    *con == con_remove).unwrap()
+                );
+        });
+    }
+
+    pub fn remove_constraint_schemes(&mut self, cons: &Vec<ConstraintScheme>) {
         cons.iter().for_each(|con_remove| {
             self.theta
             .swap_remove(
                 self.theta
                 .iter()
+                .rev()
                 .position(|con|
-                    con == con_remove).unwrap()
+                    *con == *con_remove).unwrap()
                 );
         });
     }

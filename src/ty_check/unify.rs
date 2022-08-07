@@ -8,7 +8,7 @@ use crate::ty_check::subty::multiple_outlives;
 use crate::ty_check::TyResult;
 use std::collections::{HashMap, HashSet};
 
-pub(super) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
+pub(crate) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
     let (subst, _) = constrain(t1, t2)?;
     substitute(&subst, t1);
     substitute(&subst, t2);
@@ -32,7 +32,7 @@ pub(super) fn sub_unify<C: Constrainable>(
     Ok(outlives_ctx)
 }
 
-pub(super) fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
+pub(crate) fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
     let mut constr_map = ConstrainMap::new();
     let mut prv_rels = Vec::new();
     t1.constrain(t2, &mut constr_map, &mut prv_rels)?;
@@ -61,10 +61,10 @@ pub(super) fn inst_ty_scheme(
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(super) struct PrvConstr(pub Provenance, pub Provenance);
+pub(crate) struct PrvConstr(pub Provenance, pub Provenance);
 
 #[derive(Debug)]
-pub(super) struct ConstrainMap {
+pub(crate) struct ConstrainMap {
     pub ty_unifier: HashMap<String, Ty>,
     pub dty_unifier: HashMap<String, DataTy>,
     pub nat_unifier: HashMap<String, Nat>,
@@ -151,7 +151,7 @@ impl DataTy {
     }
 }
 
-pub(super) trait Constrainable {
+pub(crate) trait Constrainable {
     fn constrain(
         &mut self,
         other: &mut Self,
@@ -215,13 +215,7 @@ impl Constrainable for Constraint {
         }
 
         self.param.constrain(&mut other.param, constr_map, prv_rels)?;
-
-        assert!(self.trait_bound.generics.len() == other.trait_bound.generics.len());
-        self.trait_bound.generics
-            .iter_mut()
-            .zip(other.trait_bound.generics.iter_mut())
-            .try_for_each(|(arg_ty1, arg_ty2)|
-                arg_ty1.constrain(arg_ty2, constr_map, prv_rels))
+        self.trait_bound.constrain(&mut other.trait_bound, constr_map, prv_rels)
     }
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
@@ -233,6 +227,37 @@ impl Constrainable for Constraint {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_constraint(self);
+    }
+}
+
+impl Constrainable for TraitMonoType {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        if self.name != other.name {
+            return Err(TyError::CannotUnify);
+        }
+
+        assert!(self.generics.len() == other.generics.len());
+        self.generics
+            .iter_mut()
+            .zip(other.generics.iter_mut())
+            .try_for_each(|(arg_ty1, arg_ty2)|
+                arg_ty1.constrain(arg_ty2, constr_map, prv_rels))
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_trait_mono_ty(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_trait_mono_ty(self);
     }
 }
 

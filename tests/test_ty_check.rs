@@ -117,6 +117,118 @@ fn test_method_call() {
 }
 
 #[test]
+fn test_monomoprhisation() {
+    let src = r#"
+    trait Trait1 {}
+    trait Trait2 {}
+    trait Eq<X, Y> where X: Trait1 {
+        fn new<Z>(z: Z) -[cpu.thread]-> i32 {
+            let mut x: X;
+            let mut y: Y;
+            42
+        }
+    }
+    struct Point<X, Y> where X: Trait2 {
+        x: X,
+        y: Y
+    }
+    impl<A, B, C> Eq<A, B> for Point<B, C> where A: Trait1 + Trait2, B: Trait2 {
+        fn new<Z>(z: Z) -[cpu.thread]-> i32 {
+            let p: Point<i32, i32> = Point { x: 42, y: 43 };
+            foo(p, true)
+        }
+    }
+    impl Trait1 for i32 {}
+    impl Trait2 for i32 {}
+    impl Trait1 for f32 {}
+    impl Trait2 for f32 {}
+
+    fn foo<X, Z, T>(t: T, z: Z) -[cpu.thread] -> i32 where X: Trait1, T: Eq<X, X> {
+        T::new(z)
+    }
+
+    fn bar() -[cpu.thread]-> i32 {
+        let p: Point<f32, i32> = Point { x: 4.0, y: 42 };
+        foo(p, 42);
+        let p2: Point<f32, i32> = Point { x: 4.0, y: 42 };
+        foo(p2, "hello_world")
+    }
+    "#;
+    assert_compile!(src);
+}
+
+#[test]
+fn test_fun_calls() {
+    let src = r#"
+    trait Eq {
+        fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> i32 {
+            1
+        }
+    }
+    trait SomeOtherTrait {}
+    impl SomeOtherTrait for i32 {}
+    struct Point<T> {
+        x: T,
+        y: T
+    }
+    impl<T> Eq for Point<T> where T: SomeOtherTrait {}
+    fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Eq {
+        let i1: i32 = (&t).eq(&t);
+        let i2: i32 = T::eq(&t, &t);
+        ()
+    }
+    fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t4: T) -[cpu.thread]-> () where T: SomeOtherTrait  {
+        let p: Point<T> = Point { x: t1, y: t2 };
+        fun_with_generics(p);
+
+        let p2: Point<T> = Point { x: t3, y: t4 };
+        (&p2).eq(&p2);
+        Point::<T>::eq(&p2, &p2);
+        Point::eq(&p2, &p2);
+        ()
+    }
+    fn bar() -[cpu.thread]-> () {
+        fun_with_generics2(1, 2, 3, 4);
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    trait Eq {
+        fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> i32 {
+            1
+        }
+    }
+    struct Point<T> {
+        x: T,
+        y: T
+    }
+    impl<T> Eq for Point<T> {} //here "T" has no constraints
+    fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Eq {
+        let i1: i32 = (&t).eq(&t);
+        let i2: i32 = T::eq(&t, &t);
+        ()
+    }
+    fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t3: T) -[cpu.thread] -> () {
+        let p: Point<T> = Point { x: t1, y: t2 };
+        fun_with_generics(p);
+
+        let p2: Point<T> = Point { x: t3, y: t4 };
+        (&p2).eq(&p2);
+        Point::<T>::eq(&p2, &p2);
+        Point::eq(&p2, &p2);
+        ()
+    }
+    fn bar() -[cpu.thread]-> () {
+        fun_with_generics2(1, 2, 3, 4);
+        ()
+    }
+    "#;
+    assert_compile!(src); //This should generate other code because "T" should not be monomorphised
+}
+
+#[test]
 #[ignore] //TODO why does this compile???
 fn test_moved_struct_attribute() {
     let src = r#"
@@ -755,6 +867,30 @@ fn test_cylic_constraints() {
     }
     "#;
     assert_compile!(src);
+}
+
+#[test]
+fn test_struct_with_lifetimes() {
+    let src = r#"
+    struct Test<'a> {
+        x: &'a i32
+    }
+    impl<'a> Test<'a> {
+        fn bar(&shrd cpu.mem self, i: i32) -[cpu.thread]-> i32 {
+            i + self.x
+        }
+    }
+    fn foo<'a>(t: Test<'a>) -[cpu.thread]-> i32 {
+        t.x = 42;
+        t.bar(15)
+    }
+    fn main() -[cpu.thread]-> () {
+        let test: i32 = 1;
+        let t = Test { x: &test };
+        foo(t);
+        ()
+    }
+    "
 }
 
 #[test]

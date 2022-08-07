@@ -2,10 +2,9 @@
 pub mod source;
 mod utils;
 
-use crate::ast::*;
-use core::iter;
+use crate::ast::{*, visit_mut::{walk_expr, walk_arg_kinded}};
 use error::ParseError;
-use std::collections::{HashMap, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap};
 
 use crate::error::ErrorReported;
 pub use source::*;
@@ -19,11 +18,8 @@ pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported
     let mut item_defs =
         parser
         .parse()
-        .map_err(|err| err.emit())?
-        .into_iter()
-        .map(replace_arg_kinded_idents)
-        .collect::<Vec<Item>>();
-    replace_tyidents_struct_names(&mut item_defs);
+        .map_err(|err| err.emit())?;
+    visit_ast(&mut item_defs);
     Ok(CompilUnit::new(
         item_defs,
         source,
@@ -45,140 +41,140 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn replace_arg_kinded_idents(mut item_def: Item) -> Item {
-    struct ReplaceArgKindedIdents {
-        ident_names_to_kinds: HashMap<String, Kind>,
-    }
-    impl VisitMut for ReplaceArgKindedIdents {
-        fn visit_expr(&mut self, expr: &mut Expr) {
-            match &mut expr.expr {
-                ExprKind::Block(prvs, body) => {
-                    self.ident_names_to_kinds
-                        .extend(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
-                    self.visit_expr(body)
-                }
-                ExprKind::App(f, gen_args, args) => {
-                    self.visit_expr(f);
-                    for gen_arg in gen_args {
-                        if let ArgKinded::Ident(ident) = gen_arg {
-                            let to_be_kinded = ident.clone();
-                            match self.ident_names_to_kinds.get(&ident.name).unwrap() {
-                                Kind::Provenance => {
-                                    *gen_arg =
-                                        ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
-                                }
-                                Kind::Memory => {
-                                    *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded))
-                                }
-                                Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
-                                Kind::Ty => {
-                                    // TODO how to deal with View??!! This is a problem!
-                                    //  Ident only for Ty but not for DataTy or ViewTy?
-                                    *gen_arg = ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
-                                        DataTyKind::Ident(to_be_kinded),
-                                    ))))
-                                }
-                                _ => panic!("This kind can not be referred to with an identifier."),
-                            }
-                        }
-                    }
-                    walk_list!(self, visit_expr, args)
-                }
-                ExprKind::ForNat(ident, _, body) => {
-                    self.ident_names_to_kinds
-                        .extend(iter::once((ident.name.clone(), Kind::Nat)));
-                    self.visit_expr(body)
-                }
-                _ => visit_mut::walk_expr(self, expr),
-            }
-        }
-
-        fn visit_item_def(&mut self, item_def: &mut Item) {
-            let generic_params = 
-                match item_def {
-                    Item::FunDef(fun_def) =>  &fun_def.generic_params,
-                    Item::StructDef(struct_def) => &struct_def.generic_params,
-                    Item::TraitDef(trait_def) => &trait_def.generic_params,
-                    Item::ImplDef(impl_def) => &impl_def.generic_params,
-                };
-            self.ident_names_to_kinds = generic_params
-                .iter()
-                .map(|IdentKinded { ident, kind }| (ident.name.clone(), *kind))
-                .collect();
-            visit_mut::walk_item_def(self, item_def)
-        }
-    }
-    let mut replace = ReplaceArgKindedIdents {
-        ident_names_to_kinds: HashMap::new(),
-    };
-    replace.visit_item_def(&mut item_def);
-    item_def
-}
-
-//Replace the special ident "Self" in impls with the type of the impl
-fn replace_self_in_impls(impl_def: &mut ImplDef) {
-    struct ReplaceSelfInImpl {
-        impl_dty: DataTy
-    }
-
-    impl VisitMut for ReplaceSelfInImpl {
-        fn visit_dty(&mut self, dty: &mut DataTy) {
-            match &dty.dty {
-                DataTyKind::Ident(ident) => {
-                    if ident.name == "Self" {
-                        *dty = self.impl_dty.clone();
-                    }
-                },
-                _ => walk_dty(self, dty)
-            }
-        }
-    }
-
-    ReplaceSelfInImpl{impl_dty: impl_def.dty.clone()}.visit_impl_def(impl_def)
-}
-
-//Distinguish between type variables and struct names without generic params
-//and initialize attributes list of struct_types
-//and replace Self in impls
-fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
-    struct DistinguisherBetweenTyVarsAndStructNames {
+fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
+    struct Visitor {
         structs: BTreeMap<String, StructDef>,
-        type_vars_in_scope: BTreeSet<String>,
+        ident_kinded_in_scope: Vec<(String, Kind)>,
+        impl_dty_in_scope: Option<DataTy>
     }
 
-    impl DistinguisherBetweenTyVarsAndStructNames {
+    impl Visitor {
         fn new(items: &Vec<Item>) -> Self {
-            DistinguisherBetweenTyVarsAndStructNames {
+            Visitor {
                 structs: BTreeMap::from_iter(
                     items.iter().filter_map(|item| 
                         if let Item::StructDef(struct_def) = item {
                             Some((struct_def.name.clone(), struct_def.clone()))
                         } else {
                             None
-                        }
+                }
                     )),
-                type_vars_in_scope: BTreeSet::new()
+                ident_kinded_in_scope: Vec::with_capacity(32),
+                impl_dty_in_scope: None
+                                }
+                                }
+
+        fn add_generics(&mut self, generics: &Vec<IdentKinded>) {
+            self.add_ident_kinded(generics.iter().map(|ident_kinded|
+                (ident_kinded.ident.name.clone(), ident_kinded.kind)));
+                                }
+
+        fn add_ident_kinded<I>(&mut self, ident_kinded: I) where I: Iterator<Item = (String, Kind)> {
+            self.ident_kinded_in_scope.extend(ident_kinded);
+                            }
+
+        fn pop_ident_kinded(&mut self, n: usize) {
+            self.ident_kinded_in_scope.truncate(self.ident_kinded_in_scope.len() - n);
+                        }
+
+        fn get_kind(&self, ident: &Ident) -> &Kind {
+            if let Some((_, kind)) = self.ident_kinded_in_scope.iter().rev().find(|(name, _)|
+                *name == ident.name
+            ) {
+                kind
+            } else {
+                panic!("Could not find kind of identifier \"{}\"", ident); //TODO throw error instead of panic
+                    }
+                }
+
+        fn contains_ident_kinded(&self, name: &str) -> bool {
+            self.ident_kinded_in_scope
+            .iter()
+            .rev()
+            .find(|(generic_name, _)|
+                generic_name == name
+            ).is_some()
             }
         }
 
-        fn add_generics(&mut self, generics: &Vec<IdentKinded>) {
-            self.type_vars_in_scope.extend(
-                generics
-                .iter()
-                .map(|gen|
-                    gen.ident.name.clone()));
+    //Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
+    fn replace_arg_kinded_kind(visitor: &Visitor, arg: &mut ArgKinded){
+        if let ArgKinded::Ident(ident) = arg {
+            *arg = 
+                match visitor.get_kind(&ident) {
+                    Kind::Provenance => 
+                        ArgKinded::Provenance(Provenance::Ident(*ident)),
+                    Kind::Memory =>
+                        ArgKinded::Memory(Memory::Ident(*ident)),
+                    Kind::Nat =>
+                        ArgKinded::Nat(Nat::Ident(*ident)),
+                    Kind::Ty =>
+                        // TODO how to deal with View??!! This is a problem!
+                        //  Ident only for Ty but not for DataTy or ViewTy?
+                        ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
+                            DataTyKind::Ident(*ident),
+                        )))),
+                    _ => panic!("This kind can not be referred to with an identifier."),
         }
+    }
+}
 
-        fn remove_generics(&mut self, generics: &Vec<IdentKinded>) {
-            generics
-            .iter()
-            .for_each(|gen| {
-                self.type_vars_in_scope.remove(&gen.ident.name);
-            });
+//Replace the special ident "Self" in impls with the type of the impl
+    fn replace_self_in_impls(visitor: &Visitor, dty: &mut DataTy) {
+        if let Some(impl_dty_in_scope) = visitor.impl_dty_in_scope {
+            if let DataTyKind::Ident(ident) = &dty.dty {
+                    if ident.name == "Self" {
+                    *dty = impl_dty_in_scope.clone();
+                    }
+            }
         }
     }
 
-    impl VisitMut for DistinguisherBetweenTyVarsAndStructNames {
+//Distinguish between type variables and struct names without generic params
+    fn replace_tyidents_struct_names(visitor: &Visitor, dty: &mut DataTy) {
+        if let DataTyKind::Ident(name) = &mut dty.dty {
+            let struct_def = visitor.structs.get(&name.name);
+            let is_type_ident = visitor.contains_ident_kinded(&name.name);
+
+            match (struct_def.is_some(), is_type_ident) {
+                (true, false) => 
+                    dty.dty =
+                        match struct_def.unwrap().ty().mono_ty.ty {
+                            TyKind::Data(dty) => dty.dty,
+                            _ => panic!("Struct should have a Datatype!"),
+                        },
+                (false, true) | (false, false) =>
+                    (),
+                (true, true) => 
+                    panic!("AmbiguousIdentifier"), //TODO throw error instead of panic
+                    // self.errs.push(
+                    //     TyError::from(CtxError::AmbiguousIdentifier(name.clone()))),
+                        }
+            }
+        }
+
+    //Initialize attributes list of struct_types
+    fn initialize_struct_attribute_lists(visitor: &Visitor, dty: &mut DataTy) {
+        if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
+            assert!(struct_ty.attributes.len() == 0);
+            if let Some(struct_def) = visitor.structs.get(&struct_ty.name) {
+                let inst_struct_mono = struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
+                if let TyKind::Data(dataty) = inst_struct_mono.ty {
+                    if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
+                        struct_ty.attributes = inst_struct_ty.attributes;
+                    } else {
+                        panic!("Instantiated struct def should have struct type")
+        }
+                } else {
+                    panic!("Instantiated struct def should have struct type")
+                }
+            } else {
+                panic!("TODO print some err instead of panic")
+            }
+        }
+    }
+
+    impl VisitMut for Visitor {
         fn visit_item_def(&mut self, item_def: &mut Item) { 
             match item_def {
                 Item::FunDef(fun_def) => {
@@ -187,18 +183,19 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
                 Item::StructDef(struct_def) => {
                     self.add_generics(&struct_def.generic_params);
                     walk_struct_def(self, struct_def);
-                    self.remove_generics(&struct_def.generic_params);
+                    self.ident_kinded_in_scope.clear();
                 },
                 Item::TraitDef(trait_def) => {
                     self.add_generics(&trait_def.generic_params);
                     walk_trait_def(self, trait_def);
-                    self.remove_generics(&trait_def.generic_params);
+                    self.ident_kinded_in_scope.clear();
                 },
                 Item::ImplDef(impl_def) => {
-                    replace_self_in_impls(impl_def);
                     self.add_generics(&impl_def.generic_params);
+                    self.impl_dty_in_scope = Some(impl_def.dty);
                     walk_impl_def(self, impl_def);
-                    self.remove_generics(&impl_def.generic_params);
+                    self.impl_dty_in_scope = None;
+                    self.ident_kinded_in_scope.clear();
                 },
             }
          }
@@ -206,58 +203,45 @@ fn replace_tyidents_struct_names(items: &mut Vec<Item>) {
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
             self.add_generics(&fun_def.generic_params);
             walk_fun_def(self, fun_def);
-            self.remove_generics(&fun_def.generic_params);
+            self.pop_ident_kinded(fun_def.generic_params.len());
         }
 
-        fn visit_dty(&mut self, dty: &mut DataTy) {
-            match &mut dty.dty {
-                DataTyKind::Ident(name) => {
-                    let struct_def =
-                        self.structs.get(&name.name);
-                    let is_type_ident =
-                        self.type_vars_in_scope.contains(&name.name);
-
-                    match (struct_def.is_some(), is_type_ident) {
-                        (true, false) => 
-                            dty.dty =
-                                match struct_def.unwrap().ty().mono_ty.ty {
-                                    TyKind::Data(dty) => dty.dty,
-                                    _ => panic!("Struct should have a Datatype!"),
+        fn visit_expr(&mut self, expr: &mut Expr) {
+            match &mut expr.expr {
+                ExprKind::Block(prvs, body) => {
+                    self.add_ident_kinded(
+                        prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
+                    self.visit_expr(body);
+                    self.pop_ident_kinded(prvs.len());
                                 },
-                        (false, true) | (false, false) =>
-                            (),
-                        (true, true) => 
-                            panic!("AmbiguousIdentifier"),
-                            // self.errs.push(
-                            //     TyError::from(CtxError::AmbiguousIdentifier(name.clone()))),
-                    }
+                ExprKind::ForNat(ident, _, body) => {
+                    self.ident_kinded_in_scope.push((ident.name.clone(), Kind::Nat));
+                    self.visit_expr(body);
+                    self.ident_kinded_in_scope.pop();
                 },
-                DataTyKind::Struct(struct_ty) => {
-                    assert!(struct_ty.attributes.len() == 0);
-                    if let Some(struct_def) = self.structs.get(&struct_ty.name) {
-                        let inst_struct_mono = struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
-                        if let TyKind::Data(dataty) = inst_struct_mono.ty {
-                            if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
-                                struct_ty.attributes = inst_struct_ty.attributes;
-                            } else {
-                                panic!("Instantiated struct def should have struct type")
+                _ => {
+                    walk_expr(self, expr);
                             }
-                        } else {
-                            panic!("Instantiated struct def should have struct type")
                         }
-                    } else {
-                        panic!("TODO print some err instead of panic")
                     }
-                },
-                _ => walk_dty(self, dty)
+
+        fn visit_dty(&mut self, dty: &mut DataTy) {
+            replace_self_in_impls(self, dty);
+            replace_tyidents_struct_names(self, dty);
+            initialize_struct_attribute_lists(self, dty);
+            walk_dty(self, dty);
             }
+
+        fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) {
+            replace_arg_kinded_kind(self, arg_kinded);
+            walk_arg_kinded(self, arg_kinded);
         }
     }
 
-    let mut d =
-        DistinguisherBetweenTyVarsAndStructNames::new(items);
-    items.iter_mut().for_each(|item|
-        d.visit_item_def(item));
+    let visitor = Visitor::new(items);
+    items.iter_mut().for_each(|item_def|
+        visitor.visit_item_def(item_def)
+    )
 }
 
 pub mod error {
@@ -632,23 +616,44 @@ peg::parser! {
                 Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
             }
             e:(p:place_expression() "." _ { Expr::new(ExprKind::PlaceExpr(p)) }
-                / "(" _ e:expression() _ ")" _ "." _ { e })?
+                / "(" _ e:expression() _ ")" _ "." _ { e })
                 begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {{
-                let args =
-                    match e {
-                        Some(place_expr) => {
+                let args = {
                             let mut result = Vec::with_capacity(args.len() + 1);
                             result.push(place_expr);
                             result.extend(args.clone());
                             result
                         },
-                        None => args,
+                Expr::new(
+                    ExprKind::App(
+                        Path::InferFromFirstArg,
+                        None,
+                        Box::new(Expr::with_span(
+                            ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
+                            Span::new(begin, place_end)
+                        )),
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    )
+                )    
+            }}
+            path:(path:ident() _ "::" path_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { Some(k) } / _ { None })? { (path, path_args) })?
+                begin:position!() func:ident() place_end:position!() _
+                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
+            {{
+                let path =
+                    match path {
+                        Some((path, path_args)) => Path::Path(path, path_args.unwrap_or(vec![])),
+                        None => Path::Empty
                     };
                 Expr::new(
                     ExprKind::App(
+                        path,
+                        None,
                         Box::new(Expr::with_span(
                             ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
                             Span::new(begin, place_end)
@@ -1604,6 +1609,8 @@ mod tests {
             descend::expression("f::<x>().0"),
             Ok(Expr::new(ExprKind::Proj(
                 Box::new(Expr::new(ExprKind::App(
+                    Path::Empty,
+                    None,
                     Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
                         PlaceExprKind::Ident(Ident::new("f"))
                     )))),
@@ -2326,6 +2333,30 @@ mod tests {
     }
 
     #[test]
+    fn compil_unit_test_fun_calls() {
+        let src = r#"
+        trait Eq {
+            fn eq(&shrd cpu.mem self){}
+        }
+        struct Point {}
+        impl Eq for Point {}
+        fn foo<T>(t: T) -[cpu.thread]-> () where T:Eq {
+            let p: Point = Point {};
+            foo();
+            Point::eq(p);
+            p.eq();
+            eq(p); //This should not typecheck
+            T::eq(t);
+            t.eq()
+        }
+        
+        "#;
+        let result =
+            descend::compil_unit(src).expect("Cannot parse compilation unit with different function calls");
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
     fn compil_unit_test_multiple() {
         let src = r#"
         
@@ -2536,7 +2567,7 @@ mod tests {
         }
         fn main() -[cpu.thread] -> () {
             let (p1, p2) = (Point {x: 3, y: 4}, Point {x: 4, y: 5});
-            let test = eq(p1, &shrd p2);
+            let test = Point::eq(p1, &shrd p2);
             let are_equal = p1.eq(&shrd p2);
             let x = bar().x
         }

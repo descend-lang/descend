@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, Constraint};
+use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, Constraint, FunctionName, DataTy};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -240,11 +240,13 @@ pub enum CtxError {
     // format!("{} is not defined as outliving {}.", l, s)
     OutlRelNotDefined(Ident, Ident),
     // Multiple defined objects
-    MultipleDefinedGlobalFuns(String),
+    MultipleDefinedFunctions(FunctionName),
     MultipleDefinedItems(String),
     MultipleDefinedStructs(String),
     MultipleDefinedTraits(String),
     MultipleDefinedImplsForTrait(Ty, String),
+    // If there the function which should be called is ambiguous
+    AmbiguousFunctionCall(String, DataTy),
     TraitNotImplmented(Constraint),
     FunNotImplemented(String),
     UnexpectedItem(String),
