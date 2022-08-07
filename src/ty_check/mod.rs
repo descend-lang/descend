@@ -112,7 +112,12 @@ impl TyChecker {
                         self.ty_check_fun_def(kind_ctx_trait.clone(), fun_def)
                     },
                     AssociatedItem::FunDecl(fun_decl) => {
-                        let fun_ty = self.gl_ctx.fun_ty_by_name(FunctionName::from_trait(&fun_decl.name, trait_def));
+                        let fun_ty = self.gl_ctx.fun_ty_by_name(
+                            FunctionName {
+                                name: trait_def.name.clone(),
+                                fun_kind: FunctionKind::TraitFun(trait_def.name.clone())
+                            }
+                        );
                         self.tyscheme_well_formed(&kind_ctx_empty, &ty_ctx, fun_decl.exec, fun_ty)
                     },
                     AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
@@ -1841,7 +1846,7 @@ impl TyChecker {
 
         //Replace InferFromFirstArg-path by dty of first arg
         if let Path::InferFromFirstArg = path {
-            let dty = args.first().unwrap().ty.unwrap().dty().clone();
+            let dty = args.first().unwrap().ty.as_ref().unwrap().dty().clone();
             *path = Path::DataTy(
                 match dty.dty {
                     DataTyKind::Ref(_, _, _, dty) => *dty,
@@ -1851,7 +1856,7 @@ impl TyChecker {
         }
 
         // TODO check well-kinded: FrameTyping, Prv, Ty
-        let (f_subst, mut f_mono_ty) = self.ty_check_dep_app(kind_ctx, &ty_ctx, exec, path, fun_kind, ef, k_args)?;
+        let (f_subst, mut f_mono_ty) = self.ty_check_dep_app(kind_ctx, &res_ty_ctx, exec, path, fun_kind, ef, k_args)?;
         let ret_ty_f = 
             if let TyKind::Fn(_, _, ret_ty_f) = &f_mono_ty.ty {
                 ret_ty_f.clone()
@@ -1922,11 +1927,11 @@ impl TyChecker {
                 Path::DataTy(dty) => {
                     self.ty_well_formed(kind_ctx, ty_ctx, exec, &Ty::new(TyKind::Data(dty.clone())))?;
 
-                    match dty.dty {
+                    match &dty.dty {
                         DataTyKind::Ident(ident) =>
                             self.gl_ctx.trait_fun_name(&fun_name.name, &ident)?.fun_kind,
                         _ =>
-                            self.gl_ctx.impl_fun_name_by_dty(&fun_name.name, dty)?.fun_kind
+                            self.gl_ctx.impl_fun_name_by_dty(&fun_name.name, dty)?.fun_kind.clone()
                     }                    
                 },
                 Path::InferFromFirstArg => panic!("This should be already replaced by Path::DataTy"),
@@ -1934,7 +1939,7 @@ impl TyChecker {
         );
         let fun_ty =
             // place should be an identifier referring to a globally declared function
-            if let Ok(fun_ty) = self.gl_ctx.fun_ty_by_ident(&fun_name, &fun_kind.unwrap()) {
+            if let Ok(fun_ty) = self.gl_ctx.fun_ty_by_ident(&fun_name, &fun_kind.as_ref().unwrap()) {
                 //TODO how to set a type for ef which is a typescheme?
 
                 //TODO this is now the function monotype, not the function type

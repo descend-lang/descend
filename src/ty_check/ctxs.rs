@@ -743,9 +743,9 @@ impl GlobalCtx {
 
     pub fn impl_fun_name_by_dty(&self, fun_name: &String, impl_dty: &DataTy) -> CtxResult<&FunctionName> {
         let result = 
-            self.funs.keys().fold(Vec::with_capacity(1), |res, fun_name_canidate| {
+            self.funs.keys().fold(Vec::with_capacity(1), |mut res, fun_name_canidate| {
                 if fun_name_canidate.name == *fun_name {
-                    if let FunctionKind::ImplFun(impl_dty_canidate, _) = fun_name_canidate.fun_kind {
+                    if let FunctionKind::ImplFun(impl_dty_canidate, _) = &fun_name_canidate.fun_kind {
                         let mut impl_dty = Ty::new(TyKind::Data(impl_dty.clone()));
                         let mut impl_dty_canidate = impl_dty_canidate.clone();
                         if unify(&mut impl_dty, &mut impl_dty_canidate.mono_ty).is_ok() {
@@ -760,39 +760,44 @@ impl GlobalCtx {
         } else if result.is_empty() {
             Err(CtxError::IdentNotFound(Ident::new(fun_name)))
         } else {
-            Ok(result.first().unwrap())
+            Ok(*result.first().unwrap())
         }
     }
 
-    pub fn trait_fun_name(&self, fun_name: &String, constraint_ident: &Ident) -> CtxResult<&FunctionName> {
-        let result = 
-            self.funs.keys().fold(Vec::with_capacity(1), |res, fun_name_canidate| {
-                if let FunctionKind::TraitFun(trait_name) = fun_name_canidate.fun_kind {
+    pub fn trait_fun_name(&mut self, fun_name: &String, constraint_ident: &Ident) -> CtxResult<FunctionName> {
+        let mut result = {
+            let mut res = Vec::with_capacity(1);
+            for (fun_name_canidate, _) in &self.funs { //Use for loop to avoid borrowing problems
+                if let FunctionKind::TraitFun(trait_name) = &fun_name_canidate.fun_kind {
                     if fun_name_canidate.name == *fun_name {
                         let trait_def = self.trait_ty_by_name(&trait_name).unwrap();
-                        self.theta.append_constraints(&trait_def.constraints);
+                        let trait_def_constraints = trait_def.constraints.clone();
+                        let trait_def_generics = trait_def.generic_params.clone();
+                        let fun_name_canidate = fun_name_canidate.clone();
+                        self.theta.append_constraints(&trait_def_constraints);
                         if self.theta.check_constraint(&Constraint {
                             param: DataTy::new(DataTyKind::Ident(constraint_ident.clone())),
                             trait_bound: TraitMonoType {
                                 name: trait_name.clone(),
-                                generics: trait_def.generic_params.iter().map(|gen|
+                                generics: trait_def_generics.iter().map(|gen|
                                     gen.arg_kinded()
                                 ).collect()
                             }
                         }) {
                             res.push(fun_name_canidate)
                         }
-                        self.theta.remove_constraints(&trait_def.constraints);
+                        self.theta.remove_constraints(&trait_def_constraints);
                     }
                 }
-                res
-            });
+            } 
+            res
+        };
         if result.len() > 1 {
             Err(CtxError::AmbiguousFunctionCall(fun_name.clone(), DataTy::new(DataTyKind::Ident(constraint_ident.clone()))))
         } else if result.is_empty() {
             Err(CtxError::IdentNotFound(Ident::new(fun_name)))
         } else {
-            Ok(result.first().unwrap())
+            Ok(result.remove(0))
         }
     }
 }

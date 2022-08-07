@@ -103,16 +103,16 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
             *arg = 
                 match visitor.get_kind(&ident) {
                     Kind::Provenance => 
-                        ArgKinded::Provenance(Provenance::Ident(*ident)),
+                        ArgKinded::Provenance(Provenance::Ident(ident.clone())),
                     Kind::Memory =>
-                        ArgKinded::Memory(Memory::Ident(*ident)),
+                        ArgKinded::Memory(Memory::Ident(ident.clone())),
                     Kind::Nat =>
-                        ArgKinded::Nat(Nat::Ident(*ident)),
+                        ArgKinded::Nat(Nat::Ident(ident.clone())),
                     Kind::Ty =>
                         // TODO how to deal with View??!! This is a problem!
                         //  Ident only for Ty but not for DataTy or ViewTy?
                         ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
-                            DataTyKind::Ident(*ident),
+                            DataTyKind::Ident(ident.clone()),
                         )))),
                     _ => panic!("This kind can not be referred to with an identifier."),
         }
@@ -121,7 +121,7 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
 
 //Replace the special ident "Self" in impls with the type of the impl
     fn replace_self_in_impls(visitor: &Visitor, dty: &mut DataTy) {
-        if let Some(impl_dty_in_scope) = visitor.impl_dty_in_scope {
+        if let Some(impl_dty_in_scope) = &visitor.impl_dty_in_scope {
             if let DataTyKind::Ident(ident) = &dty.dty {
                     if ident.name == "Self" {
                     *dty = impl_dty_in_scope.clone();
@@ -156,7 +156,7 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
     //Initialize attributes list of struct_types
     fn initialize_struct_attribute_lists(visitor: &Visitor, dty: &mut DataTy) {
         if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
-            assert!(struct_ty.attributes.len() == 0);
+            if struct_ty.attributes.len() == 0 {
             if let Some(struct_def) = visitor.structs.get(&struct_ty.name) {
                 let inst_struct_mono = struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
                 if let TyKind::Data(dataty) = inst_struct_mono.ty {
@@ -172,6 +172,7 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
                 panic!("TODO print some err instead of panic")
             }
         }
+    }
     }
 
     impl VisitMut for Visitor {
@@ -192,7 +193,7 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
                 },
                 Item::ImplDef(impl_def) => {
                     self.add_generics(&impl_def.generic_params);
-                    self.impl_dty_in_scope = Some(impl_def.dty);
+                    self.impl_dty_in_scope = Some(impl_def.dty.clone());
                     walk_impl_def(self, impl_def);
                     self.impl_dty_in_scope = None;
                     self.ident_kinded_in_scope.clear();
@@ -238,7 +239,7 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
         }
     }
 
-    let visitor = Visitor::new(items);
+    let mut visitor = Visitor::new(items);
     items.iter_mut().for_each(|item_def|
         visitor.visit_item_def(item_def)
     )
@@ -318,8 +319,8 @@ peg::parser! {
         pub(crate) rule fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:generic_params()? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
-            "-" _ "[" _ exec:execution_resource() _ "]" _ w:where_clause()? _
-            "-" _ ">" _ ret_dty:dty() _ body_expr:block() {
+            "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">"
+            _ ret_dty:dty() _ w:where_clause()? _ body_expr:block() {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
                     None => vec![]
@@ -623,10 +624,10 @@ peg::parser! {
             {{
                 let args = {
                             let mut result = Vec::with_capacity(args.len() + 1);
-                            result.push(place_expr);
+                    result.push(e);
                             result.extend(args.clone());
                             result
-                        },
+                };
                 Expr::new(
                     ExprKind::App(
                         Path::InferFromFirstArg,
@@ -640,16 +641,28 @@ peg::parser! {
                     )
                 )    
             }}
-            path:(path:ident() _ "::" path_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { Some(k) } / _ { None })? { (path, path_args) })?
-                begin:position!() func:ident() place_end:position!() _
+            begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {{
-                let path =
-                    match path {
-                        Some((path, path_args)) => Path::Path(path, path_args.unwrap_or(vec![])),
-                        None => Path::Empty
-                    };
+                Expr::new(
+                    ExprKind::App(
+                        Path::Empty,
+                        None,
+                        Box::new(Expr::with_span(
+                            ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
+                            Span::new(begin, place_end)
+                        )),
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    )
+                )    
+            }}
+            path:(path:dty() "::" { path }) begin:position!() func:ident() place_end:position!() _
+                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
+            {{
+                let path = Path::DataTy(path);
                 Expr::new(
                     ExprKind::App(
                         path,
@@ -2333,30 +2346,6 @@ mod tests {
     }
 
     #[test]
-    fn compil_unit_test_fun_calls() {
-        let src = r#"
-        trait Eq {
-            fn eq(&shrd cpu.mem self){}
-        }
-        struct Point {}
-        impl Eq for Point {}
-        fn foo<T>(t: T) -[cpu.thread]-> () where T:Eq {
-            let p: Point = Point {};
-            foo();
-            Point::eq(p);
-            p.eq();
-            eq(p); //This should not typecheck
-            T::eq(t);
-            t.eq()
-        }
-        
-        "#;
-        let result =
-            descend::compil_unit(src).expect("Cannot parse compilation unit with different function calls");
-        assert_eq!(result.len(), 4);
-    }
-
-    #[test]
     fn compil_unit_test_multiple() {
         let src = r#"
         
@@ -2377,6 +2366,30 @@ mod tests {
         let result = descend::compil_unit(src)
             .expect("Cannot parse compilation unit with multiple functions");
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn compil_unit_test_fun_calls() {
+        let src = r#"
+        trait Eq {
+            fn eq(&shrd cpu.mem self) -[cpu.thread]-> () { () }
+        }
+        struct Point {}
+        impl Eq for Point {}
+        fn foo<T>(t: T) -[cpu.thread]-> () where T:Eq {
+            let p: Point = Point {};
+            foo();
+            Point::eq(p);
+            p.eq();
+            eq(p); //This should not typecheck
+            T::eq(t);
+            t.eq()
+        }
+        
+        "#;
+        let result =
+            descend::compil_unit(src).expect("Cannot parse compilation unit with different function calls");
+        assert_eq!(result.len(), 4);
     }
 
     #[test]

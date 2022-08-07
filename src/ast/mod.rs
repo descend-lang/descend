@@ -195,7 +195,7 @@ impl FunctionName {
     pub fn from_impl(name: &str, impl_def: &ImplDef) -> Self {
         let trait_name = 
             if impl_def.trait_impl.is_some() {
-                Some(impl_def.trait_impl.unwrap().name)
+                Some(impl_def.trait_impl.as_ref().unwrap().name.clone())
             } else {
                 None
             };
@@ -208,7 +208,7 @@ impl FunctionName {
     pub fn from_trait(name: &str, trait_def: &TraitDef) -> Self {
         FunctionName {
             name: String::from(name),
-            fun_kind: FunctionKind::TraitFun(trait_def.name)
+            fun_kind: FunctionKind::TraitFun(trait_def.name.clone())
         }
     }
 }

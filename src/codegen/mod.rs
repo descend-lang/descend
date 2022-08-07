@@ -1,6 +1,6 @@
 mod cu_ast;
 mod printer;
-mod Monomorphiser;
+mod monomorphiser;
 
 use crate::ast::{self as desc, ProjEntry};
 use crate::ast::visit::Visit;
@@ -17,8 +17,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let (structs, funs) =
-        Monomorphiser::monomorphise_constraint_generics(
-            &mut compil_unit.item_defs.as_slice().clone());
+        monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs.clone());
     let compil_unit = CompilUnit {
         structs,
         funs
