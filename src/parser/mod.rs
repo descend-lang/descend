@@ -114,6 +114,10 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
                         ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
                             DataTyKind::Ident(ident.clone()),
                         )))),
+                    Kind::DataTy => 
+                        ArgKinded::DataTy(DataTy::new(
+                            DataTyKind::Ident(ident.clone()),
+                        )),
                     _ => panic!("This kind can not be referred to with an identifier."),
         }
     }
@@ -399,7 +403,7 @@ peg::parser! {
             }
 
         pub(crate) rule inherent_impl_def() -> ImplDef    
-            = "impl" __ g:generic_params()? _ dty:dty() _ w:where_clause()? _
+            = "impl" _ g:generic_params()? _ dty:dty() _ w:where_clause()? _
             "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
                 let constraints = w.unwrap_or(vec![]);
@@ -407,7 +411,7 @@ peg::parser! {
             }
 
         pub(crate) rule trait_impl_def() -> ImplDef 
-            = "impl" __ g:generic_params()? _ trait_impl:trait_mono_ty() __ "for" __
+            = "impl" _ g:generic_params()? _ trait_impl:trait_mono_ty() __ "for" __
             dty:dty() _ w:where_clause()? _ "{" _
             decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
@@ -459,13 +463,21 @@ peg::parser! {
         //     }
            
         rule where_clause() -> Vec<Constraint>
-            = "where" __ i:(where_clause_item() ** (_ "," _)) {
-                i
+            = "where" __ clauses:(where_clause_item() ** (_ "," _)) {
+                clauses.into_iter().fold(Vec::new(), |mut clauses, clause| {
+                    clauses.extend(clause);
+                    clauses
+                })
             }
         
-        rule where_clause_item() -> Constraint 
-            = param:dty() _ ":" _ trait_bound:trait_mono_ty() {
-                Constraint{param, trait_bound}
+        rule where_clause_item() -> Vec<Constraint>
+            = param:dty() _ ":" _ trait_bounds:(trait_mono_ty() ** (_ "+" _)) {
+                trait_bounds.into_iter().map(|trait_bound|
+                    Constraint{
+                        param: param.clone(),
+                        trait_bound
+                    }
+                ).collect()
             }
 
         rule kind_parameter() -> IdentKinded

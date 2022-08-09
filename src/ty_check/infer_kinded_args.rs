@@ -23,7 +23,7 @@ pub fn infer_kinded_args_from_mono_ty(
             infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
         }
         infer_kargs_tys(&mut res_map, subst_ret_ty, mono_ret_ty);
-        let mut res_vec = Vec::new();
+        let mut res_vec = Vec::with_capacity(remain_gen_args.len());
         for gen_arg in remain_gen_args {
             let res_karg = res_map.get(&gen_arg.ident).unwrap();
             if gen_arg.kind != res_karg.kind() {

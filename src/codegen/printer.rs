@@ -105,7 +105,7 @@ impl std::fmt::Display for Item {
                 if !templ_params.is_empty() {
                     write!(f, "template<")?;
                     fmt_vec(f, templ_params, ", ")?;
-                    writeln!(f, ">\n")?;
+                    writeln!(f, ">")?;
                 }
                 write!(f, "struct {};", name)
             },
@@ -117,7 +117,7 @@ impl std::fmt::Display for Item {
                 if !templ_params.is_empty() {
                     write!(f, "template<")?;
                     fmt_vec(f, templ_params, ", ")?;
-                    writeln!(f, ">\n")?;
+                    writeln!(f, ">")?;
                 }
 
                 writeln!(f, "struct {} {{", name)?;

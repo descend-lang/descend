@@ -92,7 +92,7 @@ impl CompilUnit {
         .iter()
         .find(|fun_def|
             fun_def.name == name
-        ).expect("Cannot find function definition.")
+        ).expect(format!("Cannot find function definition for fun {}.", name).as_str())
     }
 }
 
@@ -2368,6 +2368,7 @@ fn gen_templ_param(ty_ident: &desc::IdentKinded) -> cu::TemplParam {
             ty: cu::Ty::Scalar(cu::ScalarTy::Memory),
         },
         desc::Kind::Ty => cu::TemplParam::TyName { name },
+        desc::Kind::DataTy => cu::TemplParam::TyName { name },
         _ => panic!("Cannot generate template parameter for {:?}", ty_ident.kind),
     }
 }

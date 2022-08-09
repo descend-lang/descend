@@ -1,5 +1,5 @@
 use core::panic;
-use std::{collections::{HashMap, hash_map::RandomState}, vec};
+use std::{collections::{HashMap, hash_map::RandomState, HashSet}, vec};
 
 use crate::{ast::{*, visit_mut::{VisitMut, walk_expr}, visit::{Visit}}, ty_check::unify::{constrain, Constrainable}};
 
@@ -33,38 +33,44 @@ pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDef>
 
 struct Monomorphiser<'a> {
     items: &'a Vec<Item>,
-    funs: HashMap<FunctionName, FunDef>,
-    generated_funs: Vec<(FunctionName, FunDef)>
+    funs: Vec<(FunctionName, FunDef)>,
+    generated: HashMap<(FunctionName, Vec<ArgKinded>), String>,
+    generated_funs: Vec<(FunctionName, FunDef)>,
+    name_generator: NameGenerator
 }
 
 impl<'a> Monomorphiser<'a> {
     pub fn monomorphise(items: &Vec<Item>) -> Vec<FunDef> {
         let mut funs = 
-            items.iter().fold(HashMap::new(), |mut funs, item| {
+            items.iter().fold(Vec::new(), |mut funs, item| {
                 match item {
                     Item::ImplDef(impl_def) => 
-                    funs.extend(impl_to_global_funs(impl_def)),
+                        funs.extend(impl_to_global_funs(impl_def)),
                     Item::FunDef(fun_def) => {
-                        funs.insert(FunctionName::global_fun(&fun_def.name), fun_def.clone());
+                        funs.push((FunctionName::global_fun(&fun_def.name), fun_def.clone()));
                     },
-                    _ => (),
+                    Item::TraitDef(trait_def) =>
+                        funs.extend(trait_to_global_funs(trait_def)),
+                    Item::StructDef(_) => (),
                 };
                 funs
             });
         let mut mono_funs: HashMap<FunctionName, Vec<FunDef>, RandomState> = HashMap::from_iter(
-            funs.keys().map(|name|
-                (name.clone(), Vec::with_capacity(16))
+            funs.iter().map(|(name, _)|
+                (name.clone(), Vec::with_capacity(8))
             ));
         let mut monomorphiser = Monomorphiser {
             items: items,
             funs: funs.clone(),
-            generated_funs: Vec::with_capacity(funs.len() * 4)
+            generated: HashMap::new(),
+            generated_funs: Vec::with_capacity(funs.len() * 4),
+            name_generator: NameGenerator::new()
         };
 
-        funs.values_mut().for_each(|fun_def| {
+        funs.iter_mut().for_each(|(_, fun_def)| {
             monomorphiser.visit_fun_def(fun_def)
         });
-        while monomorphiser.generated_funs.is_empty() {
+        while !monomorphiser.generated_funs.is_empty() {
             let (fun_name, mono_fun) = monomorphiser.generated_funs.pop().unwrap();
             let mono_funs_with_name = mono_funs.get_mut(&fun_name).unwrap();
             if mono_funs_with_name.into_iter().find(|fun_def|
@@ -75,23 +81,56 @@ impl<'a> Monomorphiser<'a> {
         }
 
         funs.into_iter().fold(
-            Vec::<FunDef>::new(), |mut funs, (fun_name, fun_def)| {
-                let mono_funs = mono_funs.remove(&fun_name).unwrap();
-                if mono_funs.len() > 0 {
-                    funs.extend(
-                        mono_funs.into_iter().map(|fun|
-                            fun
-                        )
-                    );
+            Vec::<FunDef>::new(), |mut funs, (fun_name, mut fun_def)| {
+                if let FunctionKind::TraitFun(_) = fun_name.fun_kind {
                 } else {
-                    //TODO change name of fun_def
-                    funs.push(fun_def);
+                    let mut mono_funs = mono_funs.remove(&fun_name).unwrap();
+                    if mono_funs.len() > 0 {
+                        mono_funs.sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap());
+                        funs.extend(
+                            mono_funs.into_iter().map(|fun|
+                                fun
+                            )
+                        );
+                    } else {
+                        let fun_generics = &fun_def.generic_params;
+                        if fun_generics.iter()
+                            .find(|gen|{
+                                fun_def.constraints.iter()
+                                .find(|con|
+                                    if let DataTyKind::Ident(ident) = &con.param.dty {
+                                        ident.name == gen.ident.name
+                                    } else {
+                                        false
+                                    }
+                                ).is_some()
+                            }).is_some() {
+                            eprintln!("function {} \"{}\" is never used. Because this function has constraint \
+                                generic params, which needs to be monomoprhised, no code can be generated \
+                                for this function.",
+                                match fun_name.fun_kind {
+                                    FunctionKind::GlobalFun => "global_fun",
+                                    FunctionKind::TraitFun(_) => "trait_fun",
+                                    FunctionKind::ImplFun(_, _) => "impl_fun"
+                                }, fun_name.name)
+                        } else {
+                            fun_def.name = monomorphiser.name_generator.generate_name(&fun_name);
+                        funs.push(fun_def);
+                        }
+                    }
                 }
                 funs
         })
     }
 
-    fn monomorphise_fun_app(&mut self, path: &Path, fun_kind: &mut Option<FunctionKind>, fun: &mut Box<Expr>,
+    fn get_fun_def(&self, name: &FunctionName) -> &FunDef {
+        &self.funs.iter().find(|(fun_name, _)|
+            *name == *fun_name)
+        .expect(&format!("Did not find function definition of function {:#?}", name))
+        .1
+    }
+
+    fn monomorphise_fun_app(&mut self, fun_kind: &mut Option<FunctionKind>, fun: &mut Box<Expr>,
         generic_args: &mut Vec<ArgKinded>) {
         let (fun_name, fun_def) = {
             let fun_name = match &fun.expr {
@@ -106,12 +145,14 @@ impl<'a> Monomorphiser<'a> {
             let fun_name = FunctionName {
                 name: fun_name.clone(),
                 fun_kind: fun_kind.as_ref().unwrap().clone() };
+                if self.funs.get(&fun_name).is_none() {panic!("DOnt found {:#?}", fun_name)}
             (fun_name.clone(),
-            self.funs.get(&fun_name).unwrap())
+            self.get_fun_def(&fun_name))
         };
 
         //if the lengths are different: This is a call of a already monomorphised function
         if fun_def.generic_params.len() != generic_args.len() {
+            assert!(fun_def.generic_params.len() > generic_args.len());
             return;
         }
 
@@ -142,18 +183,37 @@ impl<'a> Monomorphiser<'a> {
 
         if !contains_dty_identifier(&con_generic_args, &con_generics) {
             if let FunctionKind::TraitFun(_) = fun_kind.as_ref().unwrap() {
-                self.replace_trait_fun_app(path, &fun_name, fun_kind, generic_args);
-                self.monomorphise_fun_app(path, fun_kind, fun, generic_args);
+                self.replace_trait_fun_app(&fun_name, fun_kind, generic_args);
+                self.monomorphise_fun_app(fun_kind, fun, generic_args);
             } else {
-                //TODO change name to avoid name conflicts
-                let mono_fun = monomorphise_fun(&fun_def, &con_generics, &con_generic_args);
+                let key_generated = (fun_name, con_generic_args);
+                let new_fun_name = 
+                    if let Some(fun_name) = self.generated.get(&key_generated) {
+                        fun_name.clone()
+                    } else {
+                        let mut mono_fun = monomorphise_fun(&fun_def, &con_generics, &key_generated.1);
+                        let new_fun_name = self.name_generator.generate_name(&key_generated.0);
+                        mono_fun.name = new_fun_name.clone();
+                        self.generated_funs.push((key_generated.0.clone(), mono_fun));
+                        self.generated.insert(key_generated, new_fun_name.clone());
+                        new_fun_name
+                    };
+
                 self.monomorphise_fun_call(fun_kind, generic_args, &fun_generics, &con_generics);
-                self.generated_funs.push((fun_name, mono_fun));
+                match &mut fun.expr {
+                    ExprKind::PlaceExpr(place_expr) =>
+                        if let PlaceExprKind::Ident(ident) = &mut place_expr.pl_expr {
+                            ident.name = new_fun_name;
+                        } else {
+                            panic!("Dont know how to set function name")
+                        },
+                    _ => panic!("Dont know how to set function name"),
+                }
             }
         }
     }
 
-    fn replace_trait_fun_app(&mut self, path: &Path, fun_name: &FunctionName,
+    fn replace_trait_fun_app(&mut self, fun_name: &FunctionName,
         fun_kind: &mut Option<FunctionKind>, generic_args: &mut Vec<ArgKinded>) {
         let trait_def =
             if let FunctionKind::TraitFun(name) = fun_kind.as_ref().unwrap() {
@@ -171,10 +231,9 @@ impl<'a> Monomorphiser<'a> {
                 panic!("trait_fun_call with non TraitFun-Kind!")
             };
         let impl_dty =
-            match path {
-                Path::DataTy(dty) => dty,
-                Path::InferFromFirstArg => panic!("this should be replaced while type_checking"),
-                Path::Empty => panic!("found a trait_fun_call without a path"),
+            match generic_args.first().unwrap() {
+                ArgKinded::DataTy(dty) => dty.clone(),
+                _ => panic!("Found non-datatype ArgKinded as generic arg for Self"),
         };
         let (impl_def, dty_unfication) =
             if let Err((impl_def, dty_unfication)) =
@@ -203,8 +262,8 @@ impl<'a> Monomorphiser<'a> {
         };
         
         let trait_mono_args = Vec::from_iter(
-            generic_args.drain(0..trait_def.generic_params.len()));
-        let fun_generic_args = generic_args.drain(..);
+            generic_args.drain(1..trait_def.generic_params.len()+1));
+        let fun_generic_args = generic_args.drain(1..);
         //Infer generic_args of impl from impl_dty and trait_mono_args
         let mut impl_trait_mono =
             TraitMonoType {
@@ -262,8 +321,8 @@ impl<'a> Monomorphiser<'a> {
 impl<'a> VisitMut for Monomorphiser<'a> {
     fn visit_expr(&mut self, expr: &mut Expr) {
         match &mut expr.expr {
-            ExprKind::App(path, fun_kind, fun, generic_args, _) =>
-                self.monomorphise_fun_app(path, fun_kind, fun, generic_args),
+            ExprKind::App(_, fun_kind, fun, generic_args, _) =>
+                self.monomorphise_fun_app(fun_kind, fun, generic_args),
             ExprKind::DepApp(_, _) => panic!("Does this happen? What to do now?"),
             _ => walk_expr(self, expr)
         }
@@ -346,22 +405,69 @@ fn monomorphise_fun(fun_def: &FunDef, generics: &Vec<IdentKinded>, generic_args:
 fn impl_to_global_funs(impl_def: &ImplDef) -> impl Iterator<Item = (FunctionName, FunDef)> + '_ {
     impl_def.decls.iter().filter_map(|ass_item|
         match ass_item {
-            AssociatedItem::FunDef(fun_def) => {
-                let mut fun_def = fun_def.clone();
-                fun_def.generic_params =
-                    impl_def.generic_params.clone().into_iter()
-                    .chain(fun_def.generic_params.into_iter())
-                    .collect();
-                fun_def.constraints = 
-                    impl_def.constraints.clone().into_iter()
-                    .chain(fun_def.constraints.into_iter())
-                    .collect();   
-                Some((FunctionName::from_impl(&fun_def.name, impl_def), fun_def))
-            },
+            AssociatedItem::FunDef(fun_def) =>
+                Some((FunctionName::from_impl(&fun_def.name, impl_def),
+                    polymorhpise_fun(fun_def, &impl_def.generic_params, &impl_def.constraints))),
             AssociatedItem::FunDecl(_) => panic!("impls should not conatain fun_decls"),
             AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
         }
     )
+}
+
+//Create multiple global functions (with empty bodys) from an trait
+fn trait_to_global_funs(trait_def: &TraitDef) -> impl Iterator<Item = (FunctionName, FunDef)> + '_ {
+    fn self_chain_generics(trait_def: &TraitDef) -> Vec<IdentKinded> {
+        std::iter::once(IdentKinded::new(&Ident::new("Self"), Kind::DataTy))
+        .chain(
+            trait_def.generic_params.clone()
+        ).collect()
+    }
+
+    trait_def.decls.iter().filter_map(|ass_item|
+        match ass_item {
+            AssociatedItem::FunDef(fun_def) =>
+                Some((FunctionName::from_trait(&fun_def.name, trait_def),
+                    polymorhpise_fun(fun_def, &self_chain_generics(trait_def), &trait_def.constraints))),
+            AssociatedItem::FunDecl(fun_decl) =>
+                Some((FunctionName::from_trait(&fun_decl.name, trait_def),
+                    FunDef {
+                        name: fun_decl.name.clone(),
+                        generic_params:
+                            self_chain_generics(trait_def).into_iter()
+                            .chain(fun_decl.generic_params.clone().into_iter())
+                            .collect(),
+                        constraints:
+                            trait_def.constraints.clone().into_iter()
+                            .chain(fun_decl.constraints.clone().into_iter())
+                            .collect(),
+                        param_decls: vec![],
+                        ret_dty: fun_decl.ret_dty.clone(),
+                        exec: fun_decl.exec,
+                        prv_rels: fun_decl.prv_rels.clone(),
+                        body_expr: Expr::new(ExprKind::Seq(vec![]))
+                    })),
+            AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
+        }
+    )
+}
+
+fn polymorhpise_fun(fun_def: &FunDef, generics: &Vec<IdentKinded>, constraints: &Vec<Constraint>) -> FunDef {
+    FunDef {
+        name: fun_def.name.clone(),
+        generic_params:
+            generics.clone().into_iter()
+            .chain(fun_def.generic_params.clone().into_iter())
+            .collect(),
+        constraints:
+            constraints.clone().into_iter()
+            .chain(fun_def.constraints.clone().into_iter())
+            .collect(),
+        param_decls: fun_def.param_decls.clone(),
+        ret_dty: fun_def.ret_dty.clone(),
+        exec: fun_def.exec,
+        prv_rels: fun_def.prv_rels.clone(),
+        body_expr: fun_def.body_expr.clone()
+    }
 }
 
 //Create a new fun for an impl from a fun_def in a trait
@@ -439,4 +545,63 @@ fn contains_dty_identifier(generics_args: &Vec<ArgKinded>, identifier: &Vec<Iden
         }
         res
     }).result
+}
+
+struct NameGenerator {
+    generated_names: HashSet<String>
+}
+
+impl NameGenerator {
+    const CPP_KEYWORDS: [&'static str; 101]= ["alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel", "atomic_commit", "atomic_noexcept", "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class", "compl", "concept", "const", "consteval", "constexpr", "constinit", "const_cast", "continue", "co_await", "co_return", "co_yield", "decltype", "default", "delete", "do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "final", "float", "for", "friend", "goto", "if", "import", "inline", "int", "long", "module", "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator", "or", "or_eq", "override", "private", "protected", "public", "reflexpr", "register", "reinterpret_cast", "requires", "return", "short", "signed", "sizeof", "static", "static_assert", "static_cast", "struct", "switch", "synchronized", "template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq"];
+
+    fn is_keyword(name: &str) -> bool {
+        NameGenerator::CPP_KEYWORDS.iter().find(|str| ***str == *name).is_some()
+    }
+
+    pub fn new() -> Self {
+        NameGenerator {
+            generated_names: HashSet::from_iter(
+                NameGenerator::CPP_KEYWORDS.iter().map(|str| String::from(*str)))
+        }
+    }
+
+    pub fn generate_name(&mut self, function_name: &FunctionName) -> String {
+        let name = &function_name.name;
+        if let FunctionKind::ImplFun(impl_dty_scheme, _) = &function_name.fun_kind {
+            if let TyKind::Data(dty) = &impl_dty_scheme.mono_ty.ty {
+                match &dty.dty {
+                    DataTyKind::Struct(struct_dty) =>
+                        self.generate_name_internal(
+                            &match (NameGenerator::is_keyword(&struct_dty.name), NameGenerator::is_keyword(name)) {
+                                (true, true) => format!("_{}::_{}", struct_dty.name, name),
+                                (true, false) => format!("_{}::{}", struct_dty.name, name),
+                                (false, true) => format!("{}::_{}", struct_dty.name, name),
+                                (false, false) => format!("{}::{}", struct_dty.name, name),
+                            }),
+                    _ => self.generate_name_internal(name)
+                }
+            } else {
+                self.generate_name_internal(name)
+            }
+        } else {
+            self.generate_name_internal(name)
+        }
+    }
+
+    fn generate_name_internal(&mut self, name: &String) -> String {
+        let res = 
+            if self.generated_names.get(name).is_none() {
+                name.clone()
+            } else {
+                let mut counter = 2;
+                let mut result = format!("{}{}", name, counter);
+                while self.generated_names.get(&result).is_some() {
+                    counter += 1;
+                    result = format!("{}{}", name, counter)
+                }
+                result
+            };
+        self.generated_names.insert(res.clone());
+        res    
+    }
 }

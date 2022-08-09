@@ -20,7 +20,6 @@ use std::collections::HashSet;
 use std::ops::Deref;
 
 use self::constraint_check::ConstraintScheme;
-use self::unify::Constrainable;
 
 type TyResult<T> = Result<T, TyError>;
 
@@ -114,7 +113,7 @@ impl TyChecker {
                     AssociatedItem::FunDecl(fun_decl) => {
                         let fun_ty = self.gl_ctx.fun_ty_by_name(
                             FunctionName {
-                                name: trait_def.name.clone(),
+                                name: fun_decl.name.clone(),
                                 fun_kind: FunctionKind::TraitFun(trait_def.name.clone())
                             }
                         );
@@ -156,19 +155,21 @@ impl TyChecker {
             generics.push(IdentKinded::new(&Ident::new("Self"), Kind::DataTy));
             generics.extend(trait_def.generic_params.clone());
 
-            //Check every generic is a free type var in "monotypes"
-            let free_idents =
-                monotypes
-                .iter()
-                .fold(HashSet::new(), |mut free, monoty| {
-                    free.extend(monoty.free_idents());
-                    free
-            });
-            if !impl_def.generic_params.iter()
-                .fold(true, |res, gen|
-                res & free_idents.contains(gen)) {
-                return Err(TyError::WrongNumberOfGenericParams(free_idents.len(), generics.len()));
-            }
+            //TODO collecting free_idents dont work yet
+            // //Check every generic is a free type var in "monotypes"
+            // let free_idents =
+            //     monotypes
+            //     .iter()
+            //     .fold(HashSet::new(), |mut free, monoty| {
+            //         free.extend(monoty.free_idents());
+            //         free
+            // });
+            // println!("Free idents: {:#?}", free_idents);
+            // if !impl_def.generic_params.iter()
+            //     .fold(true, |res, gen|
+            //     res & free_idents.contains(gen)) {
+            //     return Err(TyError::WrongNumberOfGenericParams(free_idents.len(), generics.len()));
+            // }
 
             self.well_formed_constraint_scheme(&kind_ctx, &ty_ctx, 
                 &ConstraintScheme {
@@ -235,23 +236,31 @@ impl TyChecker {
 
             //Check if all fun_decls from the trait are implmented here
             let mut ass_items_to_check: Vec<&mut AssociatedItem> = impl_def.decls.iter_mut().collect();
-            trait_def.decls.iter().for_each(|ass_item|
+            trait_def.decls.iter().for_each(|ass_item| {
+                let fun_name = 
+                    match ass_item {
+                        AssociatedItem::FunDef(fun_def) =>
+                            fun_def.name.clone(),
+                        AssociatedItem::FunDecl(fun_decl) =>
+                            fun_decl.name.clone(),
+                        AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO")
+                    };
                 match ass_item {
-                    AssociatedItem::FunDef(_) => (),
-                    AssociatedItem::FunDecl(fun_decl) =>
+                    AssociatedItem::FunDef(_) |
+                    AssociatedItem::FunDecl(_) =>
                         if let Some(index) =
                             ass_items_to_check
                             .iter()
                             .position(|impl_ass_item|
                                 match impl_ass_item {
-                                    AssociatedItem::FunDef(fun) => fun.name == fun_decl.name,
+                                    AssociatedItem::FunDef(fun) => fun.name == fun_name,
                                     _ => false}) {
                             let fun_impl =
                                 match ass_items_to_check.swap_remove(index) {
                                     AssociatedItem::FunDef(fun_def) => fun_def,
                                     _ => panic!("This can not happen")
                                 };
-                            let fun_decl_ty = self.gl_ctx.fun_ty_by_name(FunctionName::from_trait(&fun_decl.name, &trait_def));
+                            let fun_decl_ty = self.gl_ctx.fun_ty_by_name(FunctionName::from_trait(&fun_name, &trait_def));
 
                             let expected_impl_fun_ty = 
                                 TypeScheme {
@@ -284,13 +293,13 @@ impl TyChecker {
                                 errors.push(TyError::UnexpectedType)
                             } 
                         } else {
-                            errors.push(TyError::from(CtxError::FunNotImplemented(fun_decl.name.clone())))
+                            errors.push(TyError::from(CtxError::FunNotImplemented(fun_name.clone())))
                         },
                     AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO")
                 }
-            );
+            });
 
-            ass_items_to_check.iter().for_each(|_| 
+            ass_items_to_check.iter().for_each(|_|
                 errors.push(TyError::UnexpectedItem)
             );
 
@@ -545,7 +554,7 @@ impl TyChecker {
                             .zip(generic_args.iter())
                             .fold(field.ty.clone(), |ty, (gen, arg)|
                                 ty.subst_ident_kinded(gen, arg));
-                        if &Ty::new(TyKind::Data(expected_ty)) != expr.ty.as_ref().unwrap() {
+                        if Ty::new(TyKind::Data(expected_ty)) != *expr.ty.as_ref().unwrap() {
                             errs.push(TyError::UnexpectedType)
                         }
                     },
@@ -564,7 +573,7 @@ impl TyChecker {
                         !self.gl_ctx.theta.check_constraint(con)) {
                     Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))
                 } else {
-                    Ok((ty_ctx, res_ty.as_mono().unwrap()))
+                    Ok((ty_ctx, res_ty.mono_ty))
                 }
             } else {
                 Err(TyError::UnexpectedNumberOfStructFields(struct_def.decls.len(), inst_exprs.len()))

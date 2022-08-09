@@ -82,7 +82,6 @@ fn test_impl_def() {
 }
 
 #[test]
-//TODO generated Code is wrong
 fn test_method_call() {
     let src = r#"
     struct Point {
@@ -108,7 +107,7 @@ fn test_method_call() {
         let p2 = p.foo();
         let q2x = q.foo().x;
         let p3 = (&shrd p2).eq(&shrd p2);
-        let p4 = eq(&shrd p2, &shrd p2);
+        let p4 = Point::eq(&shrd p2, &shrd p2);
         let z = p2.x;
         ()
     }
@@ -134,24 +133,29 @@ fn test_monomoprhisation() {
     }
     impl<A, B, C> Eq<A, B> for Point<B, C> where A: Trait1 + Trait2, B: Trait2 {
         fn new<Z>(z: Z) -[cpu.thread]-> i32 {
-            let p: Point<i32, i32> = Point { x: 42, y: 43 };
-            foo(p, true)
+            let mut a: A;
+            let mut b: B;
+            let p: Point<i32, i32> = Point<i32, i32> { x: 42, y: 43 };
+            foo::<i32>(p, true); //TODO infer generic
+            42
         }
     }
     impl Trait1 for i32 {}
     impl Trait2 for i32 {}
-    impl Trait1 for f32 {}
-    impl Trait2 for f32 {}
+    impl Trait1 for f64 {}
+    impl Trait2 for f64 {}
 
     fn foo<X, Z, T>(t: T, z: Z) -[cpu.thread] -> i32 where X: Trait1, T: Eq<X, X> {
-        T::new(z)
+        //T::new(z)
+        T::new::<T, X, X, Z>(z) //TODO generics should be inferred
     }
 
     fn bar() -[cpu.thread]-> i32 {
-        let p: Point<f32, i32> = Point { x: 4.0, y: 42 };
-        foo(p, 42);
-        let p2: Point<f32, i32> = Point { x: 4.0, y: 42 };
-        foo(p2, "hello_world")
+        let p: Point<f64, i32> = Point<f64, i32> { x: 4.0, y: 42 };
+        foo::<f64>(p, 42); //TODO infer generic
+        let p2: Point<i32, f64> = Point<i32, f64> { x: 4, y: 42.0 };
+        foo::<i32>(p2, 42.5); //TODO infer generic
+        42
     }
     "#;
     assert_compile!(src);

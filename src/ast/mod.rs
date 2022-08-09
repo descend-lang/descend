@@ -484,12 +484,15 @@ impl Expr {
             fn visit_dty(&mut self, dty: &mut DataTy) {
                 match &mut dty.dty {
                     DataTyKind::Ident(ident) => {
-                        if let Some(ArgKinded::Ty(Ty {
-                            ty: TyKind::Data(dty_arg),
-                            ..
-                        })) = self.subst_map.get::<&str>(&ident.name.as_str())
-                        {
-                            *dty = dty_arg.clone()
+                        match self.subst_map.get::<&str>(&ident.name.as_str()) {
+                            Some(ArgKinded::Ty(Ty {
+                                ty: TyKind::Data(dty_arg),
+                                ..
+                            })) |
+                            Some(ArgKinded::DataTy(dty_arg)) => {
+                                *dty = dty_arg.clone()
+                            },
+                            _ => visit_mut::walk_dty(self, dty)
                         }
                     }
                     _ => visit_mut::walk_dty(self, dty),
@@ -799,8 +802,8 @@ pub enum ArgKinded {
 impl ArgKinded {
     pub fn kind(&self) -> Kind {
         match self {
-            ArgKinded::Ident(_) => {
-                panic!("Unexpected: unkinded identifier should have been removed after parsing")
+            ArgKinded::Ident(ident) => {
+                panic!("Unexpected: unkinded identifier \"{}\" should have been removed after parsing", ident.name)
             }
             ArgKinded::Ty(_) => Kind::Ty,
             ArgKinded::DataTy(_) => Kind::DataTy,

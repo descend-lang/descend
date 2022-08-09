@@ -745,12 +745,34 @@ impl GlobalCtx {
         let result = 
             self.funs.keys().fold(Vec::with_capacity(1), |mut res, fun_name_canidate| {
                 if fun_name_canidate.name == *fun_name {
-                    if let FunctionKind::ImplFun(impl_dty_canidate, _) = &fun_name_canidate.fun_kind {
-                        let mut impl_dty = Ty::new(TyKind::Data(impl_dty.clone()));
-                        let mut impl_dty_canidate = impl_dty_canidate.clone();
-                        if unify(&mut impl_dty, &mut impl_dty_canidate.mono_ty).is_ok() {
-                            res.push(fun_name_canidate)
-                        }
+                    match &fun_name_canidate.fun_kind {
+                        FunctionKind::ImplFun(impl_dty_canidate, _) =>  {
+                            let mut impl_dty = Ty::new(TyKind::Data(impl_dty.clone()));
+                            let mut impl_dty_canidate = impl_dty_canidate.clone();
+                            if unify(&mut impl_dty, &mut impl_dty_canidate.mono_ty).is_ok() {
+                                res.push(fun_name_canidate)
+                            }
+                        },
+                        FunctionKind::TraitFun(trait_name) => {
+                            if self.theta.check_constraint(&Constraint {
+                                param: impl_dty.clone(),
+                                trait_bound:
+                                    TraitMonoType {
+                                        name: trait_name.clone(),
+                                        generics:
+                                            self.trait_ty_by_name(trait_name)
+                                            .unwrap()
+                                            .generic_params
+                                            .iter()
+                                            .map(|gen|
+                                                gen.arg_kinded())
+                                            .collect()
+                                    }
+                                }) {
+                                res.push(fun_name_canidate)
+                            }
+                        },
+                        _ => (),
                     }
                 }
                 res
