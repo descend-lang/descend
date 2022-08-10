@@ -1,4 +1,4 @@
-use crate::ast::utils::{FreeKindedIdents, fresh_ident};
+use crate::ast::utils::{fresh_ident, FreeKindedIdents};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
@@ -43,8 +43,10 @@ pub(super) fn inst_ty_scheme(
     tyscheme: &TypeScheme
 ) -> (Ty, Vec<Constraint>) {
     let inst_tyscheme = tyscheme.instantiate(
-        &tyscheme.generic_params.iter().map(|i|
-            match i.kind {
+        &tyscheme
+            .generic_params
+            .iter()
+            .map(|i| match i.kind {
                 Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
                 Kind::DataTy => {
                     ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
@@ -54,7 +56,8 @@ pub(super) fn inst_ty_scheme(
                 Kind::Provenance => {
                     ArgKinded::Provenance(fresh_ident(&i.ident.name, Provenance::Ident))
                 }
-        }).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
     );
 
     (inst_tyscheme.mono_ty, inst_tyscheme.constraints)
@@ -174,20 +177,21 @@ impl Constrainable for ArgKinded {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (self, other) {
-            (ArgKinded::Ident(_), ArgKinded::Ident(_)) =>
-                unimplemented!("needed?"),
-            (ArgKinded::DataTy(dt1), ArgKinded::DataTy(dt2)) =>
-                dt1.constrain(dt2, constr_map, prv_rels),
-            (ArgKinded::Memory(mem1), ArgKinded::Memory(mem2)) =>
-                mem1.constrain(mem2, constr_map, prv_rels), 
-            (ArgKinded::Nat(nat1), ArgKinded::Nat(nat2)) =>
-                nat1.constrain(nat2, constr_map, prv_rels),      
-            (ArgKinded::Provenance(prov1), ArgKinded::Provenance(prov2)) =>
-                prov1.constrain(prov2, constr_map, prv_rels), 
-            (ArgKinded::Ty(ty1), ArgKinded::Ty(ty2)) =>
-                ty1.constrain(ty2, constr_map, prv_rels),
-            _ => 
-                Err(TyError::CannotUnify)
+            (ArgKinded::Ident(_), ArgKinded::Ident(_)) => unimplemented!("needed?"),
+            (ArgKinded::DataTy(dt1), ArgKinded::DataTy(dt2)) => {
+                dt1.constrain(dt2, constr_map, prv_rels)
+            }
+            (ArgKinded::Memory(mem1), ArgKinded::Memory(mem2)) => {
+                mem1.constrain(mem2, constr_map, prv_rels)
+            }
+            (ArgKinded::Nat(nat1), ArgKinded::Nat(nat2)) => {
+                nat1.constrain(nat2, constr_map, prv_rels)
+            }
+            (ArgKinded::Provenance(prov1), ArgKinded::Provenance(prov2)) => {
+                prov1.constrain(prov2, constr_map, prv_rels)
+            }
+            (ArgKinded::Ty(ty1), ArgKinded::Ty(ty2)) => ty1.constrain(ty2, constr_map, prv_rels),
+            _ => Err(TyError::CannotUnify),
         }
     }
 
@@ -214,8 +218,10 @@ impl Constrainable for Constraint {
             return Err(TyError::CannotUnify);
         }
 
-        self.param.constrain(&mut other.param, constr_map, prv_rels)?;
-        self.trait_bound.constrain(&mut other.trait_bound, constr_map, prv_rels)
+        self.param
+            .constrain(&mut other.param, constr_map, prv_rels)?;
+        self.trait_bound
+            .constrain(&mut other.trait_bound, constr_map, prv_rels)
     }
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
@@ -245,8 +251,7 @@ impl Constrainable for TraitMonoType {
         self.generics
             .iter_mut()
             .zip(other.generics.iter_mut())
-            .try_for_each(|(arg_ty1, arg_ty2)|
-                arg_ty1.constrain(arg_ty2, constr_map, prv_rels))
+            .try_for_each(|(arg_ty1, arg_ty2)| arg_ty1.constrain(arg_ty2, constr_map, prv_rels))
     }
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
@@ -271,10 +276,7 @@ impl Constrainable for Ty {
         match (&mut self.ty, &mut other.ty) {
             (TyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
             (_, TyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
-            (
-                TyKind::Fn(param_tys1, exec1, ret_ty1),
-                TyKind::Fn(param_tys2, exec2, ret_ty2),
-            ) => {
+            (TyKind::Fn(param_tys1, exec1, ret_ty1), TyKind::Fn(param_tys2, exec2, ret_ty2)) => {
                 if exec1 != exec2 {
                     return Err(TyError::CannotUnify);
                 }
@@ -360,25 +362,23 @@ impl Constrainable for DataTy {
                 }
                 assert!(struct_1.generic_args.len() == struct_2.generic_args.len());
                 assert!(struct_1.attributes.len() == struct_2.attributes.len());
-                struct_1.generic_args
-                .iter_mut()
-                .zip(struct_2.generic_args.iter_mut())
-                .try_for_each(|(gen1, gen2)|
-                    gen1.constrain(gen2, constr_map, prv_rels)
-                )?;
-                struct_1.attributes
-                .iter_mut()
-                .try_for_each(|attr1|
-                    attr1.ty.constrain(&mut
-                        struct_2.attributes
-                        .iter_mut()
-                        .find(|attr2|
-                            attr1.name == attr2.name)
-                        .unwrap()
-                        .ty,
+                struct_1
+                    .generic_args
+                    .iter_mut()
+                    .zip(struct_2.generic_args.iter_mut())
+                    .try_for_each(|(gen1, gen2)| gen1.constrain(gen2, constr_map, prv_rels))?;
+                struct_1.attributes.iter_mut().try_for_each(|attr1| {
+                    attr1.ty.constrain(
+                        &mut struct_2
+                            .attributes
+                            .iter_mut()
+                            .find(|attr2| attr1.name == attr2.name)
+                            .unwrap()
+                            .ty,
                         constr_map,
-                        prv_rels)
-                )
+                        prv_rels,
+                    )
+                })
             }
             (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;

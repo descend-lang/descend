@@ -30,13 +30,12 @@ impl<'a> CompilUnit<'a> {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     FunDef(FunDef),
     StructDef(StructDef),
     TraitDef(TraitDef),
-    ImplDef(ImplDef)
+    ImplDef(ImplDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,26 +79,30 @@ impl StructDef {
     pub fn ty(&self) -> TypeScheme {
         let struct_ty = StructDataType {
             name: self.name.clone(),
-            attributes:
-                self.decls.iter()
-                .map(|field|
-                    StructField {
+            attributes: self
+                .decls
+                .iter()
+                .map(|field| StructField {
                     name: field.name.clone(),
-                    ty: self.generic_params.iter()
-                        .fold(field.ty.clone(), |res, gen|
+                    ty: self
+                        .generic_params
+                        .iter()
+                        .fold(field.ty.clone(), |res, gen| {
                             res.subst_ident_kinded(gen, &gen.arg_kinded())
-                        )
-                    })
+                        }),
+                })
                 .collect(),
-            generic_args: self.generic_params.iter()
-            .map(|gen| gen.arg_kinded()).collect(),
+            generic_args: self
+                .generic_params
+                .iter()
+                .map(|gen| gen.arg_kinded())
+                .collect(),
         };
 
         TypeScheme {
             generic_params: self.generic_params.clone(),
             constraints: self.constraints.clone(),
-            mono_ty:
-                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Struct(struct_ty))))
+            mono_ty: Ty::new(TyKind::Data(DataTy::new(DataTyKind::Struct(struct_ty)))),
         }
     }
 }
@@ -110,7 +113,7 @@ pub struct TraitDef {
     pub generic_params: Vec<IdentKinded>,
     pub constraints: Vec<Constraint>,
     pub decls: Vec<AssociatedItem>,
-    pub supertraits: Vec<TraitMonoType>
+    pub supertraits: Vec<TraitMonoType>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,7 +122,7 @@ pub struct ImplDef {
     pub generic_params: Vec<IdentKinded>,
     pub constraints: Vec<Constraint>,
     pub decls: Vec<AssociatedItem>,
-    pub trait_impl: Option<TraitMonoType>
+    pub trait_impl: Option<TraitMonoType>,
 }
 
 impl ImplDef {
@@ -127,7 +130,7 @@ impl ImplDef {
         TypeScheme {
             generic_params: self.generic_params.clone(),
             constraints: self.constraints.clone(),
-            mono_ty: Ty::new(TyKind::Data(self.dty.clone()))
+            mono_ty: Ty::new(TyKind::Data(self.dty.clone())),
         }
     }
 }
@@ -136,7 +139,7 @@ impl ImplDef {
 pub enum AssociatedItem {
     FunDef(FunDef),
     FunDecl(FunDecl),
-    ConstItem(String, DataTy, Option<Expr>)
+    ConstItem(String, DataTy, Option<Expr>),
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -148,7 +151,7 @@ pub struct Constraint {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct TraitMonoType {
     pub name: String,
-    pub generics: Vec<ArgKinded>
+    pub generics: Vec<ArgKinded>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -160,20 +163,16 @@ pub struct StructDataType {
 
 impl StructDataType {
     pub fn get_ty(&self, name: &String) -> Option<&DataTy> {
-        match self.attributes.iter()
-            .find(|field|
-                field.name == *name) {
+        match self.attributes.iter().find(|field| field.name == *name) {
             Some(field) => Some(&field.ty),
-            None => None
+            None => None,
         }
     }
 
     pub fn get_ty_mut(&mut self, name: &String) -> Option<&mut DataTy> {
-        match self.attributes.iter_mut()
-            .find(|field|
-                field.name == *name) {
+        match self.attributes.iter_mut().find(|field| field.name == *name) {
             Some(field) => Some(&mut field.ty),
-            None => None
+            None => None,
         }
     }
 }
@@ -181,34 +180,33 @@ impl StructDataType {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct FunctionName {
     pub name: String,
-    pub fun_kind: FunctionKind
+    pub fun_kind: FunctionKind,
 }
 
 impl FunctionName {
     pub fn global_fun(name: &str) -> Self {
         FunctionName {
             name: String::from(name),
-            fun_kind: FunctionKind::GlobalFun
+            fun_kind: FunctionKind::GlobalFun,
         }
     }
 
     pub fn from_impl(name: &str, impl_def: &ImplDef) -> Self {
-        let trait_name = 
-            if impl_def.trait_impl.is_some() {
-                Some(impl_def.trait_impl.as_ref().unwrap().name.clone())
-            } else {
-                None
-            };
+        let trait_name = if impl_def.trait_impl.is_some() {
+            Some(impl_def.trait_impl.as_ref().unwrap().name.clone())
+        } else {
+            None
+        };
         FunctionName {
             name: String::from(name),
-            fun_kind: FunctionKind::ImplFun(impl_def.ty(), trait_name)
+            fun_kind: FunctionKind::ImplFun(impl_def.ty(), trait_name),
         }
     }
 
     pub fn from_trait(name: &str, trait_def: &TraitDef) -> Self {
         FunctionName {
             name: String::from(name),
-            fun_kind: FunctionKind::TraitFun(trait_def.name.clone())
+            fun_kind: FunctionKind::TraitFun(trait_def.name.clone()),
         }
     }
 }
@@ -228,20 +226,23 @@ pub enum FunctionKind {
     TraitFun(String),
 }
 
-pub trait SubstKindedIdents where Self: Sized + Clone {
+pub trait SubstKindedIdents
+where
+    Self: Sized + Clone,
+{
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self;
-    
+
     fn subst_idents_kinded<'a, 'b, I, J>(&self, ident_kinded: I, with: J) -> Self
     where
         I: ExactSizeIterator<Item = &'a IdentKinded>,
-        J: ExactSizeIterator<Item = &'b ArgKinded>
+        J: ExactSizeIterator<Item = &'b ArgKinded>,
     {
         assert!(ident_kinded.len() == with.len());
         ident_kinded
-        .zip(with)
-        .fold(self.clone(), |res, (ident, with)|
-            res.subst_ident_kinded(ident, with)
-        )
+            .zip(with)
+            .fold(self.clone(), |res, (ident, with)| {
+                res.subst_ident_kinded(ident, with)
+            })
     }
 }
 
@@ -249,8 +250,11 @@ impl SubstKindedIdents for TraitMonoType {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         TraitMonoType {
             name: self.name.clone(),
-            generics: self.generics.iter().map(|arg|
-                arg.subst_ident_kinded(ident_kinded, with)).collect()
+            generics: self
+                .generics
+                .iter()
+                .map(|arg| arg.subst_ident_kinded(ident_kinded, with))
+                .collect(),
         }
     }
 }
@@ -259,7 +263,7 @@ impl SubstKindedIdents for Constraint {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         Constraint {
             param: self.param.subst_ident_kinded(ident_kinded, with),
-            trait_bound: self.trait_bound.subst_ident_kinded(ident_kinded, with)
+            trait_bound: self.trait_bound.subst_ident_kinded(ident_kinded, with),
         }
     }
 }
@@ -269,9 +273,13 @@ impl TraitDef {
         let self_ident = Ident::new("Self");
         let self_ty = DataTy::new(DataTyKind::Ident(self_ident.clone()));
 
-        self.supertraits.iter().map(|supertrait| 
-            Constraint { param: self_ty.clone(), trait_bound: supertrait.clone() }
-        ).collect()
+        self.supertraits
+            .iter()
+            .map(|supertrait| Constraint {
+                param: self_ty.clone(),
+                trait_bound: supertrait.clone(),
+            })
+            .collect()
     }
 }
 
@@ -289,7 +297,7 @@ impl FunDef {
                 param_tys,
                 self.exec,
                 Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
-            ))
+            )),
         }
     }
 }
@@ -308,7 +316,7 @@ impl FunDecl {
                 param_tys,
                 self.exec,
                 Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
-            ))
+            )),
         }
     }
 }
@@ -410,7 +418,8 @@ impl Expr {
                                     let mut tuple_expr =
                                         Expr::new(ExprKind::PlaceExpr(tuple.as_ref().clone()));
                                     self.visit_expr(&mut tuple_expr);
-                                    *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), i.clone()));
+                                    *expr =
+                                        Expr::new(ExprKind::Proj(Box::new(tuple_expr), i.clone()));
                                 }
                                 PlaceExprKind::Deref(deref_expr) => {
                                     let mut ref_expr =
@@ -488,11 +497,9 @@ impl Expr {
                             Some(ArgKinded::Ty(Ty {
                                 ty: TyKind::Data(dty_arg),
                                 ..
-                            })) |
-                            Some(ArgKinded::DataTy(dty_arg)) => {
-                                *dty = dty_arg.clone()
-                            },
-                            _ => visit_mut::walk_dty(self, dty)
+                            }))
+                            | Some(ArgKinded::DataTy(dty_arg)) => *dty = dty_arg.clone(),
+                            _ => visit_mut::walk_dty(self, dty),
                         }
                     }
                     _ => visit_mut::walk_dty(self, dty),
@@ -560,7 +567,13 @@ pub enum ExprKind {
     // Function application
     // Struct::<T>::e_f(e_1, ..., e_n)
     // FunctionKind is inferred while typechecking
-    App(Path, Option<FunctionKind>, Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
+    App(
+        Path,
+        Option<FunctionKind>,
+        Box<Expr>,
+        Vec<ArgKinded>,
+        Vec<Expr>,
+    ),
     // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
@@ -803,7 +816,10 @@ impl ArgKinded {
     pub fn kind(&self) -> Kind {
         match self {
             ArgKinded::Ident(ident) => {
-                panic!("Unexpected: unkinded identifier \"{}\" should have been removed after parsing", ident.name)
+                panic!(
+                    "Unexpected: unkinded identifier \"{}\" should have been removed after parsing",
+                    ident.name
+                )
             }
             ArgKinded::Ty(_) => Kind::Ty,
             ArgKinded::DataTy(_) => Kind::DataTy,
@@ -817,22 +833,20 @@ impl ArgKinded {
 impl SubstKindedIdents for ArgKinded {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match self {
-            ArgKinded::Ident(ident) =>
+            ArgKinded::Ident(ident) => {
                 if ident.name == ident_kinded.ident.name {
                     with.clone()
                 } else {
                     ArgKinded::Ident(ident.clone())
-                },
-            ArgKinded::Nat(nat) =>
-                ArgKinded::Nat(nat.subst_ident_kinded(ident_kinded, with)),
-            ArgKinded::Memory(mem) =>
-                ArgKinded::Memory(mem.subst_ident_kinded(ident_kinded, with)),
-            ArgKinded::Ty(ty) =>
-                ArgKinded::Ty(ty.subst_ident_kinded(ident_kinded, with)),
-            ArgKinded::DataTy(dty) =>
-                ArgKinded::DataTy(dty.subst_ident_kinded(ident_kinded, with)),
-            ArgKinded::Provenance(prov) =>
-                ArgKinded::Provenance(prov.subst_ident_kinded(ident_kinded, with)),
+                }
+            }
+            ArgKinded::Nat(nat) => ArgKinded::Nat(nat.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::Memory(mem) => ArgKinded::Memory(mem.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::Ty(ty) => ArgKinded::Ty(ty.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::DataTy(dty) => ArgKinded::DataTy(dty.subst_ident_kinded(ident_kinded, with)),
+            ArgKinded::Provenance(prov) => {
+                ArgKinded::Provenance(prov.subst_ident_kinded(ident_kinded, with))
+            }
         }
     }
 }
@@ -946,11 +960,10 @@ impl PlaceExpr {
 impl fmt::Display for PlaceExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.pl_expr {
-            PlaceExprKind::Proj(pl_expr, n) =>
-               match n {
+            PlaceExprKind::Proj(pl_expr, n) => match n {
                 ProjEntry::TupleAccess(n) => write!(f, "{}.{}", pl_expr, n),
                 ProjEntry::StructAccess(n) => write!(f, "{}.{}", pl_expr, n),
-               },
+            },
             PlaceExprKind::Deref(pl_expr) => write!(f, "*{}", pl_expr),
             PlaceExprKind::Ident(ident) => write!(f, "{}", ident),
         }
@@ -962,7 +975,7 @@ impl fmt::Display for PlaceExpr {
 pub struct TypeScheme {
     pub generic_params: Vec<IdentKinded>,
     pub constraints: Vec<Constraint>,
-    pub mono_ty: Ty
+    pub mono_ty: Ty,
 }
 
 impl TypeScheme {
@@ -970,7 +983,7 @@ impl TypeScheme {
         TypeScheme {
             generic_params: vec![],
             constraints: vec![],
-            mono_ty: ty
+            mono_ty: ty,
         }
     }
 
@@ -990,37 +1003,37 @@ impl TypeScheme {
         self.generic_params[0..with.len()]
             .iter()
             .zip(with.iter())
-            .fold(x.clone(), |x, (ident_kinded, with)|
-                x.subst_ident_kinded(ident_kinded, with))
+            .fold(x.clone(), |x, (ident_kinded, with)| {
+                x.subst_ident_kinded(ident_kinded, with)
+            })
     }
 
     pub fn instantiate(&self, with: &[ArgKinded]) -> Self {
         assert!(self.generic_params.len() >= with.len());
         TypeScheme {
             generic_params: self.generic_params[with.len()..].to_vec(),
-            constraints:
-                self.constraints
+            constraints: self
+                .constraints
                 .iter()
-                .map(|con|
-                    self.substitute(con, with))
+                .map(|con| self.substitute(con, with))
                 .collect(),
-            mono_ty:
-                self.substitute(&self.mono_ty, with),
+            mono_ty: self.substitute(&self.mono_ty, with),
         }
     }
 
     pub fn eq_structure(&self, other: &Self) -> bool {
-        if self.generic_params.len() == other.generic_params.len() &&
-            self.generic_params
-            .iter()
-            .zip(other.generic_params.iter())
-            .fold(true, |res, (gen1, gen2)|
-                res && gen1.kind == gen2.kind
-            ) {
-            let args = self.generic_params.iter()
-                .map(|gen|
-                    gen.arg_kinded()
-                ).collect::<Vec<ArgKinded>>();
+        if self.generic_params.len() == other.generic_params.len()
+            && self
+                .generic_params
+                .iter()
+                .zip(other.generic_params.iter())
+                .fold(true, |res, (gen1, gen2)| res && gen1.kind == gen2.kind)
+        {
+            let args = self
+                .generic_params
+                .iter()
+                .map(|gen| gen.arg_kinded())
+                .collect::<Vec<ArgKinded>>();
             self.instantiate(args.as_slice())
                 .eq_structure(&other.instantiate(args.as_slice()))
         } else {
@@ -1115,15 +1128,14 @@ impl Ty {
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::Ident(_) | TyKind::Fn( _, _, _) => true,
+            TyKind::Ident(_) | TyKind::Fn(_, _, _) => true,
             TyKind::Dead(_) => false,
         }
     }
 
     pub fn eq_structure(&self, other: &Self) -> bool {
         match (&self.ty, &other.ty) {
-            (TyKind::Fn(ptys1, exec1, ret_ty1),
-             TyKind::Fn(ptys2, exec2, ret_ty2)) => {
+            (TyKind::Fn(ptys1, exec1, ret_ty1), TyKind::Fn(ptys2, exec2, ret_ty2)) => {
                 let mut res = true;
                 for (pty1, pty2) in ptys1.iter().zip(ptys2) {
                     res &= pty1.eq_structure(pty2);
@@ -1132,12 +1144,13 @@ impl Ty {
                 res & ret_ty1.eq_structure(ret_ty2)
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.eq_structure(dty2),
-            (TyKind::Ident(id1), TyKind::Ident(id2)) =>
+            (TyKind::Ident(id1), TyKind::Ident(id2)) => {
                 if id1.is_implicit && id2.is_implicit {
                     true
                 } else {
                     id1.name == id2.name
                 }
+            }
             (TyKind::Dead(ty1), TyKind::Dead(ty2)) => ty1.eq_structure(ty2),
             _ => false,
         }
@@ -1161,8 +1174,7 @@ impl SubstKindedIdents for Ty {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match &self.ty {
             // TODO mutate and do not create a new type (also this drops the span).
-            TyKind::Data(dty) =>
-                Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
+            TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
             TyKind::Fn(params, exec, ret) => Ty::new(TyKind::Fn(
                 params
                     .iter()
@@ -1309,8 +1321,10 @@ impl DataTy {
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Struct(struct_ty) =>
-                struct_ty.attributes.iter().any(|field| field.ty.non_copyable()),
+            Struct(struct_ty) => struct_ty
+                .attributes
+                .iter()
+                .any(|field| field.ty.non_copyable()),
             Array(_, _) => false,
             RawPtr(_) => true,
             Range => true,
@@ -1403,7 +1417,8 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
-            Struct(struct_ty) => struct_ty.attributes
+            Struct(struct_ty) => struct_ty
+                .attributes
                 .iter()
                 .any(|field| field.ty.contains_ref_to_prv(prv_val_name)),
         }
@@ -1411,70 +1426,70 @@ impl DataTy {
 
     pub fn eq_structure(&self, other: &Self) -> bool {
         match (&self.dty, &other.dty) {
-            (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) =>
-                i1.name == i2.name,
-            (DataTyKind::Scalar(sct1), DataTyKind::Scalar(sct2)) => 
-                sct1 == sct2,
-            (DataTyKind::Atomic(sct1), DataTyKind::Atomic(sct2)) =>
-                sct1 == sct2,
-            (DataTyKind::Array(ty1, n1), DataTyKind::Array(ty2, n2)) =>
-                n1 == n2 && ty1.eq_structure(ty2),
-            (DataTyKind::ArrayShape(ty1, n1), DataTyKind::ArrayShape(ty2, n2)) =>
-                n1 == n2 && ty1.eq_structure(ty2),
-            (DataTyKind::Tuple(dtys1), DataTyKind::Tuple(dtys2)) =>
-                dtys1.len() == dtys1.len() &&
-                    dtys1.iter()
-                    .zip(dtys2.iter()).
-                    fold(true, |res, (dty1, dty2)|
-                        res && dty1.eq_structure(dty2)
-                ),
-            (DataTyKind::Struct(st1), DataTyKind::Struct(st2)) =>
-                st1.name == st2.name && st1.generic_args.len() == st2.generic_args.len() &&
-                    st1.generic_args.iter()
-                    .zip(st2.generic_args.iter())
-                    .fold(true, |res, (gen1, gen2)|
-                        res &&
-                            match (gen1, gen2) {
-                                (ArgKinded::Nat(n1), ArgKinded::Nat(n2)) =>
-                                    n1 == n2,
-                                (ArgKinded::Memory(mem1), ArgKinded::Memory(mem2)) =>
-                                    mem1 == mem2,
-                                (ArgKinded::Ty(ty1), ArgKinded::Ty(ty2)) =>
-                                    ty1.eq_structure(ty2),
-                                (ArgKinded::DataTy(dty1), ArgKinded::DataTy(dty2)) =>
-                                    dty1.eq_structure(dty2),
-                                (ArgKinded::Provenance(prov1), ArgKinded::Provenance(prov2)) =>
-                                    prov1 == prov2,
-                                _ => false
+            (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) => i1.name == i2.name,
+            (DataTyKind::Scalar(sct1), DataTyKind::Scalar(sct2)) => sct1 == sct2,
+            (DataTyKind::Atomic(sct1), DataTyKind::Atomic(sct2)) => sct1 == sct2,
+            (DataTyKind::Array(ty1, n1), DataTyKind::Array(ty2, n2)) => {
+                n1 == n2 && ty1.eq_structure(ty2)
+            }
+            (DataTyKind::ArrayShape(ty1, n1), DataTyKind::ArrayShape(ty2, n2)) => {
+                n1 == n2 && ty1.eq_structure(ty2)
+            }
+            (DataTyKind::Tuple(dtys1), DataTyKind::Tuple(dtys2)) => {
+                dtys1.len() == dtys1.len()
+                    && dtys1
+                        .iter()
+                        .zip(dtys2.iter())
+                        .fold(true, |res, (dty1, dty2)| res && dty1.eq_structure(dty2))
+            }
+            (DataTyKind::Struct(st1), DataTyKind::Struct(st2)) => {
+                st1.name == st2.name
+                    && st1.generic_args.len() == st2.generic_args.len()
+                    && st1.generic_args.iter().zip(st2.generic_args.iter()).fold(
+                        true,
+                        |res, (gen1, gen2)| {
+                            res && match (gen1, gen2) {
+                                (ArgKinded::Nat(n1), ArgKinded::Nat(n2)) => n1 == n2,
+                                (ArgKinded::Memory(mem1), ArgKinded::Memory(mem2)) => mem1 == mem2,
+                                (ArgKinded::Ty(ty1), ArgKinded::Ty(ty2)) => ty1.eq_structure(ty2),
+                                (ArgKinded::DataTy(dty1), ArgKinded::DataTy(dty2)) => {
+                                    dty1.eq_structure(dty2)
+                                }
+                                (ArgKinded::Provenance(prov1), ArgKinded::Provenance(prov2)) => {
+                                    prov1 == prov2
+                                }
+                                _ => false,
                             }
-                ),
-            (DataTyKind::At(ty1, mem1), DataTyKind::At(ty2, mem2)) =>
-                mem1 == mem2 && ty1.eq_structure(ty2),
-            (DataTyKind::Ref(prov1, own1, mem1, ty1),
-             DataTyKind::Ref(prov2, own2, mem2, ty2)) =>
-                own1 == own2 && mem1 == mem2 && ty1.eq_structure(ty2) &&
-                    match (prov1, prov2) {
-                        (Provenance::Ident(i1), Provenance::Ident(i2)) => 
+                        },
+                    )
+            }
+            (DataTyKind::At(ty1, mem1), DataTyKind::At(ty2, mem2)) => {
+                mem1 == mem2 && ty1.eq_structure(ty2)
+            }
+            (DataTyKind::Ref(prov1, own1, mem1, ty1), DataTyKind::Ref(prov2, own2, mem2, ty2)) => {
+                own1 == own2
+                    && mem1 == mem2
+                    && ty1.eq_structure(ty2)
+                    && match (prov1, prov2) {
+                        (Provenance::Ident(i1), Provenance::Ident(i2)) => {
                             if i1.is_implicit && i2.is_implicit {
                                 true
                             } else {
                                 i1 == i2
-                            },
-                        _ => prov1 == prov2,    
-                    },
-            (DataTyKind::ThreadHierchy(tht1),
-             DataTyKind::ThreadHierchy(tht2)) =>
-                tht1 == tht2,
-            (DataTyKind::SplitThreadHierchy(tht1, n1),
-             DataTyKind::SplitThreadHierchy(tht2, n2)) =>
-                n1 == n2 && tht1 == tht2,
-            (DataTyKind::RawPtr(ty1), DataTyKind::RawPtr(ty2)) =>
-                ty1.eq_structure(ty2),
-            (DataTyKind::Range, DataTyKind::Range) =>
-                true,
-            (DataTyKind::Dead(ty1), DataTyKind::Dead(ty2)) =>
-                ty1.eq_structure(ty2),
-            _ => false
+                            }
+                        }
+                        _ => prov1 == prov2,
+                    }
+            }
+            (DataTyKind::ThreadHierchy(tht1), DataTyKind::ThreadHierchy(tht2)) => tht1 == tht2,
+            (
+                DataTyKind::SplitThreadHierchy(tht1, n1),
+                DataTyKind::SplitThreadHierchy(tht2, n2),
+            ) => n1 == n2 && tht1 == tht2,
+            (DataTyKind::RawPtr(ty1), DataTyKind::RawPtr(ty2)) => ty1.eq_structure(ty2),
+            (DataTyKind::Range, DataTyKind::Range) => true,
+            (DataTyKind::Dead(ty1), DataTyKind::Dead(ty2)) => ty1.eq_structure(ty2),
+            _ => false,
         }
     }
 }
@@ -1523,19 +1538,22 @@ impl SubstKindedIdents for DataTy {
                     .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
                     .collect(),
             )),
-            Struct(struct_ty) =>
-                DataTy::new(DataTyKind::Struct(super::ast::StructDataType{
-                    name: struct_ty.name.clone(),
-                    attributes:
-                        struct_ty.attributes.iter().map(|field|
-                            StructField {
-                                name: field.name.clone(),
-                                ty: field.ty.subst_ident_kinded(ident_kinded, with)
-                            }
-                        ).collect(),
-                    generic_args: struct_ty.generic_args.iter().map(|gen_arg|
-                        gen_arg.subst_ident_kinded(ident_kinded, with)).collect(),
-                })),
+            Struct(struct_ty) => DataTy::new(DataTyKind::Struct(super::ast::StructDataType {
+                name: struct_ty.name.clone(),
+                attributes: struct_ty
+                    .attributes
+                    .iter()
+                    .map(|field| StructField {
+                        name: field.name.clone(),
+                        ty: field.ty.subst_ident_kinded(ident_kinded, with),
+                    })
+                    .collect(),
+                generic_args: struct_ty
+                    .generic_args
+                    .iter()
+                    .map(|gen_arg| gen_arg.subst_ident_kinded(ident_kinded, with))
+                    .collect(),
+            })),
             Array(dty, n) => DataTy::new(Array(
                 Box::new(dty.subst_ident_kinded(ident_kinded, with)),
                 n.subst_ident_kinded(ident_kinded, with),
@@ -1695,16 +1713,11 @@ impl IdentKinded {
         let mut ident = self.ident.clone();
         ident.name = name;
         match self.kind {
-            Kind::DataTy =>
-                ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident))),
-            Kind::Memory =>
-                ArgKinded::Memory(Memory::Ident(ident)),
-            Kind::Nat =>
-                ArgKinded::Nat(Nat::Ident(ident)),
-            Kind::Provenance =>
-                ArgKinded::Provenance(Provenance::Ident(ident)),
-            Kind::Ty =>
-                ArgKinded::Ty(Ty::new(TyKind::Ident(ident))),
+            Kind::DataTy => ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident))),
+            Kind::Memory => ArgKinded::Memory(Memory::Ident(ident)),
+            Kind::Nat => ArgKinded::Nat(Nat::Ident(ident)),
+            Kind::Provenance => ArgKinded::Provenance(Provenance::Ident(ident)),
+            Kind::Ty => ArgKinded::Ty(Ty::new(TyKind::Ident(ident))),
         }
     }
 }

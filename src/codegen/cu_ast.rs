@@ -28,7 +28,7 @@ pub(super) enum Item {
     StructDef {
         name: String,
         templ_params: Vec<TemplParam>,
-        attributes: Vec<(String, Ty)>
+        attributes: Vec<(String, Ty)>,
     },
 }
 

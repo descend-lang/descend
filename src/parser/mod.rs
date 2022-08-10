@@ -2,9 +2,12 @@
 pub mod source;
 mod utils;
 
-use crate::ast::{*, visit_mut::{walk_expr, walk_arg_kinded}};
+use crate::ast::{
+    visit_mut::{walk_arg_kinded, walk_expr},
+    *,
+};
 use error::ParseError;
-use std::collections::{BTreeMap};
+use std::collections::BTreeMap;
 
 use crate::error::ErrorReported;
 pub use source::*;
@@ -12,18 +15,15 @@ pub use source::*;
 use crate::ast::visit_mut::{VisitMut, walk_struct_def, walk_impl_def,
     walk_trait_def, walk_fun_def, walk_dty};
 
+use crate::ast::visit_mut::{
+    walk_dty, walk_fun_def, walk_impl_def, walk_struct_def, walk_trait_def, VisitMut,
+};
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
-    let mut item_defs =
-        parser
-        .parse()
-        .map_err(|err| err.emit())?;
+    let mut item_defs = parser.parse().map_err(|err| err.emit())?;
     visit_ast(&mut item_defs);
-    Ok(CompilUnit::new(
-        item_defs,
-        source,
-    ))
+    Ok(CompilUnit::new(item_defs, source))
 }
 
 #[derive(Debug)]
@@ -41,168 +41,171 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
+fn visit_ast(items: &mut Vec<Item>) {
+    //TODO find a proper name
     struct Visitor {
         structs: BTreeMap<String, StructDef>,
         ident_kinded_in_scope: Vec<(String, Kind)>,
-        impl_dty_in_scope: Option<DataTy>
+        impl_dty_in_scope: Option<DataTy>,
     }
 
     impl Visitor {
         fn new(items: &Vec<Item>) -> Self {
             Visitor {
-                structs: BTreeMap::from_iter(
-                    items.iter().filter_map(|item| 
-                        if let Item::StructDef(struct_def) = item {
-                            Some((struct_def.name.clone(), struct_def.clone()))
-                        } else {
-                            None
-                }
-                    )),
+                structs: BTreeMap::from_iter(items.iter().filter_map(|item| {
+                    if let Item::StructDef(struct_def) = item {
+                        Some((struct_def.name.clone(), struct_def.clone()))
+                    } else {
+                        None
+                    }
+                })),
                 ident_kinded_in_scope: Vec::with_capacity(32),
-                impl_dty_in_scope: None
-                                }
-                                }
+                impl_dty_in_scope: None,
+            }
+        }
 
         fn add_generics(&mut self, generics: &Vec<IdentKinded>) {
-            self.add_ident_kinded(generics.iter().map(|ident_kinded|
-                (ident_kinded.ident.name.clone(), ident_kinded.kind)));
-                                }
+            self.add_ident_kinded(
+                generics
+                    .iter()
+                    .map(|ident_kinded| (ident_kinded.ident.name.clone(), ident_kinded.kind)),
+            );
+        }
 
-        fn add_ident_kinded<I>(&mut self, ident_kinded: I) where I: Iterator<Item = (String, Kind)> {
+        fn add_ident_kinded<I>(&mut self, ident_kinded: I)
+        where
+            I: Iterator<Item = (String, Kind)>,
+        {
             self.ident_kinded_in_scope.extend(ident_kinded);
-                            }
+        }
 
         fn pop_ident_kinded(&mut self, n: usize) {
-            self.ident_kinded_in_scope.truncate(self.ident_kinded_in_scope.len() - n);
-                        }
+            self.ident_kinded_in_scope
+                .truncate(self.ident_kinded_in_scope.len() - n);
+        }
 
         fn get_kind(&self, ident: &Ident) -> &Kind {
-            if let Some((_, kind)) = self.ident_kinded_in_scope.iter().rev().find(|(name, _)|
-                *name == ident.name
-            ) {
+            if let Some((_, kind)) = self
+                .ident_kinded_in_scope
+                .iter()
+                .rev()
+                .find(|(name, _)| *name == ident.name)
+            {
                 kind
             } else {
                 panic!("Could not find kind of identifier \"{}\"", ident); //TODO throw error instead of panic
-                    }
-                }
+            }
+        }
 
         fn contains_ident_kinded(&self, name: &str) -> bool {
             self.ident_kinded_in_scope
-            .iter()
-            .rev()
-            .find(|(generic_name, _)|
-                generic_name == name
-            ).is_some()
-            }
-        }
-
-    //Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
-    fn replace_arg_kinded_kind(visitor: &Visitor, arg: &mut ArgKinded){
-        if let ArgKinded::Ident(ident) = arg {
-            *arg = 
-                match visitor.get_kind(&ident) {
-                    Kind::Provenance => 
-                        ArgKinded::Provenance(Provenance::Ident(ident.clone())),
-                    Kind::Memory =>
-                        ArgKinded::Memory(Memory::Ident(ident.clone())),
-                    Kind::Nat =>
-                        ArgKinded::Nat(Nat::Ident(ident.clone())),
-                    Kind::Ty =>
-                        // TODO how to deal with View??!! This is a problem!
-                        //  Ident only for Ty but not for DataTy or ViewTy?
-                        ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
-                            DataTyKind::Ident(ident.clone()),
-                        )))),
-                    Kind::DataTy => 
-                        ArgKinded::DataTy(DataTy::new(
-                            DataTyKind::Ident(ident.clone()),
-                        ))
+                .iter()
+                .rev()
+                .find(|(generic_name, _)| generic_name == name)
+                .is_some()
         }
     }
-}
 
-//Replace the special ident "Self" in impls with the type of the impl
+    //Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
+    fn replace_arg_kinded_kind(visitor: &Visitor, arg: &mut ArgKinded) {
+        if let ArgKinded::Ident(ident) = arg {
+            *arg = match visitor.get_kind(&ident) {
+                Kind::Provenance => ArgKinded::Provenance(Provenance::Ident(ident.clone())),
+                Kind::Memory => ArgKinded::Memory(Memory::Ident(ident.clone())),
+                Kind::Nat => ArgKinded::Nat(Nat::Ident(ident.clone())),
+                Kind::Ty =>
+                // TODO how to deal with View??!! This is a problem!
+                //  Ident only for Ty but not for DataTy or ViewTy?
+                {
+                    ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
+                        ident.clone(),
+                    )))))
+                }
+                Kind::DataTy => ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident.clone()))),
+            }
+        }
+    }
+
+    //Replace the special ident "Self" in impls with the type of the impl
     fn replace_self_in_impls(visitor: &Visitor, dty: &mut DataTy) {
         if let Some(impl_dty_in_scope) = &visitor.impl_dty_in_scope {
             if let DataTyKind::Ident(ident) = &dty.dty {
-                    if ident.name == "Self" {
+                if ident.name == "Self" {
                     *dty = impl_dty_in_scope.clone();
-                    }
+                }
             }
         }
     }
 
-//Distinguish between type variables and struct names without generic params
+    //Distinguish between type variables and struct names without generic params
     fn replace_tyidents_struct_names(visitor: &Visitor, dty: &mut DataTy) {
         if let DataTyKind::Ident(name) = &mut dty.dty {
             let struct_def = visitor.structs.get(&name.name);
             let is_type_ident = visitor.contains_ident_kinded(&name.name);
 
             match (struct_def.is_some(), is_type_ident) {
-                (true, false) => 
-                    dty.dty =
-                        match struct_def.unwrap().ty().mono_ty.ty {
-                            TyKind::Data(dty) => dty.dty,
-                            _ => panic!("Struct should have a Datatype!"),
-                        },
-                (false, true) | (false, false) =>
-                    (),
-                (true, true) => 
-                    panic!("AmbiguousIdentifier"), //TODO throw error instead of panic
-                    // self.errs.push(
-                    //     TyError::from(CtxError::AmbiguousIdentifier(name.clone()))),
-                        }
+                (true, false) => {
+                    dty.dty = match struct_def.unwrap().ty().mono_ty.ty {
+                        TyKind::Data(dty) => dty.dty,
+                        _ => panic!("Struct should have a Datatype!"),
+                    }
+                }
+                (false, true) | (false, false) => (),
+                (true, true) => panic!("AmbiguousIdentifier"), //TODO throw error instead of panic
+                                                               // self.errs.push(
+                                                               //     TyError::from(CtxError::AmbiguousIdentifier(name.clone()))),
             }
         }
+    }
 
     //Initialize attributes list of struct_types
     fn initialize_struct_attribute_lists(visitor: &Visitor, dty: &mut DataTy) {
         if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
             if struct_ty.attributes.len() == 0 {
-            if let Some(struct_def) = visitor.structs.get(&struct_ty.name) {
-                let inst_struct_mono = struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
-                if let TyKind::Data(dataty) = inst_struct_mono.ty {
-                    if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
-                        struct_ty.attributes = inst_struct_ty.attributes;
+                if let Some(struct_def) = visitor.structs.get(&struct_ty.name) {
+                    let inst_struct_mono =
+                        struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
+                    if let TyKind::Data(dataty) = inst_struct_mono.ty {
+                        if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
+                            struct_ty.attributes = inst_struct_ty.attributes;
+                        } else {
+                            panic!("Instantiated struct def should have struct type")
+                        }
                     } else {
                         panic!("Instantiated struct def should have struct type")
-        }
+                    }
                 } else {
-                    panic!("Instantiated struct def should have struct type")
+                    panic!("TODO print some err instead of panic")
                 }
-            } else {
-                panic!("TODO print some err instead of panic")
             }
         }
     }
-    }
 
     impl VisitMut for Visitor {
-        fn visit_item_def(&mut self, item_def: &mut Item) { 
+        fn visit_item_def(&mut self, item_def: &mut Item) {
             match item_def {
                 Item::FunDef(fun_def) => {
                     self.visit_fun_def(fun_def);
-                },
+                }
                 Item::StructDef(struct_def) => {
                     self.add_generics(&struct_def.generic_params);
                     walk_struct_def(self, struct_def);
                     self.ident_kinded_in_scope.clear();
-                },
+                }
                 Item::TraitDef(trait_def) => {
                     self.add_generics(&trait_def.generic_params);
                     walk_trait_def(self, trait_def);
                     self.ident_kinded_in_scope.clear();
-                },
+                }
                 Item::ImplDef(impl_def) => {
                     self.add_generics(&impl_def.generic_params);
                     self.impl_dty_in_scope = Some(impl_def.dty.clone());
                     walk_impl_def(self, impl_def);
                     self.impl_dty_in_scope = None;
                     self.ident_kinded_in_scope.clear();
-                },
+                }
             }
-         }
+        }
 
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
             self.add_generics(&fun_def.generic_params);
@@ -213,28 +216,28 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
                 ExprKind::Block(prvs, body) => {
-                    self.add_ident_kinded(
-                        prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
+                    self.add_ident_kinded(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
                     self.visit_expr(body);
                     self.pop_ident_kinded(prvs.len());
-                                },
+                }
                 ExprKind::ForNat(ident, _, body) => {
-                    self.ident_kinded_in_scope.push((ident.name.clone(), Kind::Nat));
+                    self.ident_kinded_in_scope
+                        .push((ident.name.clone(), Kind::Nat));
                     self.visit_expr(body);
                     self.ident_kinded_in_scope.pop();
-                },
+                }
                 _ => {
                     walk_expr(self, expr);
-                            }
-                        }
-                    }
+                }
+            }
+        }
 
         fn visit_dty(&mut self, dty: &mut DataTy) {
             replace_self_in_impls(self, dty);
             replace_tyidents_struct_names(self, dty);
             initialize_struct_attribute_lists(self, dty);
             walk_dty(self, dty);
-            }
+        }
 
         fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) {
             replace_arg_kinded_kind(self, arg_kinded);
@@ -243,9 +246,9 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
     }
 
     let mut visitor = Visitor::new(items);
-    items.iter_mut().for_each(|item_def|
-        visitor.visit_item_def(item_def)
-    )
+    items
+        .iter_mut()
+        .for_each(|item_def| visitor.visit_item_def(item_def))
 }
 
 pub mod error {
@@ -317,7 +320,7 @@ peg::parser! {
             / i: trait_impl_def() { Item::ImplDef(i) }
             / i: inherent_impl_def() { Item::ImplDef(i) }) {
                 result
-            }    
+            }
 
         pub(crate) rule fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:generic_params()? _
@@ -343,7 +346,7 @@ peg::parser! {
 
         pub(crate) rule fun_decl() -> FunDecl
             = "fn" __ name:identifier() _ g:generic_params()? _
-            "(" _ param_decls:(p:fun_decl_param() ** (_ "," _) {p}) _ ")" _ 
+            "(" _ param_decls:(p:fun_decl_param() ** (_ "," _) {p}) _ ")" _
             exec:("-" _ "[" _ e:execution_resource() _ "]" {e}) _ w:where_clause()? _
             "-" _ ">" _ ret_dty:dty() _ ";" {
                 let generic_params =
@@ -364,7 +367,7 @@ peg::parser! {
         }
 
         pub(crate) rule struct_def() -> StructDef
-            = "struct" __ name:identifier() _ g:generic_params()?  _  w:where_clause()? _ 
+            = "struct" __ name:identifier() _ g:generic_params()?  _  w:where_clause()? _
             struct_fields:(u:("{" t:(_ s:(struct_field() ** (_ "," _)) _ {s})? "}" {t}) {Some(u)}
                             / ";" {None}) _ {
                 let generic_params = g.unwrap_or(vec![]);
@@ -380,8 +383,8 @@ peg::parser! {
                     decls,
                 }
             }
-        
-        pub(crate) rule trait_def() -> TraitDef 
+
+        pub(crate) rule trait_def() -> TraitDef
             = "trait" __ name:identifier() _ g:generic_params()?
             supertraits:(":" _ t:trait_mono_ty() ** (_ "+" _) {t})?
             _ w:where_clause()? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
@@ -397,11 +400,11 @@ peg::parser! {
             }
 
         rule trait_mono_ty() -> TraitMonoType
-            = name:identifier() generic_args:(_ "<" _ generic_args:(k:kind_argument() ** (_ "," _) {k}) _ ">" { generic_args })? { 
+            = name:identifier() generic_args:(_ "<" _ generic_args:(k:kind_argument() ** (_ "," _) {k}) _ ">" { generic_args })? {
                 TraitMonoType { name, generics: generic_args.unwrap_or(vec![]) }
             }
 
-        pub(crate) rule inherent_impl_def() -> ImplDef    
+        pub(crate) rule inherent_impl_def() -> ImplDef
             = "impl" _ g:generic_params()? _ dty:dty() _ w:where_clause()? _
             "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
@@ -409,7 +412,7 @@ peg::parser! {
                 ImplDef { dty, generic_params, constraints, decls, trait_impl: None}
             }
 
-        pub(crate) rule trait_impl_def() -> ImplDef 
+        pub(crate) rule trait_impl_def() -> ImplDef
             = "impl" _ g:generic_params()? _ trait_impl:trait_mono_ty() __ "for" __
             dty:dty() _ w:where_clause()? _ "{" _
             decls:(_ i:associated_item() ** _ {i}) _ "}" {
@@ -437,14 +440,14 @@ peg::parser! {
             params
         }
 
-        // only syntatic sugar to specify trait bounds inside generic param list    
+        // only syntatic sugar to specify trait bounds inside generic param list
         // rule generic_params() -> (Vec<IdentKinded>, Vec<WhereClauseItem>)
         //     = generic_params:("<" _ t:(genericParam() ** (_ "," _)) _ ">" {t}) {
         //         let (idents, preds_options): (Vec<_>, Vec<_>) = generic_params.into_iter().unzip();
         //         let  preds = preds_options.into_iter().filter_map(|option| option).collect();
         //         (idents, preds)
         //     }
-        
+
         //  rule genericParam() -> (IdentKinded, Option<WhereClauseItem>)
         //     = name:ident() bound:(_ ":" _ r:(k:kind(){Ok(k)} / t:identifier(){Err(t)}) {r})? {
         //         match bound {
@@ -460,7 +463,7 @@ peg::parser! {
         //             None => (IdentKinded::new(&name, Kind::Ty), None)
         //         }
         //     }
-           
+
         rule where_clause() -> Vec<Constraint>
             = "where" __ clauses:(where_clause_item() ** (_ "," _)) {
                 clauses.into_iter().fold(Vec::new(), |mut clauses, clause| {
@@ -468,7 +471,7 @@ peg::parser! {
                     clauses
                 })
             }
-        
+
         rule where_clause_item() -> Vec<Constraint>
             = param:dty() _ ":" _ trait_bounds:(trait_mono_ty() ** (_ "+" _)) {
                 trait_bounds.into_iter().map(|trait_bound|
@@ -483,7 +486,7 @@ peg::parser! {
             = name:ident() kind:(_ ":" _ kind:kind() {kind})? {
                 IdentKinded::new(&name, kind.unwrap_or(Kind::DataTy))
             }
-  
+
         rule fun_parameter() -> ParamDecl
             = result:(
             mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() {
@@ -505,7 +508,7 @@ peg::parser! {
         rule self_param() -> ParamDecl
             = result:(s:shorthand_self() { s } / s:typed_self() {s}) {
                 result
-            }  
+            }
 
         rule shorthand_self() -> ParamDecl
             = ref_params:("&" _ prov:(prv:provenance() __ { prv })? own:ownership() __
@@ -519,7 +522,7 @@ peg::parser! {
                             None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$r")))
                         }, own, mem, Box::new(DataTy::new(self_dtykind)))
                     }
-                    None => self_dtykind    
+                    None => self_dtykind
                 };
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
                 ParamDecl{ ident: Ident::new("self"), ty: Some(Ty::new(TyKind::Data(DataTy::new(s_type)))), mutbl}
@@ -634,10 +637,10 @@ peg::parser! {
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {{
                 let args = {
-                            let mut result = Vec::with_capacity(args.len() + 1);
+                    let mut result = Vec::with_capacity(args.len() + 1);
                     result.push(e);
-                            result.extend(args.clone());
-                            result
+                    result.extend(args.clone());
+                    result
                 };
                 Expr::new(
                     ExprKind::App(
@@ -650,7 +653,7 @@ peg::parser! {
                         kind_args.unwrap_or(vec![]),
                         args
                     )
-                )    
+                )
             }}
             begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
@@ -667,7 +670,7 @@ peg::parser! {
                         kind_args.unwrap_or(vec![]),
                         args
                     )
-                )    
+                )
             }}
             path:(path:dty() "::" { path }) begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
@@ -685,7 +688,7 @@ peg::parser! {
                         kind_args.unwrap_or(vec![]),
                         args
                     )
-                )    
+                )
             }}
             begin:position!() func:ident() end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" { k })
@@ -921,7 +924,7 @@ peg::parser! {
         pub(crate) rule dty() -> DataTy
             = first:dty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
                 mems.into_iter().fold(DataTy::new(first), |prev,mem| DataTy::new(DataTyKind::At(Box::new(prev), mem)))
-            } 
+            }
 
         /// Helper for "type @ memory" left-recursion
         rule dty_term() -> DataTyKind
@@ -2252,7 +2255,7 @@ mod tests {
 
     #[test]
     fn global_fun_def_no_function_parameters_required() {
-        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () <>{            
+        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
@@ -2345,11 +2348,11 @@ mod tests {
     #[test]
     fn compil_unit_test_one() {
         let src = r#"
-        
+
         fn foo() -[cpu.thread]-> () <>{
             42
         }
-        
+
         "#;
         let result =
             descend::compil_unit(src).expect("Cannot parse compilation unit with one function");
@@ -2359,7 +2362,7 @@ mod tests {
     #[test]
     fn compil_unit_test_multiple() {
         let src = r#"
-        
+
         fn foo() -[cpu.thread]-> () <>{
             42
         }
@@ -2372,7 +2375,7 @@ mod tests {
         fn baz() -[cpu.thread]-> () <>{
             1337
         }
-        
+
         "#;
         let result = descend::compil_unit(src)
             .expect("Cannot parse compilation unit with multiple functions");
@@ -2396,10 +2399,10 @@ mod tests {
             T::eq(t);
             t.eq()
         }
-        
+
         "#;
-        let result =
-            descend::compil_unit(src).expect("Cannot parse compilation unit with different function calls");
+        let result = descend::compil_unit(src)
+            .expect("Cannot parse compilation unit with different function calls");
         assert_eq!(result.len(), 4);
     }
 
@@ -2413,8 +2416,15 @@ mod tests {
         let constraints: Vec<Constraint> = vec![];
         let decls: Vec<StructField> = vec![];
 
-        assert_eq!(result,
-            StructDef {name, generic_params, constraints, decls});
+        assert_eq!(
+            result,
+            StructDef {
+                name,
+                generic_params,
+                constraints,
+                decls
+            }
+        );
     }
 
     #[test]
@@ -2427,8 +2437,15 @@ mod tests {
         let constraints: Vec<Constraint> = vec![];
         let decls: Vec<StructField> = vec![];
 
-        assert_eq!(result,
-            StructDef {name, generic_params, constraints, decls})
+        assert_eq!(
+            result,
+            StructDef {
+                name,
+                generic_params,
+                constraints,
+                decls
+            }
+        )
     }
 
     #[test]
@@ -2443,12 +2460,25 @@ mod tests {
         let name_b = String::from("b");
         let ty_a = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
         let ty_b = DataTy::new(DataTyKind::Scalar(ScalarTy::F32));
-        let field1 = StructField{name: name_a, ty: ty_a};
-        let field2 = StructField{name: name_b, ty: ty_b};
+        let field1 = StructField {
+            name: name_a,
+            ty: ty_a,
+        };
+        let field2 = StructField {
+            name: name_b,
+            ty: ty_b,
+        };
         let decls: Vec<StructField> = vec![field1, field2];
 
-        assert_eq!(result,
-            StructDef {name, generic_params, constraints, decls});
+        assert_eq!(
+            result,
+            StructDef {
+                name,
+                generic_params,
+                constraints,
+                decls
+            }
+        );
     }
 
     #[test]
@@ -2461,17 +2491,29 @@ mod tests {
         let gen_param2 = Ident::with_span(String::from("Q"), Span::new(20, 21));
         let generic_params: Vec<IdentKinded> = vec![
             IdentKinded::new(&gen_param1, Kind::DataTy),
-            IdentKinded::new(&gen_param2, Kind::DataTy)];
-        let constraints: Vec<Constraint> = vec![
-            Constraint{
-                param: DataTy::with_span(
-                    DataTyKind::Ident(Ident::with_span(String::from("Q"), Span::new(34, 35))),
-                    Span::new(32, 33)),
-                trait_bound: TraitMonoType { name: String::from("Number"), generics: vec![] }}];
+            IdentKinded::new(&gen_param2, Kind::DataTy),
+        ];
+        let constraints: Vec<Constraint> = vec![Constraint {
+            param: DataTy::with_span(
+                DataTyKind::Ident(Ident::with_span(String::from("Q"), Span::new(34, 35))),
+                Span::new(32, 33),
+            ),
+            trait_bound: TraitMonoType {
+                name: String::from("Number"),
+                generics: vec![],
+            },
+        }];
         let decls: Vec<StructField> = vec![];
 
-        assert_eq!(result,
-            StructDef {name, generic_params, constraints, decls});
+        assert_eq!(
+            result,
+            StructDef {
+                name,
+                generic_params,
+                constraints,
+                decls
+            }
+        );
     }
 
     #[test]
@@ -2485,46 +2527,58 @@ mod tests {
         let result = descend::trait_def(src).expect("Cannot parse trait");
 
         assert_eq!(result.decls.len(), 2);
-        let params1 = 
-            match &result.decls[0] {
-                AssociatedItem::FunDecl(fun_decl) => fun_decl.param_decls.clone(),
-                _ => vec![]
-            };
-        let params2 = 
-            match &result.decls[1] {
-                AssociatedItem::FunDef(fun_decl) => fun_decl.param_decls.clone(),
-                _ => vec![]
-            };
+        let params1 = match &result.decls[0] {
+            AssociatedItem::FunDecl(fun_decl) => fun_decl.param_decls.clone(),
+            _ => vec![],
+        };
+        let params2 = match &result.decls[1] {
+            AssociatedItem::FunDef(fun_decl) => fun_decl.param_decls.clone(),
+            _ => vec![],
+        };
 
         let name = String::from("Eq");
         let generic_params: Vec<IdentKinded> = vec![];
         let constraints: Vec<Constraint> = vec![];
         let decls: Vec<AssociatedItem> = vec![
-            AssociatedItem::FunDecl(
-                FunDecl{name: String::from("eq"),
-                    generic_params: vec![],
-                    constraints: vec![],
-                    param_decls: params1,
-                    ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
-                    exec: Exec::CpuThread,
-                    prv_rels: vec![]}),
-            AssociatedItem::FunDef(
-                FunDef{name: String::from("eq2"),
-                    generic_params: vec![],
-                    constraints: vec![],
-                    param_decls: params2,
-                    ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
-                    exec: Exec::CpuThread,
-                    prv_rels: vec![],
-                    body_expr: Expr::new(ExprKind::Block(vec![],
-                        Box::new(Expr::with_type(
-                            ExprKind::Lit(Lit::Bool(false)),
-                            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::Bool))))
-                    ))))}),
+            AssociatedItem::FunDecl(FunDecl {
+                name: String::from("eq"),
+                generic_params: vec![],
+                constraints: vec![],
+                param_decls: params1,
+                ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                exec: Exec::CpuThread,
+                prv_rels: vec![],
+            }),
+            AssociatedItem::FunDef(FunDef {
+                name: String::from("eq2"),
+                generic_params: vec![],
+                constraints: vec![],
+                param_decls: params2,
+                ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                exec: Exec::CpuThread,
+                prv_rels: vec![],
+                body_expr: Expr::new(ExprKind::Block(
+                    vec![],
+                    Box::new(Expr::with_type(
+                        ExprKind::Lit(Lit::Bool(false)),
+                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                            ScalarTy::Bool,
+                        )))),
+                    )),
+                )),
+            }),
         ];
 
-        assert_eq!(result,
-            TraitDef {name, generic_params, constraints, decls, supertraits: vec![]});        
+        assert_eq!(
+            result,
+            TraitDef {
+                name,
+                generic_params,
+                constraints,
+                decls,
+                supertraits: vec![]
+            }
+        );
     }
 
     #[test]
@@ -2535,9 +2589,10 @@ mod tests {
         }"#;
 
         let result = descend::trait_def(src).expect("Cannot parse empty struct");
-        let supertraits = vec![
-            TraitMonoType { name: String::from("Eq"), generics: vec![] },
-        ];
+        let supertraits = vec![TraitMonoType {
+            name: String::from("Eq"),
+            generics: vec![],
+        }];
         assert_eq!(result.constraints, vec![]);
         assert_eq!(result.supertraits, supertraits);
         assert_eq!(result.decls.len(), 2);
@@ -2552,8 +2607,14 @@ mod tests {
 
         let result = descend::trait_def(src).expect("Cannot parse empty struct");
         let supertraits = vec![
-            TraitMonoType { name: String::from("Eq"), generics: vec![] },
-            TraitMonoType { name: String::from("Eq2"), generics: vec![] },
+            TraitMonoType {
+                name: String::from("Eq"),
+                generics: vec![],
+            },
+            TraitMonoType {
+                name: String::from("Eq2"),
+                generics: vec![],
+            },
         ];
         assert_eq!(result.constraints, vec![]);
         assert_eq!(result.supertraits, supertraits);
@@ -2620,35 +2681,35 @@ mod tests {
         let result = descend::compil_unit(src).expect("Cannot use struct datatypes");
         assert_eq!(result.len(), 1);
 
-        let letty =
-            if let Item::FunDef(fun_def) = &result[0] {
-                if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
-                    if let ExprKind::Let(_, ty, _) = &expr.expr {
-                        ty.clone().unwrap().ty
-                    } else {
-                        panic!("Cannot recognize let expr");
-                    }
+        let letty = if let Item::FunDef(fun_def) = &result[0] {
+            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                if let ExprKind::Let(_, ty, _) = &expr.expr {
+                    ty.clone().unwrap().ty
                 } else {
-                    panic!("Cannot recognize block expr");
+                    panic!("Cannot recognize let expr");
                 }
             } else {
-                panic!("Cannot recognize fundef");
-            };
+                panic!("Cannot recognize block expr");
+            }
+        } else {
+            panic!("Cannot recognize fundef");
+        };
 
         if let TyKind::Data(dataty) = letty {
-            assert_eq!(dataty,
+            assert_eq!(
+                dataty,
                 DataTy::with_span(
-                    DataTyKind::Struct(StructDataType{
-                            name: String::from("Point"),
-                            attributes: vec![],
-                            generic_args: vec![
-                                ArgKinded::DataTy(DataTy::new(
-                                    DataTyKind::Scalar(ScalarTy::I32))),
-                                ArgKinded::DataTy(DataTy::new(
-                                    DataTyKind::Scalar(ScalarTy::I32))),
-                            ],
-                        }),
-                    Span::new(59, 64)));
+                    DataTyKind::Struct(StructDataType {
+                        name: String::from("Point"),
+                        attributes: vec![],
+                        generic_args: vec![
+                            ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
+                            ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
+                        ],
+                    }),
+                    Span::new(59, 64)
+                )
+            );
         } else {
             panic!("Cannot recognize datatype");
         }
@@ -2664,42 +2725,39 @@ mod tests {
             let p: Point = x
         }
         "#;
-        let result = parse(
-            &SourceCode::new(String::from(src)))
-            .expect("Cannot use struct datatypes").item_defs;
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot use struct datatypes")
+            .item_defs;
         assert_eq!(result.len(), 2);
 
-        let letty = 
-            if let Item::FunDef(fun_def) = &result[1] {
-                if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
-                    if let ExprKind::Let(_, ty, _) = &expr.expr {
-                        ty.clone().unwrap().ty
-                    } else {
-                        panic!("Cannot recognize let expr");
-                    }
+        let letty = if let Item::FunDef(fun_def) = &result[1] {
+            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                if let ExprKind::Let(_, ty, _) = &expr.expr {
+                    ty.clone().unwrap().ty
                 } else {
-                    panic!("Cannot recognize block expr");
+                    panic!("Cannot recognize let expr");
                 }
             } else {
-                panic!("Cannot recognize fundef");
-            };
+                panic!("Cannot recognize block expr");
+            }
+        } else {
+            panic!("Cannot recognize fundef");
+        };
 
-        let struct_ty = StructDataType{
+        let struct_ty = StructDataType {
             name: String::from("Point"),
-            attributes: vec![
-                StructField {
-                    name: String::from("x"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
-                }
-            ],
+            attributes: vec![StructField {
+                name: String::from("x"),
+                ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+            }],
             generic_args: vec![],
         };
 
         if let TyKind::Data(dataty) = letty {
-            assert_eq!(dataty,
-                DataTy::with_span(
-                    DataTyKind::Struct(struct_ty),
-                    Span::new(59, 64)));
+            assert_eq!(
+                dataty,
+                DataTy::with_span(DataTyKind::Struct(struct_ty), Span::new(59, 64))
+            );
         } else {
             panic!("Cannot recognize datatype");
         }
@@ -2716,49 +2774,47 @@ mod tests {
             let p: Point<i32> = x
         }
         "#;
-        let result = parse(
-            &SourceCode::new(String::from(src)))
-            .expect("Cannot use struct datatypes").item_defs;
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot use struct datatypes")
+            .item_defs;
         assert_eq!(result.len(), 2);
 
-        let letty = 
-            if let Item::FunDef(fun_def) = &result[1] {
-                if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
-                    if let ExprKind::Let(_, ty, _) = &expr.expr {
-                        ty.clone().unwrap().ty
-                    } else {
-                        panic!("Cannot recognize let expr");
-                    }
+        let letty = if let Item::FunDef(fun_def) = &result[1] {
+            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                if let ExprKind::Let(_, ty, _) = &expr.expr {
+                    ty.clone().unwrap().ty
                 } else {
-                    panic!("Cannot recognize block expr");
+                    panic!("Cannot recognize let expr");
                 }
             } else {
-                panic!("Cannot recognize fundef");
-            };
+                panic!("Cannot recognize block expr");
+            }
+        } else {
+            panic!("Cannot recognize fundef");
+        };
 
-        let struct_ty = StructDataType{
+        let struct_ty = StructDataType {
             name: String::from("Point"),
             attributes: vec![
                 StructField {
                     name: String::from("x"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
                 },
                 StructField {
                     name: String::from("y"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
-                }
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                },
             ],
-            generic_args: vec![
-                ArgKinded::DataTy(DataTy::new(
-                    DataTyKind::Scalar(ScalarTy::I32)))
-            ],
+            generic_args: vec![ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::I32,
+            )))],
         };
 
         if let TyKind::Data(dataty) = letty {
-            assert_eq!(dataty,
-                DataTy::with_span(
-                    DataTyKind::Struct(struct_ty),
-                    Span::new(59, 64)));
+            assert_eq!(
+                dataty,
+                DataTy::with_span(DataTyKind::Struct(struct_ty), Span::new(59, 64))
+            );
         } else {
             panic!("Cannot recognize datatype");
         }
@@ -2785,9 +2841,9 @@ mod tests {
             }
         }
         "#;
-        let result = parse(
-            &SourceCode::new(String::from(src)))
-            .expect("Cannot parse structs, traits and impls").item_defs;
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot parse structs, traits and impls")
+            .item_defs;
         assert_eq!(result.len(), 4);
     }
 
@@ -2804,33 +2860,33 @@ mod tests {
             }
         }
         "#;
-        let struct_ty = StructDataType{
+        let struct_ty = StructDataType {
             name: String::from("Point"),
             attributes: vec![
                 StructField {
                     name: String::from("x"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
                 },
                 StructField {
                     name: String::from("y"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
-                }
+                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                },
             ],
             generic_args: vec![],
         };
-        let result = parse(
-            &SourceCode::new(String::from(src)))
-            .expect("Cannot parse structs and impl").item_defs;
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot parse structs and impl")
+            .item_defs;
         assert_eq!(result.len(), 2);
         if let Item::ImplDef(impl_def) = &result[1] {
             assert_eq!(impl_def.decls.len(), 1);
             if let AssociatedItem::FunDef(fun_def) = &impl_def.decls[0] {
                 assert_eq!(fun_def.param_decls.len(), 1);
                 assert_eq!(fun_def.param_decls[0].ident.name, "self");
-                assert_eq!(fun_def.param_decls[0].ty.as_ref().unwrap(),
-                    &Ty::new(TyKind::Data(DataTy::new(DataTyKind::Struct(
-                        struct_ty
-                    )))))
+                assert_eq!(
+                    fun_def.param_decls[0].ty.as_ref().unwrap(),
+                    &Ty::new(TyKind::Data(DataTy::new(DataTyKind::Struct(struct_ty))))
+                )
             } else {
                 panic!("Does not recognize FunDef")
             }

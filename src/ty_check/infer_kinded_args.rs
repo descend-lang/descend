@@ -75,10 +75,7 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
     match (&poly_ty.ty, &mono_ty.ty) {
         (TyKind::Ident(id), _) => insert_checked!(map, ArgKinded::Ty, id, mono_ty),
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
-        (
-            TyKind::Fn(params1, exec1, ret_ty1),
-            TyKind::Fn(params2, exec2, ret_ty2),
-        ) => {
+        (TyKind::Fn(params1, exec1, ret_ty1), TyKind::Fn(params2, exec2, ret_ty2)) => {
             infer_from_lists!(infer_kargs_tys, map, params1, params2);
             panic_if_neq!(exec1, exec2);
             infer_kargs_tys(map, ret_ty1, ret_ty2)
@@ -114,19 +111,18 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
             assert!(struct_1.name == struct_2.name);
             assert!(struct_1.generic_args.len() == struct_2.generic_args.len());
             assert!(struct_1.attributes.len() == struct_2.attributes.len());
-            struct_1.attributes
-            .iter()
-            .for_each(|attr1|
+            struct_1.attributes.iter().for_each(|attr1| {
                 infer_kargs_dtys(
                     map,
                     &attr1.ty,
-                    &struct_2.attributes
-                    .iter()
-                    .find(|attr2|
-                        attr1.name == attr2.name)
-                    .unwrap()
-                    .ty)
-            )
+                    &struct_2
+                        .attributes
+                        .iter()
+                        .find(|attr2| attr1.name == attr2.name)
+                        .unwrap()
+                        .ty,
+                )
+            })
         }
         (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
             infer_kargs_dtys(map, dty1, dty2);

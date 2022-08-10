@@ -120,9 +120,10 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         }
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTyKind::Struct(struct_ty) => {
-            struct_ty.attributes.iter().for_each(|field|
-                visitor.visit_dty(&field.ty)
-            );
+            struct_ty
+                .attributes
+                .iter()
+                .for_each(|field| visitor.visit_dty(&field.ty));
             walk_list!(visitor, visit_arg_kinded, &struct_ty.generic_args);
         }
         DataTyKind::Array(dty, n) => {
@@ -168,7 +169,7 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
-        },
+        }
     }
 }
 
@@ -246,7 +247,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_dty(dty);
             visitor.visit_expr(expr)
         }
-         ExprKind::App(path, _, f, gen_args, args) => {
+        ExprKind::App(path, _, f, gen_args, args) => {
             if let Path::DataTy(dty) = path {
                 visitor.visit_dty(dty);
             }
@@ -365,7 +366,7 @@ pub fn walk_ass_item<V: Visit>(visitor: &mut V, ass_item: &AssociatedItem) {
             if let Some(expr) = expr_op {
                 visitor.visit_expr(expr);
             }
-        },
+        }
     }
 }
 
@@ -417,7 +418,7 @@ pub fn walk_struct_def<V: Visit>(visitor: &mut V, struct_def: &StructDef) {
         name: _,
         generic_params,
         constraints,
-        decls
+        decls,
     } = struct_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_constraint, constraints);
@@ -430,7 +431,7 @@ pub fn walk_trait_def<V: Visit>(visitor: &mut V, trait_def: &TraitDef) {
         generic_params,
         constraints,
         decls,
-        supertraits
+        supertraits,
     } = trait_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_constraint, constraints);
@@ -444,7 +445,7 @@ pub fn walk_impl_def<V: Visit>(visitor: &mut V, impl_def: &ImplDef) {
         generic_params,
         constraints,
         decls,
-        trait_impl
+        trait_impl,
     } = impl_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
     visitor.visit_dty(dty);
@@ -457,13 +458,9 @@ pub fn walk_impl_def<V: Visit>(visitor: &mut V, impl_def: &ImplDef) {
 
 pub fn walk_item_def<V: Visit>(visitor: &mut V, item_def: &Item) {
     match item_def {
-        Item::FunDef(fun_def) =>
-            visitor.visit_fun_def(fun_def),
-        Item::StructDef(struct_def) =>
-            visitor.visit_struct_def(struct_def),
-        Item::TraitDef(trait_def) =>
-            visitor.visit_trait_def(trait_def),
-        Item::ImplDef(impl_def) =>
-            visitor.visit_impl_def(impl_def),
+        Item::FunDef(fun_def) => visitor.visit_fun_def(fun_def),
+        Item::StructDef(struct_def) => visitor.visit_struct_def(struct_def),
+        Item::TraitDef(trait_def) => visitor.visit_trait_def(trait_def),
+        Item::ImplDef(impl_def) => visitor.visit_impl_def(impl_def),
     }
 }

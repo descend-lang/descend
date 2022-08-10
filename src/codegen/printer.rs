@@ -51,7 +51,8 @@ impl std::fmt::Display for Item {
                 templ_params,
                 params,
                 ret_ty,
-                is_dev_fun } => {
+                is_dev_fun,
+            } => {
                 if !templ_params.is_empty() {
                     write!(f, "template<")?;
                     fmt_vec(f, templ_params, ", ")?;
@@ -69,7 +70,7 @@ impl std::fmt::Display for Item {
                     writeln!(f)?;
                 }
                 write!(f, ") -> {};", ret_ty)
-            },
+            }
             Item::FunDef {
                 name,
                 templ_params,
@@ -97,18 +98,15 @@ impl std::fmt::Display for Item {
                 writeln!(f, ") -> {} {{", ret_ty)?;
                 write!(f, "{}", body)?;
                 writeln!(f, "\n}}")
-            },
-            Item::StructDecl{
-                name,
-                templ_params
-            } => {
+            }
+            Item::StructDecl { name, templ_params } => {
                 if !templ_params.is_empty() {
                     write!(f, "template<")?;
                     fmt_vec(f, templ_params, ", ")?;
                     writeln!(f, ">")?;
                 }
                 write!(f, "struct {};", name)
-            },
+            }
             Item::StructDef {
                 name,
                 templ_params,
@@ -121,11 +119,11 @@ impl std::fmt::Display for Item {
                 }
 
                 writeln!(f, "struct {} {{", name)?;
-                attributes.iter().try_for_each(|(name, ty)|
-                    writeln!(f, "{} {};", ty, name)
-                )?;
+                attributes
+                    .iter()
+                    .try_for_each(|(name, ty)| writeln!(f, "{} {};", ty, name))?;
                 writeln!(f, "}};")
-            },
+            }
         }
     }
 }
@@ -251,14 +249,15 @@ impl std::fmt::Display for Expr {
             UnOp { op, arg } => write!(f, "{}{}", op, arg),
             BinOp { op, lhs, rhs } => write!(f, "{} {} {}", lhs, op, rhs),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
-            Proj { tuple, n } =>
-                match n {
-                    crate::ast::ProjEntry::TupleAccess(n) =>
-                        write!(f, "{}.{}", tuple, n),
-                    crate::ast::ProjEntry::StructAccess(n) =>
-                        write!(f, "{}.{}", tuple, n),
-                },
-            StructInst { name, template_args, args }  => {
+            Proj { tuple, n } => match n {
+                crate::ast::ProjEntry::TupleAccess(n) => write!(f, "{}.{}", tuple, n),
+                crate::ast::ProjEntry::StructAccess(n) => write!(f, "{}.{}", tuple, n),
+            },
+            StructInst {
+                name,
+                template_args,
+                args,
+            } => {
                 write!(f, "{}", name)?;
                 if template_args.len() > 0 {
                     write!(f, "<")?;

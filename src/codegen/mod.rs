@@ -1,14 +1,14 @@
 mod cu_ast;
-mod printer;
 mod monomorphiser;
+mod printer;
 
-use crate::ast::{self as desc, ProjEntry};
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
+use crate::ast::{self as desc, ProjEntry};
 use crate::ast::{utils, Mutability};
 use crate::codegen::cu_ast::Item;
-use cu_ast as cu;
 use core::panic;
+use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -18,23 +18,18 @@ use std::sync::atomic::{AtomicI32, Ordering};
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let (structs, funs) =
         monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs.clone());
-    let compil_unit = CompilUnit {
-        structs,
-        funs
-    };
+    let compil_unit = CompilUnit { structs, funs };
 
-    let (struct_decls, struct_defs) =
-        compil_unit.structs
+    let (struct_decls, struct_defs) = compil_unit
+        .structs
         .iter()
-        .map(|struct_def|
-            (gen_struct_decl(struct_def),
-             gen_struct_def(struct_def))
-        ).unzip::<_, _, Vec<Item>, Vec<Item>>();
+        .map(|struct_def| (gen_struct_decl(struct_def), gen_struct_def(struct_def)))
+        .unzip::<_, _, Vec<Item>, Vec<Item>>();
 
-    let (fun_decls, fun_defs) =
-        compil_unit.funs
+    let (fun_decls, fun_defs) = compil_unit
+        .funs
         .iter()
-        .filter_map(|fun|
+        .filter_map(|fun| {
             if fun.param_decls.iter().all(|p| {
                 !is_shape_ty(p.ty.as_ref().unwrap())
                     && !matches!(
@@ -45,15 +40,17 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
                         })
                     )
             }) {
-                Some((gen_fun_decl(fun),
-                      gen_fun_def(fun, &compil_unit, idx_checks)))
+                Some((
+                    gen_fun_decl(fun),
+                    gen_fun_def(fun, &compil_unit, idx_checks),
+                ))
             } else {
                 None
             }
-        ).unzip::<_, _, Vec<Item>, Vec<Item>>();
+        })
+        .unzip::<_, _, Vec<Item>, Vec<Item>>();
 
-    let cu_program =
-        std::iter::once(cu::Item::Include("descend.cuh".to_string()))
+    let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
         .chain(std::iter::once(cu::Item::EmptyLine))
         .chain(struct_decls)
         .chain(std::iter::once(cu::Item::EmptyLine))
@@ -74,25 +71,22 @@ struct CodegenCtx {
 
 struct CompilUnit {
     structs: Vec<desc::StructDef>,
-    funs: Vec<desc::FunDef>
+    funs: Vec<desc::FunDef>,
 }
 
 impl CompilUnit {
     fn get_struct_def(&self, name: &str) -> &desc::StructDef {
         self.structs
-        .iter()
-        .find(|struct_def|
-            struct_def.name == *name
-        ).expect("Could not find struct definition.")
-        
+            .iter()
+            .find(|struct_def| struct_def.name == *name)
+            .expect("Could not find struct definition.")
     }
 
     fn get_fun_def(&self, name: &str) -> &desc::FunDef {
         self.funs
-        .iter()
-        .find(|fun_def|
-            fun_def.name == name
-        ).expect(format!("Cannot find function definition for fun {}.", name).as_str())
+            .iter()
+            .find(|fun_def| fun_def.name == name)
+            .expect(format!("Cannot find function definition for fun {}.", name).as_str())
     }
 }
 
@@ -198,12 +192,12 @@ impl CheckedExpr {
 fn gen_struct_decl(struct_def: &desc::StructDef) -> cu::Item {
     cu::Item::StructDecl {
         name: struct_def.name.clone(),
-        templ_params: gen_templ_params(&struct_def.generic_params)
+        templ_params: gen_templ_params(&struct_def.generic_params),
     }
 }
 
 fn gen_struct_def(struct_def: &desc::StructDef) -> cu::Item {
-    let desc::StructDef{
+    let desc::StructDef {
         name,
         generic_params,
         constraints: _,
@@ -213,12 +207,19 @@ fn gen_struct_def(struct_def: &desc::StructDef) -> cu::Item {
     cu::Item::StructDef {
         name: name.clone(),
         templ_params: gen_templ_params(generic_params),
-        attributes:
-            decls.iter().map(|struct_field|
-                (struct_field.name.clone(),
-                    gen_ty(&desc::TyKind::Data(struct_field.ty.clone()), desc::Mutability::Mut))
-            ).collect(),
-     }
+        attributes: decls
+            .iter()
+            .map(|struct_field| {
+                (
+                    struct_field.name.clone(),
+                    gen_ty(
+                        &desc::TyKind::Data(struct_field.ty.clone()),
+                        desc::Mutability::Mut,
+                    ),
+                )
+            })
+            .collect(),
+    }
 }
 
 fn gen_fun_decl(fun_def: &desc::FunDef) -> cu::Item {
@@ -230,17 +231,15 @@ fn gen_fun_decl(fun_def: &desc::FunDef) -> cu::Item {
         ret_dty: ret_ty,
         exec,
         prv_rels: _,
-        body_expr:_ ,
+        body_expr: _,
     } = fun_def;
 
     cu::Item::FunDecl {
         name: name.clone(),
         templ_params: gen_templ_params(generic_params),
         params: gen_param_decls(params),
-        ret_ty: gen_ty(
-            &desc::TyKind::Data(ret_ty.clone()), 
-            desc::Mutability::Mut),
-        is_dev_fun: is_dev_fun(*exec)
+        ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut),
+        is_dev_fun: is_dev_fun(*exec),
     }
 }
 
@@ -583,10 +582,16 @@ fn gen_let(
                         tp,
                         &desc::Expr::with_type(
                             desc::ExprKind::Proj(Box::new(e.clone()), ProjEntry::TupleAccess(i)),
-                            match crate::ty_check::proj_elem_ty(e.ty.as_ref().unwrap(), &ProjEntry::TupleAccess(i)) {
+                            match crate::ty_check::proj_elem_ty(
+                                e.ty.as_ref().unwrap(),
+                                &ProjEntry::TupleAccess(i),
+                            ) {
                                 Ok(ty) => ty,
                                 Err(err) => {
-                                    panic!("Cannot project tuple element type at {}\nError:{:?}", i, err)
+                                    panic!(
+                                        "Cannot project tuple element type at {}\nError:{:?}",
+                                        i, err
+                                    )
                                 }
                             },
                         ),
@@ -1287,9 +1292,19 @@ fn gen_par_for(
         Some(decls) => cu::Stmt::Seq(
             decls
                 .iter()
-                .map(|d|
-                    gen_stmt(d, false, &mut CodegenCtx::new(), 
-                    &CompilUnit { structs: vec![], funs: vec![] }, true, idx_checks))
+                .map(|d| {
+                    gen_stmt(
+                        d,
+                        false,
+                        &mut CodegenCtx::new(),
+                        &CompilUnit {
+                            structs: vec![],
+                            funs: vec![],
+                        },
+                        true,
+                        idx_checks,
+                    )
+                })
                 .collect(),
         ),
         None => cu::Stmt::Skip,
@@ -1615,25 +1630,26 @@ fn gen_expr(
         StructInst(name, args, attributes) => {
             //Make sure the order of the attributes are the same like in the struct def
             let struct_def = comp_unit.get_struct_def(name);
-            let attributes =
-                struct_def.decls.iter().map(|field|
-                    &attributes.iter().find(|(name, _)|
-                        name.name == field.name)
-                    .unwrap().1
-                );
+            let attributes = struct_def.decls.iter().map(|field| {
+                &attributes
+                    .iter()
+                    .find(|(name, _)| name.name == field.name)
+                    .unwrap()
+                    .1
+            });
 
             CheckedExpr::Expr(cu::Expr::StructInst {
                 name: name.clone(),
                 template_args: gen_args_kinded(args),
-                args:
-                    attributes
-                    .map(|expr|
-                        match gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                args: attributes
+                    .map(
+                        |expr| match gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
                             CheckedExpr::Expr(expr) => expr,
                             CheckedExpr::ExprIdxCheck(_, expr) => expr,
-                        }
-                    ).collect()
-                })
+                        },
+                    )
+                    .collect(),
+            })
         }
         Array(elems) => CheckedExpr::Expr(cu::Expr::InitializerList {
             elems: elems
@@ -1933,11 +1949,7 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
         .zip(gen_args)
         .collect();
     if let desc::TyKind::Fn(param_tys, exec, ret_ty) = &fun.ty().mono_ty.ty {
-        let fun_ty = desc::Ty::new(desc::TyKind::Fn(
-            param_tys.clone(),
-            *exec,
-            ret_ty.clone(),
-        ));
+        let fun_ty = desc::Ty::new(desc::TyKind::Fn(param_tys.clone(), *exec, ret_ty.clone()));
         let mut fun = desc::Expr::with_type(
             desc::ExprKind::Lambda(
                 fun.param_decls.clone(),
@@ -2052,11 +2064,13 @@ fn gen_pl_expr(
             // FIXME this does not work when there are tuples inside of shape tuples
             Some(p) if shape_ctx.contains_key(&p.ident.name) => gen_shape(
                 shape_ctx.get(&p.ident.name),
-                p.path.iter().map(|n| 
-                    match n {
+                p.path
+                    .iter()
+                    .map(|n| match n {
                         ProjEntry::TupleAccess(n) => desc::Nat::Lit(*n),
                         _ => todo!("TODO"),
-                    }).collect(),
+                    })
+                    .collect(),
                 shape_ctx,
                 comp_unit,
                 idx_checks,
@@ -2076,11 +2090,13 @@ fn gen_pl_expr(
             match ple.to_place() {
                 Some(pl) if shape_ctx.contains_key(&pl.ident.name) => gen_shape(
                     shape_ctx.get(&pl.ident.name),
-                    pl.path.iter().map(|n|
-                        match n {
+                    pl.path
+                        .iter()
+                        .map(|n| match n {
                             ProjEntry::TupleAccess(n) => desc::Nat::Lit(*n),
                             _ => todo!("TODO"),
-                        }).collect(),
+                        })
+                        .collect(),
                     shape_ctx,
                     comp_unit,
                     idx_checks,
@@ -2247,15 +2263,13 @@ fn gen_shape(
             path.push(idx.clone());
             gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
         }
-        (ShapeExpr::Proj { shape, i }, _) => {
-            match i {
-                ProjEntry::TupleAccess(i) => {
-                    path.push(desc::Nat::Lit(*i));
-                    gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
-                },
-                _ => todo!("Are here also non tuple accesses allowed?"),
+        (ShapeExpr::Proj { shape, i }, _) => match i {
+            ProjEntry::TupleAccess(i) => {
+                path.push(desc::Nat::Lit(*i));
+                gen_shape(shape, path, shape_ctx, comp_unit, idx_checks)
             }
-        }
+            _ => todo!("Are here also non tuple accesses allowed?"),
+        },
         (ShapeExpr::SplitAt { pos, shape }, _) => {
             let proj = path.pop();
             let idx = path.pop();
@@ -2464,16 +2478,18 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             dty: d::Tuple(tys), ..
         }) => cu::Ty::Tuple(tys.iter().map(|ty| gen_ty(&Data(ty.clone()), m)).collect()),
         Data(desc::DataTy {
-            dty: d::Struct(struct_ty), ..
+            dty: d::Struct(struct_ty),
+            ..
         }) => cu::Ty::Struct(
-            struct_ty.name.clone(), 
-            struct_ty.generic_args.iter().map(|gen_arg|
-                match gen_arg {
-                    desc::ArgKinded::DataTy(dty) =>
-                        gen_ty(&Data(dty.clone()), m),
+            struct_ty.name.clone(),
+            struct_ty
+                .generic_args
+                .iter()
+                .map(|gen_arg| match gen_arg {
+                    desc::ArgKinded::DataTy(dty) => gen_ty(&Data(dty.clone()), m),
                     _ => unimplemented!("TODO"),
-                }
-            ).collect()
+                })
+                .collect(),
         ),
         Data(desc::DataTy {
             dty: d::Array(ty, n),
@@ -2681,8 +2697,7 @@ impl ParallelityCollec {
             desc::ExprKind::PlaceExpr(pl_expr) => {
                 ParallelityCollec::create_parall_pl_expr(pl_expr, parall_ctx)
             }
-            desc::ExprKind::Proj(expr, i) =>
-            match i {
+            desc::ExprKind::Proj(expr, i) => match i {
                 ProjEntry::TupleAccess(i) => ParallelityCollec::Proj {
                     parall_expr: Box::new(ParallelityCollec::create_from(expr, parall_ctx)),
                     i: *i,
@@ -2708,16 +2723,13 @@ impl ParallelityCollec {
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Proj(pp, i),
                 ..
-            } =>
-                match i {
-                    ProjEntry::TupleAccess(i) => 
-                        ParallelityCollec::Proj {
-                            parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
-                            i: i.clone(),
-                        },
-                    _ => todo!("Are here also non tuple accesses allowed?"),
-                }
-           ,
+            } => match i {
+                ProjEntry::TupleAccess(i) => ParallelityCollec::Proj {
+                    parall_expr: Box::new(ParallelityCollec::create_parall_pl_expr(pp, parall_ctx)),
+                    i: i.clone(),
+                },
+                _ => todo!("Are here also non tuple accesses allowed?"),
+            },
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Deref(_),
                 ..
@@ -3064,9 +3076,7 @@ fn inline_par_for_funs(mut fun_def: desc::FunDef, comp_unit: &CompilUnit) -> des
         }
     }
 
-    let mut inliner = InlineParForFuns { 
-        comp_unit
-     };
+    let mut inliner = InlineParForFuns { comp_unit };
     inliner.visit_fun_def(&mut fun_def);
     fun_def
 }

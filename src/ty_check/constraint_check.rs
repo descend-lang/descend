@@ -1,4 +1,4 @@
-use crate::ast::{IdentKinded, Constraint};
+use crate::ast::{Constraint, IdentKinded};
 
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
 
@@ -8,17 +8,21 @@ use super::unify::substitute;
 pub struct ConstraintScheme {
     pub generics: Vec<IdentKinded>,
     pub implican: Vec<Constraint>,
-    pub implied: Constraint
+    pub implied: Constraint,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConstraintEnv {
-    theta: Vec<ConstraintScheme>
+    theta: Vec<ConstraintScheme>,
 }
 
 impl ConstraintScheme {
     pub fn new(implied: &Constraint) -> Self {
-        ConstraintScheme { generics: vec![], implican: vec![], implied: implied.clone() }
+        ConstraintScheme {
+            generics: vec![],
+            implican: vec![],
+            implied: implied.clone(),
+        }
     }
 
     pub fn is_constraint(&self) -> bool {
@@ -40,33 +44,32 @@ impl ConstraintEnv {
     }
 
     pub fn append_constraints(&mut self, cons: &Vec<Constraint>) {
-        self.theta.extend(cons.iter().map(|con| ConstraintScheme::new(con)));
+        self.theta
+            .extend(cons.iter().map(|con| ConstraintScheme::new(con)));
     }
 
     pub fn remove_constraints(&mut self, cons: &Vec<Constraint>) {
         cons.iter().for_each(|con_remove| {
             let con_remove = ConstraintScheme::new(con_remove);
-            self.theta
-            .swap_remove(
+            self.theta.swap_remove(
                 self.theta
-                .iter()
-                .rev()
-                .position(|con|
-                    *con == con_remove).unwrap()
-                );
+                    .iter()
+                    .rev()
+                    .position(|con| *con == con_remove)
+                    .unwrap(),
+            );
         });
     }
 
     pub fn remove_constraint_schemes(&mut self, cons: &Vec<ConstraintScheme>) {
         cons.iter().for_each(|con_remove| {
-            self.theta
-            .swap_remove(
+            self.theta.swap_remove(
                 self.theta
-                .iter()
-                .rev()
-                .position(|con|
-                    *con == *con_remove).unwrap()
-                );
+                    .iter()
+                    .rev()
+                    .position(|con| *con == *con_remove)
+                    .unwrap(),
+            );
         });
     }
 
@@ -74,21 +77,27 @@ impl ConstraintEnv {
         let mut constr_map = ConstrainMap::new();
         let mut prv_rels = Vec::new();
 
-        self.theta.iter().find(|con| {
-            constr_map.clear();
-            prv_rels.clear();
-            
-            let mut goal_clone = goal.clone();
+        self.theta
+            .iter()
+            .find(|con| {
+                constr_map.clear();
+                prv_rels.clear();
 
-            if goal_clone.constrain(&mut con.implied.clone(), &mut constr_map, &mut prv_rels).is_ok() {
-                con.implican.iter().fold(true, |res, c| {
-                    let mut goal = c.clone();
-                    substitute(&constr_map, &mut goal);
-                    res && self.check_constraint(&goal)
-                })
-            } else {
-                false
-            }
-        }).is_some()
+                let mut goal_clone = goal.clone();
+
+                if goal_clone
+                    .constrain(&mut con.implied.clone(), &mut constr_map, &mut prv_rels)
+                    .is_ok()
+                {
+                    con.implican.iter().fold(true, |res, c| {
+                        let mut goal = c.clone();
+                        substitute(&constr_map, &mut goal);
+                        res && self.check_constraint(&goal)
+                    })
+                } else {
+                    false
+                }
+            })
+            .is_some()
     }
 }

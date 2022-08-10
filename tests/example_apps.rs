@@ -5,7 +5,7 @@ extern crate descend;
 type Res = Result<(), descend::error::ErrorReported>;
 
 #[test]
-#[ignore]//TODO stack overflow
+#[ignore] //TODO stack overflow
 fn scan() -> Res {
     Ok(println!(
         "{}",
@@ -14,7 +14,7 @@ fn scan() -> Res {
 }
 
 #[test]
-#[ignore]//TODO stack overflow
+#[ignore] //TODO stack overflow
 fn reduce_shared_mem() -> Res {
     Ok(println!(
         "{}",
@@ -23,7 +23,7 @@ fn reduce_shared_mem() -> Res {
 }
 
 #[test]
-#[ignore]//TODO stack overflow
+#[ignore] //TODO stack overflow
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",

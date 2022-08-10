@@ -24,7 +24,6 @@ macro_rules! assert_err_compile {
     };
 }
 
-
 #[test]
 fn test_struct_def() {
     let src = r#"
@@ -162,7 +161,7 @@ fn test_monomoprhisation() {
 }
 
 #[test]
-#[ignore]//TODO error while parsing
+#[ignore] //TODO error while parsing
 fn test_fun_calls() {
     let src = r#"
     trait Eq {
@@ -351,7 +350,7 @@ fn test_associated_const() {
 }
 
 #[test]
-#[ignore]//TODO fail?
+#[ignore] //TODO fail?
 fn test_unimplmented_method_impl_def() {
     let src = r#"
     struct Point {
@@ -729,7 +728,6 @@ fn test_invalid_generic_kind() {
     impl<T: mem> Eq for Point<T, 42.3> {}
     "#;
     assert_err_compile!(src);
-
 }
 
 #[test]
@@ -823,7 +821,7 @@ fn test_unfullfilled_constraints2() {
         x: X,
         y: Y
     }
-    struct T<X> where X: Ord {} 
+    struct T<X> where X: Ord {}
     struct Point2<Y> where Y: SOrd {
         p: Point<T<Y>, Y>
     }
@@ -847,7 +845,7 @@ fn test_unfullfilled_constraints2() {
         x: X,
         y: Y
     }
-    struct T<X> where X: Ord {} 
+    struct T<X> where X: Ord {}
     struct Point2<Y> where Y: Ord {
         p: Point<T<Y>, Y>
     }
@@ -908,7 +906,7 @@ fn test_higher_rank_trait_bounds() {
         data: (u8, u16),
         func: F,
     }
-    
+
     impl<F> Closure<F>
         where for<'a> F: Fn(&'a (u8, u16)) -> &'a u8,
     {
@@ -916,9 +914,9 @@ fn test_higher_rank_trait_bounds() {
             (self.func)(&self.data)
         }
     }
-    
+
     fn do_it(data: &shrd cpu.mem(u8, u16)) -[cpu.thread]-> &shrd cpu.mem u8 { &data.0 }
-    
+
     fn main() -[cpu.thread]-> () {
         let clo = Closure { data: (0, 1), func: do_it };
         let res = clo.call()

@@ -3,7 +3,7 @@
 
 // TODO specific access modifiers
 
-use super::{Ident, Ownership, PlaceExpr, Ty, ProjEntry};
+use super::{Ident, Ownership, PlaceExpr, ProjEntry, Ty};
 use crate::ast::{Mutability, PlaceExprKind};
 use std::collections::HashSet;
 
@@ -80,8 +80,9 @@ impl Place {
     pub fn to_place_expr(&self) -> PlaceExpr {
         self.path.iter().fold(
             PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
-            |pl_expr, path_entry| 
+            |pl_expr, path_entry| {
                 PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), path_entry.clone()))
+            },
         )
     }
 }

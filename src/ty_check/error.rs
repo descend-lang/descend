@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind, Kind, Constraint, FunctionName, DataTy};
+use crate::ast::{Constraint, DataTy, FunctionName, Ident, Kind, Ownership, PlaceExpr, TyKind};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -187,8 +187,7 @@ impl TyError {
             TyError::WrongNumberOfGenericParams(expected, found) => {
                 eprintln!(
                     "Wrong amount of generic arguments. Expected {}, found {}",
-                    expected,
-                    found
+                    expected, found
                 );
             }
             err => {
