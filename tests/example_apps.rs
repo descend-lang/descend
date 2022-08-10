@@ -32,7 +32,6 @@ fn tree_reduce() -> Res {
 }
 
 #[test]
-#[ignore]//TODO error monomorphise
 fn vector_add() -> Res {
     Ok(println!(
         "{}",
@@ -59,7 +58,6 @@ fn bfs() -> Res {
 }
 
 #[test]
-#[ignore]//TODO error monomorphise
 fn computed_indexing() -> Res {
     Ok(println!(
         "{}",

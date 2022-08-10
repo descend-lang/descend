@@ -82,7 +82,6 @@ fn test_impl_def() {
 }
 
 #[test]
-#[ignore]//TODO fail?
 fn test_method_call() {
     let src = r#"
     struct Point {

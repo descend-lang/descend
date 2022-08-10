@@ -292,7 +292,11 @@ impl TyChecker {
                                 errors.push(TyError::UnexpectedType)
                             } 
                         } else {
-                            errors.push(TyError::from(CtxError::FunNotImplemented(fun_name.clone())))
+                            match ass_item {
+                                AssociatedItem::FunDef(_) => (),
+                                AssociatedItem::FunDecl(_) => errors.push(TyError::from(CtxError::FunNotImplemented(fun_name.clone()))),
+                                _ => unimplemented!(),
+                            }
                         },
                     AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO")
                 }
