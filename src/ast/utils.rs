@@ -1,6 +1,6 @@
 use crate::ast::visit::Visit;
 use crate::ast::{
-    visit, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    DataTy, DataTyKind, visit, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -50,9 +50,10 @@ impl FreeKindedIdents {
 impl Visit for FreeKindedIdents {
     fn visit_nat(&mut self, nat: &Nat) {
         match nat {
-            Nat::Ident(ident) => self
+            Nat::Ident(ident) => { self
                 .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Nat))),
+                .insert(IdentKinded::new(ident, Kind::Nat));
+            },
             //Nat::App(ident, args) =>
             _ => visit::walk_nat(self, nat),
         }
@@ -60,32 +61,42 @@ impl Visit for FreeKindedIdents {
 
     fn visit_mem(&mut self, mem: &Memory) {
         match mem {
-            Memory::Ident(ident) => self
+            Memory::Ident(ident) => { self
                 .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Memory))),
+                .insert(IdentKinded::new(ident, Kind::Memory));
+            },
             _ => visit::walk_mem(self, mem),
         }
     }
 
     fn visit_prv(&mut self, prv: &Provenance) {
         match prv {
-            Provenance::Ident(ident) => self
+            Provenance::Ident(ident) => { self
                 .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Provenance))),
+                .insert(IdentKinded::new(ident, Kind::Provenance));
+            },
             _ => visit::walk_prv(self, prv),
         }
     }
 
     fn visit_ty(&mut self, ty: &Ty) {
         match &ty.ty {
-            TyKind::Ident(ident) => self
+            TyKind::Ident(ident) => { self
                 .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty))),
-            TyKind::Fn(param_tys, _, ret_ty) => {
-                walk_list!(self, visit_ty, param_tys);
-                self.visit_ty(ret_ty)
-            }
+                .insert(IdentKinded::new(ident, Kind::Ty));
+            },
             _ => visit::walk_ty(self, ty),
+        }
+    }
+
+    fn visit_dty(&mut self, dty: &DataTy) {
+        match &dty.dty {
+            DataTyKind::Ident(ident) => {
+                self
+                .set
+                .insert(IdentKinded::new(ident, Kind::DataTy));
+            },
+            _ => visit::walk_dty(self, dty),
         }
     }
 

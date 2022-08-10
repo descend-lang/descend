@@ -13,6 +13,7 @@ use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
 use crate::ty_check::infer_kinded_args::infer_kinded_args_from_mono_ty;
+use crate::ty_check::unify::Constrainable;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use core::panic;
@@ -155,21 +156,19 @@ impl TyChecker {
             generics.push(IdentKinded::new(&Ident::new("Self"), Kind::DataTy));
             generics.extend(trait_def.generic_params.clone());
 
-            //TODO collecting free_idents dont work yet
-            // //Check every generic is a free type var in "monotypes"
-            // let free_idents =
-            //     monotypes
-            //     .iter()
-            //     .fold(HashSet::new(), |mut free, monoty| {
-            //         free.extend(monoty.free_idents());
-            //         free
-            // });
-            // println!("Free idents: {:#?}", free_idents);
-            // if !impl_def.generic_params.iter()
-            //     .fold(true, |res, gen|
-            //     res & free_idents.contains(gen)) {
-            //     return Err(TyError::WrongNumberOfGenericParams(free_idents.len(), generics.len()));
-            // }
+            //Check every generic is a free type var in "monotypes"
+            let free_idents =
+                monotypes
+                .iter()
+                .fold(HashSet::new(), |mut free, monoty| {
+                    free.extend(monoty.free_idents());
+                    free
+            });
+            if !impl_def.generic_params.iter()
+                .fold(true, |res, gen|
+                res & free_idents.contains(gen)) {
+                return Err(TyError::WrongNumberOfGenericParams(free_idents.len(), generics.len()));
+            }
 
             self.well_formed_constraint_scheme(&kind_ctx, &ty_ctx, 
                 &ConstraintScheme {

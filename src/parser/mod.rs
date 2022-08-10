@@ -117,8 +117,7 @@ fn visit_ast(items: &mut Vec<Item>) { //TODO find a proper name
                     Kind::DataTy => 
                         ArgKinded::DataTy(DataTy::new(
                             DataTyKind::Ident(ident.clone()),
-                        )),
-                    _ => panic!("This kind can not be referred to with an identifier."),
+                        ))
         }
     }
 }
