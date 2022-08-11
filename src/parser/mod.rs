@@ -22,8 +22,14 @@ use crate::ast::visit_mut::{
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
     let mut item_defs = parser.parse().map_err(|err| err.emit())?;
-    visit_ast(&mut item_defs);
-    Ok(CompilUnit::new(item_defs, source))
+    let errs = visit_ast(&mut item_defs);
+
+    if errs.is_empty() {
+        Ok(CompilUnit::new(item_defs, source))
+    } else {
+        errs.iter().for_each(|err| eprintln!("{}", err));
+        Err(ErrorReported)
+    }
 }
 
 #[derive(Debug)]
@@ -41,12 +47,12 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn visit_ast(items: &mut Vec<Item>) {
-    //TODO find a proper name
+fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     struct Visitor {
         structs: BTreeMap<String, StructDef>,
         ident_kinded_in_scope: Vec<(String, Kind)>,
         impl_dty_in_scope: Option<DataTy>,
+        errs: Vec<String>,
     }
 
     impl Visitor {
@@ -61,6 +67,7 @@ fn visit_ast(items: &mut Vec<Item>) {
                 })),
                 ident_kinded_in_scope: Vec::with_capacity(32),
                 impl_dty_in_scope: None,
+                errs: vec![],
             }
         }
 
@@ -84,19 +91,6 @@ fn visit_ast(items: &mut Vec<Item>) {
                 .truncate(self.ident_kinded_in_scope.len() - n);
         }
 
-        fn get_kind(&self, ident: &Ident) -> &Kind {
-            if let Some((_, kind)) = self
-                .ident_kinded_in_scope
-                .iter()
-                .rev()
-                .find(|(name, _)| *name == ident.name)
-            {
-                kind
-            } else {
-                panic!("Could not find kind of identifier \"{}\"", ident); //TODO throw error instead of panic
-            }
-        }
-
         fn contains_ident_kinded(&self, name: &str) -> bool {
             self.ident_kinded_in_scope
                 .iter()
@@ -107,21 +101,45 @@ fn visit_ast(items: &mut Vec<Item>) {
     }
 
     //Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
-    fn replace_arg_kinded_kind(visitor: &Visitor, arg: &mut ArgKinded) {
+    fn replace_arg_kinded_kind(visitor: &mut Visitor, arg: &mut ArgKinded) {
         if let ArgKinded::Ident(ident) = arg {
-            *arg = match visitor.get_kind(&ident) {
-                Kind::Provenance => ArgKinded::Provenance(Provenance::Ident(ident.clone())),
-                Kind::Memory => ArgKinded::Memory(Memory::Ident(ident.clone())),
-                Kind::Nat => ArgKinded::Nat(Nat::Ident(ident.clone())),
-                Kind::Ty =>
-                // TODO how to deal with View??!! This is a problem!
-                //  Ident only for Ty but not for DataTy or ViewTy?
-                {
-                    ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
-                        ident.clone(),
-                    )))))
+            let ident_kind = visitor
+                .ident_kinded_in_scope
+                .iter()
+                .rev()
+                .find(|(name, _)| *name == ident.name);
+            let struct_def = visitor.structs.get(&ident.name);
+
+            match (ident_kind.is_some(), struct_def.is_some()) {
+                (true, false) => {
+                    *arg = match ident_kind.unwrap().1 {
+                        Kind::Provenance => ArgKinded::Provenance(Provenance::Ident(ident.clone())),
+                        Kind::Memory => ArgKinded::Memory(Memory::Ident(ident.clone())),
+                        Kind::Nat => ArgKinded::Nat(Nat::Ident(ident.clone())),
+                        Kind::Ty =>
+                        // TODO how to deal with View??!! This is a problem!
+                        //  Ident only for Ty but not for DataTy or ViewTy?
+                        {
+                            ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
+                                ident.clone(),
+                            )))))
+                        }
+                        Kind::DataTy => {
+                            ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident.clone())))
+                        }
+                    }
                 }
-                Kind::DataTy => ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident.clone()))),
+                (false, true) => {
+                    *arg = ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident.clone())))
+                }
+                (false, false) => visitor.errs.push(format!(
+                    "Could not find kind of ArgKinded-identifier \"{:#?}\"",
+                    ident
+                )),
+                (true, true) => visitor.errs.push(format!(
+                    "Ambiguous ArgKinded-identifier \"{:#?}\" is a struct-name and also an bound identifier",
+                    ident
+                )),
             }
         }
     }
@@ -138,7 +156,7 @@ fn visit_ast(items: &mut Vec<Item>) {
     }
 
     //Distinguish between type variables and struct names without generic params
-    fn replace_tyidents_struct_names(visitor: &Visitor, dty: &mut DataTy) {
+    fn replace_tyidents_struct_names(visitor: &mut Visitor, dty: &mut DataTy) {
         if let DataTyKind::Ident(name) = &mut dty.dty {
             let struct_def = visitor.structs.get(&name.name);
             let is_type_ident = visitor.contains_ident_kinded(&name.name);
@@ -151,15 +169,15 @@ fn visit_ast(items: &mut Vec<Item>) {
                     }
                 }
                 (false, true) | (false, false) => (),
-                (true, true) => panic!("AmbiguousIdentifier"), //TODO throw error instead of panic
-                                                               // self.errs.push(
-                                                               //     TyError::from(CtxError::AmbiguousIdentifier(name.clone()))),
+                (true, true) =>
+                    visitor.errs
+                        .push(format!("Ambiguous identifier \"{:#?}\" is a struct-name and also an bounded datatype-identifier", name)),
             }
         }
     }
 
     //Initialize attributes list of struct_types
-    fn initialize_struct_attribute_lists(visitor: &Visitor, dty: &mut DataTy) {
+    fn initialize_struct_attribute_lists(visitor: &mut Visitor, dty: &mut DataTy) {
         if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
             if struct_ty.attributes.len() == 0 {
                 if let Some(struct_def) = visitor.structs.get(&struct_ty.name) {
@@ -175,7 +193,10 @@ fn visit_ast(items: &mut Vec<Item>) {
                         panic!("Instantiated struct def should have struct type")
                     }
                 } else {
-                    panic!("TODO print some err instead of panic")
+                    visitor.errs.push(format!(
+                        "Did not find struct definition for struct \"{:#?}\"",
+                        struct_ty
+                    ))
                 }
             }
         }
@@ -236,7 +257,7 @@ fn visit_ast(items: &mut Vec<Item>) {
             replace_self_in_impls(self, dty);
             replace_tyidents_struct_names(self, dty);
             initialize_struct_attribute_lists(self, dty);
-            walk_dty(self, dty);
+            walk_dty(self, dty)
         }
 
         fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) {
@@ -248,7 +269,8 @@ fn visit_ast(items: &mut Vec<Item>) {
     let mut visitor = Visitor::new(items);
     items
         .iter_mut()
-        .for_each(|item_def| visitor.visit_item_def(item_def))
+        .for_each(|item_def| visitor.visit_item_def(item_def));
+    visitor.errs
 }
 
 pub mod error {

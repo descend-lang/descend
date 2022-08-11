@@ -161,7 +161,6 @@ fn test_monomoprhisation() {
 }
 
 #[test]
-#[ignore] //TODO error while parsing
 fn test_fun_calls() {
     let src = r#"
     trait Eq {
@@ -177,18 +176,18 @@ fn test_fun_calls() {
     }
     impl<T> Eq for Point<T> where T: SomeOtherTrait {}
     fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Eq {
-        let i1: i32 = (&t).eq(&t);
-        let i2: i32 = T::eq(&t, &t);
+        let i1: i32 = (&shrd t).eq(&shrd t);
+        let i2: i32 = T::eq(&shrd t, &shrd t);
         ()
     }
     fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t4: T) -[cpu.thread]-> () where T: SomeOtherTrait  {
-        let p: Point<T> = Point { x: t1, y: t2 };
+        let p: Point<T> = Point<T> { x: t1, y: t2 };
         fun_with_generics(p);
 
-        let p2: Point<T> = Point { x: t3, y: t4 };
-        (&p2).eq(&p2);
-        Point::<T>::eq(&p2, &p2);
-        Point::eq(&p2, &p2);
+        let p2: Point<T> = Point<T> { x: t3, y: t4 };
+        (&shrd p2).eq(&shrd p2);
+        Point<T>::eq(&shrd p2, &shrd p2);
+        // Point::eq(&shrd p2, &shrd p2); //TODO infer generic
         ()
     }
     fn bar() -[cpu.thread]-> () {
@@ -204,24 +203,26 @@ fn test_fun_calls() {
             1
         }
     }
+    trait SomeOtherTrait {} //TODO why is this necassary to run the test sucessfully
+    impl SomeOtherTrait for i32 {} //TODO why is this necassary to run the test sucessfully
     struct Point<T> {
         x: T,
         y: T
     }
     impl<T> Eq for Point<T> {} //here "T" has no constraints
     fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Eq {
-        let i1: i32 = (&t).eq(&t);
-        let i2: i32 = T::eq(&t, &t);
+        let i1: i32 = (&shrd t).eq(&shrd t);
+        let i2: i32 = T::eq(&shrd t, &shrd t);
         ()
     }
-    fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t3: T) -[cpu.thread] -> () {
-        let p: Point<T> = Point { x: t1, y: t2 };
+    fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t4: T) -[cpu.thread]-> () {
+        let p: Point<T> = Point<T> { x: t1, y: t2 };
         fun_with_generics(p);
 
-        let p2: Point<T> = Point { x: t3, y: t4 };
-        (&p2).eq(&p2);
-        Point::<T>::eq(&p2, &p2);
-        Point::eq(&p2, &p2);
+        let p2: Point<T> = Point<T> { x: t3, y: t4 };
+        (&shrd p2).eq(&shrd p2);
+        Point<T>::eq(&shrd p2, &shrd p2);
+        // Point::eq(&shrd p2, &shrd p2); //TODO infer generic
         ()
     }
     fn bar() -[cpu.thread]-> () {
@@ -229,7 +230,7 @@ fn test_fun_calls() {
         ()
     }
     "#;
-    assert_compile!(src); //This should generate other code because "T" should not be monomorphised
+    assert_compile!(src); //This generates other code because "T" is not monomorphised
 }
 
 #[test]
@@ -350,7 +351,6 @@ fn test_associated_const() {
 }
 
 #[test]
-#[ignore] //TODO fail?
 fn test_unimplmented_method_impl_def() {
     let src = r#"
     struct Point {
@@ -439,25 +439,6 @@ fn test_multiple_structs_with_same_name() {
     assert_err_compile!(src);
 }
 
-#[ignore]
-#[test]
-fn test_multiple_structs_and_traits_with_same_name() {
-    let src = r#"
-    struct Test {}
-    "#;
-    assert_compile!(src);
-    let src = r#"
-    trait Test {}
-    "#;
-    assert_compile!(src);
-
-    let src = r#"
-    struct Test {}
-    trait Test {}
-    "#;
-    assert_err_compile!(src);
-}
-
 #[test]
 fn test_multiple_attributes_in_struct_with_same_name() {
     let src = r#"
@@ -512,7 +493,6 @@ fn test_multiple_ass_funs_with_same_name() {
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_multiple_generics_with_same_name() {
     let src = r#"
     struct Test<m: nat, n: nat> { x: [i32; m], y: [f32; n] }
@@ -520,17 +500,16 @@ fn test_multiple_generics_with_same_name() {
     assert_compile!(src);
 
     let src = r#"
-    struct Test<m: nat, n: nat> { x: [i32; m], y: [f32; n] }
+    struct Test<m: nat, m: nat> { x: [i32; m], y: [f32; m] }
     "#;
     assert_err_compile!(src);
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_ambious_generic_struct_name() {
     let src = r#"
     struct T {}
-    fn foo<X>(x: T, y: X) -[cpu.thread]-> () {
+    fn foo<X>(x: T, y: X) -[cpu.thread]-> i32 {
         42
     }
     "#;
@@ -538,7 +517,7 @@ fn test_ambious_generic_struct_name() {
 
     let src = r#"
     struct T {}
-    fn foo<T>(x: T, y: T) -[cpu.thread]-> () {
+    fn foo<T>(x: T, y: T) -[cpu.thread]-> i32 {
         42
     }
     "#;
@@ -555,23 +534,21 @@ fn test_invalid_type_in_fn() {
     "#;
     assert_compile!(src);
 
-    //TODO dont work
-    // let src = r#"
-    // struct T {}
-    // fn foo(x: Ty) -[cpu.thread]-> i32 {
-    //     42
-    // }
-    // "#;
-    // assert_err_compile!(src);
+    let src = r#"
+    struct T {}
+    fn foo(x: Ty) -[cpu.thread]-> i32 {
+        42
+    }
+    "#;
+    assert_err_compile!(src);
 
-    //TODO dont work
-    // let src = r#"
-    // struct T {}
-    // fn foo(x: X) -[cpu.thread]-> i32 {
-    //     42
-    // }
-    // "#;
-    // assert_err_compile!(src);
+    let src = r#"
+    struct T {}
+    fn foo(x: X) -[cpu.thread]-> i32 {
+        42
+    }
+    "#;
+    assert_err_compile!(src);
 }
 
 #[test]
@@ -588,7 +565,6 @@ fn test_invalid_type_in_struct() {
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_invalid_generic_in_trait() {
     let src = r#"
     trait Eq<T> {
@@ -606,7 +582,6 @@ fn test_invalid_generic_in_trait() {
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_invalid_number_generics_struct() {
     let src = r#"
     struct Point<X, Y> {
@@ -614,7 +589,7 @@ fn test_invalid_number_generics_struct() {
         y: Y
     }
     fn foo() -[cpu.thread]-> () {
-        let x = Point<i32, i32>
+        let x = Point<i32, i32> { x: 16, y: 4 }
     }
     "#;
     assert_compile!(src);
@@ -625,7 +600,7 @@ fn test_invalid_number_generics_struct() {
         y: Y
     }
     fn foo() -[cpu.thread]-> () {
-        let x = Point<i32>
+        let x = Point<i32> { x: 16, y: 4 }
     }
     "#;
     assert_err_compile!(src);
@@ -636,14 +611,13 @@ fn test_invalid_number_generics_struct() {
         y: Y
     }
     fn foo() -[cpu.thread]-> () {
-        let x = Point<i32, i32, i32>
+        let x = Point<i32, i32, i32> { x: 16, y: 4 }
     }
     "#;
     assert_err_compile!(src);
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_invalid_number_generics_trait() {
     let src = r#"
     struct Point<X, Y> {
@@ -697,12 +671,11 @@ fn test_invalid_number_generics_trait() {
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_invalid_generic_kind() {
     let src = r#"
-    struct Point<X: ty, Y: nat> {
+    struct Point<X: dty, n: nat> {
         x: X,
-        y: Y
+        y: [i32; n]
     }
     trait Eq {}
     impl<T> Eq for Point<T, 42> {}
@@ -710,28 +683,37 @@ fn test_invalid_generic_kind() {
     assert_compile!(src);
 
     let src = r#"
-    struct Point<X: ty, Y: nat> {
+    struct Point<X: dty, n: nat> {
         x: X,
-        y: Y
+        y: [i32; n]
     }
     trait Eq {}
-    impl<T> Eq for Point<T, 42.3> {}
+    impl<T, X: nat> Eq for Point<T, X> {}
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    struct Point<X: ty, n: nat> {
+        x: X,
+        y: [i32; n]
+    }
+    trait Eq {}
+    impl<T, X> Eq for Point<T, X> {}
     "#;
     assert_err_compile!(src);
 
     let src = r#"
-    struct Point<X: ty, Y: nat> {
+    struct Point<X: ty, n: nat> {
         x: X,
-        y: Y
+        y: [i32; n]
     }
     trait Eq {}
-    impl<T: mem> Eq for Point<T, 42.3> {}
+    impl<T: mem> Eq for Point<T, 42> {}
     "#;
     assert_err_compile!(src);
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_unfullfilled_constraints() {
     let src = r#"
     struct Struct1 { i: i32 }
@@ -751,7 +733,7 @@ fn test_unfullfilled_constraints() {
     fn foo() -[cpu.thread]-> () {
         let x: Struct1 = Struct1 { i: 42 };
         let y: Struct1 = Struct1 { i: 43 };
-        let p: Point<Struct1, Struct1> = Point {x, y}
+        let p: Point<Struct1, Struct1> = Point<Struct1, Struct1> {x, y}
     }
     "#;
     assert_compile!(src);
@@ -774,14 +756,13 @@ fn test_unfullfilled_constraints() {
     fn foo() -[cpu.thread]-> () {
         let x: Struct1 = Struct1 { i: 42 };
         let y: Struct2 = Struct2 { i: 43 };
-        let p: Point<Struct1, Struct2> = Point {x, y}
+        let p: Point<Struct1, Struct2> = Point<Struct1, Struct2> {x, y}
     }
     "#;
     assert_err_compile!(src);
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_unfullfilled_constraints2() {
     let src = r#"
     trait Eq {
@@ -805,62 +786,62 @@ fn test_unfullfilled_constraints2() {
     "#;
     assert_compile!(src);
 
-    let src = r#"
-    trait Eq {
-        fn foo(x: i32) -[cpu.thread]-> bool {
-            false
-        }
-    }
-    trait Ord: Eq {
-        fn foo2(x: i32) -[cpu.thread]-> bool {false}
-    }
-    trait SOrd: Ord {
-        fn foo3(x: i32) -[cpu.thread]-> bool {false}
-    }
-    struct Point<X, Y> where X: Eq, Y:Eq {
-        x: X,
-        y: Y
-    }
-    struct T<X> where X: Ord {}
-    struct Point2<Y> where Y: SOrd {
-        p: Point<T<Y>, Y>
-    }
-    impl SOrd for T<X> where X: SOrd {}
-    "#;
-    assert_compile!(src);
+    //TODO cant pass ArgKinded with generic params
+    // let src = r#"
+    // trait Eq {
+    //     fn foo(x: i32) -[cpu.thread]-> bool {
+    //         false
+    //     }
+    // }
+    // trait Ord: Eq {
+    //     fn foo2(x: i32) -[cpu.thread]-> bool {false}
+    // }
+    // trait SOrd: Ord {
+    //     fn foo3(x: i32) -[cpu.thread]-> bool {false}
+    // }
+    // struct Point<X, Y> where X: Eq, Y:Eq {
+    //     x: X,
+    //     y: Y
+    // }
+    // struct T<X> where X: Ord {}
+    // struct Point2<Y> where Y: SOrd {
+    //     p: Point<T<Y>, Y>
+    // }
+    // impl SOrd for T<X> where X: SOrd {}
+    // "#;
+    // assert_compile!(src);
 
-    let src = r#"
-    trait Eq {
-        fn foo(x: i32) -[cpu.thread]-> bool {
-            false
-        }
-    }
-    trait Ord: Eq {
-        fn foo2(x: i32) -[cpu.thread]-> bool {false}
-    }
-    trait SOrd: Ord {
-        fn foo3(x: i32) -[cpu.thread]-> bool {false}
-    }
-    struct Point<X, Y> where X: Eq, Y:Eq {
-        x: X,
-        y: Y
-    }
-    struct T<X> where X: Ord {}
-    struct Point2<Y> where Y: Ord {
-        p: Point<T<Y>, Y>
-    }
-    impl SOrd for T<X> where X: SOrd {}
-    "#;
-    assert_err_compile!(src);
+    // let src = r#"
+    // trait Eq {
+    //     fn foo(x: i32) -[cpu.thread]-> bool {
+    //         false
+    //     }
+    // }
+    // trait Ord: Eq {
+    //     fn foo2(x: i32) -[cpu.thread]-> bool {false}
+    // }
+    // trait SOrd: Ord {
+    //     fn foo3(x: i32) -[cpu.thread]-> bool {false}
+    // }
+    // struct Point<X, Y> where X: Eq, Y:Eq {
+    //     x: X,
+    //     y: Y
+    // }
+    // struct T<X> where X: Ord {}
+    // struct Point2<Y> where Y: Ord {
+    //     p: Point<T<Y>, Y>
+    // }
+    // impl SOrd for T<X> where X: SOrd {}
+    // "#;
+    // assert_err_compile!(src);
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_cylic_constraints() {
     let src = r#"
     impl<T> MyTrait for T where T: MyTrait {
-        fn identity(T) -> T {
-            T
+        fn identity(t: T) -[cpu.thread]-> T {
+            t
         }
     }
     struct Point<X> where X: MyTrait {
@@ -870,7 +851,52 @@ fn test_cylic_constraints() {
         let x: Point<i32> = Point<i32> { x: 42 }
     }
     "#;
+    assert_err_compile!(src);
+}
+
+#[test]
+#[ignore] //Dont work
+fn test_cyclic_struct_defs() {
+    let src = r#"
+    struct Point1 {
+        x: i32,
+        y: i32,
+        p2: Point2,
+        p3: Point2
+    }
+    struct Point2 {
+        x: f32,
+        y: f32
+    }
+    "#;
     assert_compile!(src);
+
+    let src = r#"
+    struct Point1 {
+        x: i32,
+        y: i32,
+        p2: Point2
+    }
+    struct Point2 {
+        x: f32,
+        y: f32,
+        p1: Point1
+    }
+    "#;
+    assert_err_compile!(src);
+
+    let src = r#"
+    struct A {
+        b: B
+    }
+    struct B {
+        c: C
+    }
+    struct C {
+        a: A
+    }
+    "#;
+    assert_err_compile!(src);
 }
 
 #[test]

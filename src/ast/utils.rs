@@ -105,7 +105,24 @@ impl Visit for FreeKindedIdents {
                 inner_free_idents.visit_expr(body);
                 self.set.extend(inner_free_idents.set)
             }
+            ExprKind::Block(prvs, _) if !prvs.is_empty() => unimplemented!(),
             _ => visit::walk_expr(self, expr),
         }
+    }
+
+    fn visit_item_def(&mut self, item_def: &super::Item) {
+        unimplemented!()
+    }
+    fn visit_trait_def(&mut self, trait_def: &super::TraitDef) {
+        unimplemented!()
+    }
+    fn visit_struct_def(&mut self, struct_def: &super::StructDef) {
+        unimplemented!()
+    }
+    fn visit_impl_def(&mut self, impl_def: &super::ImplDef) {
+        unimplemented!()
+    }
+    fn visit_fun_def(&mut self, fun_def: &super::FunDef) {
+        unimplemented!()
     }
 }

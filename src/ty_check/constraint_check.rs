@@ -74,30 +74,106 @@ impl ConstraintEnv {
     }
 
     pub fn check_constraint(&self, goal: &Constraint) -> bool {
+        struct Backtrack {
+            current_goal: Constraint,
+            current_number_of_goals: usize,
+            current_index: usize,
+        }
+
         let mut constr_map = ConstrainMap::new();
         let mut prv_rels = Vec::new();
 
-        self.theta
-            .iter()
-            .find(|con| {
+        let mut goals: Vec<Constraint> = Vec::with_capacity(16);
+        let mut backtracks: Vec<Backtrack> = Vec::with_capacity(8);
+        let mut index = 0;
+
+        //Start with passed constraint as first goal
+        goals.push(goal.clone());
+        //Prove all goals
+        while !goals.is_empty() {
+            //Try to prove goal
+            let goal = goals.pop().unwrap();
+
+            //Check for every constraint in theta
+            while index < self.theta.len() {
+                let current_con = &self.theta[index];
+
+                let mut goal_clone = goal.clone();
                 constr_map.clear();
                 prv_rels.clear();
 
-                let mut goal_clone = goal.clone();
-
+                //Can current from constraint-scheme implied constraint and current goal can be unified?
                 if goal_clone
-                    .constrain(&mut con.implied.clone(), &mut constr_map, &mut prv_rels)
+                    .constrain(
+                        &mut current_con.implied.clone(),
+                        &mut constr_map,
+                        &mut prv_rels,
+                    )
                     .is_ok()
                 {
-                    con.implican.iter().fold(true, |res, c| {
-                        let mut goal = c.clone();
-                        substitute(&constr_map, &mut goal);
-                        res && self.check_constraint(&goal)
-                    })
+                    if !current_con.implican.is_empty() {
+                        //Push all constraints which implies the current implied constraint to list of goals which must be prooved
+                        goals.extend(current_con.implican.iter().map(|con| {
+                            let mut goal = con.clone();
+                            substitute(&constr_map, &mut goal);
+                            goal
+                        }));
+
+                        //Make sure there are no cycles
+                        let cycle = backtracks.iter().fold(false, |res, backtrack| {
+                            goals[goals.len() - current_con.implican.len()..]
+                                .iter()
+                                .fold(res, |res, goal| res || backtrack.current_goal == *goal)
+                        });
+
+                        if cycle {
+                            goals.truncate(goals.len() - current_con.implican.len());
+
+                            index = index + 1;
+                        } else {
+                            //Save current status to be able to restore it later
+                            backtracks.push(Backtrack {
+                                current_goal: goal.clone(),
+                                current_number_of_goals: goals.len() - current_con.implican.len(),
+                                current_index: index,
+                            });
+
+                            index = 0;
+                            break;
+                        }
+                    } else {
+                        //Sucessfully prooved a subgoal with a fact
+                        if !backtracks.is_empty() {
+                            let last_backtrack = backtracks.last().unwrap();
+                            if goals.len() <= last_backtrack.current_number_of_goals {
+                                backtracks.pop();
+                            }
+                        }
+
+                        index = 0;
+                        break;
+                    }
                 } else {
-                    false
+                    index = index + 1;
                 }
-            })
-            .is_some()
+            }
+
+            //if there are no constraint-schemes in theta which implies the current goal
+            if index >= self.theta.len() {
+                //try to backtrack
+                if !backtracks.is_empty() {
+                    let backtrack = backtracks.pop().unwrap();
+                    goals.truncate(backtrack.current_number_of_goals);
+                    goals.push(backtrack.current_goal);
+                    index = backtrack.current_index + 1;
+                }
+                //no more possibilities for backtracking -> prooving the constrain failed
+                else {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }

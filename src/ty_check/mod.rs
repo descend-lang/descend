@@ -8,6 +8,8 @@ mod subty;
 pub(crate) mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
+use crate::ast::utils::FreeKindedIdents;
+use crate::ast::visit::Visit;
 use crate::ast::DataTyKind::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
@@ -107,7 +109,9 @@ impl TyChecker {
 
     fn ty_check_trait_def(&mut self, trait_def: &mut TraitDef) -> TyResult<()> {
         let kind_ctx_empty = KindCtx::new();
-        let kind_ctx_trait = KindCtx::new().append_idents(trait_def.generic_params.clone());
+        let kind_ctx_trait = KindCtx::new()
+            .append_idents(vec![IdentKinded::new(&Ident::new("Self"), Kind::DataTy)])
+            .append_idents(trait_def.generic_params.clone());
         let ty_ctx = TyCtx::new();
 
         self.gl_ctx.theta.append_constraints(&trait_def.constraints);
@@ -2902,10 +2906,24 @@ impl TyChecker {
             // TODO check well-formedness of Nats
             TyKind::Fn(param_tys, exec, ret_ty) => {
                 self.ty_well_formed(&kind_ctx, ty_ctx, *exec, ret_ty)?;
+                let mut visitor = FreeKindedIdents::new();
                 for param_ty in param_tys {
-                    //TODO this does not work if param_ty is a reference with an implicit
-                    //Lifetime-Ident because this Ident is not in the kind_ctx
-                    // self.ty_well_formed(&kind_ctx, ty_ctx, *exec, param_ty)?;
+                    //Add free implicit Lifetime-parameter-idents to kind_ctx
+                    visitor.set.clear();
+                    visitor.bound_idents.clear();
+                    visitor.visit_ty(param_ty);
+                    let kind_ctx = kind_ctx.clone().append_idents(
+                        visitor
+                            .set
+                            .iter()
+                            .filter(|ident| {
+                                ident.kind == Kind::Provenance && ident.ident.is_implicit
+                            })
+                            .map(|ident| ident.clone())
+                            .collect(),
+                    );
+
+                    self.ty_well_formed(&kind_ctx, ty_ctx, *exec, param_ty)?;
                 }
             }
             TyKind::Dead(_) => {}

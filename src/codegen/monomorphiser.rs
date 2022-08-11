@@ -127,7 +127,7 @@ impl<'a> Monomorphiser<'a> {
         funs.iter_mut().for_each(|(_, fun_def, _)| {
             //Visit only functions without constraint generic params
             if fun_def.generic_params.iter().fold(true, |res, gen| {
-                res && fun_def
+                res && !fun_def
                     .constraints
                     .iter()
                     .find(|con| {
@@ -456,7 +456,6 @@ impl<'a> Monomorphiser<'a> {
                 let mut arg = generic.arg_kinded();
                 arg.substitute(&dty_unfication);
                 arg.substitute(&dty_unfication2);
-                assert!(arg != generic.arg_kinded()); //All generic_args are inferrable!
                 arg
             })
             .collect::<Vec<ArgKinded>>();
