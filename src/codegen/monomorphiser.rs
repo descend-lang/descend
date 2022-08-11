@@ -820,13 +820,6 @@ impl NameGenerator {
         "xor_eq",
     ];
 
-    fn is_keyword(name: &str) -> bool {
-        NameGenerator::CPP_KEYWORDS
-            .iter()
-            .find(|str| ***str == *name)
-            .is_some()
-    }
-
     pub fn new() -> Self {
         NameGenerator {
             generated_names: HashSet::from_iter(
@@ -843,15 +836,9 @@ impl NameGenerator {
             if let TyKind::Data(dty) = &impl_dty_scheme.mono_ty.ty {
                 match &dty.dty {
                     //e.g. Point::function() or Point::_new()
-                    DataTyKind::Struct(struct_dty) => self.generate_name_internal(&match (
-                        NameGenerator::is_keyword(&struct_dty.name),
-                        NameGenerator::is_keyword(name),
-                    ) {
-                        (true, true) => format!("_{}::_{}", struct_dty.name, name),
-                        (true, false) => format!("_{}::{}", struct_dty.name, name),
-                        (false, true) => format!("{}::_{}", struct_dty.name, name),
-                        (false, false) => format!("{}::{}", struct_dty.name, name),
-                    }),
+                    DataTyKind::Struct(struct_dty) => {
+                        self.generate_name_internal(&format!("{}__{}", struct_dty.name, name))
+                    }
                     _ => self.generate_name_internal(name),
                 }
             } else {

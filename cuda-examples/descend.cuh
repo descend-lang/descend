@@ -196,6 +196,9 @@ extern const i32 NO_ERROR = -1;
 using u32 = std::uint32_t;
 // FIXME there is no way to guarantee that float holds 32 bits
 using f32 = float;
+static_assert(sizeof(f32) == 4);
+using f64 = double;
+static_assert(sizeof(f64) == 8);
 
 template<typename T, std::size_t n>
 using array = std::array<T, n>;

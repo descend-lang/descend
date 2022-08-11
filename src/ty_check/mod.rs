@@ -1918,11 +1918,6 @@ impl TyChecker {
         // TODO check well-kinded: FrameTyping, Prv, Ty
         let (f_subst, mut f_mono_ty) =
             self.ty_check_dep_app(kind_ctx, &res_ty_ctx, exec, path, fun_kind, ef, k_args)?;
-        let ret_ty_f = if let TyKind::Fn(_, _, ret_ty_f) = &f_mono_ty.ty {
-            ret_ty_f.clone()
-        } else {
-            panic!("Expected function type but found something else.")
-        };
         let (f_subst_param_tys, exec_f, f_subst_ret_ty) =
             if let TyKind::Fn(f_subst_param_tys, exec_f, f_subst_ret_ty) = f_subst.mono_ty.ty {
                 (f_subst_param_tys, exec_f, f_subst_ret_ty)
@@ -1958,6 +1953,11 @@ impl TyChecker {
         );
         k_args.append(&mut inferred_k_args);
 
+        let ret_ty_f = if let TyKind::Fn(_, _, ret_ty_f) = &f_mono_ty.ty {
+            ret_ty_f.clone()
+        } else {
+            panic!("Expected function type but found something else.")
+        };
         // TODO check provenance relations
         return Ok((res_ty_ctx, *ret_ty_f));
     }
@@ -2014,6 +2014,12 @@ impl TyChecker {
                 )))?
         };
 
+        if fun_ty.generic_params.len() < k_args.len() {
+            return Err(TyError::WrongNumberOfGenericParams(
+                fun_ty.generic_params.len(),
+                k_args.len(),
+            ));
+        }
         Self::check_args_have_correct_kinds(
             &fun_ty.generic_params[0..k_args.len()].to_vec(),
             &k_args.to_vec(),
