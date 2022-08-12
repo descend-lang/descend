@@ -52,6 +52,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         structs: BTreeMap<String, StructDef>,
         ident_kinded_in_scope: Vec<(String, Kind)>,
         impl_dty_in_scope: Option<DataTy>,
+        current_struct_chain: Vec<String>,
         errs: Vec<String>,
     }
 
@@ -67,6 +68,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                 })),
                 ident_kinded_in_scope: Vec::with_capacity(32),
                 impl_dty_in_scope: None,
+                current_struct_chain: Vec::with_capacity(8),
                 errs: vec![],
             }
         }
@@ -257,7 +259,25 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
             replace_self_in_impls(self, dty);
             replace_tyidents_struct_names(self, dty);
             initialize_struct_attribute_lists(self, dty);
-            walk_dty(self, dty)
+
+            match &dty.dty {
+                //This prevents infinite loops when visit cylic struct definitions
+                DataTyKind::Struct(struct_dty) => {
+                    if !self.current_struct_chain.contains(&struct_dty.name) {
+                        self.current_struct_chain.push(struct_dty.name.clone());
+                        walk_dty(self, dty);
+                        self.current_struct_chain.pop();
+                    } else {
+                        self.errs.push(format!(
+                            "struct \"{}\" has cylic definition. Multiple visits of struct \"{}\" while visiting attributes of struct \"{}\"",
+                            self.current_struct_chain.first().unwrap(),
+                            struct_dty.name,
+                            self.current_struct_chain.first().unwrap(),
+                        ))
+                    }
+                }
+                _ => walk_dty(self, dty),
+            }
         }
 
         fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) {

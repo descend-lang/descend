@@ -855,7 +855,6 @@ fn test_cylic_constraints() {
 }
 
 #[test]
-#[ignore] //Dont work
 fn test_cyclic_struct_defs() {
     let src = r#"
     struct Point1 {
@@ -903,29 +902,31 @@ fn test_cyclic_struct_defs() {
 #[ignore] //TODO dont work
 fn test_struct_with_lifetimes() {
     let src = r#"
-    struct Test<'a> {
-        x: &'a i32
+    struct Test<a: prv> {
+        x: &'a shrd cpu.mem i32
     }
-    impl<'a> Test<'a> {
+    impl<a: prv> Test<a> {
         fn bar(&shrd cpu.mem self, i: i32) -[cpu.thread]-> i32 {
             i + self.x
         }
     }
-    fn foo<'a>(t: Test<'a>) -[cpu.thread]-> i32 {
+    fn foo<a: prv>(t: Test<a>) -[cpu.thread]-> i32 {
         t.x = 42;
         t.bar(15)
     }
     fn main() -[cpu.thread]-> () {
         let test: i32 = 1;
-        let t = Test { x: &test };
+        let t = Test { x: &shrd test };
         foo(t);
         ()
     }
-    "
+    "#;
+
+    assert_compile!(src);
 }
 
 #[test]
-#[ignore] //TODO dont work
+#[ignore]
 fn test_higher_rank_trait_bounds() {
     let src = r#"
     struct Closure<F> {
