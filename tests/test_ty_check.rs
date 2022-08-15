@@ -134,7 +134,7 @@ fn test_monomoprhisation() {
         fn new<Z>(z: Z) -[cpu.thread]-> i32 {
             let mut a: A;
             let mut b: B;
-            let p: Point<i32, i32> = Point<i32, i32> { x: 42, y: 43 };
+            let p: Point<i32, i32> = Point::<i32, i32> { x: 42, y: 43 };
             foo::<i32>(p, true); //TODO infer generic
             42
         }
@@ -150,9 +150,9 @@ fn test_monomoprhisation() {
     }
 
     fn bar() -[cpu.thread]-> i32 {
-        let p: Point<f64, i32> = Point<f64, i32> { x: 4.0, y: 42 };
+        let p: Point<f64, i32> = Point::<f64, i32> { x: 4.0, y: 42 };
         foo::<f64>(p, 42); //TODO infer generic
-        let p2: Point<i32, f64> = Point<i32, f64> { x: 4, y: 42.0 };
+        let p2: Point<i32, f64> = Point::<i32, f64> { x: 4, y: 42.0 };
         foo::<i32>(p2, 42.5); //TODO infer generic
         42
     }
@@ -181,10 +181,10 @@ fn test_fun_calls() {
         ()
     }
     fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t4: T) -[cpu.thread]-> () where T: SomeOtherTrait  {
-        let p: Point<T> = Point<T> { x: t1, y: t2 };
+        let p: Point<T> = Point::<T> { x: t1, y: t2 };
         fun_with_generics(p);
 
-        let p2: Point<T> = Point<T> { x: t3, y: t4 };
+        let p2: Point<T> = Point::<T> { x: t3, y: t4 };
         (&shrd p2).eq(&shrd p2);
         Point<T>::eq(&shrd p2, &shrd p2);
         // Point::eq(&shrd p2, &shrd p2); //TODO infer generic
@@ -216,10 +216,10 @@ fn test_fun_calls() {
         ()
     }
     fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t4: T) -[cpu.thread]-> () {
-        let p: Point<T> = Point<T> { x: t1, y: t2 };
+        let p: Point<T> = Point::<T> { x: t1, y: t2 };
         fun_with_generics(p);
 
-        let p2: Point<T> = Point<T> { x: t3, y: t4 };
+        let p2: Point<T> = Point::<T> { x: t3, y: t4 };
         (&shrd p2).eq(&shrd p2);
         Point<T>::eq(&shrd p2, &shrd p2);
         // Point::eq(&shrd p2, &shrd p2); //TODO infer generic
@@ -252,13 +252,16 @@ fn test_moved_struct_attribute() {
     assert_compile!(src);
 
     let src = r#"
-    struct Test;
-    struct Point {
+    struct Test<a: prv> {
+        x: &a uniq cpu.mem i32
+    }
+    struct Point { //StructDef -> StructDecl
         x: Test,
         y: i32
     }
-    fn bar() -[cpu.thread]-> () {
-        let x = Test {};
+    fn bar() -[cpu.thread]-> () <'a>{
+        let test = 42;
+        let x = Test<'a> { x: &'a uniq test };
         let p = Point { x, y: 42 };
         let z = p.x;
         let z2 = p.x; //Already moved
@@ -589,7 +592,7 @@ fn test_invalid_number_generics_struct() {
         y: Y
     }
     fn foo() -[cpu.thread]-> () {
-        let x = Point<i32, i32> { x: 16, y: 4 }
+        let x = Point::<i32, i32> { x: 16, y: 4 }
     }
     "#;
     assert_compile!(src);
@@ -600,10 +603,10 @@ fn test_invalid_number_generics_struct() {
         y: Y
     }
     fn foo() -[cpu.thread]-> () {
-        let x = Point<i32> { x: 16, y: 4 }
+        let x = Point::<i32> { x: 16, y: 4 }
     }
     "#;
-    assert_err_compile!(src);
+    assert_compile!(src); //Second generic param can be inferred
 
     let src = r#"
     struct Point<X, Y> {
@@ -611,7 +614,7 @@ fn test_invalid_number_generics_struct() {
         y: Y
     }
     fn foo() -[cpu.thread]-> () {
-        let x = Point<i32, i32, i32> { x: 16, y: 4 }
+        let x = Point::<i32, i32, i32> { x: 16, y: 4 }
     }
     "#;
     assert_err_compile!(src);
@@ -733,7 +736,7 @@ fn test_unfullfilled_constraints() {
     fn foo() -[cpu.thread]-> () {
         let x: Struct1 = Struct1 { i: 42 };
         let y: Struct1 = Struct1 { i: 43 };
-        let p: Point<Struct1, Struct1> = Point<Struct1, Struct1> {x, y}
+        let p: Point<Struct1, Struct1> = Point::<Struct1, Struct1> {x, y}
     }
     "#;
     assert_compile!(src);
@@ -903,25 +906,129 @@ fn test_cyclic_struct_defs() {
 fn test_struct_with_lifetimes() {
     let src = r#"
     struct Test<a: prv> {
-        x: &'a shrd cpu.mem i32
+        x: &a shrd cpu.mem i32
     }
     impl<a: prv> Test<a> {
         fn bar(&shrd cpu.mem self, i: i32) -[cpu.thread]-> i32 {
-            i + self.x
+            i + *((*self).x)
         }
     }
     fn foo<a: prv>(t: Test<a>) -[cpu.thread]-> i32 {
         t.x = 42;
         t.bar(15)
     }
-    fn main() -[cpu.thread]-> () {
+    fn main() -[cpu.thread]-> () <'a>{
         let test: i32 = 1;
-        let t = Test { x: &shrd test };
+        let t = Test<'a> { x: &'a shrd test };
         foo(t);
         ()
     }
     "#;
 
+    assert_compile!(src);
+}
+
+#[test]
+#[ignore]
+fn test_different_generic_param_types() {
+    let src = r#"
+    trait Number {}
+    impl Number for i32 {}
+    impl Number for f64 {}
+    trait Eq {
+        fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+            false
+        }
+    }
+    struct Point<T> {
+        x: T,
+        y: T
+    }
+    struct Points<T: dty, n: nat, m: mem> {
+        points: [Point<T>; n],
+        special_point: Point<i32>
+    }
+    //TODO BorrowIndex is not implemented
+    impl<T, n: nat, m: mem> Points<T, n, m> {
+        fn getFirstPoint<a: prv>(&a shrd cpu.mem self) -[cpu.thread]-> &a shrd cpu.mem Point<T> {
+            &a shrd (*self).points[0]
+        }
+    }
+    // impl<n: nat, m: mem> Point<i32, n, m> {
+    //     fn isFirstPointEqualSpecialPoint(&shrd cpu.mem self) -[cpu.thread]-> bool {
+    //         (&shrd self.getFirstPoint()).eq(&shrd self.special_point)
+    //     }
+    // }
+    // TODO "==" kann man in eq nicht benutzen, da es sich um generische Parameter handelt...
+    // impl<T> Eq for Point<T> where T: Number {
+    //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+    //         (*self).x == (*other).x && *(self).y == (*other).y
+    //     }
+    // }
+    fn main() -[cpu.thread]-> () {
+    // TODO infer generic params
+    //     let p_special = Point {x: 42, y: 43};
+    //     let p_special2 = Point {x: 42, y: 43};
+    //     let p_special3 = Point {x: 42, y: 43};
+    //     let p11 = Point {x: 42, y: 43};
+    //     let p21 = Point {x: 42.2, y: 43.3};
+    //     let p22 = Point {x: 24.2, y: 34.3}
+
+    //     let points1 = Points { points: [p11], special_point: p_special };
+    //     let points2 = Points { points: [p21, p22], special_point: p_special2 };
+    //     let a = points1.isFirstPointEqualSpecialPoint();
+    //     let b = (&shrd p_special3).eq((&shrd p_special3));
+    //     let c = (&shrd points2).getFirstPoint();
+        ()
+    }
+    "#;
+    //TODO use lifetimes
+    // let src = r#"
+    // trait Number {}
+    // impl Number for i32 {}
+    // impl Number for f64 {}
+    // trait Eq {
+    //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+    //         false
+    //     }
+    // }
+    // struct Point<T> {
+    //     x: T,
+    //     y: T
+    // }
+    // struct Points<T: dty, n: nat, m: mem, a: prv> {
+    //     points: [Point<T>, n],
+    //     special_point: &a shrd m Point<i32>
+    // }
+    // impl<T, n: nat, m: mem, a: prv> Points<T, n, m, a> {
+    //     fn getFirstPoint(&shrd cpu.mem self) -[cpu.thread]-> Point<T> {
+    //         self.points[0];
+    //     }
+    // }
+    // impl<n: nat, m: mem, a: prv> Point<i32, n, m, a> {
+    //     fn isFirstPointEqualSpecialPoint(&shrd cpu.mem self) -[cpu.thread]-> bool {
+    //         (&shrd self.getFirstPoint()).eq(self.special_point)
+    //     }
+    // }
+    // impl<T> Eq for Points<T> where T: Number {
+    //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+    //         *self.x == *other.x && *self.y == *other.x
+    //     }
+    // }
+    // fn main() -[cpu.thread]-> () {
+    //     let p_special = Point {x: 42, y: 43};
+    //     let p11 = Point {x: 42, y: 43};
+    //     let p21 = Point {x: 42.2, y: 43.3};
+    //     let p22 = Point {x: 24.2, y: 34.3}
+
+    //     let points1 = Points { points: [p11], special_point: &shrd p_special };
+    //     let points2 = Points { points: [p21, p22], special_point: &shrd p_special };
+    //     let a = points1.isFirstPointEqualSpecialPoint();
+    //     let b = (&shrd p_special).eq((&shrd p_special));
+    //     let c = (&shrd points2).getFirstPoint();
+    //     ()
+    // }
+    // "#;
     assert_compile!(src);
 }
 

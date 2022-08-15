@@ -829,6 +829,7 @@ impl NameGenerator {
         }
     }
 
+    //TODO change names and print name of generics
     pub fn generate_name(&mut self, function_name: &FunctionName) -> String {
         let name = &function_name.name;
         if let FunctionKind::ImplFun(impl_dty_scheme, _) = &function_name.fun_kind {

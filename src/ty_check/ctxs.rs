@@ -617,10 +617,10 @@ impl GlobalCtx {
                             if !impl_defs_names
                                 .insert((impl_def.dty.clone(), trait_impl.name.clone()))
                             {
-                                errs.push(CtxError::MultipleDefinedImplsForTrait(
-                                    Ty::new(TyKind::Data(impl_def.dty.clone())),
-                                    trait_impl.name.clone(),
-                                ));
+                                errs.push(CtxError::MultipleDefinedImplsForTrait {
+                                    trait_name: trait_impl.name.clone(),
+                                    impl_dty: impl_def.ty(),
+                                });
                             }
                         } else {
                             impl_def.decls.iter().for_each(|decl| match decl {
@@ -645,9 +645,7 @@ impl GlobalCtx {
                                     )
                                 }
                                 AssociatedItem::ConstItem(_, _, _) => todo!("TODO"),
-                                AssociatedItem::FunDecl(fun_decl) => {
-                                    errs.push(CtxError::UnexpectedItem(fun_decl.name.clone()))
-                                }
+                                AssociatedItem::FunDecl(_) => (),
                             });
                         }
                     }
@@ -847,10 +845,10 @@ impl GlobalCtx {
                 res
             });
         if result.len() > 1 {
-            Err(CtxError::AmbiguousFunctionCall(
-                fun_name.clone(),
-                impl_dty.clone(),
-            ))
+            Err(CtxError::AmbiguousFunctionCall {
+                function_name: fun_name.clone(),
+                impl_dty: impl_dty.clone(),
+            })
         } else if result.is_empty() {
             Err(CtxError::IdentNotFound(Ident::new(fun_name)))
         } else {
@@ -893,10 +891,10 @@ impl GlobalCtx {
             res
         };
         if result.len() > 1 {
-            Err(CtxError::AmbiguousFunctionCall(
-                fun_name.clone(),
-                DataTy::new(DataTyKind::Ident(constraint_ident.clone())),
-            ))
+            Err(CtxError::AmbiguousFunctionCall {
+                function_name: fun_name.clone(),
+                impl_dty: DataTy::new(DataTyKind::Ident(constraint_ident.clone())),
+            })
         } else if result.is_empty() {
             Err(CtxError::IdentNotFound(Ident::new(fun_name)))
         } else {

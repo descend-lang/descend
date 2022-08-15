@@ -999,7 +999,7 @@ impl TypeScheme {
         }
     }
 
-    fn substitute<T: SubstKindedIdents + Clone>(&self, x: &T, with: &[ArgKinded]) -> T {
+    pub fn instantiate_single<T: SubstKindedIdents + Clone>(&self, x: &T, with: &[ArgKinded]) -> T {
         self.generic_params[0..with.len()]
             .iter()
             .zip(with.iter())
@@ -1015,9 +1015,9 @@ impl TypeScheme {
             constraints: self
                 .constraints
                 .iter()
-                .map(|con| self.substitute(con, with))
+                .map(|con| self.instantiate_single(con, with))
                 .collect(),
-            mono_ty: self.substitute(&self.mono_ty, with),
+            mono_ty: self.instantiate_single(&self.mono_ty, with),
         }
     }
 

@@ -29,7 +29,6 @@ fn bitonic_sort_shrd_mem() -> Res {
 }
 
 #[test]
-#[ignore] //TODO stack overflow
 fn scan() -> Res {
     eprintln!(
         "Breaks because there are name clashes between nats and type variables.\n \
@@ -43,7 +42,6 @@ fn scan() -> Res {
 }
 
 #[test]
-#[ignore] //TODO stack overflow
 fn reduce_shared_mem() -> Res {
     Ok(println!(
         "{}",
@@ -52,7 +50,6 @@ fn reduce_shared_mem() -> Res {
 }
 
 #[test]
-#[ignore] //TODO stack overflow
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",

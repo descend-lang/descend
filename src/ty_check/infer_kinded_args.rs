@@ -4,37 +4,26 @@ use crate::ast::{
 };
 use std::collections::HashMap;
 
-// monot_ty is function type,
-//  and since polytype is top-level function type, all (type-level) identifiers must have been
-//  introduced by the polymorphic function, therefore finding an identifier on the lhs means that
-//  it was introduced by the polymorphic function
-pub fn infer_kinded_args_from_mono_ty(
-    remain_gen_args: Vec<IdentKinded>,
-    subst_param_tys: Vec<Ty>,
-    subst_ret_ty: &Ty,
-    mono_ty: &Ty,
-) -> Vec<ArgKinded> {
-    if let TyKind::Fn(mono_param_tys, _, mono_ret_ty) = &mono_ty.ty {
-        if mono_param_tys.len() != subst_param_tys.len() {
-            panic!("Unexpected difference in amount of paramters.")
+// all (type-level) identifiers must be generic params of a type-scheme
+// therefore finding an identifier on the lhs means that it was introduced by the type-scheme
+pub fn infer_kinded_args_from_mono_ty<'a, 'b, 'c, I>(
+    remain_gen_args: &'c Vec<IdentKinded>,
+    poly_mono_ty_pairs: I,
+) -> impl Iterator<Item = ArgKinded> + 'c
+where
+    I: Iterator<Item = (&'a Ty, &'b Ty)>,
+{
+    let mut res_map = HashMap::new();
+    poly_mono_ty_pairs
+        .for_each(|(poly_ty, mono_ty)| infer_kargs_tys(&mut res_map, poly_ty, mono_ty));
+
+    remain_gen_args.iter().map(move |gen_arg| {
+        let res_karg = res_map.get(&gen_arg.ident).unwrap();
+        if gen_arg.kind != res_karg.kind() {
+            panic!("Unexpected: Kinds of identifier and argument do not match.")
         }
-        let mut res_map = HashMap::new();
-        for (subst_ty, mono_ty) in subst_param_tys.iter().zip(mono_param_tys) {
-            infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
-        }
-        infer_kargs_tys(&mut res_map, subst_ret_ty, mono_ret_ty);
-        let mut res_vec = Vec::with_capacity(remain_gen_args.len());
-        for gen_arg in remain_gen_args {
-            let res_karg = res_map.get(&gen_arg.ident).unwrap();
-            if gen_arg.kind != res_karg.kind() {
-                panic!("Unexpected: Kinds of identifier and argument do not match.")
-            }
-            res_vec.push(res_karg.clone());
-        }
-        res_vec
-    } else {
-        panic!("Expected function type.")
-    }
+        res_karg.clone()
+    })
 }
 
 macro_rules! infer_from_lists {

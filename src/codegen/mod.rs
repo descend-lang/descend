@@ -1627,30 +1627,19 @@ fn gen_expr(
             let inst_fun = partial_app_gen_args(fun_def, &kinded_args);
             gen_expr(&inst_fun, codegen_ctx, comp_unit, dev_fun, idx_checks)
         }
-        StructInst(name, args, attributes) => {
-            //Make sure the order of the attributes are the same like in the struct def
-            let struct_def = comp_unit.get_struct_def(name);
-            let attributes = struct_def.decls.iter().map(|field| {
-                &attributes
-                    .iter()
-                    .find(|(name, _)| name.name == field.name)
-                    .unwrap()
-                    .1
-            });
-
-            CheckedExpr::Expr(cu::Expr::StructInst {
-                name: name.clone(),
-                template_args: gen_args_kinded(args),
-                args: attributes
-                    .map(
-                        |expr| match gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                            CheckedExpr::Expr(expr) => expr,
-                            CheckedExpr::ExprIdxCheck(_, expr) => expr,
-                        },
-                    )
-                    .collect(),
-            })
-        }
+        StructInst(name, args, attributes) => CheckedExpr::Expr(cu::Expr::StructInst {
+            name: name.clone(),
+            template_args: gen_args_kinded(args),
+            args: attributes
+                .iter()
+                .map(|(_, expr)| {
+                    match gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                        CheckedExpr::Expr(expr) => expr,
+                        CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                    }
+                })
+                .collect(),
+        }),
         Array(elems) => CheckedExpr::Expr(cu::Expr::InitializerList {
             elems: elems
                 .iter()

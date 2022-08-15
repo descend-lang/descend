@@ -359,8 +359,7 @@ peg::parser! {
             = result:(f: fun_def() { Item::FunDef(f) }
             / s: struct_def() { Item::StructDef(s) }
             / t: trait_def() { Item::TraitDef(t) }
-            / i: trait_impl_def() { Item::ImplDef(i) }
-            / i: inherent_impl_def() { Item::ImplDef(i) }) {
+            / i: impl_def() { Item::ImplDef(i) }) {
                 result
             }
 
@@ -388,9 +387,9 @@ peg::parser! {
 
         pub(crate) rule fun_decl() -> FunDecl
             = "fn" __ name:identifier() _ g:generic_params()? _
-            "(" _ param_decls:(p:fun_decl_param() ** (_ "," _) {p}) _ ")" _
-            exec:("-" _ "[" _ e:execution_resource() _ "]" {e}) _ w:where_clause()? _
-            "-" _ ">" _ ret_dty:dty() _ ";" {
+            "(" _ param_decls:(p:fun_parameter_decl() ** (_ "," _) {p}) _ ")" _
+            "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">"
+             _ ret_dty:dty() _ w:where_clause()? _ ";" {
                 let generic_params =
                     match g {
                         Some(x) => x,
@@ -428,7 +427,7 @@ peg::parser! {
 
         pub(crate) rule trait_def() -> TraitDef
             = "trait" __ name:identifier() _ g:generic_params()?
-            supertraits:(":" _ t:trait_mono_ty() ** (_ "+" _) {t})?
+            supertraits:(":" _ t:trait_mono_ty() **<1,> (_ "+" _) {t})?
             _ w:where_clause()? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
                 let generic_params = g.unwrap_or(vec![]);
                 let mut constraints = w.unwrap_or(vec![]);
@@ -441,31 +440,13 @@ peg::parser! {
                 }
             }
 
-        rule trait_mono_ty() -> TraitMonoType
-            = name:identifier() generic_args:(_ "<" _ generic_args:(k:kind_argument() ** (_ "," _) {k}) _ ">" { generic_args })? {
-                TraitMonoType { name, generics: generic_args.unwrap_or(vec![]) }
-            }
-
-        pub(crate) rule inherent_impl_def() -> ImplDef
-            = "impl" _ g:generic_params()? _ dty:dty() _ w:where_clause()? _
-            "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}" {
-                let generic_params = g.unwrap_or(vec![]);
-                let constraints = w.unwrap_or(vec![]);
-                ImplDef { dty, generic_params, constraints, decls, trait_impl: None}
-            }
-
-        pub(crate) rule trait_impl_def() -> ImplDef
-            = "impl" _ g:generic_params()? _ trait_impl:trait_mono_ty() __ "for" __
+        pub(crate) rule impl_def() -> ImplDef
+            = "impl" _ g:generic_params()? _ trait_impl:(t:trait_mono_ty() __ "for" __ { t })?
             dty:dty() _ w:where_clause()? _ "{" _
             decls:(_ i:associated_item() ** _ {i}) _ "}" {
                 let generic_params = g.unwrap_or(vec![]);
                 let constraints = w.unwrap_or(vec![]);
-                ImplDef { dty, generic_params, constraints, decls, trait_impl: Some(trait_impl)}
-        }
-
-        rule struct_field() -> StructField
-            = name:identifier() _ ":" _ ty:dty() {
-                StructField {name, ty}
+                ImplDef { dty, generic_params, constraints, decls, trait_impl}
         }
 
         rule associated_item() -> AssociatedItem
@@ -475,11 +456,21 @@ peg::parser! {
                 _ dty:dty() expr:(_ "=" _ e:expression() {e})? _
                 ";" {AssociatedItem::ConstItem(name, dty, expr)})) {
                     ass_item
+        }
+
+        rule trait_mono_ty() -> TraitMonoType
+            = name:identifier() generic_args:(_ "<" _ generic_args:(k:kind_argument() ** (_ "," _) {k}) _ ">" { generic_args })? {
+                TraitMonoType { name, generics: generic_args.unwrap_or(vec![]) }
             }
 
+        rule struct_field() -> StructField
+            = name:identifier() _ ":" _ ty:dty() {
+                StructField {name, ty}
+        }
+
         rule generic_params() -> Vec<IdentKinded>
-        = params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t}) {
-            params
+            = params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t}) {
+                params
         }
 
         // only syntatic sugar to specify trait bounds inside generic param list
@@ -507,7 +498,7 @@ peg::parser! {
         //     }
 
         rule where_clause() -> Vec<Constraint>
-            = "where" __ clauses:(where_clause_item() ** (_ "," _)) {
+            = "where" __ clauses:(where_clause_item() **<1,> (_ "," _)) {
                 clauses.into_iter().fold(Vec::new(), |mut clauses, clause| {
                     clauses.extend(clause);
                     clauses
@@ -515,7 +506,7 @@ peg::parser! {
             }
 
         rule where_clause_item() -> Vec<Constraint>
-            = param:dty() _ ":" _ trait_bounds:(trait_mono_ty() ** (_ "+" _)) {
+            = param:dty() _ ":" _ trait_bounds:(trait_mono_ty() **<1,> (_ "+" _)) {
                 trait_bounds.into_iter().map(|trait_bound|
                     Constraint{
                         param: param.clone(),
@@ -538,7 +529,7 @@ peg::parser! {
                 result
             }
 
-        rule fun_decl_param() -> ParamTypeDecl
+        rule fun_parameter_decl() -> ParamTypeDecl
             = result:(
             mutbl:(m:mutability() __ {m})? (ident() _ ":" _)? ty:ty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
@@ -672,8 +663,27 @@ peg::parser! {
                     s:nat() __ view:place_expression() end:position!() {
                 Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
             }
-            e:(p:place_expression() "." _ { Expr::new(ExprKind::PlaceExpr(p)) }
-                / "(" _ e:expression() _ ")" _ "." _ { e })
+            begin:position!() struct_name:identifier() _
+                kind_args:("::" _ "<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "{" _ args:(i:ident() e:(_ ":" _ e:expression(){e})? {(i, e)}) ** (_ "," _)
+                _ "}"  end:position!() {{
+                let args = args.iter().map(|(ident, expr_option)| {
+                    match expr_option {
+                        Some(e) => (ident.clone(), e.clone()),
+                        None => (ident.clone(), Expr::new(ExprKind::PlaceExpr(
+                            PlaceExpr::new(PlaceExprKind::Ident(ident.clone())))))
+                    }}).collect();
+                Expr::with_span(
+                    ExprKind::StructInst(
+                        struct_name,
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    ),
+                    Span::new(begin, end)
+                )
+            }}
+            e:(p:place_expression() { Expr::new(ExprKind::PlaceExpr(p)) }
+                / "(" _ e:expression() _ ")" { e }) _ "." _
                 begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
@@ -700,7 +710,7 @@ peg::parser! {
             begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
-            {{
+            {
                 Expr::new(
                     ExprKind::App(
                         Path::Empty,
@@ -713,7 +723,7 @@ peg::parser! {
                         args
                     )
                 )
-            }}
+            }
             path:(path:dty() "::" { path }) begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
@@ -744,25 +754,6 @@ peg::parser! {
                         kind_args
                 ))
             }
-            begin:position!() struct_name:identifier() _
-                kind_args:("<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
-                "{" _ args:(i:ident() e:(_ ":" _ e:expression(){e})? {(i, e)}) ** (_ "," _)
-                 _ "}"  end:position!() {{
-                let args = args.iter().map(|(ident, expr_option)| {
-                    match expr_option {
-                        Some(e) => (ident.clone(), e.clone()),
-                        None => (ident.clone(), Expr::new(ExprKind::PlaceExpr(
-                            PlaceExpr::new(PlaceExprKind::Ident(ident.clone())))))
-                    }}).collect();
-                Expr::with_span(
-                    ExprKind::StructInst(
-                        struct_name,
-                        kind_args.unwrap_or(vec![]),
-                        args
-                    ),
-                    Span::new(begin, end)
-                )
-            }}
             l:literal() {
                 Expr::with_type(
                     ExprKind::Lit(l),
@@ -2935,5 +2926,40 @@ mod tests {
         } else {
             panic!("Does not recognize ImplDef")
         }
+    }
+
+    #[test]
+    #[ignore] //TODO Dont work
+    fn test_no_stackoverflow() {
+        let src = r#"
+        fn reduce<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {
+            exec::<64, 1024, 'h, (&'r uniq gpu.global [i32; n])>(
+                &'h uniq gpu,
+                (&'r uniq a_array,),
+                | grid: BlockGrp<64, ThreadGrp<1024>>,
+                  input: (&'r uniq gpu.global [i32; n])| -[gpu.grid]-> () <>{
+                    par_branch split_thread_grp::<k, 1024, 1, 1>(block) {
+                        active_threads => {
+                            parfor _ in active_threads
+                            with fst_half, snd_half from active_half0, active_half1 {
+                                *fst_half = *fst_half + *snd_half
+                            }
+                        },
+                        inactive_threads => { () }
+                    }
+                }
+            );
+          }
+        "#;
+
+        descend::compil_unit(src).expect("Cannot parse program which should be parsable");
+    }
+
+    #[test]
+    #[ignore] //TODO Dont work
+    fn test_pass_arg_kinded_with_generics() {
+        let src = "let x = Point::<42, Point2<T>> { x: 42, x: 43}";
+
+        descend::expr_helper(src).expect("Cannot parse struct initialization");
     }
 }

@@ -160,7 +160,6 @@ impl TyChecker {
                     .generics
                     .iter()
                     .filter_map(|gen_arg| match gen_arg {
-                        ArgKinded::Ty(_) => panic!("types as generic params are not supported"),
                         ArgKinded::DataTy(dty) => Some(dty.clone()),
                         _ => unimplemented!("TODO"),
                     })
@@ -181,10 +180,10 @@ impl TyChecker {
                 .iter()
                 .fold(true, |res, gen| res & free_idents.contains(gen))
             {
-                return Err(TyError::WrongNumberOfGenericParams(
-                    free_idents.len(),
-                    generics.len(),
-                ));
+                return Err(TyError::WrongNumberOfGenericParams {
+                    expected: free_idents.len(),
+                    found: generics.len(),
+                });
             }
 
             self.well_formed_constraint_scheme(
@@ -249,7 +248,7 @@ impl TyChecker {
                             },
                         ),
                     ) {
-                        errors.push(TyError::from(CtxError::TraitNotImplmented(supertrait_con)))
+                        errors.push(TyError::UnfullfilledConstraint(supertrait_con))
                     }
                 });
             //Check for every constraint specified in the where-clause of the trait is fullfilled
@@ -267,6 +266,7 @@ impl TyChecker {
             });
 
             //Check if all fun_decls from the trait are implmented here
+            let impl_def_ty = impl_def.ty();
             let mut ass_items_to_check: Vec<&mut AssociatedItem> =
                 impl_def.decls.iter_mut().collect();
             trait_def.decls.iter().for_each(|ass_item| {
@@ -326,17 +326,27 @@ impl TyChecker {
                                         errors.push(err);
                                     }
                                 } else {
-                                    errors.push(TyError::UnexpectedType)
+                                    errors.push(TyError::UnexpectedType {
+                                        expected: expected_impl_fun_ty.mono_ty,
+                                        found: fun_impl_ty.mono_ty,
+                                    })
                                 }
                             } else {
-                                errors.push(TyError::UnexpectedType)
+                                errors.push(TyError::UnexpectedType {
+                                    expected: expected_impl_fun_ty.mono_ty,
+                                    found: fun_impl_ty.mono_ty,
+                                })
                             }
                         } else {
                             match ass_item {
                                 AssociatedItem::FunDef(_) => (),
-                                AssociatedItem::FunDecl(_) => errors.push(TyError::from(
-                                    CtxError::FunNotImplemented(fun_name.clone()),
-                                )),
+                                AssociatedItem::FunDecl(_) => {
+                                    errors.push(TyError::from(CtxError::FunNotImplemented {
+                                        function_name: fun_name.clone(),
+                                        trait_name: trait_def.name.clone(),
+                                        impl_dty: impl_def_ty.clone(),
+                                    }))
+                                }
                                 _ => unimplemented!(),
                             }
                         }
@@ -347,7 +357,7 @@ impl TyChecker {
 
             ass_items_to_check
                 .iter()
-                .for_each(|_| errors.push(TyError::UnexpectedItem));
+                .for_each(|item| errors.push(TyError::UnexpectedAssItemInImpl((**item).clone())));
 
             //Reset constraint environment
             self.gl_ctx.theta.remove_constraints(&impl_def.constraints);
@@ -366,7 +376,9 @@ impl TyChecker {
 
             let result =
                 iter_TyResult_to_TyResult!(impl_def.decls.iter_mut().map(|decl| match decl {
-                    AssociatedItem::FunDecl(_) => Err(TyError::UnexpectedItem),
+                    AssociatedItem::FunDecl(fun_decl) => Err(TyError::UnexpectedAssItemInImpl(
+                        AssociatedItem::FunDecl(fun_decl.clone())
+                    )),
                     AssociatedItem::FunDef(fun_def) =>
                         self.ty_check_fun_def(kind_ctx.clone(), fun_def),
                     AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
@@ -579,64 +591,125 @@ impl TyChecker {
         ty_ctx: TyCtx,
         exec: Exec,
         struct_name: &String,
-        generic_args: &Vec<ArgKinded>,
+        generic_args: &mut Vec<ArgKinded>,
         inst_exprs: &mut Vec<(Ident, Expr)>,
     ) -> TyResult<(TyCtx, Ty)> {
         let struct_def_orginal = self.gl_ctx.struct_by_name(struct_name)?;
         let struct_def = struct_def_orginal.clone(); // Prevent borrowing errors
-        Self::check_args_have_correct_kinds(&struct_def.generic_params, generic_args)?;
+
+        //Check generic args
+        if struct_def.generic_params.len() < generic_args.len() {
+            return Err(TyError::WrongNumberOfGenericParams {
+                expected: struct_def.generic_params.len(),
+                found: generic_args.len(),
+            });
+        }
+        Self::check_args_have_correct_kinds(
+            &struct_def.generic_params[0..generic_args.len()].to_vec(),
+            &generic_args,
+        )?;
+        let struct_ty = struct_def.ty().instantiate(generic_args);
         iter_TyResult_to_TyResult!(generic_args.iter().map(|gen_arg| match gen_arg {
-            ArgKinded::Ty(_) => panic!("types as generic params are not supported"),
             ArgKinded::DataTy(dty) =>
                 self.ty_well_formed(kind_ctx, &ty_ctx, exec, &Ty::new(TyKind::Data(dty.clone()))),
             _ => unimplemented!("TODO"),
         }))?;
-        let (ty_ctx, errs) = struct_def.decls.iter().try_fold(
-            (ty_ctx, Vec::new()),
-            |(mut ty_ctx, mut errs), field| {
-                match inst_exprs
-                    .iter_mut()
-                    .find(|(ident, _)| ident.name == field.name)
-                {
-                    Some((_, expr)) => {
-                        ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
-                        let expected_ty = struct_def
-                            .generic_params
-                            .iter()
-                            .zip(generic_args.iter())
-                            .fold(field.ty.clone(), |ty, (gen, arg)| {
-                                ty.subst_ident_kinded(gen, arg)
-                            });
-                        if Ty::new(TyKind::Data(expected_ty)) != *expr.ty.as_ref().unwrap() {
-                            errs.push(TyError::UnexpectedType)
-                        }
-                    }
-                    None => errs.push(TyError::MissingStructField(field.name.clone())),
-                }
-                let res: Result<(TyCtx, Vec<TyError>), TyError> = Ok((ty_ctx, errs));
-                res
-            },
-        )?;
-        if errs.is_empty() {
-            if struct_def.decls.len() == inst_exprs.len() {
-                let res_ty = struct_def.ty().instantiate(generic_args);
-                if let Some(unfulfilled_con) = res_ty
-                    .constraints
+
+        //Sort all inst_exprs to have the same order like in struct_def
+        //And check if all struct_fields are initialized
+        let mut errs = Vec::new();
+        let inst_exprs_sorted = struct_def
+            .decls
+            .iter()
+            .filter_map(|field| {
+                if let Some(inst_expr_position) = inst_exprs
                     .iter()
-                    .find(|con| !self.gl_ctx.theta.check_constraint(con))
+                    .position(|(name, _)| name.name == field.name)
                 {
-                    Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))
+                    Some(inst_exprs.swap_remove(inst_expr_position))
                 } else {
-                    Ok((ty_ctx, res_ty.mono_ty))
+                    errs.push(TyError::MissingStructField {
+                        missing_field: field.name.clone(),
+                        struct_name: struct_def.name.clone(),
+                    });
+                    None
                 }
-            } else {
-                Err(TyError::UnexpectedNumberOfStructFields(
-                    struct_def.decls.len(),
-                    inst_exprs.len(),
-                ))
-            }
+            })
+            .collect();
+        inst_exprs.iter().for_each(|(name, expr)| {
+            errs.push(TyError::UnexpectedStructField {
+                unexpected_field: name.name.clone(),
+                struct_name: struct_def.name.clone(),
+            })
+        });
+        *inst_exprs = inst_exprs_sorted;
+        if !errs.is_empty() {
+            return Err(TyError::MultiError(errs));
+        }
+
+        //Tycheck every expression
+        let ty_ctx = inst_exprs
+            .iter_mut()
+            .try_fold(ty_ctx, |ty_ctx, (_, expr)| {
+                self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)
+            })?;
+
+        //Infer remaining generic args
+        let struct_inst_tys = match &struct_ty.mono_ty.dty().dty {
+            DataTyKind::Struct(struct_dty) => struct_dty
+                .attributes
+                .iter()
+                .map(|field| Ty::new(TyKind::Data(field.ty.clone()))),
+            _ => panic!("Expected a struct data type, but found something else"),
+        }
+        .collect::<Vec<_>>();
+        let inferred_generic_args = infer_kinded_args_from_mono_ty(
+            &struct_ty.generic_params,
+            struct_inst_tys
+                .iter()
+                .zip(inst_exprs.iter().map(|(_, expr)| expr.ty.as_ref().unwrap())),
+        );
+        let generic_args_len = generic_args.len();
+        generic_args.extend(inferred_generic_args);
+        let struct_ty = struct_ty.instantiate(&generic_args[generic_args_len..]);
+
+        //Check if all constraints are fullfilled
+        if let Some(unfulfilled_con) = struct_ty
+            .constraints
+            .iter()
+            .find(|con| !self.gl_ctx.theta.check_constraint(con))
+        {
+            Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))?;
+        }
+
+        //Check if every expression has the expected type
+        inst_exprs
+            .iter()
+            .zip(match &struct_ty.mono_ty.dty().dty {
+                DataTyKind::Struct(struct_dty) => struct_dty.attributes.iter(),
+                _ => panic!("Expected a struct data type, but found something else"),
+            })
+            .try_for_each(|((_, expr), field)| {
+                let found_ty = expr.ty.as_ref().unwrap();
+                let expected_ty = Ty::new(TyKind::Data(field.ty.clone()));
+                if expected_ty.eq_structure(found_ty) {
+                    Ok(())
+                } else {
+                    Err(TyError::UnexpectedType {
+                        expected: expected_ty.clone(),
+                        found: found_ty.clone(),
+                    })
+                }
+            })?;
+
+        if let Some(unfulfilled_con) = struct_ty
+            .constraints
+            .iter()
+            .find(|con| !self.gl_ctx.theta.check_constraint(con))
+        {
+            Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))
         } else {
-            Err(TyError::MultiError(errs))
+            Ok((ty_ctx, struct_ty.mono_ty))
         }
     }
 
@@ -756,7 +829,10 @@ impl TyChecker {
                 )),
             ]))))
         } else {
-            return Err(TyError::UnexpectedType);
+            return Err(TyError::UnexpectedTypeKind {
+                expected_name: String::from("TyKind::Data"),
+                found: view.ty.as_ref().unwrap().clone(),
+            });
         };
 
         let loans = borrow_check::ownership_safe(
@@ -1321,10 +1397,16 @@ impl TyChecker {
                             tty.clone(),
                         )))))
                     } else {
-                        Err(TyError::UnexpectedType)
+                        Err(TyError::UnexpectedDataTypeKind {
+                            expected_name: String::from("DataTyKind::ArrayShape"),
+                            found: (**arr_view).clone(),
+                        })
                     }
                 } else {
-                    Err(TyError::UnexpectedType)
+                    Err(TyError::UnexpectedTypeKind {
+                        expected_name: String::from("TyKind::Data"),
+                        found: e.ty.as_ref().unwrap().clone(),
+                    })
                 }
             })
             .zip(input_idents)
@@ -1910,6 +1992,13 @@ impl TyChecker {
             res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, exec, arg)?;
         }
 
+        //Get function name
+        let fun_name = if let ExprKind::PlaceExpr(place_expr) = &ef.expr {
+            let place = place_expr.to_place().unwrap();
+            place.ident
+        } else {
+            panic!("function is not a place expr");
+        };
         //Replace InferFromFirstArg-path by dty of first arg
         if let Path::InferFromFirstArg = path {
             let dty = args.first().unwrap().ty.as_ref().unwrap().dty().clone();
@@ -1918,12 +2007,55 @@ impl TyChecker {
                 _ => dty,
             })
         }
+        //Infer function_kind from path
+        *fun_kind = Some(match path {
+            Path::Empty => FunctionKind::GlobalFun,
+            Path::DataTy(dty) => {
+                self.ty_well_formed(
+                    kind_ctx,
+                    &res_ty_ctx,
+                    exec,
+                    &Ty::new(TyKind::Data(dty.clone())),
+                )?;
+
+                match &dty.dty {
+                    //If this is an ident only trait-functions can be called
+                    DataTyKind::Ident(ident) => {
+                        self.gl_ctx.trait_fun_name(&fun_name.name, &ident)?.fun_kind
+                    }
+                    //Else this dty corresponds to a concrete impl
+                    _ => self
+                        .gl_ctx
+                        .impl_fun_name_by_dty(&fun_name.name, dty)?
+                        .fun_kind
+                        .clone(),
+                }
+            }
+            Path::InferFromFirstArg => panic!("This should be already replaced by Path::DataTy"),
+        });
+
+        //Get type_scheme of function from context
+        let fun_ty =
+        // place should be an identifier referring to a globally declared function
+        if let Ok(fun_ty) = self.gl_ctx.fun_ty_by_ident(&fun_name, &fun_kind.as_ref().unwrap()) {
+            //TODO how to set a type for ef which is a typescheme?
+
+            //TODO this is now the function monotype, not the function type
+            //Is this a problem?
+            ef.ty = Some(fun_ty.mono_ty.clone());
+
+            fun_ty.clone()
+        } else {
+            Err(TyError::String(format!(
+                "The provided function expression\n {:?}\n is not a identifier for a declared function",
+                ef
+            )))?
+        };
 
         // TODO check well-kinded: FrameTyping, Prv, Ty
-        let (f_subst, mut f_mono_ty) =
-            self.ty_check_dep_app(kind_ctx, &res_ty_ctx, exec, path, fun_kind, ef, k_args)?;
+        let (f_subst, mut f_mono_ty) = Self::dep_app(&fun_ty, k_args)?;
         let (f_subst_param_tys, exec_f, f_subst_ret_ty) =
-            if let TyKind::Fn(f_subst_param_tys, exec_f, f_subst_ret_ty) = f_subst.mono_ty.ty {
+            if let TyKind::Fn(f_subst_param_tys, exec_f, f_subst_ret_ty) = &f_subst.mono_ty.ty {
                 (f_subst_param_tys, exec_f, f_subst_ret_ty)
             } else {
                 panic!("Expected function type but found something else.")
@@ -1945,102 +2077,56 @@ impl TyChecker {
                 args.iter()
                     .map(|arg| arg.ty.as_ref().unwrap().clone())
                     .collect(),
-                exec_f,
+                *exec_f,
                 Box::new(ret_ty),
             )),
         )?;
-        let mut inferred_k_args = infer_kinded_args_from_mono_ty(
-            f_subst.generic_params,
-            f_subst_param_tys,
-            &f_subst_ret_ty,
-            &f_mono_ty,
-        );
-        k_args.append(&mut inferred_k_args);
 
-        let ret_ty_f = if let TyKind::Fn(_, _, ret_ty_f) = &f_mono_ty.ty {
-            ret_ty_f.clone()
-        } else {
-            panic!("Expected function type but found something else.")
-        };
+        //Infer remaing kinded args
+        let (f_mono_param_tys, _, f_mono_ret_ty) =
+            if let TyKind::Fn(f_subst_param_tys, exec_f, f_subst_ret_ty) = &f_mono_ty.ty {
+                (f_subst_param_tys, exec_f, f_subst_ret_ty)
+            } else {
+                panic!("Expected function type but found something else.")
+            };
+        let inferred_k_args = infer_kinded_args_from_mono_ty(
+            &f_subst.generic_params,
+            f_subst_param_tys
+                .iter()
+                .zip(f_mono_param_tys.iter())
+                .chain(std::iter::once(&**f_subst_ret_ty).zip(std::iter::once(&**f_mono_ret_ty))),
+        );
+        k_args.extend(inferred_k_args);
+
+        //Check if all constraints of the function are fullfilled
+        if let Some(unfulfilled_con) = fun_ty
+            .constraints
+            .iter()
+            .map(|con| fun_ty.instantiate_single(con, k_args))
+            .find(|con| !self.gl_ctx.theta.check_constraint(con))
+        {
+            Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))?;
+        }
+
         // TODO check provenance relations
-        return Ok((res_ty_ctx, *ret_ty_f));
+        return Ok((res_ty_ctx, (**f_mono_ret_ty).clone()));
     }
 
-    fn ty_check_dep_app(
-        &mut self,
-        kind_ctx: &KindCtx,
-        ty_ctx: &TyCtx,
-        exec: Exec,
-        path: &Path,
-        fun_kind: &mut Option<FunctionKind>,
-        ef: &mut Expr,
-        k_args: &mut [ArgKinded],
-    ) -> TyResult<(TypeScheme, Ty)> {
-        let fun_name = if let ExprKind::PlaceExpr(place_expr) = &ef.expr {
-            let place = place_expr.to_place().unwrap();
-            place.ident
-        } else {
-            panic!("function is not a place expr");
-        };
-        //Infer function_kind from path
-        *fun_kind = Some(match path {
-            Path::Empty => FunctionKind::GlobalFun,
-            Path::DataTy(dty) => {
-                self.ty_well_formed(kind_ctx, ty_ctx, exec, &Ty::new(TyKind::Data(dty.clone())))?;
-
-                match &dty.dty {
-                    DataTyKind::Ident(ident) => {
-                        self.gl_ctx.trait_fun_name(&fun_name.name, &ident)?.fun_kind
-                    }
-                    _ => self
-                        .gl_ctx
-                        .impl_fun_name_by_dty(&fun_name.name, dty)?
-                        .fun_kind
-                        .clone(),
-                }
-            }
-            Path::InferFromFirstArg => panic!("This should be already replaced by Path::DataTy"),
-        });
-        let fun_ty =
-            // place should be an identifier referring to a globally declared function
-            if let Ok(fun_ty) = self.gl_ctx.fun_ty_by_ident(&fun_name, &fun_kind.as_ref().unwrap()) {
-                //TODO how to set a type for ef which is a typescheme?
-
-                //TODO this is now the function monotype, not the function type
-                //Is this a problem?
-                ef.ty = Some(fun_ty.mono_ty.clone());
-
-                fun_ty.clone()
-            } else {
-                Err(TyError::String(format!(
-                    "The provided function expression\n {:?}\n is not a identifier for a globally declared function",
-                    ef
-                )))?
-        };
-
-        if fun_ty.generic_params.len() < k_args.len() {
-            return Err(TyError::WrongNumberOfGenericParams(
-                fun_ty.generic_params.len(),
-                k_args.len(),
-            ));
+    fn dep_app(ty_scheme: &TypeScheme, k_args: &[ArgKinded]) -> TyResult<(TypeScheme, Ty)> {
+        if ty_scheme.generic_params.len() < k_args.len() {
+            return Err(TyError::WrongNumberOfGenericParams {
+                expected: ty_scheme.generic_params.len(),
+                found: k_args.len(),
+            });
         }
         Self::check_args_have_correct_kinds(
-            &fun_ty.generic_params[0..k_args.len()].to_vec(),
+            &ty_scheme.generic_params[0..k_args.len()].to_vec(),
             &k_args.to_vec(),
         )?;
-        let fun_ty_subs = fun_ty.instantiate(k_args);
+        let fun_ty_subs = ty_scheme.instantiate(k_args);
         let (fun_mono_ty, _) = unify::inst_ty_scheme(&fun_ty_subs);
 
-        //TODO cannt check constraints if some generic_args must be infered
-        // if let Some(unfulfilled_con) =
-        //     fun_ty_subs.constraints
-        //     .iter()
-        //     .find(|con|
-        //         !self.gl_ctx.theta.check_constraint(con)) {
-        //     Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))
-        // } else {
         Ok((fun_ty_subs, fun_mono_ty))
-        // }
     }
 
     fn check_args_have_correct_kinds(
@@ -2053,10 +2139,10 @@ impl TyChecker {
                 .zip(kv.iter())
                 .map(|(gen, arg)| TyChecker::check_arg_has_correct_kind(&gen.kind, arg)))
         } else {
-            Err(TyError::WrongNumberOfGenericParams(
-                expected.len(),
-                kv.len(),
-            ))
+            Err(TyError::WrongNumberOfGenericParams {
+                expected: expected.len(),
+                found: kv.len(),
+            })
         }
     }
 
@@ -2064,10 +2150,10 @@ impl TyChecker {
         if expected == &kv.kind() {
             Ok(())
         } else {
-            Err(TyError::String(format!(
-                "expected argument of kind {:?}, but the provided argument is {:?}",
-                expected, kv
-            )))
+            Err(TyError::WrongKind {
+                expected: *expected,
+                found: kv.kind(),
+            })
         }
     }
 
@@ -2120,9 +2206,9 @@ impl TyChecker {
         }
 
         let tuple_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
-        let elem_ty = proj_elem_ty(e.ty.as_ref().unwrap(), i);
+        let elem_ty = proj_elem_ty(e.ty.as_ref().unwrap(), i)?;
 
-        Ok((tuple_ty_ctx, elem_ty?))
+        Ok((tuple_ty_ctx, elem_ty))
     }
 
     fn ty_check_array(
