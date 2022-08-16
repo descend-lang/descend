@@ -970,17 +970,19 @@ impl TyChecker {
             .into_iter()
             .map(FrameEntry::Var)
             .collect::<Vec<_>>();
-        if parall_ident_typed.is_some() {
-            frm_ty.push(FrameEntry::Var(parall_ident_typed.unwrap()));
+        if let Some(pid_ty) = parall_ident_typed {
+            frm_ty.push(FrameEntry::Var(pid_ty));
         }
-        let ty_ctx_with_idents = input_ty_ctx.clone().append_frame(frm_ty);
+        let ty_ctx_with_idents = input_ty_ctx.clone().append_frame(frm_ty.clone());
 
-        // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
-        // that is used for the par_for can safely be reused.
-        let _body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_idents, body_exec, body)?;
+        let body_ty_ctx_fst = self.ty_check_expr(kind_ctx, ty_ctx_with_idents, body_exec, body)?;
+        // Run type checking again to see whether there were illegal moves
+        let body_ty_ctx_with_idents = body_ty_ctx_fst.drop_last_frame().append_frame(frm_ty);
+        let no_moves_ty_ctx =
+            self.ty_check_expr(kind_ctx, body_ty_ctx_with_idents, body_exec, body)?;
 
         Ok((
-            input_ty_ctx,
+            no_moves_ty_ctx.drop_last_frame(),
             Ty::new(TyKind::Data(DataTy::new(Scalar(ScalarTy::Unit)))),
         ))
     }

@@ -3,7 +3,6 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit::Visit;
-use crate::ast::DimCompo;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -781,8 +780,9 @@ fn gen_for_range(
 }
 
 fn gen_exec(
-    blocks: &desc::ArgKinded,
-    threads: &desc::ArgKinded,
+    grid_dims: usize,
+    blocks: Vec<desc::ArgKinded>,
+    threads: Vec<desc::ArgKinded>,
     gpu_expr: &desc::Expr,
     input_expr: &desc::Expr,
     fun: &desc::Expr,
@@ -940,7 +940,22 @@ fn gen_exec(
             },
         )
         .collect();
-    let template_args = gen_args_kinded(vec![blocks.clone(), threads.clone()].as_slice());
+    let template_args = if grid_dims == 1 {
+        gen_args_kinded(vec![blocks[0].clone(), threads[0].clone()].as_slice())
+    } else if grid_dims == 2 {
+        gen_args_kinded(
+            vec![
+                blocks[0].clone(),
+                blocks[1].clone(),
+                threads[0].clone(),
+                threads[1].clone(),
+            ]
+            .as_slice(),
+        )
+    } else {
+        unimplemented!()
+    };
+
     let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
     args.append(&mut input);
     let mut nat_input_idents = free_kinded_idents
@@ -955,9 +970,17 @@ fn gen_exec(
         .collect::<Vec<_>>();
     args.append(&mut nat_input_idents);
 
+    let exec_name = if grid_dims == 1 {
+        "descend::exec".to_string()
+    } else if grid_dims == 2 {
+        "descend::exec_xy".to_string()
+    } else {
+        unimplemented!()
+    };
+
     if checks.is_empty() {
         CheckedExpr::Expr(cu::Expr::FunCall {
-            fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+            fun: Box::new(cu::Expr::Ident(exec_name.to_string())),
             template_args,
             args,
         })
@@ -965,7 +988,7 @@ fn gen_exec(
         CheckedExpr::ExprIdxCheck(
             cu::Stmt::Seq(checks),
             cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("descend::exec".to_string())),
+                fun: Box::new(cu::Expr::Ident(exec_name.to_string())),
                 template_args,
                 args,
             },
@@ -1085,19 +1108,25 @@ fn gen_par_branch(
 }
 
 fn gen_sync_stmt(par_collec: &ParallelityCollec) -> cu::Stmt {
+    let sync = cu::Stmt::Expr(cu::Expr::FunCall {
+        fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+        template_args: vec![],
+        args: vec![],
+    });
     match par_collec {
-        ParallelityCollec::Split {
-            dim,
-            pos,
-            coll_size,
-            parall_collec,
-        } => gen_sync_stmt(parall_collec),
+        ParallelityCollec::Split { parall_collec, .. } => gen_sync_stmt(parall_collec),
         ParallelityCollec::Grid(_, _) | ParallelityCollec::ToThreadGrp(_) => cu::Stmt::Skip,
-        ParallelityCollec::Block(_) => cu::Stmt::Expr(cu::Expr::FunCall {
-            fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-            template_args: vec![],
-            args: vec![],
-        }),
+        ParallelityCollec::Block(_) => sync,
+        ParallelityCollec::Proj { parall_expr, .. } => {
+            if let ParallelityCollec::Split { parall_collec, .. } = parall_expr.as_ref() {
+                match parall_collec.as_ref() {
+                    ParallelityCollec::Block(_) => sync,
+                    _ => cu::Stmt::Skip,
+                }
+            } else {
+                panic!("this should never happen")
+            }
+        }
         _ => unimplemented!(),
     }
 }
@@ -1484,9 +1513,24 @@ fn gen_expr(
             PlaceExpr(desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Ident(name),
                 ..
-            }) if name.name == "exec" => gen_exec(
-                &kinded_args[0],
-                &kinded_args[1],
+            }) if name.name == crate::ty_check::pre_decl::EXEC => gen_exec(
+                1,
+                vec![kinded_args[0].clone()],
+                vec![kinded_args[1].clone()],
+                &args[0],
+                &args[1],
+                &args[2],
+                codegen_ctx,
+                comp_unit,
+                idx_checks,
+            ),
+            PlaceExpr(desc::PlaceExpr {
+                pl_expr: desc::PlaceExprKind::Ident(name),
+                ..
+            }) if name.name == crate::ty_check::pre_decl::EXEC_XY => gen_exec(
+                2,
+                vec![kinded_args[0].clone(), kinded_args[1].clone()],
+                vec![kinded_args[2].clone(), kinded_args[3].clone()],
                 &args[0],
                 &args[1],
                 &args[2],
@@ -2629,9 +2673,9 @@ impl ParallelityCollec {
                                 || ident.name == SPLIT_BLOCK_GRP
                                 || ident.name == SPLIT_XY_BLOCK_GRP_X
                             {
-                                DimCompo::X
+                                desc::DimCompo::X
                             } else {
-                                DimCompo::Y
+                                desc::DimCompo::Y
                             };
                             return ParallelityCollec::Split {
                                 dim,
@@ -2654,7 +2698,7 @@ impl ParallelityCollec {
                     //         };
                     //     }
                     //     panic!("Cannot create `split` from the provided arguments.");
-                    } else if ident.name == crate::ty_check::pre_decl::TO_THREAD_GRP {
+                    } else if ident.name == TO_THREAD_GRP || ident.name == TO_XY_THREAD_GRP {
                         if let Some(p) = args.first() {
                             return ParallelityCollec::ToThreadGrp(Box::new(
                                 ParallelityCollec::create_from(p, parall_ctx),
@@ -2734,8 +2778,6 @@ impl ParallelityCollec {
                             (Some(remain_grid_dim), Some(remain_block_dim)) => {
                                 ParallelityCollec::Grid(remain_grid_dim, remain_block_dim)
                             }
-                            // (Some(remain_grid_dim), None) => ParallelityCollec::Grid(remain_grid_dim, block_dim),
-                            // (None, Some(remain_block_dim)) => ParallelityCollec::Grid(remain_grid_dim, remain_block_dim),
                             (None, None) => ParallelityCollec::Thread,
                             _ => todo!(),
                         }

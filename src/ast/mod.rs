@@ -260,11 +260,11 @@ pub enum ExprKind {
     PlaceExpr(PlaceExpr),
     // Index into array, e.g., arr[i]
     Index(PlaceExpr, Nat),
+    // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
+    Proj(Box<Expr>, usize),
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),
     Tuple(Vec<Expr>),
-    // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
-    Proj(Box<Expr>, usize),
     // Borrow Expressions
     Ref(Option<String>, Ownership, PlaceExpr),
     BorrowIndex(Option<String>, Ownership, PlaceExpr, Nat),

@@ -191,6 +191,8 @@ impl Constrainable for Ty {
                 assert!(idents_kinded2.is_empty());
 
                 if exec1 != exec2 {
+                    eprintln!("{}", exec1);
+                    eprintln!("{}", exec2);
                     return Err(TyError::CannotUnify);
                 }
                 if param_tys1.len() != param_tys2.len() {

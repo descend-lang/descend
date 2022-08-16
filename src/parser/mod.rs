@@ -691,16 +691,14 @@ peg::parser! {
             }
 
         /// Potential whitespace
-        rule _() -> ()
-            = quiet!{(
-                [' '|'\n'|'\t'|'\r'] _) // 0 or more whitespaces
-                / ("//" (!['\n'][_])* ['\n'] _) // Comment to EOL
-                / ("/*" (!"*/"[_])* "*/" _) // Block comment
-                / ""}
-
+        rule _() = quiet!{ (whitespace_char() / inline_comment() / line_comment())* }
         /// At least one whitespace
-        rule __() -> ()
-            = quiet!{[' '|'\n'|'\t'|'\r'] _}
+        rule __() = quiet!{ (whitespace_char() / inline_comment() / line_comment())+ }
+
+        rule whitespace_char() = [' '|'\n'|'\t'|'\r'] // 0 or more whitespaces
+        rule line_comment() = "//" (!['\n'][_])* (['\n'] / ![_]) // Comment to EOL
+        rule inline_comment() = "/*" (!"*/"[_])* "*/"  // Block comment
+
     }
 }
 
