@@ -52,7 +52,12 @@ impl Visit for FreeKindedIdents {
     fn visit_nat(&mut self, nat: &Nat) {
         match nat {
             Nat::Ident(ident) => {
-                self.set.insert(IdentKinded::new(ident, Kind::Nat));
+                if !self
+                    .bound_idents
+                    .contains(&IdentKinded::new(ident, Kind::Nat))
+                {
+                    self.set.insert(IdentKinded::new(ident, Kind::Nat));
+                }
             }
             //Nat::App(ident, args) =>
             _ => visit::walk_nat(self, nat),
@@ -99,30 +104,31 @@ impl Visit for FreeKindedIdents {
         match &expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
                 self.visit_nat(collec);
-                let mut inner_free_idents = FreeKindedIdents::with_bound_idents(std::iter::once(
-                    IdentKinded::new(ident, Kind::Nat),
-                ));
-                inner_free_idents.visit_expr(body);
-                self.set.extend(inner_free_idents.set)
+
+                let ident_kinded = IdentKinded::new(ident, Kind::Nat);
+                let contains = self.bound_idents.insert(ident_kinded.clone());
+                self.visit_expr(body);
+                if contains {
+                    self.bound_idents.remove(&ident_kinded);
+                }
             }
-            ExprKind::Block(prvs, _) if !prvs.is_empty() => unimplemented!(),
             _ => visit::walk_expr(self, expr),
         }
     }
 
-    fn visit_item_def(&mut self, item_def: &super::Item) {
+    fn visit_item_def(&mut self, _: &super::Item) {
         unimplemented!()
     }
-    fn visit_trait_def(&mut self, trait_def: &super::TraitDef) {
+    fn visit_trait_def(&mut self, _: &super::TraitDef) {
         unimplemented!()
     }
-    fn visit_struct_def(&mut self, struct_def: &super::StructDef) {
+    fn visit_struct_def(&mut self, _: &super::StructDef) {
         unimplemented!()
     }
-    fn visit_impl_def(&mut self, impl_def: &super::ImplDef) {
+    fn visit_impl_def(&mut self, _: &super::ImplDef) {
         unimplemented!()
     }
-    fn visit_fun_def(&mut self, fun_def: &super::FunDef) {
+    fn visit_fun_def(&mut self, _: &super::FunDef) {
         unimplemented!()
     }
 }

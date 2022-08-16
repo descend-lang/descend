@@ -234,7 +234,6 @@ fn test_fun_calls() {
 }
 
 #[test]
-#[ignore] //TODO why does this compile???
 fn test_moved_struct_attribute() {
     let src = r#"
     struct Test;
@@ -261,7 +260,7 @@ fn test_moved_struct_attribute() {
     }
     fn bar() -[cpu.thread]-> () <'a>{
         let test = 42;
-        let x = Test<'a> { x: &'a uniq test };
+        let x = Test::<'a> { x: &'a uniq test };
         let p = Point { x, y: 42 };
         let z = p.x;
         let z2 = p.x; //Already moved
@@ -902,25 +901,44 @@ fn test_cyclic_struct_defs() {
 }
 
 #[test]
-#[ignore] //TODO dont work
 fn test_struct_with_lifetimes() {
     let src = r#"
     struct Test<a: prv> {
-        x: &a shrd cpu.mem i32
+        x: &a uniq cpu.mem i32
     }
     impl<a: prv> Test<a> {
         fn bar(&shrd cpu.mem self, i: i32) -[cpu.thread]-> i32 {
             i + *((*self).x)
         }
     }
-    fn foo<a: prv>(t: Test<a>) -[cpu.thread]-> i32 {
-        t.x = 42;
-        t.bar(15)
+    fn test_double_reference(x: & uniq cpu.mem & uniq cpu.mem i32) -[cpu.thread]-> () {
+        *(*x) = 42;
+        ()
+    }
+    fn test_double_reference2<a: prv>(x: &a uniq cpu.mem & uniq cpu.mem i32) -[cpu.thread]-> () {
+        *(*x) = 42;
+        ()
+    }
+    fn test_double_reference3<a: prv, b: prv>(x: &a uniq cpu.mem &b uniq cpu.mem i32) -[cpu.thread]-> () {
+        *(*x) = 42;
+        ()
+    }
+    fn foo<a: prv>(mut t: Test<a>) -[cpu.thread]-> i32 {
+        *(t.x) = 42;
+        (&shrd t).bar(15)
     }
     fn main() -[cpu.thread]-> () <'a>{
-        let test: i32 = 1;
-        let t = Test<'a> { x: &'a shrd test };
+        let mut test: i32 = 1;
+        let mut t = Test { x: &'a uniq test };
         foo(t);
+
+        let mut test2 = 19;
+        let mut t2 = Test { x: &uniq test2 };
+
+        let mut test3 = 2;
+        let mut test4 = &uniq test3;
+        test_double_reference(&uniq test4);
+        test_double_reference2(&uniq test4);
         ()
     }
     "#;

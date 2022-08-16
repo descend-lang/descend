@@ -9,7 +9,8 @@ pub(crate) mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::utils::FreeKindedIdents;
-use crate::ast::visit::Visit;
+use crate::ast::visit::{walk_dty, Visit};
+use crate::ast::visit_mut::VisitMut;
 use crate::ast::DataTyKind::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
@@ -28,7 +29,7 @@ type TyResult<T> = Result<T, TyError>;
 
 macro_rules! iter_TyResult_to_TyResult {
     ($err_iter: expr) => {{
-        let err_vec: Vec<TyError> = $err_iter
+        let mut err_vec: Vec<TyError> = $err_iter
             .into_iter()
             .filter_map(|res| -> Option<TyError> {
                 match res {
@@ -39,6 +40,8 @@ macro_rules! iter_TyResult_to_TyResult {
             .collect();
         if err_vec.is_empty() {
             Ok(())
+        } else if err_vec.len() == 1 {
+            Err(err_vec.remove(0))
         } else {
             Err(TyError::MultiError(err_vec))
         }
@@ -98,12 +101,7 @@ impl TyChecker {
         let ty_ctx = TyCtx::new();
 
         iter_TyResult_to_TyResult!(struct_def.decls.iter().map(|struct_field| {
-            self.ty_well_formed(
-                &kind_ctx,
-                &ty_ctx,
-                Exec::View,
-                &Ty::new(TyKind::Data(struct_field.ty.clone())),
-            ) //TODO exec = View???
+            self.dty_well_formed(&kind_ctx, &ty_ctx, None, &struct_field.ty)
         }))
     }
 
@@ -126,7 +124,7 @@ impl TyChecker {
                         name: fun_decl.name.clone(),
                         fun_kind: FunctionKind::TraitFun(trait_def.name.clone()),
                     });
-                    self.tyscheme_well_formed(&kind_ctx_empty, &ty_ctx, fun_decl.exec, fun_ty)
+                    self.tyscheme_well_formed(&kind_ctx_empty, &ty_ctx, Some(fun_decl.exec), fun_ty)
                 }
                 AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
             }));
@@ -139,7 +137,12 @@ impl TyChecker {
             kind_ctx_trait
                 .append_idents(vec![IdentKinded::new(&Ident::new("Self"), Kind::Ty).clone()]);
         iter_TyResult_to_TyResult!(trait_def.constraints.iter().map(|con| {
-            self.well_formed_constraint_scheme(&kind_ctx, &ty_ctx, &ConstraintScheme::new(con))
+            self.constraint_scheme_well_formed(
+                &kind_ctx,
+                &ty_ctx,
+                None,
+                &ConstraintScheme::new(con),
+            )
         }))
     }
 
@@ -186,9 +189,10 @@ impl TyChecker {
                 });
             }
 
-            self.well_formed_constraint_scheme(
+            self.constraint_scheme_well_formed(
                 &kind_ctx,
                 &ty_ctx,
+                None,
                 &ConstraintScheme {
                     generics: impl_def.generic_params.clone(),
                     implican: impl_def.constraints.clone(),
@@ -396,6 +400,75 @@ impl TyChecker {
         kind_ctx.well_kinded_prv_rels(&gf.prv_rels)?;
         let kind_ctx = kind_ctx.append_prv_rels(gf.prv_rels.clone());
 
+        // If a reference with lifetime 'a references an other reference with lifetime 'b
+        // then a' < b'
+        // This also applies for structs that contains references
+        struct PrvVistor {
+            current_prov: Option<Provenance>,
+            result_relations: Vec<PrvRel>,
+        }
+        impl Visit for PrvVistor {
+            fn visit_dty(&mut self, dty: &DataTy) {
+                match &dty.dty {
+                    DataTyKind::Ref(prov, _, _, dty) => {
+                        if let Some(current_prov) = &self.current_prov {
+                            match (current_prov, prov) {
+                                (Provenance::Ident(p1), Provenance::Ident(p2)) => {
+                                    self.result_relations.push(PrvRel {
+                                        longer: p2.clone(),
+                                        shorter: p1.clone(),
+                                    })
+                                }
+                                _ => panic!(
+                                    "There are non-ident-provenances in the types of
+                                    the parameters of a function. How is that possible?"
+                                ),
+                            }
+                        }
+                        self.current_prov = Some(prov.clone());
+                        self.visit_dty(dty);
+                    }
+                    DataTyKind::Struct(structdty) => {
+                        if let Some(current_prov) = &self.current_prov {
+                            structdty.generic_args.iter().for_each(|arg| {
+                                if let ArgKinded::Provenance(prov) = arg {
+                                    match (current_prov, prov) {
+                                        (Provenance::Ident(p1), Provenance::Ident(p2)) => {
+                                            self.result_relations.push(PrvRel {
+                                                longer: p2.clone(),
+                                                shorter: p1.clone(),
+                                            })
+                                        }
+                                        _ => panic!(
+                                            "There are non-ident-provenances in the types of
+                                            the parameters of a function. How is that possible?"
+                                        ),
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    _ => walk_dty(self, dty),
+                }
+            }
+        }
+        let kind_ctx = kind_ctx.append_prv_rels(
+            gf.param_decls
+                .iter()
+                .fold(
+                    PrvVistor {
+                        current_prov: None,
+                        result_relations: Vec::new(),
+                    },
+                    |mut res, param| {
+                        res.current_prov = None;
+                        res.visit_ty(param.ty.as_ref().unwrap());
+                        res
+                    },
+                )
+                .result_relations,
+        );
+
         self.gl_ctx.theta.append_constraints(&gf.constraints);
 
         let res: TyResult<()> = {
@@ -415,7 +488,7 @@ impl TyChecker {
             );
             let ty_ctx = TyCtx::from(glf_frame);
 
-            self.tyscheme_well_formed(&kind_ctx, &ty_ctx, gf.exec, &gf.ty())?;
+            self.tyscheme_well_formed(&kind_ctx, &ty_ctx, Some(gf.exec), &gf.ty())?;
 
             self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
 
@@ -608,12 +681,13 @@ impl TyChecker {
             &struct_def.generic_params[0..generic_args.len()].to_vec(),
             &generic_args,
         )?;
-        let struct_ty = struct_def.ty().instantiate(generic_args);
-        iter_TyResult_to_TyResult!(generic_args.iter().map(|gen_arg| match gen_arg {
-            ArgKinded::DataTy(dty) =>
-                self.ty_well_formed(kind_ctx, &ty_ctx, exec, &Ty::new(TyKind::Data(dty.clone()))),
-            _ => unimplemented!("TODO"),
-        }))?;
+        let struct_ty = struct_def
+            .ty()
+            .fresh_generic_param_names()
+            .instantiate(generic_args);
+        iter_TyResult_to_TyResult!(generic_args.iter().map(
+            |generic_arg| self.arg_kinded_well_formed(kind_ctx, &ty_ctx, Some(exec), generic_arg)
+        ))?;
 
         //Sort all inst_exprs to have the same order like in struct_def
         //And check if all struct_fields are initialized
@@ -2011,12 +2085,7 @@ impl TyChecker {
         *fun_kind = Some(match path {
             Path::Empty => FunctionKind::GlobalFun,
             Path::DataTy(dty) => {
-                self.ty_well_formed(
-                    kind_ctx,
-                    &res_ty_ctx,
-                    exec,
-                    &Ty::new(TyKind::Data(dty.clone())),
-                )?;
+                self.dty_well_formed(kind_ctx, &res_ty_ctx, Some(exec), dty)?;
 
                 match &dty.dty {
                     //If this is an ident only trait-functions can be called
@@ -2044,7 +2113,7 @@ impl TyChecker {
             //Is this a problem?
             ef.ty = Some(fun_ty.mono_ty.clone());
 
-            fun_ty.clone()
+            fun_ty.fresh_generic_param_names() //This avoids name clashes
         } else {
             Err(TyError::String(format!(
                 "The provided function expression\n {:?}\n is not a identifier for a declared function",
@@ -2740,9 +2809,11 @@ impl TyChecker {
                 "Type unspecified. Cannot project from potentially non tuple/non struct type."
                     .to_string(),
             )),
-            _ => Err(TyError::IllegalProjection(
-                "Unexpected type or projection access.".to_string(),
-            )),
+            _ => Err(TyError::IllegalProjection(format!(
+                "Unexpected type or projection access. Found access: {:?} on ty {:#?}",
+                proj,
+                tuple_expr.ty.as_ref().unwrap()
+            ))),
         }
     }
 
@@ -2824,22 +2895,70 @@ impl TyChecker {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        exec: Exec,
+        exec: Option<Exec>,
         ty: &TypeScheme,
     ) -> TyResult<()> {
         let kind_ctx = kind_ctx.clone().append_idents(ty.generic_params.clone());
-        if ty.constraints.len() > 0 {
-            self.well_formed_constraint_scheme(
-                &kind_ctx,
-                ty_ctx,
-                &ConstraintScheme {
-                    generics: vec![],
-                    implican: ty.constraints.clone().drain(1..).collect(),
-                    implied: ty.constraints.first().unwrap().clone(),
-                },
-            )?;
+        for constaint in &ty.constraints {
+            self.constraint_well_formed(&kind_ctx, ty_ctx, exec, constaint)?;
         }
         self.ty_well_formed(&kind_ctx, ty_ctx, exec, &ty.mono_ty)
+    }
+
+    fn arg_kinded_well_formed(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: &TyCtx,
+        exec: Option<Exec>,
+        arg: &ArgKinded,
+    ) -> TyResult<()> {
+        match arg {
+            ArgKinded::Ident(_) => panic!("This should have been replaced in parser."),
+            ArgKinded::Nat(nat) => self.nat_well_formed(kind_ctx, nat),
+            ArgKinded::Memory(mem) => self.memory_well_formed(kind_ctx, mem),
+            ArgKinded::Ty(ty) => self.ty_well_formed(kind_ctx, ty_ctx, exec, ty),
+            ArgKinded::DataTy(dty) => self.dty_well_formed(kind_ctx, ty_ctx, exec, dty),
+            ArgKinded::Provenance(prov) => self.prov_well_formed(kind_ctx, ty_ctx, prov),
+        }
+    }
+
+    fn nat_well_formed(&self, kind_ctx: &KindCtx, nat: &Nat) -> TyResult<()> {
+        match nat {
+            Nat::Ident(ident) => {
+                if kind_ctx.ident_of_kind_exists(ident, Kind::Nat) {
+                    Ok(())
+                } else {
+                    Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())))
+                }
+            }
+            Nat::Lit(_) => Ok(()),
+            Nat::BinOp(_, nat1, nat2) => {
+                self.nat_well_formed(kind_ctx, nat1)?;
+                self.nat_well_formed(kind_ctx, nat2)
+            }
+            Nat::App(ident, nats) => {
+                for nat in nats {
+                    self.nat_well_formed(kind_ctx, nat)?
+                }
+                panic!("What is ident {:?}?", ident)
+            }
+        }
+    }
+
+    fn memory_well_formed(&self, kind_ctx: &KindCtx, mem: &Memory) -> TyResult<()> {
+        match mem {
+            Memory::CpuMem => Ok(()),
+            Memory::GpuGlobal => Ok(()),
+            Memory::GpuShared => Ok(()),
+            Memory::GpuLocal => Ok(()),
+            Memory::Ident(ident) => {
+                if kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
+                    Ok(())
+                } else {
+                    Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())))
+                }
+            }
+        }
     }
 
     // TODO respect memory
@@ -2847,151 +2966,18 @@ impl TyChecker {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        exec: Exec,
+        exec: Option<Exec>,
         ty: &Ty,
     ) -> TyResult<()> {
         match &ty.ty {
-            TyKind::Data(dty) => match &dty.dty {
-                // TODO variables of Dead types can be reassigned. So why do we not have to check
-                //  well-formedness of the type in Dead(ty)? (According paper).
-                DataTyKind::Scalar(_)
-                | DataTyKind::Atomic(_)
-                | DataTyKind::Range
-                | DataTyKind::RawPtr(_)
-                | DataTyKind::Dead(_) => {}
-                DataTyKind::Ident(ident) => {
-                    if !kind_ctx.ident_of_kind_exists(ident, Kind::DataTy) {
-                        Err(CtxError::KindedIdentNotFound(ident.clone()))?
-                    }
-                }
-                DataTyKind::Struct(struct_mono_ty) => {
-                    let StructDataType {
-                        name,
-                        attributes,
-                        generic_args,
-                    } = struct_mono_ty;
-                    let struct_def = self.gl_ctx.struct_by_name(name)?;
-                    Self::check_args_have_correct_kinds(&struct_def.generic_params, generic_args)?;
-                    iter_TyResult_to_TyResult!(attributes.iter().map(|field| self
-                        .ty_well_formed(
-                            kind_ctx,
-                            ty_ctx,
-                            exec,
-                            &Ty::new(TyKind::Data(field.ty.clone()))
-                        )))?;
-                }
-                DataTyKind::Ref(Provenance::Value(prv), own, mem, dty) => {
-                    let elem_ty = Ty::new(TyKind::Data(dty.as_ref().clone()));
-                    if !elem_ty.is_fully_alive() {
-                        return Err(TyError::ReferenceToDeadTy);
-                    }
-                    let loans = ty_ctx.loans_in_prv(prv)?;
-                    if !loans.is_empty() {
-                        let mut exists = false;
-                        for loan in loans {
-                            let Loan {
-                                place_expr,
-                                own: l_own,
-                            } = loan;
-                            if l_own != own {
-                                return Err(TyError::ReferenceToWrongOwnership);
-                            }
-                            let mut borrowed_pl_expr = place_expr.clone();
-                            self.place_expr_ty_under_exec_own(
-                                kind_ctx,
-                                ty_ctx,
-                                exec,
-                                *l_own,
-                                &mut borrowed_pl_expr,
-                            )?;
-                            if let TyKind::Data(pl_expr_dty) = borrowed_pl_expr.ty.unwrap().ty {
-                                if !pl_expr_dty.is_fully_alive() {
-                                    return Err(TyError::ReferenceToDeadTy);
-                                }
-                                if dty.occurs_in(&pl_expr_dty) {
-                                    exists = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if !exists {
-                            if let DataTyKind::ArrayShape(_, _) = &dty.dty {
-                                eprintln!("WARNING: Did not check well-formedness of view type reference.")
-                            } else {
-                                return Err(TyError::ReferenceToIncompatibleType);
-                            }
-                        }
-                    }
-                    self.ty_well_formed(kind_ctx, ty_ctx, exec, &elem_ty)?;
-                }
-                DataTyKind::Ref(Provenance::Ident(ident), _, mem, dty) => {
-                    let elem_ty = Ty::new(TyKind::Data(dty.as_ref().clone()));
-                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Provenance) {
-                        Err(CtxError::KindedIdentNotFound(ident.clone()))?
-                    }
-                    self.ty_well_formed(kind_ctx, ty_ctx, exec, &elem_ty)?;
-                }
-                //FIXME check well-formedness of nats
-                DataTyKind::ThreadHierchy(th_hy) => {}
-                DataTyKind::SplitThreadHierchy(th_hy, n) => {}
-                DataTyKind::Tuple(elem_dtys) => {
-                    for elem_dty in elem_dtys {
-                        self.ty_well_formed(
-                            kind_ctx,
-                            ty_ctx,
-                            exec,
-                            &Ty::new(TyKind::Data(elem_dty.clone())),
-                        )?;
-                    }
-                }
-                DataTyKind::Array(elem_dty, n) => {
-                    self.ty_well_formed(
-                        kind_ctx,
-                        ty_ctx,
-                        exec,
-                        &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
-                    )?;
-                    // TODO well-formed nat
-                }
-                DataTyKind::ArrayShape(elem_dty, n) => {
-                    self.ty_well_formed(
-                        kind_ctx,
-                        ty_ctx,
-                        exec,
-                        &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
-                    )?
-                    // TODO well-formed nat
-                }
-                DataTyKind::At(elem_dty, Memory::Ident(ident)) => {
-                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
-                        Err(TyError::CtxError(CtxError::KindedIdentNotFound(
-                            ident.clone(),
-                        )))?;
-                    }
-                    self.ty_well_formed(
-                        kind_ctx,
-                        ty_ctx,
-                        exec,
-                        &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
-                    )?;
-                }
-                DataTyKind::At(elem_dty, _) => {
-                    self.ty_well_formed(
-                        kind_ctx,
-                        ty_ctx,
-                        exec,
-                        &Ty::new(TyKind::Data(elem_dty.as_ref().clone())),
-                    )?;
-                }
-            },
+            TyKind::Data(dty) => self.dty_well_formed(kind_ctx, ty_ctx, exec, dty)?,
             TyKind::Ident(ident) => {
                 if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
                     Err(CtxError::KindedIdentNotFound(ident.clone()))?
                 }
             }
-            // TODO check well-formedness of Nats
             TyKind::Fn(param_tys, exec, ret_ty) => {
-                self.ty_well_formed(&kind_ctx, ty_ctx, *exec, ret_ty)?;
+                self.ty_well_formed(&kind_ctx, ty_ctx, Some(*exec), ret_ty)?;
                 let mut visitor = FreeKindedIdents::new();
                 for param_ty in param_tys {
                     //Add free implicit Lifetime-parameter-idents to kind_ctx
@@ -3009,62 +2995,216 @@ impl TyChecker {
                             .collect(),
                     );
 
-                    self.ty_well_formed(&kind_ctx, ty_ctx, *exec, param_ty)?;
+                    self.ty_well_formed(&kind_ctx, ty_ctx, Some(*exec), param_ty)?;
                 }
             }
             TyKind::Dead(_) => {}
         }
+
         Ok(())
     }
 
-    fn well_formed_constraint_scheme(
+    // TODO respect memory
+    fn dty_well_formed(
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        cscheme: &ConstraintScheme,
+        exec: Option<Exec>,
+        dty: &DataTy,
     ) -> TyResult<()> {
-        if cscheme.is_constraint() {
-            self.ty_well_formed_constraint(&cscheme.implied)?;
-            self.ty_well_formed(
-                kind_ctx,
-                ty_ctx,
-                Exec::View,
-                &Ty::new(TyKind::Data(cscheme.implied.param.clone())),
-            )?; //TODO exec = View???
-            iter_TyResult_to_TyResult!(cscheme.implied.trait_bound.generics.iter().map(|arg| {
-                match arg {
-                    ArgKinded::Ty(_) => panic!("types as generic params are not supported"),
-                    ArgKinded::DataTy(dty) => self.ty_well_formed(
-                        kind_ctx,
-                        ty_ctx,
-                        Exec::View,
-                        &Ty::new(TyKind::Data(dty.clone())),
-                    ), //TODO exec = View???
-                    _ => unimplemented!("TODO"),
+        match &dty.dty {
+            // TODO variables of Dead types can be reassigned. So why do we not have to check
+            //  well-formedness of the type in Dead(ty)? (According paper).
+            DataTyKind::Scalar(_)
+            | DataTyKind::Atomic(_)
+            | DataTyKind::Range
+            | DataTyKind::RawPtr(_)
+            | DataTyKind::Dead(_) => {}
+            DataTyKind::Ident(ident) => {
+                if !kind_ctx.ident_of_kind_exists(ident, Kind::DataTy) {
+                    Err(CtxError::KindedIdentNotFound(ident.clone()))?
                 }
-            }))
-        } else {
-            let kind_ctx = kind_ctx.clone().append_idents(cscheme.generics.clone());
+            }
+            DataTyKind::Struct(struct_mono_ty) => {
+                let StructDataType {
+                    name,
+                    attributes,
+                    generic_args,
+                } = struct_mono_ty;
+                let struct_def = self.gl_ctx.struct_by_name(name)?;
+                Self::check_args_have_correct_kinds(&struct_def.generic_params, generic_args)?;
+                iter_TyResult_to_TyResult!(attributes
+                    .iter()
+                    .map(|field| self.dty_well_formed(kind_ctx, ty_ctx, exec, &field.ty)))?;
+            }
+            DataTyKind::Ref(Provenance::Value(prv), own, mem, dty) => {
+                self.memory_well_formed(kind_ctx, mem)?;
+                let elem_ty = dty.as_ref();
+                if !elem_ty.is_fully_alive() {
+                    return Err(TyError::ReferenceToDeadTy);
+                }
+                let loans = ty_ctx.loans_in_prv(prv)?;
+                if !loans.is_empty() {
+                    let mut exists = false;
+                    //TODO what to do if exec is None?
+                    if exec.is_some() {
+                        for loan in loans {
+                            let Loan {
+                                place_expr,
+                                own: l_own,
+                            } = loan;
+                            if l_own != own {
+                                return Err(TyError::ReferenceToWrongOwnership);
+                            }
+                            let mut borrowed_pl_expr = place_expr.clone();
+                            self.place_expr_ty_under_exec_own(
+                                kind_ctx,
+                                ty_ctx,
+                                exec.unwrap(),
+                                *l_own,
+                                &mut borrowed_pl_expr,
+                            )?;
+                            if let TyKind::Data(pl_expr_dty) = borrowed_pl_expr.ty.unwrap().ty {
+                                if !pl_expr_dty.is_fully_alive() {
+                                    return Err(TyError::ReferenceToDeadTy);
+                                }
+                                if dty.occurs_in(&pl_expr_dty) {
+                                    exists = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if !exists {
+                        if let DataTyKind::ArrayShape(_, _) = &dty.dty {
+                            eprintln!(
+                                "WARNING: Did not check well-formedness of view type reference."
+                            )
+                        } else {
+                            return Err(TyError::ReferenceToIncompatibleType);
+                        }
+                    }
+                }
+                self.dty_well_formed(kind_ctx, ty_ctx, exec, elem_ty)?;
+            }
+            DataTyKind::Ref(Provenance::Ident(ident), _, mem, dty) => {
+                self.memory_well_formed(kind_ctx, mem)?;
+                self.prov_well_formed(kind_ctx, ty_ctx, &Provenance::Ident(ident.clone()))?;
+                self.dty_well_formed(kind_ctx, ty_ctx, exec, dty.as_ref())?;
+            }
+            DataTyKind::ThreadHierchy(th_hy) => {
+                self.thread_hierchy_ty_well_formed(kind_ctx, th_hy)?
+            }
+            DataTyKind::SplitThreadHierchy(th_hy, n) => {
+                self.thread_hierchy_ty_well_formed(kind_ctx, th_hy)?;
+                self.nat_well_formed(kind_ctx, n)?;
+            }
+            DataTyKind::Tuple(elem_dtys) => {
+                for elem_dty in elem_dtys {
+                    self.dty_well_formed(kind_ctx, ty_ctx, exec, elem_dty)?;
+                }
+            }
+            DataTyKind::Array(elem_dty, n) => {
+                self.dty_well_formed(kind_ctx, ty_ctx, exec, elem_dty.as_ref())?;
+                self.nat_well_formed(kind_ctx, n)?;
+            }
+            DataTyKind::ArrayShape(elem_dty, n) => {
+                self.dty_well_formed(kind_ctx, ty_ctx, exec, &elem_dty.as_ref().clone())?;
+                self.nat_well_formed(kind_ctx, n)?;
+            }
+            DataTyKind::At(elem_dty, Memory::Ident(ident)) => {
+                if !kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
+                    Err(TyError::CtxError(CtxError::KindedIdentNotFound(
+                        ident.clone(),
+                    )))?;
+                }
+                self.dty_well_formed(kind_ctx, ty_ctx, exec, &elem_dty.as_ref())?;
+            }
+            DataTyKind::At(elem_dty, _) => {
+                self.dty_well_formed(kind_ctx, ty_ctx, exec, elem_dty.as_ref())?;
+            }
+        }
 
-            iter_TyResult_to_TyResult!(cscheme.implican.iter().map(|implied| self
-                .well_formed_constraint_scheme(
-                    &kind_ctx,
-                    ty_ctx,
-                    &ConstraintScheme::new(implied)
-                )))?;
+        Ok(())
+    }
 
-            self.well_formed_constraint_scheme(
-                &kind_ctx,
-                ty_ctx,
-                &ConstraintScheme::new(&cscheme.implied),
-            )
+    fn thread_hierchy_ty_well_formed(
+        &self,
+        kind_ctx: &KindCtx,
+        tht: &ThreadHierchyTy,
+    ) -> TyResult<()> {
+        match tht {
+            ThreadHierchyTy::BlockGrp(n1, n2, n3, n4, n5, n6) => {
+                self.nat_well_formed(kind_ctx, n1)?;
+                self.nat_well_formed(kind_ctx, n2)?;
+                self.nat_well_formed(kind_ctx, n3)?;
+                self.nat_well_formed(kind_ctx, n4)?;
+                self.nat_well_formed(kind_ctx, n5)?;
+                self.nat_well_formed(kind_ctx, n6)
+            }
+            ThreadHierchyTy::ThreadGrp(n1, n2, n3) => {
+                self.nat_well_formed(kind_ctx, n1)?;
+                self.nat_well_formed(kind_ctx, n2)?;
+                self.nat_well_formed(kind_ctx, n3)
+            }
+            ThreadHierchyTy::WarpGrp(n) => self.nat_well_formed(kind_ctx, n),
+            ThreadHierchyTy::Warp => Ok(()),
+            ThreadHierchyTy::Thread => Ok(()),
         }
     }
 
-    fn ty_well_formed_constraint(&self, constraint: &Constraint) -> TyResult<()> {
+    fn prov_well_formed(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: &TyCtx,
+        prov: &Provenance,
+    ) -> TyResult<()> {
+        match prov {
+            Provenance::Value(prv) => match ty_ctx.loans_in_prv(prv) {
+                Ok(_) => Ok(()),
+                Err(err) => Err(TyError::from(err)),
+            },
+            Provenance::Ident(ident) => {
+                if kind_ctx.ident_of_kind_exists(ident, Kind::Provenance) {
+                    Ok(())
+                } else {
+                    Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())))
+                }
+            }
+        }
+    }
+
+    fn constraint_scheme_well_formed(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: &TyCtx,
+        exec: Option<Exec>,
+        cscheme: &ConstraintScheme,
+    ) -> TyResult<()> {
+        let kind_ctx = kind_ctx.clone().append_idents(cscheme.generics.clone());
+
+        iter_TyResult_to_TyResult!(cscheme
+            .implican
+            .iter()
+            .map(|implied| self.constraint_well_formed(&kind_ctx, ty_ctx, exec, implied)))?;
+
+        self.constraint_well_formed(&kind_ctx, ty_ctx, exec, &cscheme.implied)
+    }
+
+    fn constraint_well_formed(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: &TyCtx,
+        exec: Option<Exec>,
+        constraint: &Constraint,
+    ) -> TyResult<()> {
         let TraitMonoType { name, generics } = &constraint.trait_bound;
         let trait_def = self.gl_ctx.trait_ty_by_name(name)?;
-        Self::check_args_have_correct_kinds(&trait_def.generic_params, generics)
+        self.dty_well_formed(kind_ctx, ty_ctx, exec, &constraint.param)?;
+        Self::check_args_have_correct_kinds(&trait_def.generic_params, generics)?;
+        iter_TyResult_to_TyResult!(generics
+            .iter()
+            .map(|gen| self.arg_kinded_well_formed(kind_ctx, ty_ctx, exec, gen)))
     }
 }
 
@@ -3097,8 +3237,9 @@ pub fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
                 attr_name, struct_ty.name
             ))),
         },
-        _ => Err(TyError::IllegalProjection(
-            "Unexpected type or projection access.".to_string(),
-        )),
+        _ => Err(TyError::IllegalProjection(format!(
+            "Unexpected type or projection access. Found access: {:?} on ty {:#?}",
+            proj, ty
+        ))),
     }
 }

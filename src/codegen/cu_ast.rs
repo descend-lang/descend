@@ -189,7 +189,7 @@ pub(super) enum Ty {
     Scalar(ScalarTy),
     Atomic(ScalarTy),
     Tuple(Vec<Ty>),
-    Struct(String, Vec<Ty>),
+    Struct(String, Vec<TemplateArg>),
     Array(Box<Ty>, Nat),
     CArray(Box<Ty>, Nat),
     Buffer(Box<Ty>, BufferKind),

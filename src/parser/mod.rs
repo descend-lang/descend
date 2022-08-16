@@ -2930,33 +2930,6 @@ mod tests {
 
     #[test]
     #[ignore] //TODO Dont work
-    fn test_no_stackoverflow() {
-        let src = r#"
-        fn reduce<n: nat, a: prv, b: prv>() -[cpu.thread]-> () {
-            exec::<64, 1024, 'h, (&'r uniq gpu.global [i32; n])>(
-                &'h uniq gpu,
-                (&'r uniq a_array,),
-                | grid: BlockGrp<64, ThreadGrp<1024>>,
-                  input: (&'r uniq gpu.global [i32; n])| -[gpu.grid]-> () <>{
-                    par_branch split_thread_grp::<k, 1024, 1, 1>(block) {
-                        active_threads => {
-                            parfor _ in active_threads
-                            with fst_half, snd_half from active_half0, active_half1 {
-                                *fst_half = *fst_half + *snd_half
-                            }
-                        },
-                        inactive_threads => { () }
-                    }
-                }
-            );
-          }
-        "#;
-
-        descend::compil_unit(src).expect("Cannot parse program which should be parsable");
-    }
-
-    #[test]
-    #[ignore] //TODO Dont work
     fn test_pass_arg_kinded_with_generics() {
         let src = "let x = Point::<42, Point2<T>> { x: 42, x: 43}";
 

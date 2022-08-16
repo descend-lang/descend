@@ -273,6 +273,9 @@ impl TyError {
             TyError::CtxError(ctx_error) => {
                 eprintln!("CtxError {}", ctx_error)
             }
+            TyError::IllegalProjection(message) => {
+                eprintln!("IllegalProjection {}", message)
+            }
             err => {
                 eprintln!("{:?}", err);
             }

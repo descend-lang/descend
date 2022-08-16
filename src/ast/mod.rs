@@ -9,6 +9,8 @@ pub use span::*;
 use crate::ast::visit_mut::VisitMut;
 use crate::parser::SourceCode;
 
+use self::utils::fresh_name;
+
 pub mod internal;
 
 mod span;
@@ -84,12 +86,7 @@ impl StructDef {
                 .iter()
                 .map(|field| StructField {
                     name: field.name.clone(),
-                    ty: self
-                        .generic_params
-                        .iter()
-                        .fold(field.ty.clone(), |res, gen| {
-                            res.subst_ident_kinded(gen, &gen.arg_kinded())
-                        }),
+                    ty: field.ty.clone(),
                 })
                 .collect(),
             generic_args: self
@@ -997,6 +994,27 @@ impl TypeScheme {
         } else {
             None
         }
+    }
+
+    pub fn fresh_generic_param_names(&self) -> Self {
+        //Create new fresh names for every generic param to avoid name clashes
+        let new_generics = self
+            .generic_params
+            .iter()
+            .map(|generic| {
+                let mut new_gen = generic.clone();
+                new_gen.ident.name = fresh_name(&new_gen.ident.name);
+                new_gen
+            })
+            .collect::<Vec<_>>();
+        let new_generic_args = new_generics
+            .iter()
+            .map(|gen| gen.arg_kinded())
+            .collect::<Vec<_>>();
+        //Create a new TypeScheme with the new fresh names for generic params
+        let mut result = self.instantiate(&new_generic_args);
+        result.generic_params = new_generics;
+        result
     }
 
     pub fn instantiate_single<T: SubstKindedIdents + Clone>(&self, x: &T, with: &[ArgKinded]) -> T {

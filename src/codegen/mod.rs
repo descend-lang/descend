@@ -2474,10 +2474,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             struct_ty
                 .generic_args
                 .iter()
-                .map(|gen_arg| match gen_arg {
-                    desc::ArgKinded::DataTy(dty) => gen_ty(&Data(dty.clone()), m),
-                    _ => unimplemented!("TODO"),
-                })
+                .filter_map(|gen_arg| gen_arg_kinded(gen_arg))
                 .collect(),
         ),
         Data(desc::DataTy {

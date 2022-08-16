@@ -20,7 +20,8 @@ where
     remain_gen_args.iter().map(move |gen_arg| {
         let res_karg = res_map.get(&gen_arg.ident).unwrap();
         if gen_arg.kind != res_karg.kind() {
-            panic!("Unexpected: Kinds of identifier and argument do not match.")
+            panic!("Unexpected: Kind \"{}\" of identifier \"{}\" and kind of argument \"{}\" do not match.",
+                gen_arg.kind, gen_arg.ident.name, res_karg.kind())
         }
         res_karg.clone()
     })
