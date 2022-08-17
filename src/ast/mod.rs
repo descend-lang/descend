@@ -1053,7 +1053,8 @@ impl TypeScheme {
                 .map(|gen| gen.arg_kinded())
                 .collect::<Vec<ArgKinded>>();
             self.instantiate(args.as_slice())
-                .eq_structure(&other.instantiate(args.as_slice()))
+                .mono_ty
+                .eq_structure(&other.instantiate(args.as_slice()).mono_ty)
         } else {
             false
         }

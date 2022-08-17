@@ -1,10 +1,12 @@
 use crate::ast::{Constraint, IdentKinded};
 
+use crate::ast::SubstKindedIdents;
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
+use crate::ty_check::utils::fresh_name;
 
 use super::unify::substitute;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ConstraintScheme {
     pub generics: Vec<IdentKinded>,
     pub implican: Vec<Constraint>,
@@ -25,8 +27,58 @@ impl ConstraintScheme {
         }
     }
 
-    pub fn is_constraint(&self) -> bool {
-        self.generics.len() == 0 && self.implican.len() == 0
+    pub fn fresh_generic_param_names(&self) -> Self {
+        //Create new fresh names for every generic param to avoid name clashes
+        let new_generics = self
+            .generics
+            .iter()
+            .map(|generic| {
+                let mut new_gen = generic.clone();
+                new_gen.ident.name = fresh_name(&new_gen.ident.name);
+                new_gen
+            })
+            .collect::<Vec<_>>();
+        let new_generic_args = new_generics
+            .iter()
+            .map(|gen| gen.arg_kinded())
+            .collect::<Vec<_>>();
+
+        ConstraintScheme {
+            generics: new_generics,
+            implican: self
+                .implican
+                .iter()
+                .map(|con| con.subst_idents_kinded(self.generics.iter(), new_generic_args.iter()))
+                .collect(),
+            implied: self
+                .implied
+                .subst_idents_kinded(self.generics.iter(), new_generic_args.iter()),
+        }
+    }
+}
+
+impl PartialEq for ConstraintScheme {
+    fn eq(&self, other: &Self) -> bool {
+        if self.generics.len() != other.generics.len()
+            || self.implican.len() != other.implican.len()
+        {
+            return false;
+        }
+
+        //Substitute names of "other" with names of
+        let generic_args = self
+            .generics
+            .iter()
+            .map(|generic| generic.arg_kinded())
+            .collect::<Vec<_>>();
+
+        self.implican
+            .iter()
+            .zip(other.implican.iter())
+            .chain(std::iter::once(&self.implied).zip(std::iter::once(&other.implied)))
+            .fold(true, |res, (con1, con2)| {
+                res && *con1 == con2.subst_idents_kinded(other.generics.iter(), generic_args.iter())
+            })
     }
 }
 
@@ -36,11 +88,12 @@ impl ConstraintEnv {
     }
 
     pub fn append_constraint_scheme(&mut self, con: &ConstraintScheme) {
-        self.theta.push(con.clone());
+        self.theta.push(con.fresh_generic_param_names());
     }
 
     pub fn append_constraint_schemes(&mut self, cons: &Vec<ConstraintScheme>) {
-        self.theta.extend(cons.clone());
+        self.theta
+            .extend(cons.iter().map(|con| con.fresh_generic_param_names()));
     }
 
     pub fn append_constraints(&mut self, cons: &Vec<Constraint>) {
@@ -52,11 +105,13 @@ impl ConstraintEnv {
         cons.iter().for_each(|con_remove| {
             let con_remove = ConstraintScheme::new(con_remove);
             self.theta.swap_remove(
-                self.theta
-                    .iter()
-                    .rev()
-                    .position(|con| *con == con_remove)
-                    .unwrap(),
+                (self.theta.len() - 1)
+                    - self
+                        .theta
+                        .iter()
+                        .rev()
+                        .position(|con| *con == con_remove)
+                        .unwrap(),
             );
         });
     }
@@ -64,11 +119,13 @@ impl ConstraintEnv {
     pub fn remove_constraint_schemes(&mut self, cons: &Vec<ConstraintScheme>) {
         cons.iter().for_each(|con_remove| {
             self.theta.swap_remove(
-                self.theta
-                    .iter()
-                    .rev()
-                    .position(|con| *con == *con_remove)
-                    .unwrap(),
+                (self.theta.len() - 1)
+                    - self
+                        .theta
+                        .iter()
+                        .rev()
+                        .position(|con| *con == *con_remove)
+                        .unwrap(),
             );
         });
     }
