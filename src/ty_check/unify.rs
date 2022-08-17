@@ -39,9 +39,7 @@ pub(crate) fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(C
     Ok((constr_map, prv_rels))
 }
 
-pub(super) fn inst_ty_scheme(
-    tyscheme: &TypeScheme
-) -> (Ty, Vec<Constraint>) {
+pub(super) fn inst_ty_scheme(tyscheme: &TypeScheme) -> (Ty, Vec<Constraint>) {
     let inst_tyscheme = tyscheme.instantiate(
         &tyscheme
             .generic_params

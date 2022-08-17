@@ -122,7 +122,7 @@ impl Visit for FreeKindedIdents {
     fn visit_trait_def(&mut self, _: &super::TraitDef) {
         unimplemented!()
     }
-    fn visit_struct_def(&mut self, _: &super::StructDef) {
+    fn visit_struct_decl(&mut self, _: &super::StructDecl) {
         unimplemented!()
     }
     fn visit_impl_def(&mut self, _: &super::ImplDef) {

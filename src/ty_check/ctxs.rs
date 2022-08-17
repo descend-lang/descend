@@ -523,7 +523,7 @@ impl KindCtx {
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
     funs: HashMap<FunctionName, TypeScheme>,
-    structs: HashMap<String, StructDef>,
+    structs: HashMap<String, StructDecl>,
     traits: HashMap<String, TraitDef>,
     pub theta: ConstraintEnv,
 }
@@ -575,19 +575,19 @@ impl GlobalCtx {
                         fun_def,
                         &mut errs,
                     ),
-                    Item::StructDef(struct_def) => {
+                    Item::StructDecl(struct_decl) => {
                         let old_val = self
                             .structs
-                            .insert(struct_def.name.clone(), struct_def.clone());
+                            .insert(struct_decl.name.clone(), struct_decl.clone());
                         if old_val.is_some() {
-                            errs.push(CtxError::MultipleDefinedStructs(struct_def.name.clone()));
+                            errs.push(CtxError::MultipleDefinedStructs(struct_decl.name.clone()));
                         }
                         check_unique_names(
-                            struct_def.generic_params.iter().map(|gen| &gen.ident.name),
+                            struct_decl.generic_params.iter().map(|gen| &gen.ident.name),
                             &mut errs,
                         );
                         check_unique_names(
-                            struct_def.decls.iter().map(|decl| &decl.name),
+                            struct_decl.decls.iter().map(|decl| &decl.name),
                             &mut errs,
                         );
                     }
@@ -797,7 +797,7 @@ impl GlobalCtx {
         }
     }
 
-    pub fn struct_by_name(&self, name: &String) -> CtxResult<&StructDef> {
+    pub fn struct_by_name(&self, name: &String) -> CtxResult<&StructDecl> {
         match self.structs.get(name) {
             Some(ty) => Ok(ty),
             None => Err(CtxError::StructNotFound(name.clone())),

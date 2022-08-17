@@ -12,11 +12,8 @@ use std::collections::BTreeMap;
 use crate::error::ErrorReported;
 pub use source::*;
 
-use crate::ast::visit_mut::{VisitMut, walk_struct_def, walk_impl_def,
-    walk_trait_def, walk_fun_def, walk_dty};
-
 use crate::ast::visit_mut::{
-    walk_dty, walk_fun_def, walk_impl_def, walk_struct_def, walk_trait_def, VisitMut,
+    walk_dty, walk_fun_def, walk_impl_def, walk_struct_decl, walk_trait_def, VisitMut,
 };
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
@@ -49,7 +46,7 @@ impl<'a> Parser<'a> {
 
 fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     struct Visitor {
-        structs: BTreeMap<String, StructDef>,
+        structs: BTreeMap<String, StructDecl>,
         ident_kinded_in_scope: Vec<(String, Kind)>,
         impl_dty_in_scope: Option<DataTy>,
         current_struct_chain: Vec<String>,
@@ -60,8 +57,8 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         fn new(items: &Vec<Item>) -> Self {
             Visitor {
                 structs: BTreeMap::from_iter(items.iter().filter_map(|item| {
-                    if let Item::StructDef(struct_def) = item {
-                        Some((struct_def.name.clone(), struct_def.clone()))
+                    if let Item::StructDecl(struct_decl) = item {
+                        Some((struct_decl.name.clone(), struct_decl.clone()))
                     } else {
                         None
                     }
@@ -110,9 +107,9 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                 .iter()
                 .rev()
                 .find(|(name, _)| *name == ident.name);
-            let struct_def = visitor.structs.get(&ident.name);
+            let struct_decl = visitor.structs.get(&ident.name);
 
-            match (ident_kind.is_some(), struct_def.is_some()) {
+            match (ident_kind.is_some(), struct_decl.is_some()) {
                 (true, false) => {
                     *arg = match ident_kind.unwrap().1 {
                         Kind::Provenance => ArgKinded::Provenance(Provenance::Ident(ident.clone())),
@@ -160,12 +157,12 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     //Distinguish between type variables and struct names without generic params
     fn replace_tyidents_struct_names(visitor: &mut Visitor, dty: &mut DataTy) {
         if let DataTyKind::Ident(name) = &mut dty.dty {
-            let struct_def = visitor.structs.get(&name.name);
+            let struct_decl = visitor.structs.get(&name.name);
             let is_type_ident = visitor.contains_ident_kinded(&name.name);
 
-            match (struct_def.is_some(), is_type_ident) {
+            match (struct_decl.is_some(), is_type_ident) {
                 (true, false) => {
-                    dty.dty = match struct_def.unwrap().ty().mono_ty.ty {
+                    dty.dty = match struct_decl.unwrap().ty().mono_ty.ty {
                         TyKind::Data(dty) => dty.dty,
                         _ => panic!("Struct should have a Datatype!"),
                     }
@@ -182,9 +179,11 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     fn initialize_struct_attribute_lists(visitor: &mut Visitor, dty: &mut DataTy) {
         if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
             if struct_ty.attributes.len() == 0 {
-                if let Some(struct_def) = visitor.structs.get(&struct_ty.name) {
-                    let inst_struct_mono =
-                        struct_def.ty().instantiate(&struct_ty.generic_args).mono_ty;
+                if let Some(struct_decl) = visitor.structs.get(&struct_ty.name) {
+                    let inst_struct_mono = struct_decl
+                        .ty()
+                        .instantiate(&struct_ty.generic_args)
+                        .mono_ty;
                     if let TyKind::Data(dataty) = inst_struct_mono.ty {
                         if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
                             struct_ty.attributes = inst_struct_ty.attributes;
@@ -210,9 +209,9 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                 Item::FunDef(fun_def) => {
                     self.visit_fun_def(fun_def);
                 }
-                Item::StructDef(struct_def) => {
-                    self.add_generics(&struct_def.generic_params);
-                    walk_struct_def(self, struct_def);
+                Item::StructDecl(struct_decl) => {
+                    self.add_generics(&struct_decl.generic_params);
+                    walk_struct_decl(self, struct_decl);
                     self.ident_kinded_in_scope.clear();
                 }
                 Item::TraitDef(trait_def) => {
@@ -357,7 +356,7 @@ peg::parser! {
 
         pub(crate) rule item() -> Item
             = result:(f: fun_def() { Item::FunDef(f) }
-            / s: struct_def() { Item::StructDef(s) }
+            / s: struct_decl() { Item::StructDecl(s) }
             / t: trait_def() { Item::TraitDef(t) }
             / i: impl_def() { Item::ImplDef(i) }) {
                 result
@@ -407,7 +406,7 @@ peg::parser! {
                 }
         }
 
-        pub(crate) rule struct_def() -> StructDef
+        pub(crate) rule struct_decl() -> StructDecl
             = "struct" __ name:identifier() _ g:generic_params()?  _  w:where_clause()? _
             struct_fields:(u:("{" t:(_ s:(struct_field() ** (_ "," _)) _ {s})? "}" {t}) {Some(u)}
                             / ";" {None}) _ {
@@ -417,7 +416,7 @@ peg::parser! {
                     Some(struct_fields) => match struct_fields {Some(s) => s, None => vec![]},
                     None => vec![]
                 };
-                StructDef {
+                StructDecl {
                     name,
                     generic_params,
                     constraints,
@@ -2442,7 +2441,7 @@ mod tests {
     #[test]
     fn compil_struct_decl() {
         let src = "struct Test ;";
-        let result = descend::struct_def(src).expect("Cannot parse empty struct");
+        let result = descend::struct_decl(src).expect("Cannot parse empty struct");
 
         let name = String::from("Test");
         let generic_params: Vec<IdentKinded> = vec![];
@@ -2451,7 +2450,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDef {
+            StructDecl {
                 name,
                 generic_params,
                 constraints,
@@ -2463,7 +2462,7 @@ mod tests {
     #[test]
     fn compil_struct_decl2() {
         let src = "struct Test { }";
-        let result = descend::struct_def(src).expect("Cannot parse empty struct");
+        let result = descend::struct_decl(src).expect("Cannot parse empty struct");
 
         let name = String::from("Test");
         let generic_params: Vec<IdentKinded> = vec![];
@@ -2472,7 +2471,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDef {
+            StructDecl {
                 name,
                 generic_params,
                 constraints,
@@ -2484,7 +2483,7 @@ mod tests {
     #[test]
     fn compil_struct_decl3() {
         let src = "struct Test { a: i32, b: f32 }";
-        let result = descend::struct_def(src).expect("Cannot parse struct");
+        let result = descend::struct_decl(src).expect("Cannot parse struct");
 
         let name = String::from("Test");
         let generic_params: Vec<IdentKinded> = vec![];
@@ -2505,7 +2504,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDef {
+            StructDecl {
                 name,
                 generic_params,
                 constraints,
@@ -2517,7 +2516,7 @@ mod tests {
     #[test]
     fn compil_struct_decl4() {
         let src = "struct Test<T: dty, Q: dty> where Q:Number { }";
-        let result = descend::struct_def(src).expect("Cannot parse empty struct with generics");
+        let result = descend::struct_decl(src).expect("Cannot parse empty struct with generics");
 
         let name = String::from("Test");
         let gen_param1 = Ident::with_span(String::from("T"), Span::new(12, 13));
@@ -2540,7 +2539,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDef {
+            StructDecl {
                 name,
                 generic_params,
                 constraints,

@@ -35,7 +35,7 @@ impl<'a> CompilUnit<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     FunDef(FunDef),
-    StructDef(StructDef),
+    StructDecl(StructDecl),
     TraitDef(TraitDef),
     ImplDef(ImplDef),
 }
@@ -64,7 +64,7 @@ pub struct FunDecl {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructDef {
+pub struct StructDecl {
     pub name: String,
     pub generic_params: Vec<IdentKinded>,
     pub constraints: Vec<Constraint>,
@@ -77,7 +77,7 @@ pub struct StructField {
     pub ty: DataTy,
 }
 
-impl StructDef {
+impl StructDecl {
     pub fn ty(&self) -> TypeScheme {
         let struct_ty = StructDataType {
             name: self.name.clone(),

@@ -23,7 +23,7 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let (struct_decls, struct_defs) = compil_unit
         .structs
         .iter()
-        .map(|struct_def| (gen_struct_decl(struct_def), gen_struct_def(struct_def)))
+        .map(|struct_decl| (gen_struct_decl(struct_decl), gen_struct_def(struct_decl)))
         .unzip::<_, _, Vec<Item>, Vec<Item>>();
 
     let (fun_decls, fun_defs) = compil_unit
@@ -70,15 +70,15 @@ struct CodegenCtx {
 }
 
 struct CompilUnit {
-    structs: Vec<desc::StructDef>,
+    structs: Vec<desc::StructDecl>,
     funs: Vec<desc::FunDef>,
 }
 
 impl CompilUnit {
-    fn get_struct_def(&self, name: &str) -> &desc::StructDef {
+    fn get_struct_decl(&self, name: &str) -> &desc::StructDecl {
         self.structs
             .iter()
-            .find(|struct_def| struct_def.name == *name)
+            .find(|struct_decl| struct_decl.name == *name)
             .expect("Could not find struct definition.")
     }
 
@@ -189,20 +189,20 @@ impl CheckedExpr {
     }
 }
 
-fn gen_struct_decl(struct_def: &desc::StructDef) -> cu::Item {
+fn gen_struct_decl(struct_decl: &desc::StructDecl) -> cu::Item {
     cu::Item::StructDecl {
-        name: struct_def.name.clone(),
-        templ_params: gen_templ_params(&struct_def.generic_params),
+        name: struct_decl.name.clone(),
+        templ_params: gen_templ_params(&struct_decl.generic_params),
     }
 }
 
-fn gen_struct_def(struct_def: &desc::StructDef) -> cu::Item {
-    let desc::StructDef {
+fn gen_struct_def(struct_decl: &desc::StructDecl) -> cu::Item {
+    let desc::StructDecl {
         name,
         generic_params,
         constraints: _,
         decls,
-    } = struct_def;
+    } = struct_decl;
 
     cu::Item::StructDef {
         name: name.clone(),

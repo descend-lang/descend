@@ -32,7 +32,7 @@ pub trait Visit: Sized {
     fn visit_struct_field(&mut self, struct_field: &StructField) { walk_struct_field(self, struct_field) }
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
     fn visit_fun_decl(&mut self, fun_decl: &FunDecl) { walk_fun_decl(self, fun_decl) }
-    fn visit_struct_def(&mut self, struct_def: &StructDef) { walk_struct_def(self, struct_def) }
+    fn visit_struct_decl(&mut self, struct_decl: &StructDecl) { walk_struct_decl(self, struct_decl) }
     fn visit_trait_def(&mut self, trait_def: &TraitDef) { walk_trait_def(self, trait_def) }
     fn visit_impl_def(&mut self, impl_def: &ImplDef) { walk_impl_def(self, impl_def) }
     fn visit_item_def(&mut self, item_def: &Item) { walk_item_def(self, item_def) }
@@ -413,13 +413,13 @@ pub fn walk_fun_decl<V: Visit>(visitor: &mut V, fun_def: &FunDecl) {
     walk_list!(visitor, visit_prv_rel, prv_rels);
 }
 
-pub fn walk_struct_def<V: Visit>(visitor: &mut V, struct_def: &StructDef) {
-    let StructDef {
+pub fn walk_struct_decl<V: Visit>(visitor: &mut V, struct_decl: &StructDecl) {
+    let StructDecl {
         name: _,
         generic_params,
         constraints,
         decls,
-    } = struct_def;
+    } = struct_decl;
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_constraint, constraints);
     walk_list!(visitor, visit_struct_field, decls);
@@ -459,7 +459,7 @@ pub fn walk_impl_def<V: Visit>(visitor: &mut V, impl_def: &ImplDef) {
 pub fn walk_item_def<V: Visit>(visitor: &mut V, item_def: &Item) {
     match item_def {
         Item::FunDef(fun_def) => visitor.visit_fun_def(fun_def),
-        Item::StructDef(struct_def) => visitor.visit_struct_def(struct_def),
+        Item::StructDecl(struct_decl) => visitor.visit_struct_decl(struct_decl),
         Item::TraitDef(trait_def) => visitor.visit_trait_def(trait_def),
         Item::ImplDef(impl_def) => visitor.visit_impl_def(impl_def),
     }

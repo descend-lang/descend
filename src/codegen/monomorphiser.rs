@@ -19,7 +19,7 @@ use crate::{
 //Output:
 //  -unchanged list of all structs
 //  -global functions which have no constraint generic parameters anymore
-pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDef>, Vec<FunDef>) {
+pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDecl>, Vec<FunDef>) {
     //Copy all trait_defs to prevent borrowing errors in next statement
     let trait_defs = items
         .iter()
@@ -42,17 +42,17 @@ pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDef>
     //Monomorphise global functions, traits, impls to multiple global functions
     let fun_defs = Monomorphiser::monomorphise(&items);
     //Collect struct defs
-    let struct_defs = items
+    let struct_decls = items
         .into_iter()
         .filter_map(|item| {
-            if let Item::StructDef(struct_def) = item {
-                Some(struct_def)
+            if let Item::StructDecl(struct_decl) = item {
+                Some(struct_decl)
             } else {
                 None
             }
         })
-        .collect::<Vec<StructDef>>();
-    (struct_defs, fun_defs)
+        .collect::<Vec<StructDecl>>();
+    (struct_decls, fun_defs)
 }
 
 struct Monomorphiser<'a> {
@@ -106,7 +106,7 @@ impl<'a> Monomorphiser<'a> {
                                 )
                             }),
                         ),
-                        Item::StructDef(_) => (),
+                        Item::StructDecl(_) => (),
                     };
                     (funs, name_generator)
                 },

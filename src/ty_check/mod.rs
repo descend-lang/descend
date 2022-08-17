@@ -90,17 +90,17 @@ impl TyChecker {
     fn ty_check_item_def(&mut self, item_def: &mut Item) -> TyResult<()> {
         match item_def {
             Item::FunDef(fun_def) => self.ty_check_fun_def(KindCtx::new(), fun_def),
-            Item::StructDef(struct_def) => self.ty_check_struct_def(struct_def),
+            Item::StructDecl(struct_decl) => self.ty_check_struct_decl(struct_decl),
             Item::TraitDef(trait_def) => self.ty_check_trait_def(trait_def),
             Item::ImplDef(impl_def) => self.ty_check_impl_def(impl_def),
         }
     }
 
-    fn ty_check_struct_def(&mut self, struct_def: &mut StructDef) -> TyResult<()> {
-        let kind_ctx = KindCtx::new().append_idents(struct_def.generic_params.clone());
+    fn ty_check_struct_decl(&mut self, struct_decl: &mut StructDecl) -> TyResult<()> {
+        let kind_ctx = KindCtx::new().append_idents(struct_decl.generic_params.clone());
         let ty_ctx = TyCtx::new();
 
-        iter_TyResult_to_TyResult!(struct_def.decls.iter().map(|struct_field| {
+        iter_TyResult_to_TyResult!(struct_decl.decls.iter().map(|struct_field| {
             self.dty_well_formed(&kind_ctx, &ty_ctx, None, &struct_field.ty)
         }))
     }
@@ -667,21 +667,21 @@ impl TyChecker {
         generic_args: &mut Vec<ArgKinded>,
         inst_exprs: &mut Vec<(Ident, Expr)>,
     ) -> TyResult<(TyCtx, Ty)> {
-        let struct_def_orginal = self.gl_ctx.struct_by_name(struct_name)?;
-        let struct_def = struct_def_orginal.clone(); // Prevent borrowing errors
+        let struct_decl_orginal = self.gl_ctx.struct_by_name(struct_name)?;
+        let struct_decl = struct_decl_orginal.clone(); // Prevent borrowing errors
 
         //Check generic args
-        if struct_def.generic_params.len() < generic_args.len() {
+        if struct_decl.generic_params.len() < generic_args.len() {
             return Err(TyError::WrongNumberOfGenericParams {
-                expected: struct_def.generic_params.len(),
+                expected: struct_decl.generic_params.len(),
                 found: generic_args.len(),
             });
         }
         Self::check_args_have_correct_kinds(
-            &struct_def.generic_params[0..generic_args.len()].to_vec(),
+            &struct_decl.generic_params[0..generic_args.len()].to_vec(),
             &generic_args,
         )?;
-        let struct_ty = struct_def
+        let struct_ty = struct_decl
             .ty()
             .fresh_generic_param_names()
             .instantiate(generic_args);
@@ -689,10 +689,10 @@ impl TyChecker {
             |generic_arg| self.arg_kinded_well_formed(kind_ctx, &ty_ctx, Some(exec), generic_arg)
         ))?;
 
-        //Sort all inst_exprs to have the same order like in struct_def
+        //Sort all inst_exprs to have the same order like in struct_decl
         //And check if all struct_fields are initialized
         let mut errs = Vec::new();
-        let inst_exprs_sorted = struct_def
+        let inst_exprs_sorted = struct_decl
             .decls
             .iter()
             .filter_map(|field| {
@@ -704,7 +704,7 @@ impl TyChecker {
                 } else {
                     errs.push(TyError::MissingStructField {
                         missing_field: field.name.clone(),
-                        struct_name: struct_def.name.clone(),
+                        struct_name: struct_decl.name.clone(),
                     });
                     None
                 }
@@ -713,7 +713,7 @@ impl TyChecker {
         inst_exprs.iter().for_each(|(name, expr)| {
             errs.push(TyError::UnexpectedStructField {
                 unexpected_field: name.name.clone(),
-                struct_name: struct_def.name.clone(),
+                struct_name: struct_decl.name.clone(),
             })
         });
         *inst_exprs = inst_exprs_sorted;
@@ -3031,8 +3031,8 @@ impl TyChecker {
                     attributes,
                     generic_args,
                 } = struct_mono_ty;
-                let struct_def = self.gl_ctx.struct_by_name(name)?;
-                Self::check_args_have_correct_kinds(&struct_def.generic_params, generic_args)?;
+                let struct_decl = self.gl_ctx.struct_by_name(name)?;
+                Self::check_args_have_correct_kinds(&struct_decl.generic_params, generic_args)?;
                 iter_TyResult_to_TyResult!(attributes
                     .iter()
                     .map(|field| self.dty_well_formed(kind_ctx, ty_ctx, exec, &field.ty)))?;
