@@ -1725,12 +1725,16 @@ impl IdentKinded {
     }
 
     pub fn arg_kinded(&self) -> ArgKinded {
-        self.arg_kinded_with_name(self.ident.name.clone())
+        self.arg_kinded_with_implicit(false)
     }
 
-    pub fn arg_kinded_with_name(&self, name: String) -> ArgKinded {
+    pub fn arg_kinded_implicit(&self) -> ArgKinded {
+        self.arg_kinded_with_implicit(true)
+    }
+
+    fn arg_kinded_with_implicit(&self, implicit: bool) -> ArgKinded {
         let mut ident = self.ident.clone();
-        ident.name = name;
+        ident.is_implicit = implicit;
         match self.kind {
             Kind::DataTy => ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident))),
             Kind::Memory => ArgKinded::Memory(Memory::Ident(ident)),

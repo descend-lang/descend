@@ -520,7 +520,7 @@ impl KindCtx {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct GlobalCtx {
     funs: HashMap<FunctionName, TypeScheme>,
     structs: HashMap<String, StructDecl>,
@@ -877,19 +877,23 @@ impl GlobalCtx {
                         //if the function_kind of the canidate-function references a trait
                         FunctionKind::TraitFun(trait_name) => {
                             //if the dty of impl of the searched function implements this trait, this is the searched function
-                            if self.theta.check_constraint(&Constraint {
-                                param: impl_dty.clone(),
-                                trait_bound: TraitMonoType {
-                                    name: trait_name.clone(),
-                                    generics: self
-                                        .trait_ty_by_name(trait_name)
-                                        .unwrap()
-                                        .generic_params
-                                        .iter()
-                                        .map(|gen| gen.arg_kinded())
-                                        .collect(),
-                                },
-                            }) {
+                            if self
+                                .theta
+                                .check_constraint(&Constraint {
+                                    param: impl_dty.clone(),
+                                    trait_bound: TraitMonoType {
+                                        name: trait_name.clone(),
+                                        generics: self
+                                            .trait_ty_by_name(trait_name)
+                                            .unwrap()
+                                            .generic_params
+                                            .iter()
+                                            .map(|gen| gen.arg_kinded())
+                                            .collect(),
+                                    },
+                                })
+                                .is_ok()
+                            {
                                 res.push(fun_name_canidate)
                             }
                         }
@@ -941,16 +945,20 @@ impl GlobalCtx {
                         self.theta.append_constraints(&trait_def_constraints);
 
                         //Check if "constraint_ident" implements the trait
-                        if self.theta.check_constraint(&Constraint {
-                            param: DataTy::new(DataTyKind::Ident(constraint_ident.clone())),
-                            trait_bound: TraitMonoType {
-                                name: trait_name.clone(),
-                                generics: trait_def_generics
-                                    .iter()
-                                    .map(|gen| gen.arg_kinded())
-                                    .collect(),
-                            },
-                        }) {
+                        if self
+                            .theta
+                            .check_constraint(&Constraint {
+                                param: DataTy::new(DataTyKind::Ident(constraint_ident.clone())),
+                                trait_bound: TraitMonoType {
+                                    name: trait_name.clone(),
+                                    generics: trait_def_generics
+                                        .iter()
+                                        .map(|gen| gen.arg_kinded())
+                                        .collect(),
+                                },
+                            })
+                            .is_ok()
+                        {
                             res.push(fun_name_canidate)
                         }
 

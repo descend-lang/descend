@@ -1,5 +1,5 @@
-fn reduce<n: nat, a: prv, b: prv>(
-  ha_array: &a uniq cpu.mem [i32; n]
+fn reduce<n: nat>(
+  ha_array: &uniq cpu.mem [i32; n]
 ) -[cpu.thread]-> () {
     let mut gpu: Gpu = gpu_device(0);
 
@@ -7,8 +7,7 @@ fn reduce<n: nat, a: prv, b: prv>(
     exec::<64, 1024>(
         &uniq gpu,
         (&uniq a_array,),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
-          input: (&uniq gpu.global [i32; n])| -[gpu.grid]-> () {
+        | grid, input | -[gpu.grid]-> () {
             let block_group = group_mut::<1024>(to_view_mut(input.0));
             parfor block in grid with ib from block_group {
                 for_nat k in halved_range(512) {

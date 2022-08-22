@@ -84,12 +84,7 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
                 &'k shrd gpu.global [i32; m]>>(
             &'j uniq gpu,
             <grouped_nodes, grouped_changes, &'k shrd edges>,
-            | grid: BlockGrp<4, ThreadGrp<16>>,  //  Grid<Block<Thread, 16>, 4>,
-              input: <&'r1 shrd gpu.global [[[[(i32, i32); 16]]; 4]],
-                      &'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]],
-                      &'k shrd gpu.global [i32; m]>
-            | -[gpu.grid]-> () {
-
+            | grid, input | -[gpu.grid]-> () {
                 let nod_view = input.0;
                 let chgn_view = input.1;
                 let edg = input.2;
@@ -113,19 +108,17 @@ fn bfs<n:nat, m:nat, a: prv, b: prv, k:prv, l:prv, a1:prv>(
                 &'a8 uniq gpu.global bool>>(
             &'j uniq gpu,
             <grouped_changes2, &'a8 uniq stop>,
-            | grid:  BlockGrp<4, ThreadGrp<16>>,
-              input2: <&'i uniq gpu.global [[[[(bool, bool, bool, i32); 16 ]]; 4]], &'a8 uniq gpu.global bool>
-            | -[gpu.grid]-> () {
-                    let changes = input2.0;
-                    // FIXME using stop_temp in parallel cannot work, because the reference is uniq
-                    //  instead use atomics
-                    let stop_temp = input2.1;
-                    for block in grid with change2, stop2 from changes, stop_temp do {
-                        for block with change3, stop3 from change2, stop2
-                        do { prepare_iteration::<'i, 'a8>(change2, stop2) }
-                    }
+            | grid, input2 | -[gpu.grid]-> () {
+                let changes = input2.0;
+                // FIXME using stop_temp in parallel cannot work, because the reference is uniq
+                //  instead use atomics
+                let stop_temp = input2.1;
+                for block in grid with change2, stop2 from changes, stop_temp do {
+                    for block with change3, stop3 from change2, stop2
+                    do { prepare_iteration::<'i, 'a8>(change2, stop2) }
                 }
-            );
+            }
+        );
         // copy_to_host::<'u, 'x, cpu.heap, bool>(&'u shrd d_stop,&'x uniq *h_stop);
         copy_to_host::<'u, 'x, cpu.heap, bool>(&'u shrd stop, &'x uniq *h_stop)
     }

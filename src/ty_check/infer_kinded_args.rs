@@ -18,12 +18,40 @@ where
         .for_each(|(poly_ty, mono_ty)| infer_kargs_tys(&mut res_map, poly_ty, mono_ty));
 
     remain_gen_args.iter().map(move |gen_arg| {
-        let res_karg = res_map.get(&gen_arg.ident).unwrap();
-        if gen_arg.kind != res_karg.kind() {
-            panic!("Unexpected: Kind \"{}\" of identifier \"{}\" and kind of argument \"{}\" do not match.",
-                gen_arg.kind, gen_arg.ident.name, res_karg.kind())
+        if let Some(res_karg) = res_map.get(&gen_arg.ident) {
+            if gen_arg.kind != res_karg.kind() {
+                panic!("Unexpected: Kind \"{}\" of identifier \"{}\" and kind of argument \"{}\" do not match.",
+                    gen_arg.kind, gen_arg.ident.name, res_karg.kind())
+            }
+            res_karg.clone()
+        } else { //TODO return error
+            panic!("Cannot infer identifier {}", gen_arg.ident.name)
         }
-        res_karg.clone()
+    })
+}
+
+//TODO redundant
+pub fn infer_kinded_args_from_mono_dty<'a, 'b, 'c, I>(
+    remain_gen_args: &'c Vec<IdentKinded>,
+    poly_mono_ty_pairs: I,
+) -> impl Iterator<Item = ArgKinded> + 'c
+where
+    I: Iterator<Item = (&'a DataTy, &'b DataTy)>,
+{
+    let mut res_map = HashMap::new();
+    poly_mono_ty_pairs
+        .for_each(|(poly_ty, mono_ty)| infer_kargs_dtys(&mut res_map, poly_ty, mono_ty));
+
+    remain_gen_args.iter().map(move |gen_arg| {
+        if let Some(res_karg) = res_map.get(&gen_arg.ident) {
+            if gen_arg.kind != res_karg.kind() {
+                panic!("Unexpected: Kind \"{}\" of identifier \"{}\" and kind of argument \"{}\" do not match.",
+                    gen_arg.kind, gen_arg.ident.name, res_karg.kind())
+            }
+            res_karg.clone()
+        } else { //TODO return error
+            panic!("Cannot infer identifier {}", gen_arg.ident.name)
+        }
     })
 }
 
@@ -42,7 +70,10 @@ macro_rules! insert_checked {
             if old != arg_kinded {
                 println!("old: {:?}", old);
                 println!("new: {:?}", arg_kinded);
-                panic!("Found different terms for same identifier in mono type.")
+                panic!(
+                    "Found different terms for same identifier {:?} in mono type.",
+                    $id_ref
+                )
             }
         }
     }};

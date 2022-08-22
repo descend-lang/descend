@@ -426,7 +426,7 @@ peg::parser! {
 
         pub(crate) rule trait_def() -> TraitDef
             = "trait" __ name:identifier() _ g:generic_params()?
-            supertraits:(":" _ t:trait_mono_ty() **<1,> (_ "+" _) {t})?
+            supertraits:(_ ":" _ t:trait_mono_ty() **<1,> (_ "+" _) {t})?
             _ w:where_clause()? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
                 let generic_params = g.unwrap_or(vec![]);
                 let mut constraints = w.unwrap_or(vec![]);

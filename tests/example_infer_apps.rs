@@ -29,7 +29,6 @@ fn bitonic_sort_shrd_mem() -> Res {
 }
 
 #[test]
-#[ignore] //FIXME: Some codegen error
 fn scan() -> Res {
     Ok(println!(
         "{}",

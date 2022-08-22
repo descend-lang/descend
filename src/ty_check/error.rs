@@ -71,6 +71,11 @@ pub enum TyError {
         expected: usize,
         found: usize,
     },
+    WrongNumberOfArguments {
+        expected: usize,
+        found: usize,
+        fun_name: Ident,
+    },
     MissingStructField {
         missing_field: String,
         struct_name: String,
@@ -242,6 +247,33 @@ impl TyError {
                     "Wrong amount of generic arguments. Expected {}, found {}.",
                     expected, found
                 );
+            }
+            TyError::WrongNumberOfArguments {
+                expected,
+                found,
+                fun_name,
+            } => {
+                let label = format!(
+                    "wrong number of parameters. Expected: {}, found: {}",
+                    expected, found
+                );
+                if let Some(span) = fun_name.span {
+                    let (begin_line, begin_column) = source.get_line_col(span.begin);
+                    let (end_line, end_column) = source.get_line_col(span.end);
+                    if begin_line != end_line {
+                        panic!("an identifier can't span multiple lines")
+                    }
+                    let snippet = error::single_line_snippet(
+                        source,
+                        &label,
+                        begin_line,
+                        begin_column,
+                        end_column,
+                    );
+                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                } else {
+                    eprintln!("{}", label);
+                };
             }
             TyError::MissingStructField {
                 missing_field,

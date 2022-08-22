@@ -115,7 +115,7 @@ fn test_method_call() {
 }
 
 #[test]
-#[ignore] //TODO some unify-problem
+#[ignore] //TODO name conflicts?
 fn test_monomoprhisation() {
     let src = r#"
     trait Trait1 {}
@@ -717,27 +717,26 @@ fn test_invalid_generic_kind() {
 }
 
 #[test]
-#[ignore] //TODO Parser error
 fn test_constraint_checker() {
     let src = r#"
     trait Trait1<A> {
         fn fun1(a: A) -[cpu.thread] -> i32;
     }
     trait Trait2<B> : Trait1<B> {
-        fn fun2(a: A) -[cpu.thread] -> i32;
+        fn fun2(a: B) -[cpu.thread] -> i32;
     }
     fn foo<X, A>(x: X, a: A) -[cpu.thread] -> i32 where X: Trait1<A> {
-        X::fun1(a)
+        X::fun1::<X>(a)
     }
     //In this two functions is X not constraint to implement Trait1, but because
     //Trait1 is a supertrait this can be inferred
-    fn bar<X, A>(x: X, a: A) -[cpu.thread] -> i32 where X: Trait2<A> {
-        X::fun1(a);
-        X::fun2(a)
+    fn bar<X, A>(x: X, a: A, a2: A) -[cpu.thread] -> i32 where X: Trait2<A> {
+        X::fun1::<X>(a);
+        X::fun2::<X>(a2)
     }
     fn baz<X>(x: X) -[cpu.thread] -> i32 where X: Trait2<i32> {
-        X::fun1(1);
-        X::fun2(2)
+        X::fun1::<X>(1);
+        X::fun2::<X>(2)
     }
     "#;
     //This print some warnings because here is no codegen for foo, bar and baz possible
