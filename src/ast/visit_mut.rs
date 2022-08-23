@@ -4,9 +4,10 @@ use crate::ast::*;
 pub trait VisitMut: Sized {
     fn visit_binary_op_nat(&mut self, _op: &mut BinOpNat) {}
     fn visit_nat(&mut self, n: &mut Nat) { walk_nat(self, n) }
-    fn visit_ident_kinded(&mut self, id_kind: &mut IdentKinded) { walk_ident_kinded(self, id_kind)}
+    fn visit_ident_kinded(&mut self, id_kind: &mut IdentKinded) { walk_ident_kinded(self, id_kind) }
+    fn visit_ident_exec(&mut self, id_exec: &mut IdentExec) { walk_ident_exec(self, id_exec) }
     fn visit_prv_rel(&mut self, prv_rel: &mut PrvRel) { walk_prv_rel(self, prv_rel) }
-    fn visit_exec(&mut self, _exec: &mut Exec) {}
+    fn visit_exec_ty(&mut self, _exec: &mut ExecTy) {}
     fn visit_mem(&mut self, mem: &mut Memory) { walk_mem(self, mem) }
     fn visit_prv(&mut self, prv: &mut Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
@@ -26,6 +27,7 @@ pub trait VisitMut: Sized {
     fn visit_ident(&mut self, _ident: &mut Ident) {}
     fn visit_pattern(&mut self, pattern: &mut Pattern) { walk_pattern(self, pattern) }
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
+    fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) { walk_exec_expr(self, exec_expr) }
     fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
 }
@@ -59,6 +61,12 @@ pub fn walk_ident_kinded<V: VisitMut>(visitor: &mut V, id_kind: &mut IdentKinded
     let IdentKinded { ident, kind } = id_kind;
     visitor.visit_ident(ident);
     visitor.visit_kind(kind)
+}
+
+pub fn walk_ident_exec<V: VisitMut>(visitor: &mut V, id_exec: &mut IdentExec) {
+    let IdentExec { ident, ty } = id_exec;
+    visitor.visit_ident(ident);
+    visitor.visit_exec_ty(ty)
 }
 
 pub fn walk_prv_rel<V: VisitMut>(visitor: &mut V, prv_rel: &mut PrvRel) {
@@ -147,10 +155,10 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
 pub fn walk_ty<V: VisitMut>(visitor: &mut V, ty: &mut Ty) {
     match &mut ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::Fn(gen_params, params, exec, ret_ty) => {
+        TyKind::Fn(gen_params, params, exec_ty, ret_ty) => {
             walk_list!(visitor, visit_ident_kinded, gen_params);
             walk_list!(visitor, visit_ty, params);
-            visitor.visit_exec(exec);
+            visitor.visit_exec_ty(exec_ty);
             visitor.visit_ty(ret_ty)
         }
         TyKind::Ident(ident) => visitor.visit_ident(ident),
@@ -236,9 +244,9 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
                 visitor.visit_expr(e)
             }
         }
-        ExprKind::Lambda(params, exec, dty, expr) => {
+        ExprKind::Lambda(params, exec_decl, dty, expr) => {
             walk_list!(visitor, visit_param_decl, params);
-            visitor.visit_exec(exec);
+            visitor.visit_ident_exec(exec_decl);
             visitor.visit_dty(dty);
             visitor.visit_expr(expr)
         }
@@ -272,12 +280,12 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
         }
-        ExprKind::ParBranch(parall_collec, branch_idents, branch_bodies) => {
-            visitor.visit_expr(parall_collec);
+        ExprKind::ParBranch(split_exec_expr, branch_idents, branch_bodies) => {
+            visitor.visit_exec_expr(split_exec_expr);
             walk_list!(visitor, visit_ident, branch_idents);
             walk_list!(visitor, visit_expr, branch_bodies);
         }
-        ExprKind::ParForWith(decls, par_dim, par_elem, parall_collec, input_elems, input, body) => {
+        ExprKind::ParForWith(decls, par_dim, par_elem, exec_expr, input_elems, input, body) => {
             visitor.visit_dim_compo(par_dim);
             for d in decls {
                 walk_list!(visitor, visit_expr, d)
@@ -285,7 +293,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             for ident in par_elem {
                 visitor.visit_ident(ident)
             }
-            visitor.visit_expr(parall_collec);
+            visitor.visit_exec_expr(exec_expr);
             walk_list!(visitor, visit_ident, input_elems);
             walk_list!(visitor, visit_expr, input);
             visitor.visit_expr(body)
@@ -322,6 +330,28 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
     }
 }
 
+pub fn walk_exec_expr<V: VisitMut>(visitor: &mut V, exec_expr: &mut ExecExpr) {
+    match &mut exec_expr.exec {
+        ExecKind::Ident(ident) => visitor.visit_ident(ident),
+        ExecKind::Split(dim_compo, n, split_exec_expr) => {
+            visitor.visit_dim_compo(dim_compo);
+            visitor.visit_nat(n);
+            visitor.visit_exec_expr(split_exec_expr);
+        }
+        ExecKind::Proj(_, exec_expr) => visitor.visit_exec_expr(exec_expr),
+        ExecKind::Distrib(dim_compo, exec_expr) => {
+            visitor.visit_dim_compo(dim_compo);
+            visitor.visit_exec_expr(exec_expr);
+        }
+        ExecKind::GpuGrid(gdim, bdim) => {
+            visitor.visit_dim(gdim);
+            visitor.visit_dim(bdim);
+        }
+        ExecKind::GpuBlock(bdim) => visitor.visit_dim(bdim),
+        ExecKind::CpuThread | ExecKind::GpuThread | ExecKind::View => {}
+    }
+}
+
 pub fn walk_param_decl<V: VisitMut>(visitor: &mut V, param_decl: &mut ParamDecl) {
     let ParamDecl { ident, ty, mutbl } = param_decl;
     visitor.visit_ident(ident);
@@ -337,14 +367,14 @@ pub fn walk_fun_def<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDef) {
         generic_params,
         param_decls: params,
         ret_dty,
-        exec,
+        exec_decl,
         prv_rels,
         body_expr,
     } = fun_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_param_decl, params);
     visitor.visit_dty(ret_dty);
-    visitor.visit_exec(exec);
+    visitor.visit_ident_exec(exec_decl);
     walk_list!(visitor, visit_prv_rel, prv_rels);
     visitor.visit_expr(body_expr)
 }

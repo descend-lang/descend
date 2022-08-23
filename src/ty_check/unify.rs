@@ -42,7 +42,7 @@ fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap
 pub(super) fn inst_fn_ty_scheme(
     idents_kinded: &[IdentKinded],
     param_tys: &[Ty],
-    exec: Exec,
+    exec_ty: &ExecTy,
     ret_ty: &Ty,
 ) -> TyResult<Ty> {
     let mono_idents: Vec<_> = idents_kinded
@@ -69,7 +69,7 @@ pub(super) fn inst_fn_ty_scheme(
     Ok(Ty::new(TyKind::Fn(
         vec![],
         mono_param_tys,
-        exec,
+        exec_ty.clone(),
         Box::new(mono_ret_ty),
     )))
 }

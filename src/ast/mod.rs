@@ -36,7 +36,7 @@ pub struct FunDef {
     pub generic_params: Vec<IdentKinded>,
     pub param_decls: Vec<ParamDecl>,
     pub ret_dty: DataTy,
-    pub exec: Exec,
+    pub exec_decl: IdentExec,
     pub prv_rels: Vec<PrvRel>,
     pub body_expr: Expr,
 }
@@ -51,9 +51,20 @@ impl FunDef {
         Ty::new(TyKind::Fn(
             self.generic_params.clone(),
             param_tys,
-            self.exec,
+            self.exec_decl.ty.clone(),
             Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
         ))
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdentExec {
+    pub ident: Ident,
+    pub ty: ExecTy,
+}
+
+impl IdentExec {
+    pub fn new(ident: Ident, exec_ty: ExecTy) -> Self {
+        IdentExec { ident, ty: exec_ty }
     }
 }
 
@@ -283,7 +294,7 @@ pub enum ExprKind {
     Seq(Vec<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
-    Lambda(Vec<ParamDecl>, Exec, Box<DataTy>, Box<Expr>),
+    Lambda(Vec<ParamDecl>, IdentExec, Box<DataTy>, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
@@ -300,12 +311,12 @@ pub enum ExprKind {
     While(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
-    ParBranch(Box<Expr>, Vec<Ident>, Vec<Expr>),
+    ParBranch(ExecExpr, Vec<Ident>, Vec<Expr>),
     ParForWith(
         Option<Vec<Expr>>,
         DimCompo,
         Option<Ident>,
-        Box<Expr>,
+        ExecExpr,
         Vec<Ident>,
         Vec<Expr>,
         Box<Expr>,
@@ -494,7 +505,7 @@ impl fmt::Display for BinOp {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Kind {
     Nat,
     Memory,
@@ -657,6 +668,70 @@ impl fmt::Display for PlaceExpr {
     }
 }
 
+#[span_derive(PartialEq)]
+#[derive(Debug, Clone)]
+pub struct ExecExpr {
+    pub exec: ExecKind,
+    pub ty: Option<ExecTy>,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
+}
+
+impl ExecExpr {
+    pub fn new(exec: ExecKind) -> Self {
+        ExecExpr {
+            exec,
+            ty: None,
+            span: None,
+        }
+    }
+}
+
+impl fmt::Display for ExecExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.exec)
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum ExecKind {
+    Ident(Ident),
+    CpuThread,
+    GpuGrid(Dim, Dim),
+    GpuBlock(Dim),
+    GpuThread,
+    Split(DimCompo, Nat, Box<ExecExpr>),
+    Proj(u8, Box<ExecExpr>),
+    Distrib(DimCompo, Box<ExecExpr>),
+    View,
+}
+
+impl ExecKind {
+    pub fn callable_in(self, exec: Self) -> bool {
+        if self == ExecKind::View {
+            true
+        } else {
+            self == exec
+        }
+    }
+}
+
+impl fmt::Display for ExecKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ExecKind::Ident(ident) => write!(f, "{}", ident),
+            ExecKind::CpuThread => write!(f, "cpu.thread"),
+            ExecKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
+            ExecKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
+            ExecKind::GpuThread => write!(f, "gpu.thread"),
+            ExecKind::Split(d, n, exec) => write!(f, "Split<{}, {}, {}>", d, n, exec),
+            ExecKind::Proj(i, exec) => write!(f, "Proj{}<{}>", i, exec),
+            ExecKind::Distrib(d, exec) => write!(f, "Distrib<{}, {}>", d, exec),
+            ExecKind::View => write!(f, "view"),
+        }
+    }
+}
+
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct Ty {
@@ -669,7 +744,8 @@ pub struct Ty {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind {
     Data(DataTy),
-    Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
+    // <x:k,..>(ty..) -[x:exec]-> ty
+    Fn(Vec<IdentKinded>, Vec<Ty>, ExecTy, Box<Ty>),
     Ident(Ident),
     Dead(Box<Ty>),
 }
@@ -921,6 +997,16 @@ pub enum DimCompo {
     X,
     Y,
     Z,
+}
+
+impl fmt::Display for DimCompo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            DimCompo::X => write!(f, "X"),
+            DimCompo::Y => write!(f, "Y"),
+            DimCompo::Z => write!(f, "Z"),
+        }
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -1223,35 +1309,64 @@ impl fmt::Display for Memory {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub enum Exec {
-    CpuThread,
-    GpuGrid(u8),
-    GpuBlock(u8),
-    GpuWarp,
-    GpuThread,
-    View,
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
+pub struct ExecTy {
+    pub ty: ExecTyKind,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
 }
 
-impl Exec {
-    pub fn callable_in(self, exec: Self) -> bool {
-        if self == Exec::View {
+impl ExecTy {
+    pub fn new(exec: ExecTyKind) -> Self {
+        ExecTy {
+            ty: exec,
+            span: None,
+        }
+    }
+
+    pub fn callable_in(&self, exec_ty: &Self) -> bool {
+        if &self.ty == &ExecTyKind::View {
             true
         } else {
-            self == exec
+            self == exec_ty
         }
     }
 }
 
-impl fmt::Display for Exec {
+impl fmt::Display for ExecTy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.ty)
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum ExecTyKind {
+    CpuThread,
+    GpuGrid(Dim, Dim),
+    GpuBlock(Dim),
+    GpuGlobalThreads(Dim),
+    GpuBlockGrp(Dim, Dim),
+    GpuThreadGrp(Dim),
+    GpuThread,
+    View,
+    Split(Box<ExecTyKind>, Box<ExecTyKind>),
+}
+
+impl fmt::Display for ExecTyKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Exec::CpuThread => write!(f, "cpu.thread"),
-            Exec::GpuGrid(dim_size) => write!(f, "gpu.grid{}d", dim_size),
-            Exec::GpuBlock(dim_size) => write!(f, "gpu.block{}d", dim_size),
-            Exec::GpuWarp => write!(f, "gpu.warp"),
-            Exec::GpuThread => write!(f, "gpu.thread"),
-            Exec::View => write!(f, "view"),
+            ExecTyKind::CpuThread => write!(f, "cpu.thread"),
+            ExecTyKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
+            ExecTyKind::GpuGlobalThreads(size) => write!(f, "gpu.global_threads<{}>", size),
+            ExecTyKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
+            ExecTyKind::GpuThread => write!(f, "gpu.thread"),
+            ExecTyKind::GpuBlockGrp(gsize, bsize) => {
+                write!(f, "gpu.block_grp<{}, {}>", gsize, bsize)
+            }
+            ExecTyKind::GpuThreadGrp(size) => write!(f, "gpu.thread_grp<{}>", size),
+            ExecTyKind::View => write!(f, "view"),
+            ExecTyKind::Split(ex1, ex2) => write!(f, "({}, {})", ex1, ex2),
         }
     }
 }

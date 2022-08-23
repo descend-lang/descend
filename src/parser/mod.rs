@@ -177,7 +177,7 @@ peg::parser! {
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
-            "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
+            "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
             body_expr:block() {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
@@ -188,10 +188,15 @@ peg::parser! {
                   generic_params,
                   param_decls,
                   ret_dty,
-                  exec,
+                  exec_decl,
                   prv_rels: vec![],
                   body_expr
                 }
+            }
+
+        rule ident_exec() -> IdentExec =
+            exec_ident:ident() _ ":" _ exec_ty: exec_ty() {
+                IdentExec::new(exec_ident, exec_ty)
             }
 
         rule kind_parameter() -> IdentKinded
@@ -368,28 +373,28 @@ peg::parser! {
            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "par_branch" __ par_collec:expression() _ "{" _
+            "par_branch" __ split_exec:exec_expr() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
-                Expr::new(ExprKind::ParBranch(Box::new(par_collec),
+                Expr::new(ExprKind::ParBranch(split_exec,
                     branch.iter().map(|(i, _)| i.clone()).collect(),
                     branch.iter().map(|(_, b)| b.clone()).collect()))
             }
             decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
             "parfor" par_dim:(_ "(" _ par_dim:dim_component() _ ")" { par_dim })? __
-                par_ident:maybe_ident() __ "in" __ parall_collec:expression() __
+                par_ident:maybe_ident() __ "in" __ exec_expr:exec_expr() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
             "from" __ input:expression() **<1,> (_ "," _) _ body:block() {
                 Expr::new(ExprKind::ParForWith(decls, match par_dim {
                     Some(pd) => pd,
                     None => DimCompo::X,
-                }, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
+                }, par_ident, exec_expr, input_elems, input, Box::new(body)))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
-              "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
+              "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
               body_expr:block() {
-                Expr::new(ExprKind::Lambda(params, exec, Box::new(ret_dty), Box::new(body_expr)))
+                Expr::new(ExprKind::Lambda(params, exec_decl, Box::new(ret_dty), Box::new(body_expr)))
             }
             block:block() { block }
             expression: expr_helper() { expression }
@@ -543,7 +548,6 @@ peg::parser! {
             / "Gpu" { DataTyKind::Scalar(ScalarTy::Gpu) }
             / "Atomic<i32>" { DataTyKind::Atomic(ScalarTy::I32) }
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
-            / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
             / name:ident() { DataTyKind::Ident(name) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTyKind::Array(Box::new(t), n) }
@@ -558,15 +562,47 @@ peg::parser! {
             }
             / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$d"))) }
 
-        pub(crate) rule th_hy() -> ThreadHierchyTy =
-        "BlockGrp" _ "<" _ b_dim:dim() _ "," _ "ThreadGrp" _ "<" _ t_dim:dim() _ ">" _ ">" {
-            ThreadHierchyTy::BlockGrp(b_dim, t_dim)
+        rule exec_expr() -> ExecExpr =
+            begin:position!() exec:exec_expr_kind() end:position!() {
+                ExecExpr { exec, ty: None, span: Some(Span::new(begin,end)) }
+            }
+
+        rule exec_expr_kind() -> ExecKind =
+            ident:ident() { ExecKind::Ident(ident) }
+            / "split_exec" __ d:dim_component() __ n:nat() __ exec:exec_expr() {
+                ExecKind::Split(d, n, Box::new(exec))
+            }
+
+        rule exec_ty() -> ExecTy =
+            begin:position!() exec:exec_ty_kind() end:position!() {
+            ExecTy { ty: exec, span: Some(Span::new(begin,end)) }
         }
-        / "ThreadGrp" _ "<" _ t_dim:dim() _ ">" {
-            ThreadHierchyTy::ThreadGrp(t_dim)
-        }
-        / "WarpGrp" _ "<" _ n:nat() _ ">" { ThreadHierchyTy::WarpGrp(n) }
-        / "Warp" { ThreadHierchyTy::Warp }
+
+        rule exec_ty_kind() -> ExecTyKind =
+            "cpu.thread" {
+                ExecTyKind::CpuThread
+            }
+            / "gpu.grid" _ "<" _ g_dim:dim() _ "," _ b_dim:dim() _ ">" {
+                ExecTyKind::GpuGrid(g_dim, b_dim)
+            }
+            / "gpu.block" _ "<" _ b_dim:dim() _ ">" {
+                ExecTyKind::GpuBlock(b_dim)
+            }
+            / "gpu.global_threads" _ "<" _ t_dim:dim() _ ">" {
+                ExecTyKind::GpuGlobalThreads(t_dim)
+            }
+            / "gpu.block_grp" _ "<" _ g_dim:dim() _ "," _ b_dim:dim() _ ">" {
+                ExecTyKind::GpuBlockGrp(g_dim, b_dim)
+            }
+            / "gpu.thread_grp" _ "<" _ t_dim:dim() _ ">" {
+                ExecTyKind::GpuThreadGrp(t_dim)
+            }
+            / "gpu.thread" {
+                ExecTyKind::GpuThread
+            }
+            / "view" {
+                ExecTyKind::View
+            }
 
         pub(crate) rule ownership() -> Ownership
         = "shrd" { Ownership::Shrd }
@@ -581,20 +617,6 @@ peg::parser! {
             / "gpu.global" { Memory::GpuGlobal }
             / "gpu.shared" { Memory::GpuShared }
             / name:ident() { Memory::Ident(name) }
-
-        pub(crate) rule execution_resource() -> Exec
-            = "cpu.thread" { Exec::CpuThread }
-            / "gpu.grid" dim:exec_dim() "d" { Exec::GpuGrid(dim) }
-            / "gpu.grid" { Exec::GpuGrid(1) }
-            / "gpu.block" dim:exec_dim() "d" { Exec::GpuBlock(dim) }
-            / "gpu.block" { Exec::GpuBlock(1) }
-            / "gpu.warp" { Exec::GpuWarp }
-            / "gpu.thread" { Exec::GpuThread }
-
-        rule exec_dim() -> u8
-            = "3" { 3 }
-            / "2" { 2 }
-            / "1" { 1 }
 
         pub(crate) rule kind() -> Kind
             = "nat" { Kind::Nat }
@@ -639,12 +661,11 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
-                / "Block" / "Warp" / "Thread" / "with")
+                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
+                / "cpu.mem" / "gpu.global" / "gpu.shared"
+                / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
-            / "cpu.mem" / "gpu.global" / "gpu.shared"
-            / "cpu.thread" / "gpu.group" / "gpu.thread"
 
         // Literal may be one of Unit, bool, i32, u32, f32
         pub(crate) rule literal() -> Lit
@@ -1032,24 +1053,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn execution_resource() {
-        assert_eq!(
-            descend::execution_resource("cpu.thread"),
-            Ok(Exec::CpuThread),
-            "does not recognize cpu.stack memory kind"
-        );
-        assert_eq!(
-            descend::execution_resource("gpu.block"),
-            Ok(Exec::GpuBlock(1)),
-            "does not recognize gpu.block memory kind"
-        );
-        assert_eq!(
-            descend::execution_resource("gpu.thread"),
-            Ok(Exec::GpuThread),
-            "does not recognize gpu.global memory kind"
-        );
-    }
+    // #[test]
+    // fn execution_resource() {
+    //     assert_eq!(
+    //         descend::execution_resource("cpu.thread"),
+    //         Ok(Exec::CpuThread),
+    //         "does not recognize cpu.stack memory kind"
+    //     );
+    //     assert_eq!(
+    //         descend::execution_resource("gpu.block"),
+    //         Ok(Exec::GpuBlock(1)),
+    //         "does not recognize gpu.block memory kind"
+    //     );
+    //     assert_eq!(
+    //         descend::execution_resource("gpu.thread"),
+    //         Ok(Exec::GpuThread),
+    //         "does not recognize gpu.global memory kind"
+    //     );
+    // }
 
     #[test]
     fn literal() {
@@ -1781,13 +1802,13 @@ mod tests {
             mutbl: Mutability::Const,
         }];
         let ret_dty = DataTy::new(DataTyKind::Scalar(ScalarTy::Unit));
-        let exec = Exec::CpuThread;
+        let exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::CpuThread));
         let prv_rels = vec![];
 
         let intended = FunDef {
             name,
             param_decls: params,
-            exec,
+            exec_decl: exec,
             prv_rels,
             body_expr: Expr::new(ExprKind::Block(
                 vec![],

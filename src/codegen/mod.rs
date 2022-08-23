@@ -149,7 +149,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bo
         generic_params: ty_idents,
         param_decls: params,
         ret_dty: ret_ty,
-        exec,
+        exec_decl,
         body_expr,
         ..
     } = gl_fun;
@@ -173,7 +173,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bo
             false,
             idx_checks,
         ),
-        is_dev_fun: is_dev_fun(*exec),
+        is_dev_fun: is_dev_fun(&exec_decl.ty),
     }
 }
 
@@ -396,34 +396,28 @@ fn gen_stmt(
                 )
             }
         }
-        ParBranch(split_parall_collec, branch_idents, branch_bodies) => gen_par_branch(
-            split_parall_collec,
+        ParBranch(split_exec, branch_idents, branch_bodies) => gen_par_branch(
+            split_exec,
             branch_idents,
             branch_bodies,
             codegen_ctx,
             comp_unit,
             idx_checks,
         ),
-        ParForWith(
-            decls,
-            par_dim,
-            parall_ident,
-            parall_collec,
-            input_idents,
-            input_exprs,
-            body,
-        ) => gen_par_for(
-            decls,
-            *par_dim,
-            parall_ident,
-            parall_collec,
-            input_idents,
-            input_exprs,
-            body,
-            codegen_ctx,
-            comp_unit,
-            idx_checks,
-        ),
+        ParForWith(decls, par_dim, parall_ident, exec_expr, input_idents, input_exprs, body) => {
+            gen_par_for(
+                decls,
+                *par_dim,
+                parall_ident,
+                exec_expr,
+                input_idents,
+                input_exprs,
+                body,
+                codegen_ctx,
+                comp_unit,
+                idx_checks,
+            )
+        }
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => {
             match gen_expr(cond, codegen_ctx, comp_unit, dev_fun, idx_checks) {
@@ -540,7 +534,8 @@ fn gen_decl_init(
     } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
         codegen_ctx.parall_ctx.insert(
             &ident.name,
-            ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
+            // ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
+            todo!(),
         );
         cu::Stmt::Skip
     } else if let desc::TyKind::Data(desc::DataTy {
@@ -997,7 +992,7 @@ fn gen_exec(
 }
 
 fn gen_par_branch(
-    split_parall_collec: &desc::Expr,
+    split_exec: &desc::ExecExpr,
     branch_idents: &[desc::Ident],
     branch_bodies: &[desc::Expr],
     codegen_ctx: &mut CodegenCtx,
@@ -1013,8 +1008,7 @@ fn gen_par_branch(
     // } else {
     //     panic!("Exepected SplitThreadHierarchy as input to par_branch.")
     // };
-    let split_par_collec =
-        ParallelityCollec::create_from(split_parall_collec, &codegen_ctx.parall_ctx);
+    let split_par_collec = ParallelityCollec::create_from(split_exec, &codegen_ctx.parall_ctx);
     // let (pindex, sync_stmt) = par_idx_and_sync_stmt(&split_par_collec, inner_par_collec_ty);
 
     codegen_ctx.push_scope();
@@ -1232,7 +1226,7 @@ fn gen_par_for(
     decls: &Option<Vec<desc::Expr>>,
     par_dim: desc::DimCompo,
     parall_ident: &Option<desc::Ident>,
-    parall_collec: &desc::Expr,
+    exec_expr: &desc::ExecExpr,
     input_idents: &[desc::Ident],
     inputs: &[desc::Expr],
     body: &desc::Expr,
@@ -1258,7 +1252,7 @@ fn gen_par_for(
     //     _ => panic!("Did not expect a split parallel collection."),
     // };
 
-    let pcoll = ParallelityCollec::create_from(parall_collec, &codegen_ctx.parall_ctx);
+    let pcoll = ParallelityCollec::create_from(exec_expr, &codegen_ctx.parall_ctx);
     let par_section = gen_parall_section(
         parall_ident,
         par_dim,
@@ -1482,7 +1476,7 @@ fn gen_expr(
                 rhs: Box::new(e),
             })
         }
-        Lambda(params, exec, ty, body) => CheckedExpr::Expr(cu::Expr::Lambda {
+        Lambda(params, exec_decl, ty, body) => CheckedExpr::Expr(cu::Expr::Lambda {
             captures: {
                 let mut free_idents = desc::utils::FreeKindedIdents::new();
                 free_idents.visit_expr(body);
@@ -1507,7 +1501,7 @@ fn gen_expr(
                 &desc::TyKind::Data(ty.as_ref().clone()),
                 desc::Mutability::Mut,
             ),
-            is_dev_fun: is_dev_fun(*exec),
+            is_dev_fun: is_dev_fun(&exec_decl.ty),
         }),
         App(fun, kinded_args, args) => match &fun.expr {
             PlaceExpr(desc::PlaceExpr {
@@ -1796,13 +1790,13 @@ fn create_lambda_no_shape_args(
 ) -> Option<(desc::Expr, Vec<desc::Expr>)> {
     // FIXME doesn't work for predeclared functions which expect a shape type argument
     match &fun.expr {
-        desc::ExprKind::Lambda(param_decls, exec, ret_dty, body) => {
+        desc::ExprKind::Lambda(param_decls, exec_decl, ret_dty, body) => {
             Some(create_lambda_and_args_only_dtys(
                 fun,
                 param_decls,
                 args,
                 body,
-                *exec,
+                exec_decl,
                 ret_dty,
                 codegen_ctx,
             ))
@@ -1830,7 +1824,7 @@ fn create_lambda_no_shape_args(
                 param_decls,
                 args,
                 new_body,
-                fun_def.exec,
+                &fun_def.exec_decl,
                 &fun_def.ret_dty,
                 codegen_ctx,
             ))
@@ -1847,7 +1841,7 @@ fn create_lambda_and_args_only_dtys(
     param_decls: &[desc::ParamDecl],
     args: &[desc::Expr],
     body: &desc::Expr,
-    exec: desc::Exec,
+    exec_decl: &desc::IdentExec,
     ret_dty: &desc::DataTy,
     codegen_ctx: &mut CodegenCtx,
 ) -> (desc::Expr, Vec<desc::Expr>) {
@@ -1855,11 +1849,11 @@ fn create_lambda_and_args_only_dtys(
         filter_and_map_shape_th_hierchy_params(param_decls, args, codegen_ctx),
     );
     let partial_app_fun_ty =
-        create_fun_ty_of_purely_data_tys(get_data_param_tys(fun), exec, ret_dty);
+        create_fun_ty_of_purely_data_tys(get_data_param_tys(fun), &exec_decl.ty, ret_dty);
     let partial_app_fun = desc::Expr::with_type(
         desc::ExprKind::Lambda(
             data_param_decls,
-            exec,
+            exec_decl.clone(),
             Box::new(ret_dty.clone()),
             Box::new(body.clone()),
         ),
@@ -1899,13 +1893,13 @@ fn get_data_param_tys(fun: &desc::Expr) -> Vec<desc::Ty> {
 
 fn create_fun_ty_of_purely_data_tys(
     data_param_tys: Vec<desc::Ty>,
-    exec: desc::Exec,
+    exec_ty: &desc::ExecTy,
     ret_dty: &desc::DataTy,
 ) -> desc::Ty {
     desc::Ty::new(desc::TyKind::Fn(
         vec![],
         data_param_tys,
-        exec,
+        exec_ty.clone(),
         Box::new(desc::Ty::new(desc::TyKind::Data(ret_dty.clone()))),
     ))
 }
@@ -1917,17 +1911,17 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
         .map(|id_kinded| id_kinded.ident.name.as_str())
         .zip(gen_args)
         .collect();
-    if let desc::TyKind::Fn(_, param_tys, exec, ret_ty) = &fun.ty().ty {
+    if let desc::TyKind::Fn(_, param_tys, exec_ty, ret_ty) = &fun.ty().ty {
         let fun_ty = desc::Ty::new(desc::TyKind::Fn(
             vec![],
             param_tys.clone(),
-            *exec,
+            exec_ty.clone(),
             ret_ty.clone(),
         ));
         let mut fun = desc::Expr::with_type(
             desc::ExprKind::Lambda(
                 fun.param_decls.clone(),
-                *exec,
+                fun.exec_decl.clone(),
                 Box::new(fun.ret_dty.clone()),
                 Box::new(fun.body_expr.clone()),
             ),
@@ -1982,7 +1976,8 @@ fn filter_and_map_shape_th_hierchy_params<'a>(
     for (p, arg) in th_hierchy_params_with_args {
         codegen_ctx.parall_ctx.insert(
             &p.ident.name,
-            ParallelityCollec::create_from(arg, &codegen_ctx.parall_ctx),
+            // ParallelityCollec::create_from(arg, &codegen_ctx.parall_ctx),
+            todo!(),
         );
     }
 
@@ -2593,13 +2588,17 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
     }
 }
 
-fn is_dev_fun(exec: desc::Exec) -> bool {
-    match exec {
-        desc::Exec::GpuGrid(_)
-        | desc::Exec::GpuBlock(_)
-        | desc::Exec::GpuWarp
-        | desc::Exec::GpuThread => true,
-        desc::Exec::CpuThread | desc::Exec::View => false,
+fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
+    match &exec_ty.ty {
+        desc::ExecTyKind::GpuGrid(_, _)
+        | desc::ExecTyKind::GpuBlock(_)
+        | desc::ExecTyKind::GpuGlobalThreads(_)
+        | desc::ExecTyKind::GpuBlockGrp(_, _)
+        | desc::ExecTyKind::GpuThreadGrp(_)
+        | desc::ExecTyKind::GpuThread => true,
+        desc::ExecTyKind::Split(_, _) | desc::ExecTyKind::CpuThread | desc::ExecTyKind::View => {
+            false
+        }
     }
 }
 
@@ -2648,85 +2647,86 @@ enum ParallelityCollec {
 }
 
 impl ParallelityCollec {
-    fn create_from(expr: &desc::Expr, parall_ctx: &ParallCtx) -> ParallelityCollec {
-        match &expr.expr {
-            desc::ExprKind::App(f, gen_args, args) => {
-                if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
-                    pl_expr: desc::PlaceExprKind::Ident(ident),
-                    ..
-                }) = &f.expr
-                {
-                    use crate::ty_check::pre_decl::*;
-                    if ident.name == SPLIT_THREAD_GRP
-                        || ident.name == SPLIT_XY_THREAD_GRP_X
-                        || ident.name == SPLIT_XY_THREAD_GRP_Y
-                        || ident.name == SPLIT_BLOCK_GRP
-                        || ident.name == SPLIT_XY_BLOCK_GRP_X
-                        || ident.name == SPLIT_XY_BLOCK_GRP_Y
-                        || ident.name == SPLIT_WARP_GRP
-                    {
-                        if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
-                            (&gen_args[0], &gen_args[1], args.first())
-                        {
-                            let dim = if ident.name == SPLIT_THREAD_GRP
-                                || ident.name == SPLIT_XY_THREAD_GRP_X
-                                || ident.name == SPLIT_BLOCK_GRP
-                                || ident.name == SPLIT_XY_BLOCK_GRP_X
-                            {
-                                desc::DimCompo::X
-                            } else {
-                                desc::DimCompo::Y
-                            };
-                            return ParallelityCollec::Split {
-                                dim,
-                                pos: k.clone(),
-                                coll_size: n.clone(),
-                                parall_collec: Box::new(ParallelityCollec::create_from(
-                                    p, parall_ctx,
-                                )),
-                            };
-                        }
-                        panic!("Cannot create `split` for parallel collection from the provided arguments.");
-                    // } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
-                    //     if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
-                    //         return ParallelityCollec::Split {
-                    //             pos: k.clone(),
-                    //             coll_size: desc::Nat::Lit(32),
-                    //             parall_collec: Box::new(ParallelityCollec::create_from(
-                    //                 p, parall_ctx,
-                    //             )),
-                    //         };
-                    //     }
-                    //     panic!("Cannot create `split` from the provided arguments.");
-                    } else if ident.name == TO_THREAD_GRP || ident.name == TO_XY_THREAD_GRP {
-                        if let Some(p) = args.first() {
-                            return ParallelityCollec::ToThreadGrp(Box::new(
-                                ParallelityCollec::create_from(p, parall_ctx),
-                            ));
-                        }
-                        panic!("Cannot create `to_thread_grp` from the provided argument.");
-                    } else {
-                        unimplemented!()
-                    }
-                } else {
-                    panic!(
-                        "Non-globally defined functions that can transform parallel collections \
-                     do not exist."
-                    )
-                }
-            }
-            desc::ExprKind::PlaceExpr(pl_expr) => {
-                ParallelityCollec::create_parall_pl_expr(pl_expr, parall_ctx)
-            }
-            desc::ExprKind::Proj(expr, i) => ParallelityCollec::Proj {
-                parall_expr: Box::new(ParallelityCollec::create_from(expr, parall_ctx)),
-                i: *i,
-            },
-            _ => panic!(
-                "Expected a function application, identifer or projection, but found {:?}",
-                expr.expr
-            ),
-        }
+    fn create_from(exec_expr: &desc::ExecExpr, parall_ctx: &ParallCtx) -> ParallelityCollec {
+        todo!()
+        // match &exec_expr.ty.as_ref().unwrap().ty {
+        //     desc::ExprKind::App(f, gen_args, args) => {
+        //         if let desc::ExprKind::PlaceExpr(desc::PlaceExpr {
+        //             pl_expr: desc::PlaceExprKind::Ident(ident),
+        //             ..
+        //         }) = &f.expr
+        //         {
+        //             use crate::ty_check::pre_decl::*;
+        //             if ident.name == SPLIT_THREAD_GRP
+        //                 || ident.name == SPLIT_XY_THREAD_GRP_X
+        //                 || ident.name == SPLIT_XY_THREAD_GRP_Y
+        //                 || ident.name == SPLIT_BLOCK_GRP
+        //                 || ident.name == SPLIT_XY_BLOCK_GRP_X
+        //                 || ident.name == SPLIT_XY_BLOCK_GRP_Y
+        //                 || ident.name == SPLIT_WARP_GRP
+        //             {
+        //                 if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
+        //                     (&gen_args[0], &gen_args[1], args.first())
+        //                 {
+        //                     let dim = if ident.name == SPLIT_THREAD_GRP
+        //                         || ident.name == SPLIT_XY_THREAD_GRP_X
+        //                         || ident.name == SPLIT_BLOCK_GRP
+        //                         || ident.name == SPLIT_XY_BLOCK_GRP_X
+        //                     {
+        //                         desc::DimCompo::X
+        //                     } else {
+        //                         desc::DimCompo::Y
+        //                     };
+        //                     return ParallelityCollec::Split {
+        //                         dim,
+        //                         pos: k.clone(),
+        //                         coll_size: n.clone(),
+        //                         parall_collec: Box::new(ParallelityCollec::create_from(
+        //                             p, parall_ctx,
+        //                         )),
+        //                     };
+        //                 }
+        //                 panic!("Cannot create `split` for parallel collection from the provided arguments.");
+        //             // } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
+        //             //     if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
+        //             //         return ParallelityCollec::Split {
+        //             //             pos: k.clone(),
+        //             //             coll_size: desc::Nat::Lit(32),
+        //             //             parall_collec: Box::new(ParallelityCollec::create_from(
+        //             //                 p, parall_ctx,
+        //             //             )),
+        //             //         };
+        //             //     }
+        //             //     panic!("Cannot create `split` from the provided arguments.");
+        //             } else if ident.name == TO_THREAD_GRP || ident.name == TO_XY_THREAD_GRP {
+        //                 if let Some(p) = args.first() {
+        //                     return ParallelityCollec::ToThreadGrp(Box::new(
+        //                         ParallelityCollec::create_from(p, parall_ctx),
+        //                     ));
+        //                 }
+        //                 panic!("Cannot create `to_thread_grp` from the provided argument.");
+        //             } else {
+        //                 unimplemented!()
+        //             }
+        //         } else {
+        //             panic!(
+        //                 "Non-globally defined functions that can transform parallel collections \
+        //              do not exist."
+        //             )
+        //         }
+        //     }
+        //     desc::ExprKind::PlaceExpr(pl_expr) => {
+        //         ParallelityCollec::create_parall_pl_expr(pl_expr, parall_ctx)
+        //     }
+        //     desc::ExprKind::Proj(expr, i) => ParallelityCollec::Proj {
+        //         parall_expr: Box::new(ParallelityCollec::create_from(expr, parall_ctx)),
+        //         i: *i,
+        //     },
+        //     _ => panic!(
+        //         "Expected a function application, identifer or projection, but found {:?}",
+        //         exec_expr.expr
+        //     ),
+        // }
     }
 
     fn create_parall_pl_expr(

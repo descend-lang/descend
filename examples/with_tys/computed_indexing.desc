@@ -2,7 +2,7 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
     h_indices: &a shrd cpu.mem [u32; n],
     h_results: &b uniq cpu.mem [i32; n],
     h_data: &c shrd cpu.mem [i32; m]
-)   -[cpu.thread]-> () <'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k>{
+)  -[t: cpu.thread]-> () <'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k>{
     let mut gpu: Gpu = gpu_device(0);
 
     let indices: [u32; n] @ gpu.global =
@@ -30,11 +30,10 @@ fn computed_indexing<n: nat, m:nat, a: prv, b: prv, c: prv>(
     >(
         &'i uniq gpu,
         (grouped_indices, grouped_results, &'j shrd d_data),
-        | grid: BlockGrp<X<4>, ThreadGrp<X<16>>>,
-          inputs: (&'g shrd gpu.global [[[[u32; 16]]; 4]],
+        | inputs: (&'g shrd gpu.global [[[[u32; 16]]; 4]],
                   &'h uniq gpu.global [[[[i32; 16]]; 4]],
                   &'j shrd gpu.global [i32; m])
-        | -[gpu.grid]-> () <>{
+        | -[grid: gpu.grid<X<4>, X<16>>]-> () {
             let indices_input = inputs.0;
             let results_input = inputs.1;
             let data = inputs.2;
