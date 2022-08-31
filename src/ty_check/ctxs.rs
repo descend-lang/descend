@@ -185,14 +185,6 @@ impl TyCtx {
                     dty: d::Atomic(_), ..
                 })
                 | TyKind::Data(DataTy {
-                    dty: d::ThreadHierchy(_),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::SplitThreadHierchy(_, _, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
                     dty: d::Scalar(_), ..
                 })
                 | TyKind::Data(DataTy {
@@ -254,19 +246,16 @@ impl TyCtx {
         }
     }
 
-    pub fn place_ty(&self, place: &internal::Place) -> CtxResult<Ty> {
-        fn proj_ty(ty: Ty, path: &[usize]) -> CtxResult<Ty> {
-            let mut res_ty = ty;
+    pub fn place_dty(&self, place: &internal::Place) -> CtxResult<DataTy> {
+        fn proj_ty(dty: DataTy, path: &[usize]) -> CtxResult<DataTy> {
+            let mut res_dty = dty;
             for n in path {
-                match &res_ty.ty {
-                    TyKind::Data(DataTy {
-                        dty: DataTyKind::Tuple(elem_tys),
-                        ..
-                    }) => {
+                match &res_dty.dty {
+                    DataTyKind::Tuple(elem_tys) => {
                         if elem_tys.len() <= *n {
                             return Err(CtxError::IllegalProjection);
                         }
-                        res_ty = Ty::new(TyKind::Data(elem_tys[*n].clone()));
+                        res_dty = elem_tys[*n].clone();
                     }
                     t => {
                         panic!(
@@ -276,36 +265,28 @@ impl TyCtx {
                     }
                 }
             }
-            Ok(res_ty)
+            Ok(res_dty)
         }
         let ident_ty = self.ty_of_ident(&place.ident)?;
-        proj_ty(ident_ty.clone(), &place.path)
+        if let TyKind::Data(dty) = &ident_ty.ty {
+            proj_ty(dty.as_ref().clone(), &place.path)
+        } else {
+            panic!("This place is not of a data type.")
+        }
     }
 
-    pub fn set_place_ty(mut self, pl: &internal::Place, pl_ty: Ty) -> Self {
-        fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[usize], part_ty: Ty) -> Ty {
+    pub fn set_place_dty(mut self, pl: &internal::Place, pl_ty: DataTy) -> Self {
+        fn set_dty_for_path_in_dty(orig_dty: DataTy, path: &[usize], part_dty: DataTy) -> DataTy {
             if path.is_empty() {
-                return part_ty;
+                return part_dty;
             }
 
             let idx = path.first().unwrap();
-            match orig_ty.ty {
-                TyKind::Data(DataTy {
-                    dty: DataTyKind::Tuple(mut elem_tys),
-                    ..
-                }) => {
-                    elem_tys[*idx] = if let TyKind::Data(dty) = set_ty_for_path_in_ty(
-                        Ty::new(TyKind::Data(elem_tys[*idx].clone())),
-                        &path[1..],
-                        part_ty,
-                    )
-                    .ty
-                    {
-                        dty
-                    } else {
-                        panic!("Trying create non-data type as part of data type.")
-                    };
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys))))
+            match orig_dty.dty {
+                DataTyKind::Tuple(mut elem_tys) => {
+                    elem_tys[*idx] =
+                        set_dty_for_path_in_dty(elem_tys[*idx].clone(), &path[1..], part_dty);
+                    DataTy::new(DataTyKind::Tuple(elem_tys))
                 }
                 _ => panic!("Path not compatible with type."),
             }
@@ -316,18 +297,22 @@ impl TyCtx {
             .rev()
             .find(|ident_typed| ident_typed.ident == pl.ident)
             .unwrap();
-        let updated_ty = set_ty_for_path_in_ty(ident_typed.ty.clone(), pl.path.as_slice(), pl_ty);
-        ident_typed.ty = updated_ty;
-        self
+        if let TyKind::Data(dty) = &ident_typed.ty.ty {
+            let updated_dty = set_dty_for_path_in_dty(*dty.clone(), pl.path.as_slice(), pl_ty);
+            ident_typed.ty = Ty::new(TyKind::Data(Box::new(updated_dty)));
+            self
+        } else {
+            panic!("Trying to set data type for identifier without data type.")
+        }
     }
 
     pub fn kill_place(self, pl: &internal::Place) -> Self {
-        if let Ok(pl_ty) = self.place_ty(pl) {
-            self.set_place_ty(
+        if let Ok(pl_dty) = self.place_dty(pl) {
+            self.set_place_dty(
                 pl,
-                match &pl_ty.ty {
-                    TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
-                    TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
+                match &pl_dty.dty {
+                    TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_dty.clone()))),
+                    TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_dty.clone()))),
                     TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(
                         Box::new(dty.clone()),
                     )))),
@@ -505,7 +490,7 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    items: HashMap<String, Ty>,
+    items: HashMap<Box<str>, Ty>,
 }
 
 impl GlobalCtx {

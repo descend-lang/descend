@@ -13,8 +13,12 @@ pub trait VisitMut: Sized {
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
     fn visit_dim_compo(&mut self, _dim_compo: &mut DimCompo) { }
     fn visit_dim(&mut self, dim: &mut Dim) { walk_dim(self, dim) }
-    fn visit_th_hierchy(&mut self, th_hierchy: &mut ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
+    fn visit_dim3d(&mut self, dim3d: &mut Dim3d) { walk_dim3d(self, dim3d) }
+    fn visit_dim2d(&mut self, dim2d: &mut Dim2d) { walk_dim2d(self, dim2d) }
+    fn visit_dim1d(&mut self, dim1d: &mut Dim1d) { walk_dim1d(self, dim1d) }
+    fn visit_ref(&mut self, reff: &mut RefDty) { walk_ref(self, reff) }
     fn visit_dty(&mut self, dty: &mut DataTy) { walk_dty(self, dty) }
+    fn visit_fn_ty(&mut self, fn_ty: &mut FnTy) { walk_fn_ty(self, fn_ty) }
     fn visit_ty(&mut self, ty: &mut Ty) { walk_ty(self, ty) }
     fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) { walk_pl_expr(self, pl_expr) }
     fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) { walk_arg_kinded(self, arg_kinded) }
@@ -26,7 +30,11 @@ pub trait VisitMut: Sized {
     fn visit_lit(&mut self, _lit: &mut Lit) {}
     fn visit_ident(&mut self, _ident: &mut Ident) {}
     fn visit_pattern(&mut self, pattern: &mut Pattern) { walk_pattern(self, pattern) }
+    fn visit_par_branch(&mut self, par_branch: &mut ParBranch) { walk_par_branch(self, par_branch) }
+    fn visit_par_for(&mut self, par_for: &mut ParForWith) { walk_par_for(self, par_for) }
+    fn visit_expr_split(&mut self, expr_split: &mut ExprSplit) { walk_expr_split(self, expr_split) }
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
+    fn visit_exec_split(&mut self, exec_split: &mut ExecSplit) { walk_exec_split(self, exec_split) }
     fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) { walk_exec_expr(self, exec_expr) }
     fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
@@ -52,7 +60,7 @@ pub fn walk_nat<V: VisitMut>(visitor: &mut V, n: &mut Nat) {
         Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
-            walk_list!(visitor, visit_nat, args)
+            walk_list!(visitor, visit_nat, args.as_mut())
         }
     }
 }
@@ -88,32 +96,42 @@ pub fn walk_prv<V: VisitMut>(visitor: &mut V, prv: &mut Provenance) {
     }
 }
 
+pub fn walk_dim3d<V: VisitMut>(visitor: &mut V, dim3d: &mut Dim3d) {
+    let Dim3d(n1, n2, n3) = dim3d;
+    visitor.visit_nat(n1);
+    visitor.visit_nat(n2);
+    visitor.visit_nat(n3);
+}
+
+pub fn walk_dim2d<V: VisitMut>(visitor: &mut V, dim2d: &mut Dim2d) {
+    let Dim2d(n1, n2) = dim2d;
+    visitor.visit_nat(n1);
+    visitor.visit_nat(n2);
+}
+
+pub fn walk_dim1d<V: VisitMut>(visitor: &mut V, dim1d: &mut Dim1d) {
+    let Dim1d(n) = dim1d;
+    visitor.visit_nat(n);
+}
+
 pub fn walk_dim<V: VisitMut>(visitor: &mut V, dim: &mut Dim) {
     match dim {
-        Dim::XYZ(n1, n2, n3) => {
-            visitor.visit_nat(n1);
-            visitor.visit_nat(n2);
-            visitor.visit_nat(n3);
+        Dim::XYZ(dim3d) => {
+            visitor.visit_dim3d(dim3d);
         }
-        Dim::XY(n1, n2) | Dim::XZ(n1, n2) | Dim::YZ(n1, n2) => {
-            visitor.visit_nat(n1);
-            visitor.visit_nat(n2);
+        Dim::XY(dim2d) | Dim::XZ(dim2d) | Dim::YZ(dim2d) => {
+            visitor.visit_dim2d(dim2d);
         }
-        Dim::X(n) | Dim::Y(n) | Dim::Z(n) => visitor.visit_nat(n),
+        Dim::X(dim1d) | Dim::Y(dim1d) | Dim::Z(dim1d) => visitor.visit_dim1d(dim1d),
     }
 }
 
-pub fn walk_th_hierchy<V: VisitMut>(visitor: &mut V, th_hierchy: &mut ThreadHierchyTy) {
-    match th_hierchy {
-        ThreadHierchyTy::BlockGrp(d1, d2) => {
-            visitor.visit_dim(d1);
-            visitor.visit_dim(d2);
-        }
-        ThreadHierchyTy::ThreadGrp(d) => visitor.visit_dim(d),
-        ThreadHierchyTy::WarpGrp(n) => visitor.visit_nat(n),
-        ThreadHierchyTy::Warp => {}
-        ThreadHierchyTy::Thread => {}
-    }
+pub fn walk_ref<V: VisitMut>(visitor: &mut V, reff: &mut RefDty) {
+    let RefDty { rgn, own, mem, dty } = reff;
+    visitor.visit_prv(rgn);
+    visitor.visit_own(own);
+    visitor.visit_mem(mem);
+    visitor.visit_dty(dty);
 }
 
 pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
@@ -121,12 +139,6 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
         DataTyKind::Ident(ident) => visitor.visit_ident(ident),
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
         DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
-        DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
-        DataTyKind::SplitThreadHierchy(dim_compo, th_hy, n) => {
-            visitor.visit_dim_compo(dim_compo);
-            visitor.visit_th_hierchy(th_hy);
-            visitor.visit_nat(n);
-        }
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
@@ -140,11 +152,8 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
             visitor.visit_dty(dty);
             visitor.visit_mem(mem)
         }
-        DataTyKind::Ref(prv, own, mem, dty) => {
-            visitor.visit_prv(prv);
-            visitor.visit_own(own);
-            visitor.visit_mem(mem);
-            visitor.visit_dty(dty)
+        DataTyKind::Ref(reff) => {
+            visitor.visit_ref(reff);
         }
         DataTyKind::RawPtr(dty) => visitor.visit_dty(dty),
         DataTyKind::Range => {}
@@ -152,14 +161,24 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
     }
 }
 
+pub fn walk_fn_ty<V: VisitMut>(visitor: &mut V, fn_ty: &mut FnTy) {
+    let FnTy {
+        generics,
+        param_tys,
+        exec_ty,
+        ret_ty,
+    } = fn_ty;
+    walk_list!(visitor, visit_ident_kinded, generics);
+    walk_list!(visitor, visit_ty, param_tys);
+    visitor.visit_exec_ty(exec_ty);
+    visitor.visit_ty(ret_ty);
+}
+
 pub fn walk_ty<V: VisitMut>(visitor: &mut V, ty: &mut Ty) {
     match &mut ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::Fn(gen_params, params, exec_ty, ret_ty) => {
-            walk_list!(visitor, visit_ident_kinded, gen_params);
-            walk_list!(visitor, visit_ty, params);
-            visitor.visit_exec_ty(exec_ty);
-            visitor.visit_ty(ret_ty)
+        TyKind::Fn(fn_ty) => {
+            visitor.visit_fn_ty(fn_ty);
         }
         TyKind::Ident(ident) => visitor.visit_ident(ident),
         TyKind::Dead(ty) => visitor.visit_ty(ty),
@@ -198,6 +217,35 @@ pub fn walk_pattern<V: VisitMut>(visitor: &mut V, pattern: &mut Pattern) {
         }
         Pattern::Wildcard => {}
     }
+}
+
+pub fn walk_par_branch<V: VisitMut>(visitor: &mut V, par_branch: &mut ParBranch) {
+    let ParBranch(split_exec, branch_idents, branch_bodies) = par_branch;
+    visitor.visit_exec_expr(split_exec);
+    walk_list!(visitor, visit_ident, branch_idents);
+    walk_list!(visitor, visit_expr, branch_bodies);
+}
+
+pub fn walk_par_for<V: VisitMut>(visitor: &mut V, par_for: &mut ParForWith) {
+    let ParForWith(decls, par_dim, par_elem, exec_expr, input_elems, input, body) = par_for;
+    visitor.visit_dim_compo(par_dim);
+    for d in decls {
+        walk_list!(visitor, visit_expr, d)
+    }
+    for ident in par_elem {
+        visitor.visit_ident(ident)
+    }
+    visitor.visit_exec_expr(exec_expr);
+    walk_list!(visitor, visit_ident, input_elems);
+    walk_list!(visitor, visit_expr, input);
+    visitor.visit_expr(body);
+}
+
+pub fn walk_expr_split<V: VisitMut>(visitor: &mut V, expr_split: &mut ExprSplit) {
+    let ExprSplit(_prv_val1, _prv_val2, own, s, view) = expr_split;
+    visitor.visit_own(own);
+    visitor.visit_nat(s);
+    visitor.visit_pl_expr(view);
 }
 
 pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
@@ -280,23 +328,11 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
         }
-        ExprKind::ParBranch(split_exec_expr, branch_idents, branch_bodies) => {
-            visitor.visit_exec_expr(split_exec_expr);
-            walk_list!(visitor, visit_ident, branch_idents);
-            walk_list!(visitor, visit_expr, branch_bodies);
+        ExprKind::ParBranch(par_branch) => {
+            visitor.visit_par_branch(par_branch);
         }
-        ExprKind::ParForWith(decls, par_dim, par_elem, exec_expr, input_elems, input, body) => {
-            visitor.visit_dim_compo(par_dim);
-            for d in decls {
-                walk_list!(visitor, visit_expr, d)
-            }
-            for ident in par_elem {
-                visitor.visit_ident(ident)
-            }
-            visitor.visit_exec_expr(exec_expr);
-            walk_list!(visitor, visit_ident, input_elems);
-            walk_list!(visitor, visit_expr, input);
-            visitor.visit_expr(body)
+        ExprKind::ParForWith(par_for) => {
+            visitor.visit_par_for(par_for);
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(ident);
@@ -316,10 +352,8 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_unary_op(op);
             visitor.visit_expr(expr)
         }
-        ExprKind::Split(_prv_val1, _prv_val2, own, s, view) => {
-            visitor.visit_own(own);
-            visitor.visit_nat(s);
-            visitor.visit_pl_expr(view);
+        ExprKind::Split(expr_split) => {
+            visitor.visit_expr_split(expr_split);
         }
         ExprKind::Idx(e, i) => {
             visitor.visit_expr(e);
@@ -330,13 +364,22 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
     }
 }
 
+pub fn walk_exec_split<V: VisitMut>(visitor: &mut V, exec_split: &mut ExecSplit) {
+    let ExecSplit {
+        split_dim,
+        pos,
+        exec,
+    } = exec_split;
+    visitor.visit_dim_compo(split_dim);
+    visitor.visit_nat(pos);
+    visitor.visit_exec_expr(exec);
+}
+
 pub fn walk_exec_expr<V: VisitMut>(visitor: &mut V, exec_expr: &mut ExecExpr) {
     match &mut exec_expr.exec {
         ExecKind::Ident(ident) => visitor.visit_ident(ident),
-        ExecKind::Split(dim_compo, n, split_exec_expr) => {
-            visitor.visit_dim_compo(dim_compo);
-            visitor.visit_nat(n);
-            visitor.visit_exec_expr(split_exec_expr);
+        ExecKind::Split(exec_split) => {
+            visitor.visit_exec_split(exec_split);
         }
         ExecKind::Proj(_, exec_expr) => visitor.visit_exec_expr(exec_expr),
         ExecKind::Distrib(dim_compo, exec_expr) => {

@@ -31,16 +31,34 @@ pub(super) fn check(
             check(kind_ctx, ty_ctx, sub_elem_ty, sup_elem_ty)
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′
-        (Ref(sub_prv, Shrd, sub_mem, sub_ty), Ref(sup_prv, Shrd, sup_mem, sup_ty)) => {
-            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            check(kind_ctx, res_outl_ty_ctx, sub_ty, sup_ty)
+        (Ref(lref), Ref(rref)) if lref.own == Shrd && rref.own == Shrd => {
+            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
+            if lref.mem != rref.mem {
+                return Err(SubTyError::MemoryKindsNoMatch);
+            }
+            check(
+                kind_ctx,
+                res_outl_ty_ctx,
+                lref.dty.as_ref(),
+                rref.dty.as_ref(),
+            )
         }
         // Δ; Γ ⊢ &B ρ1 uniq τ1 ≲ &B ρ2 uniq τ2 ⇒ Γ''
-        (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty)) => {
-            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            let res_forw = check(kind_ctx, res_outl_ty_ctx.clone(), sub_ty, sup_ty)?;
-            let res_back = check(kind_ctx, res_outl_ty_ctx, sup_ty, sub_ty)?;
-            if sub_mem != sup_mem {
+        (Ref(lref), Ref(rref)) => {
+            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
+            let res_forw = check(
+                kind_ctx,
+                res_outl_ty_ctx.clone(),
+                lref.dty.as_ref(),
+                rref.dty.as_ref(),
+            )?;
+            let res_back = check(
+                kind_ctx,
+                res_outl_ty_ctx,
+                rref.dty.as_ref(),
+                lref.dty.as_ref(),
+            )?;
+            if lref.mem != rref.mem {
                 return Err(SubTyError::MemoryKindsNoMatch);
             }
             // TODO find out why this is important (technically),
@@ -160,15 +178,14 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
     ty_ctx
         .all_places()
         .into_iter()
-        .filter(|(_, ty)| match ty {
-            Ty {
-                ty:
-                    TyKind::Data(DataTy {
-                        dty: DataTyKind::Ref(Provenance::Value(prv_name), _, _, _),
-                        ..
-                    }),
-                ..
-            } if prv_name == prv => true,
+        .filter(|(_, ty)| match &ty.ty {
+            TyKind::Data(dty) => match &dty.dty {
+                DataTyKind::Ref(reff) => match &reff.rgn {
+                    Provenance::Value(prv_name) => prv_name == prv,
+                    _ => false,
+                },
+                _ => false,
+            },
             _ => false,
         })
         .any(|(place, _)| {

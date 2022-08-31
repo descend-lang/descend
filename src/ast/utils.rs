@@ -1,6 +1,6 @@
 use crate::ast::visit::Visit;
 use crate::ast::{
-    visit, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    visit, Expr, ExprKind, FnTy, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -81,13 +81,13 @@ impl Visit for FreeKindedIdents {
             TyKind::Ident(ident) => self
                 .set
                 .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty))),
-            TyKind::Fn(idents_kinded, param_tys, _, ret_ty) => {
-                if !idents_kinded.is_empty() {
+            TyKind::Fn(fn_ty) => {
+                if !fn_ty.generics.is_empty() {
                     panic!("Generic function types can not appear, only their instatiated counter parts.")
                 }
 
-                walk_list!(self, visit_ty, param_tys);
-                self.visit_ty(ret_ty)
+                walk_list!(self, visit_ty, &fn_ty.param_tys);
+                self.visit_ty(fn_ty.ret_ty.as_ref())
             }
             _ => visit::walk_ty(self, ty),
         }

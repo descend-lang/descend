@@ -1,7 +1,7 @@
 fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
     ha_array: &a shrd cpu.mem [i32; gs*bs],
     h_output: &b uniq cpu.mem [i32; gs]
-) -[cpu.thread]-> i32 <'r, 'c, 'd, 'e, 'f, 'g, 'h, 'm, 'u1, 'u2>{
+) -[t: cpu.thread]-> i32 <'r, 'c, 'd, 'e, 'f, 'g, 'h, 'm, 'u1, 'u2>{
     let mut gpu: Gpu = gpu_device(0);
 
     let a_array = gpu_alloc_copy::<'c, a, [i32; gs*bs]>(&'c uniq gpu, ha_array);
@@ -9,8 +9,8 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
     exec::<gs, bs, 'h, (&'r shrd gpu.global [i32; gs*bs], &'m uniq gpu.global [i32; gs])>(
         &'h uniq gpu,
         (&'r shrd a_array, &'m uniq out_array),
-        | grid: BlockGrp<X<64>, ThreadGrp<X<1024>>>,
-          inputs: (&'r shrd gpu.global [i32; gs*bs], &'m uniq gpu.global [i32; gs])| -[gpu.grid]-> () <>{
+        | inputs: (&'r shrd gpu.global [i32; gs*bs],
+          &'m uniq gpu.global [i32; gs])| -[grid: gpu.grid<X<64>, X<1024>>]-> () <>{
             let view_a = to_view::<'r, gpu.global, (gs*bs), i32>(inputs.0);
             let block_group = group::<bs, 'r, gpu.global, (gs*bs), i32>(view_a);
             let view_out = group_mut::<1, 'm, gpu.global, gs, i32>(
@@ -31,7 +31,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                     let active_half0 = active_halves.0;
                     let active_half1 = active_halves.1;
                     // Fixme: At thies point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
-                    par_branch split_thread_grp::<k, bs>(block) {
+                    par_branch split_exec x k block {
                         active =>
                             parfor _ in active
                             with a, b from active_half0, active_half1 {
@@ -42,7 +42,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                  };
                  let tmp_view2 = to_view_mut::<'f, gpu.shared, bs, i32>(&'f uniq tmp);
                  let tmp_res = (split 'u1 'u2 uniq 1 (*tmp_view2)).0;
-                 par_branch split_thread_grp::<1, bs>(block) {
+                 par_branch split_exec x 1 block {
                     single_thread =>
                         parfor _ in single_thread
                         with out, tmp_val from out_elem, tmp_res {

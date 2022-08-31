@@ -9,7 +9,7 @@ pub struct SourceCode<'a> {
     /// UTF-8 encoded source code
     source: String,
     /// Offsets of the beginning of each line of code
-    line_offsets: Vec<usize>,
+    line_offsets: Vec<u32>,
 }
 
 impl<'a> SourceCode<'a> {
@@ -34,12 +34,12 @@ impl<'a> SourceCode<'a> {
         }
     }
 
-    fn line_offsets(source: &str) -> Vec<usize> {
+    fn line_offsets(source: &str) -> Vec<u32> {
         source
             .split("\n")
             .scan(0, |offset, line| {
                 let old_offset = *offset;
-                *offset += line.len() + 1;
+                *offset += u32::try_from(line.len()).unwrap() + 1;
                 Some(old_offset)
             })
             .collect()
@@ -51,23 +51,27 @@ impl<'a> SourceCode<'a> {
     }
 
     /// Returns a slice of the source string containing the line with (0-based) line number `num`
-    pub fn get_line(&self, num: usize) -> &str {
-        let begin_line = self.line_offsets[num];
-        let end_line = self.line_offsets[num + 1] - 1;
+    pub fn get_line(&self, num: u32) -> &str {
+        let num = num as usize;
+        let begin_line = self.line_offsets[num] as usize;
+        let end_line = (self.line_offsets[num + 1] - 1) as usize;
         &self.source[begin_line..end_line]
     }
 
     /// Get line and column (both 0-based) corresponding to an offset in the
     /// source string
-    pub fn get_line_col(&self, offset: usize) -> (usize, usize) {
-        if offset > self.source.len() {
+    pub fn get_line_col(&self, offset: u32) -> (u32, u32) {
+        if offset
+            > u32::try_from(self.source.len())
+                .expect("The input source string is unexpectedly large.")
+        {
             panic!("offset larger than source code string")
         }
         let mut line_num = 1;
         let mut line_off = 0;
         for (i, line_offset) in self.line_offsets.iter().enumerate().rev() {
             if *line_offset <= offset {
-                line_num = i;
+                line_num = u32::try_from(i).unwrap();
                 line_off = *line_offset;
                 break;
             }
@@ -79,12 +83,12 @@ impl<'a> SourceCode<'a> {
 
 pub struct SourceCodeSlice<'a> {
     pub source: &'a SourceCode<'a>,
-    pub begin: usize,
-    pub end: usize,
+    pub begin: u32,
+    pub end: u32,
 }
 
 impl<'a> SourceCodeSlice<'a> {
-    pub fn new(source: &'a SourceCode<'a>, begin: usize, end: usize) -> Self {
+    pub fn new(source: &'a SourceCode<'a>, begin: u32, end: u32) -> Self {
         SourceCodeSlice { source, begin, end }
     }
 }

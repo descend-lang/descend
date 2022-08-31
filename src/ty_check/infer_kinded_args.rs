@@ -1,6 +1,5 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Dim, Ident, IdentKinded, Memory, Nat, Provenance,
-    ThreadHierchyTy, Ty, TyKind,
+    ArgKinded, DataTy, DataTyKind, Dim, Ident, IdentKinded, Memory, Nat, Provenance, Ty, TyKind,
 };
 use std::collections::HashMap;
 
@@ -100,17 +99,6 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         (DataTyKind::Atomic(sty1), DataTyKind::Atomic(sty2)) => {
             panic_if_neq!(sty1, sty2);
         }
-        (DataTyKind::ThreadHierchy(th_hy1), DataTyKind::ThreadHierchy(th_hy2)) => {
-            infer_kargs_th_hierchies(map, th_hy1, th_hy2)
-        }
-        (
-            DataTyKind::SplitThreadHierchy(dim_compo1, th_hy1, n1),
-            DataTyKind::SplitThreadHierchy(dim_compo2, th_hy2, n2),
-        ) => {
-            panic_if_neq!(dim_compo1, dim_compo2);
-            infer_kargs_th_hierchies(map, th_hy1, th_hy2);
-            infer_kargs_nats(map, n1, n2);
-        }
         (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
             infer_from_lists!(infer_kargs_dtys, map, elem_dtys1, elem_dtys2)
         }
@@ -136,28 +124,6 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         (DataTyKind::Range, DataTyKind::Range) => (),
         (DataTyKind::Dead(dty1), DataTyKind::Dead(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         _ => panic_no_inst!(),
-    }
-}
-
-fn infer_kargs_th_hierchies(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_hierchy: &ThreadHierchyTy,
-    mono_hierchy: &ThreadHierchyTy,
-) {
-    match (poly_hierchy, mono_hierchy) {
-        (ThreadHierchyTy::BlockGrp(ldim1, ldim2), ThreadHierchyTy::BlockGrp(rdim1, rdim2)) => {
-            infer_dim(map, ldim1, rdim1);
-            infer_dim(map, ldim2, rdim2);
-        }
-        (ThreadHierchyTy::ThreadGrp(ldim), ThreadHierchyTy::ThreadGrp(rdim)) => {
-            infer_dim(map, ldim, rdim);
-        }
-        (ThreadHierchyTy::WarpGrp(n1), ThreadHierchyTy::WarpGrp(n2)) => {
-            infer_kargs_nats(map, n1, n2)
-        }
-        (ThreadHierchyTy::Warp, ThreadHierchyTy::Warp) => {}
-        (ThreadHierchyTy::Thread, ThreadHierchyTy::Thread) => {}
-        _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
     }
 }
 

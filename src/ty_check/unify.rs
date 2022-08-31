@@ -190,11 +190,8 @@ impl Constrainable for Ty {
                 assert!(idents_kinded1.is_empty());
                 assert!(idents_kinded2.is_empty());
 
-                if exec1 != exec2 {
-                    eprintln!("{}", exec1);
-                    eprintln!("{}", exec2);
-                    return Err(TyError::CannotUnify);
-                }
+                exec1.constrain(exec2, constr_map, prv_rels)?;
+
                 if param_tys1.len() != param_tys2.len() {
                     return Err(TyError::CannotUnify);
                 }
@@ -290,25 +287,6 @@ impl Constrainable for DataTy {
                     Ok(())
                 }
             }
-            (DataTyKind::ThreadHierchy(th1), DataTyKind::ThreadHierchy(th2)) => {
-                match (th1.as_mut(), th2.as_mut()) {
-                    (
-                        ThreadHierchyTy::BlockGrp(b_dim1, t_dim1),
-                        ThreadHierchyTy::BlockGrp(b_dim2, t_dim2),
-                    ) => {
-                        b_dim1.constrain(b_dim2, constr_map, prv_rels)?;
-                        t_dim1.constrain(t_dim2, constr_map, prv_rels)
-                    }
-                    (ThreadHierchyTy::ThreadGrp(dim1), ThreadHierchyTy::ThreadGrp(dim2)) => {
-                        dim1.constrain(dim2, constr_map, prv_rels)
-                    }
-                    (ThreadHierchyTy::WarpGrp(n), ThreadHierchyTy::WarpGrp(m)) => {
-                        n.constrain(m, constr_map, prv_rels)
-                    }
-                    (ThreadHierchyTy::Warp, ThreadHierchyTy::Warp) => Ok(()),
-                    _ => Err(TyError::CannotUnify),
-                }
-            }
             (DataTyKind::Range, DataTyKind::Range) => Ok(()), // FIXME/ REMOVE
             (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
                 unimplemented!()
@@ -329,6 +307,50 @@ impl Constrainable for DataTy {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_dty(self);
+    }
+}
+
+impl Constrainable for ExecTy {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        match (&mut self.ty, &mut other.ty) {
+            (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
+            | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
+            | (ExecTyKind::View, ExecTyKind::View) => Ok(()),
+            (ExecTyKind::GpuGrid(lgdim, lbdim), ExecTyKind::GpuGrid(rgdim, rbdim))
+            | (ExecTyKind::GpuBlockGrp(lgdim, lbdim), ExecTyKind::GpuBlockGrp(rgdim, rbdim)) => {
+                lgdim.constrain(rgdim, constr_map, prv_rels)?;
+                lbdim.constrain(rbdim, constr_map, prv_rels)
+            }
+            (ExecTyKind::GpuGlobalThreads(ldim), ExecTyKind::GpuGlobalThreads(rdim))
+            | (ExecTyKind::GpuBlock(ldim), ExecTyKind::GpuBlock(rdim))
+            | (ExecTyKind::GpuThreadGrp(ldim), ExecTyKind::GpuThreadGrp(rdim)) => {
+                ldim.constrain(rdim, constr_map, prv_rels)
+            }
+            (ExecTyKind::Split(lexec0, lexec1), ExecTyKind::Split(rexec0, rexec1)) => {
+                lexec0.constrain(rexec0, constr_map, prv_rels)?;
+                lexec1.constrain(rexec1, constr_map, prv_rels)
+            }
+            _ => Err(TyError::String(format!(
+                "Cannot Unify: {} and {}",
+                &self.ty, &other.ty
+            ))),
+        }
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_exec_ty(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_exec_ty(self);
     }
 }
 

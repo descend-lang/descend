@@ -15,16 +15,9 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         .fun_defs
         .iter()
         .filter(|f| {
-            f.param_decls.iter().all(|p| {
-                !is_shape_ty(p.ty.as_ref().unwrap())
-                    && !matches!(
-                        &p.ty.as_ref().unwrap().ty,
-                        desc::TyKind::Data(desc::DataTy {
-                            dty: desc::DataTyKind::ThreadHierchy(_),
-                            ..
-                        })
-                    )
-            })
+            f.param_decls
+                .iter()
+                .all(|p| !is_shape_ty(p.ty.as_ref().unwrap()))
         })
         .cloned()
         .collect::<Vec<desc::FunDef>>();
@@ -158,7 +151,10 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bo
         name: name.clone(),
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
-        ret_ty: gen_ty(&desc::TyKind::Data(ret_ty.clone()), desc::Mutability::Mut),
+        ret_ty: gen_ty(
+            &desc::TyKind::Data(Box::new(ret_ty.clone())),
+            desc::Mutability::Mut,
+        ),
         body: gen_stmt(
             body_expr,
             !matches!(
@@ -531,13 +527,6 @@ fn gen_decl_init(
         );
         cu::Stmt::Skip
         // Let Expression
-    } else if is_parall_collec_ty(e.ty.as_ref().unwrap()) {
-        codegen_ctx.parall_ctx.insert(
-            &ident.name,
-            // ParallelityCollec::create_from(e, &codegen_ctx.parall_ctx),
-            todo!(),
-        );
-        cu::Stmt::Skip
     } else if let desc::TyKind::Data(desc::DataTy {
         dty: desc::DataTyKind::At(dty, desc::Memory::GpuShared),
         ..
@@ -819,29 +808,25 @@ fn gen_exec(
 
     // FIXME only allows Lambdas
     let (dev_fun, free_kinded_idents) =
-        if let desc::ExprKind::Lambda(params, _, _, body) = &fun.expr {
+        if let desc::ExprKind::Lambda(params, ident_exec, _, body) = &fun.expr {
             let parall_collec = params[0].clone();
             let mut fresh_parall_codegen_ctx = CodegenCtx {
                 parall_ctx: ParallCtx::new(),
                 shape_ctx: codegen_ctx.shape_ctx.clone(),
             };
             codegen_ctx.shape_ctx.push_scope();
-            let (grp_dim, block_dim) = if let desc::TyKind::Data(desc::DataTy {
-                dty: desc::DataTyKind::ThreadHierchy(th_hierchy),
-                ..
-            }) = &parall_collec.ty.unwrap().ty
-            {
-                if let desc::ThreadHierchyTy::BlockGrp(grp_dim, block_dim) = th_hierchy.as_ref() {
-                    (grp_dim.clone(), block_dim.clone())
-                } else {
-                    panic!("the input to exec must always be BlockGrp")
-                }
+            let (gdim, bdim) = if let desc::ExecTyKind::GpuGrid(gdim, bdim) = &ident_exec.ty.ty {
+                (gdim.clone(), bdim.clone())
             } else {
-                panic!("the first argument to the gpu function must be a BlockGrp")
+                panic!(
+                    "Expected GpuGrid execution resource type, but found {}",
+                    &ident_exec.ty.ty
+                )
             };
+
             fresh_parall_codegen_ctx.parall_ctx.insert(
                 &parall_collec.ident.name.clone(),
-                ParallelityCollec::Grid(grp_dim, block_dim),
+                ParallelityCollec::Grid(gdim, bdim),
             );
 
             // Remember to inline input shape expression
@@ -1126,64 +1111,65 @@ fn gen_sync_stmt(par_collec: &ParallelityCollec) -> cu::Stmt {
 }
 
 fn par_idx_and_sync_stmt(
-    parall_collec: &ParallelityCollec,
-    th_hy: &desc::ThreadHierchyTy,
+    parall_collec: &desc::ExecExpr,
+    th_hy: &desc::ExecTyKind,
 ) -> (desc::Nat, Option<cu::Stmt>) {
-    if let ParallelityCollec::ToThreadGrp { .. } = parall_collec {
-        (
-            desc::Nat::BinOp(
-                desc::BinOpNat::Add,
-                Box::new(desc::Nat::BinOp(
-                    desc::BinOpNat::Mul,
-                    Box::new(desc::Nat::Ident(desc::Ident::new("blockDim.x"))),
-                    Box::new(desc::Nat::Ident(desc::Ident::new("blockIdx.x"))),
-                )),
-                Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-            ),
-            None,
-        )
-    } else {
-        match th_hy {
-            desc::ThreadHierchyTy::BlockGrp(_, _) => {
-                (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
-            }
-            desc::ThreadHierchyTy::ThreadGrp(_) => (
-                desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
-                Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                    template_args: vec![],
-                    args: vec![],
-                })),
-            ),
-            desc::ThreadHierchyTy::WarpGrp(_) => (
-                desc::Nat::BinOp(
-                    desc::BinOpNat::Div,
-                    Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-                    Box::new(desc::Nat::Lit(32)),
-                ),
-                Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                    template_args: vec![],
-                    args: vec![],
-                })),
-            ),
-            desc::ThreadHierchyTy::Warp => (
-                desc::Nat::BinOp(
-                    desc::BinOpNat::Mod,
-                    Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-                    Box::new(desc::Nat::Lit(32)),
-                ),
-                Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                    fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
-                    template_args: vec![],
-                    args: vec![],
-                })),
-            ),
-            desc::ThreadHierchyTy::Thread => {
-                panic!("This should never happen.")
-            }
-        }
-    }
+    unimplemented!()
+    // if let ParallelityCollec::ToThreadGrp { .. } = parall_collec {
+    //     (
+    //         desc::Nat::BinOp(
+    //             desc::BinOpNat::Add,
+    //             Box::new(desc::Nat::BinOp(
+    //                 desc::BinOpNat::Mul,
+    //                 Box::new(desc::Nat::Ident(desc::Ident::new("blockDim.x"))),
+    //                 Box::new(desc::Nat::Ident(desc::Ident::new("blockIdx.x"))),
+    //             )),
+    //             Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+    //         ),
+    //         None,
+    //     )
+    // } else {
+    //     match th_hy {
+    //         desc::ThreadHierchyTy::BlockGrp(_, _) => {
+    //             (desc::Nat::Ident(desc::Ident::new("blockIdx.x")), None)
+    //         }
+    //         desc::ThreadHierchyTy::ThreadGrp(_) => (
+    //             desc::Nat::Ident(desc::Ident::new("threadIdx.x")),
+    //             Some(cu::Stmt::Expr(cu::Expr::FunCall {
+    //                 fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+    //                 template_args: vec![],
+    //                 args: vec![],
+    //             })),
+    //         ),
+    //         desc::ThreadHierchyTy::WarpGrp(_) => (
+    //             desc::Nat::BinOp(
+    //                 desc::BinOpNat::Div,
+    //                 Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+    //                 Box::new(desc::Nat::Lit(32)),
+    //             ),
+    //             Some(cu::Stmt::Expr(cu::Expr::FunCall {
+    //                 fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+    //                 template_args: vec![],
+    //                 args: vec![],
+    //             })),
+    //         ),
+    //         desc::ThreadHierchyTy::Warp => (
+    //             desc::Nat::BinOp(
+    //                 desc::BinOpNat::Mod,
+    //                 Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
+    //                 Box::new(desc::Nat::Lit(32)),
+    //             ),
+    //             Some(cu::Stmt::Expr(cu::Expr::FunCall {
+    //                 fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
+    //                 template_args: vec![],
+    //                 args: vec![],
+    //             })),
+    //         ),
+    //         desc::ThreadHierchyTy::Thread => {
+    //             panic!("This should never happen.")
+    //         }
+    //     }
+    // }
 }
 
 fn gen_parall_section(
@@ -1547,7 +1533,7 @@ fn gen_expr(
                                 PlaceExpr(desc::PlaceExpr::new(desc::PlaceExprKind::Ident(
                                     pre_decl_ident,
                                 ))),
-                                fun.ty.as_ref().unwrap().clone(),
+                                fun.ty.unwrap().as_ref().clone(),
                             ),
                             codegen_ctx,
                             comp_unit,
@@ -1809,7 +1795,7 @@ fn create_lambda_no_shape_args(
                 .iter()
                 .find(|fun_def| fun_def.name == f.name)
                 .expect("Cannot find function definition.");
-            if !contains_shape_or_th_hierchy_params(&fun_def.param_decls) {
+            if !contains_shape(&fun_def.param_decls) {
                 return None;
             }
             let partial_app_fun = partial_app_gen_args(fun_def, generic_args);
@@ -1934,17 +1920,10 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
     }
 }
 
-fn contains_shape_or_th_hierchy_params(param_decls: &[desc::ParamDecl]) -> bool {
-    param_decls.iter().any(|p| {
-        is_shape_ty(p.ty.as_ref().unwrap())
-            || matches!(
-                p.ty.as_ref().unwrap().ty,
-                desc::TyKind::Data(desc::DataTy {
-                    dty: desc::DataTyKind::ThreadHierchy(_),
-                    ..
-                })
-            )
-    })
+fn contains_shape(param_decls: &[desc::ParamDecl]) -> bool {
+    param_decls
+        .iter()
+        .any(|p| is_shape_ty(p.ty.as_ref().unwrap()))
 }
 
 fn filter_and_map_shape_th_hierchy_params<'a>(
@@ -1952,35 +1931,17 @@ fn filter_and_map_shape_th_hierchy_params<'a>(
     args: &'a [desc::Expr],
     codegen_ctx: &mut CodegenCtx,
 ) -> Vec<(&'a desc::ParamDecl, &'a desc::Expr)> {
-    let (reducable_parms_with_args, data_params_with_args): (Vec<_>, Vec<_>) =
-        param_decls.iter().zip(args.iter()).partition(|&(p, _)| {
-            is_shape_ty(p.ty.as_ref().unwrap())
-                || matches!(
-                    &p.ty.as_ref().unwrap().ty,
-                    desc::TyKind::Data(desc::DataTy {
-                        dty: desc::DataTyKind::ThreadHierchy(_),
-                        ..
-                    })
-                )
-        });
-    let (shape_params_with_args, th_hierchy_params_with_args): (Vec<_>, Vec<_>) =
-        reducable_parms_with_args
-            .iter()
-            .partition(|&(p, _)| is_shape_ty(p.ty.as_ref().unwrap()));
+    let (shape_params_with_args, data_params_with_args): (Vec<_>, Vec<_>) = param_decls
+        .iter()
+        .zip(args.iter())
+        .partition(|&(p, _)| is_shape_ty(p.ty.as_ref().unwrap()));
+
     for (p, arg) in shape_params_with_args {
         codegen_ctx.shape_ctx.insert(
             &p.ident.name,
             ShapeExpr::create_from(arg, &codegen_ctx.shape_ctx),
         );
     }
-    for (p, arg) in th_hierchy_params_with_args {
-        codegen_ctx.parall_ctx.insert(
-            &p.ident.name,
-            // ParallelityCollec::create_from(arg, &codegen_ctx.parall_ctx),
-            todo!(),
-        );
-    }
-
     data_params_with_args
 }
 
@@ -2408,15 +2369,6 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
-        // FIXME remove this case?
-        desc::ArgKinded::Ty(desc::Ty {
-            ty:
-                desc::TyKind::Data(desc::DataTy {
-                    dty: desc::DataTyKind::ThreadHierchy(_),
-                    ..
-                }),
-            ..
-        }) => None,
         desc::ArgKinded::Ty(desc::Ty {
             ty: ty @ desc::TyKind::Data(_),
             ..
@@ -2568,14 +2520,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         Fn(_, _, _, _) => unimplemented!("needed?"),
         Dead(_) => panic!("Dead types cannot be generated."),
         Data(desc::DataTy {
-            dty: desc::DataTyKind::ThreadHierchy(_),
-            ..
-        })
-        | Data(desc::DataTy {
-            dty: desc::DataTyKind::SplitThreadHierchy(_, _, _),
-            ..
-        })
-        | Data(desc::DataTy {
             dty: desc::DataTyKind::Range,
             ..
         }) => panic!("Cannot generate type for ThreadHierchy or Range"),
@@ -2794,16 +2738,6 @@ impl ParallelityCollec {
             }
         }
     }
-}
-
-fn is_parall_collec_ty(ty: &desc::Ty) -> bool {
-    matches!(
-        ty.ty,
-        desc::TyKind::Data(desc::DataTy {
-            dty: desc::DataTyKind::ThreadHierchy(_),
-            ..
-        })
-    )
 }
 
 #[derive(Debug, Clone)]
