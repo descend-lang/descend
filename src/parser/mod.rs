@@ -135,8 +135,10 @@ pub mod error {
 
         pub fn emit(&self) -> ErrorReported {
             let label = format!("expected {}", self.err.expected);
-            let line_num = self.err.location.line;
-            let column_num = self.err.location.column;
+            let line_num =
+                u32::try_from(self.err.location.line).expect("Source file is unexpectedly large");
+            let column_num =
+                u32::try_from(self.err.location.column).expect("Source file is unexpectedly large");
             let snippet = single_line_parse_snippet(
                 self.parser.source,
                 &label,
@@ -152,9 +154,9 @@ pub mod error {
     fn single_line_parse_snippet<'a>(
         source: &'a SourceCode<'a>,
         label: &'a str,
-        line_num: usize,
-        begin_column: usize,
-        end_column: usize,
+        line_num: u32,
+        begin_column: u32,
+        end_column: u32,
     ) -> Snippet<'a> {
         // 1-based offsets to 0-based offsets
         crate::error::single_line_snippet(
@@ -176,7 +178,7 @@ peg::parser! {
             }
 
         pub(crate) rule global_fun_def() -> FunDef
-            = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
+            = "fn" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
             "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
             body_expr:block() {
@@ -185,7 +187,7 @@ peg::parser! {
                     None => vec![]
                 };
                 FunDef {
-                  name,
+                  ident,
                   generic_params,
                   param_decls,
                   ret_dty,
@@ -1881,7 +1883,7 @@ mod tests {
         let prv_rels = vec![];
 
         let intended = FunDef {
-            name,
+            ident: name,
             param_decls: params,
             exec_decl: exec,
             prv_rels,

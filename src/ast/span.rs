@@ -1,7 +1,5 @@
 //! Components for mapping between sources and AST nodes
 
-use std::num::TryFromIntError;
-
 // Can deal with a source file of up to 4 GiB
 // Before, this was storing a begin and end position with 64 bits each. The 16 Bytes are too large
 // and not necessary. Span is used extensively and the new size of 8 bytes is much more suitable.

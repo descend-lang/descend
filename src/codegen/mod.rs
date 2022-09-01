@@ -138,7 +138,7 @@ impl CheckedExpr {
 
 fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bool) -> cu::Item {
     let desc::FunDef {
-        name,
+        ident: name,
         generic_params: ty_idents,
         param_decls: params,
         ret_dty: ret_ty,
@@ -1591,7 +1591,7 @@ fn gen_expr(
             let ident = extract_ident(fun);
             let fun_def = comp_unit
                 .iter()
-                .find(|fun_def| fun_def.name == ident.name)
+                .find(|fun_def| fun_def.ident == ident.name)
                 .expect("Cannot find function definition.");
             let inst_fun = partial_app_gen_args(fun_def, kinded_args);
             gen_expr(&inst_fun, codegen_ctx, comp_unit, dev_fun, idx_checks)
@@ -1793,7 +1793,7 @@ fn create_lambda_no_shape_args(
         }) => {
             let fun_def = comp_unit
                 .iter()
-                .find(|fun_def| fun_def.name == f.name)
+                .find(|fun_def| fun_def.ident == f.name)
                 .expect("Cannot find function definition.");
             if !contains_shape(&fun_def.param_decls) {
                 return None;
@@ -1866,7 +1866,7 @@ fn separate_param_decls_from_args(
 }
 
 fn get_data_param_tys(fun: &desc::Expr) -> Vec<desc::Ty> {
-    if let desc::TyKind::Fn(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
+    if let desc::TyKind::FnTy(_, param_tys, _, _) = &fun.ty.as_ref().unwrap().ty {
         param_tys
             .iter()
             .filter(|p_ty| !is_shape_ty(&p_ty))
@@ -1882,7 +1882,7 @@ fn create_fun_ty_of_purely_data_tys(
     exec_ty: &desc::ExecTy,
     ret_dty: &desc::DataTy,
 ) -> desc::Ty {
-    desc::Ty::new(desc::TyKind::Fn(
+    desc::Ty::new(desc::TyKind::FnTy(
         vec![],
         data_param_tys,
         exec_ty.clone(),
@@ -1897,8 +1897,8 @@ fn partial_app_gen_args(fun: &desc::FunDef, gen_args: &[desc::ArgKinded]) -> des
         .map(|id_kinded| id_kinded.ident.name.as_str())
         .zip(gen_args)
         .collect();
-    if let desc::TyKind::Fn(_, param_tys, exec_ty, ret_ty) = &fun.ty().ty {
-        let fun_ty = desc::Ty::new(desc::TyKind::Fn(
+    if let desc::TyKind::FnTy(_, param_tys, exec_ty, ret_ty) = &fun.fn_ty().ty {
+        let fun_ty = desc::Ty::new(desc::TyKind::FnTy(
             vec![],
             param_tys.clone(),
             exec_ty.clone(),
@@ -2378,7 +2378,7 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
             ..
         }) => unimplemented!(),
         desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::Fn(_, _, _, _),
+            ty: desc::TyKind::FnTy(_, _, _, _),
             ..
         }) => unimplemented!("needed?"),
         desc::ArgKinded::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
@@ -2517,7 +2517,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
-        Fn(_, _, _, _) => unimplemented!("needed?"),
+        FnTy(_, _, _, _) => unimplemented!("needed?"),
         Dead(_) => panic!("Dead types cannot be generated."),
         Data(desc::DataTy {
             dty: desc::DataTyKind::Range,

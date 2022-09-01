@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinOpNat, DataTy, DataTyKind, Dim, ExecTy, ExecTyKind, Ident, IdentKinded, Kind, Memory, Nat,
-    Ownership, Provenance, ScalarTy, Ty, TyKind,
+    BinOpNat, DataTy, DataTyKind, Dim, ExecTy, ExecTyKind, FnTy, Ident, IdentKinded, Kind, Memory,
+    Nat, Ownership, Provenance, ScalarTy, Ty, TyKind,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -28,7 +28,7 @@ pub static JOIN_MUT: &str = "join_mut";
 pub static TRANSPOSE: &str = "transpose";
 pub static TRANSPOSE_MUT: &str = "transpose_mut";
 
-pub fn fun_decls() -> Vec<(&'static str, Ty)> {
+pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
     let decls = [
         // Built-in functions
         (GPU_DEVICE, gpu_device_ty()),
@@ -82,7 +82,7 @@ fn to_raw_ptr_ty() -> Ty {
         kind: Kind::Ty,
     };
 
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem, t_ty],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
@@ -108,7 +108,7 @@ fn offset_raw_ptr_ty() -> Ty {
         kind: Kind::Ty,
     };
 
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![t_ty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::RawPtr(Box::new(
@@ -140,7 +140,7 @@ fn atomic_set_ty() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![p_prv, m_mem, t_ty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -166,7 +166,7 @@ fn shuffle_xor_ty() -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(d.clone())))),
@@ -180,7 +180,7 @@ fn shuffle_xor_ty() -> Ty {
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
 fn gpu_device_ty() -> Ty {
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
             ScalarTy::I32,
@@ -204,7 +204,7 @@ fn load_atomic_ty() -> Ty {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
@@ -230,7 +230,7 @@ fn load_atomic_host_ty() -> Ty {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r),
@@ -257,7 +257,7 @@ fn store_atomic_ty() -> Ty {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -287,7 +287,7 @@ fn store_atomic_host_ty() -> Ty {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -325,7 +325,7 @@ fn gpu_alloc_copy_ty() -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r1_prv, r2_prv, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -368,7 +368,7 @@ fn copy_to_host_ty() -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r1_prv, r2_prv, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -410,7 +410,7 @@ fn copy_to_gpu_ty() -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r1_prv, r2_prv, d_dty],
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -499,7 +499,7 @@ fn exec_ty(mut kinded_idents: Vec<IdentKinded>, (b_dim, t_dim): (Dim, Dim)) -> T
     };
     let mut common_kinded_idents = vec![r_prv, d_dty];
     kinded_idents.append(&mut common_kinded_idents);
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         kinded_idents,
         vec![
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
@@ -509,7 +509,7 @@ fn exec_ty(mut kinded_idents: Vec<IdentKinded>, (b_dim, t_dim): (Dim, Dim)) -> T
                 Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu))),
             )))),
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(d.clone())))),
-            Ty::new(TyKind::Fn(
+            Ty::new(TyKind::FnTy(
                 vec![],
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
                     d.clone(),
@@ -573,7 +573,7 @@ fn to_view_ty(own: Ownership) -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem, n_nat, d_dty],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
@@ -625,7 +625,7 @@ fn group_ty(own: Ownership) -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![s_nat, r_prv, m_mem, n_nat, d_ty],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
@@ -663,7 +663,7 @@ fn bin_op() -> Ty {
         ident: t.clone(),
         kind: Kind::Ty,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![t_ty],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
             t.clone(),
@@ -701,7 +701,7 @@ fn join_ty(own: Ownership) -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem, o_nat, n_nat, d_dty],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),
@@ -760,7 +760,7 @@ fn transpose_ty(own: Ownership) -> Ty {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    Ty::new(TyKind::Fn(
+    Ty::new(TyKind::FnTy(
         vec![r_prv, m_mem, n_nat, o_nat, d_ty],
         vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
             Provenance::Ident(r.clone()),

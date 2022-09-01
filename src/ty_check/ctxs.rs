@@ -4,7 +4,7 @@ use crate::ty_check::error::CtxError;
 use std::collections::{HashMap, HashSet};
 
 // TODO introduce proper struct
-pub(super) type TypedPlace = (internal::Place, Ty);
+pub(super) type TypedPlace = (internal::Place, DataTy);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct TyCtx {
@@ -164,63 +164,41 @@ impl TyCtx {
     // ∀π:τ ∈ Γ
     pub fn all_places(&self) -> Vec<TypedPlace> {
         self.idents_typed()
-            .flat_map(|IdentTyped { ident, ty, .. }| TyCtx::explode_places(&ident, &ty))
+            .filter_map(|IdentTyped { ident, ty, .. }| {
+                if let TyKind::Data(dty) = &ty.ty {
+                    Some(TyCtx::explode_places(&ident, dty))
+                } else {
+                    None
+                }
+            })
+            .flatten()
             .collect()
     }
 
-    fn explode_places(ident: &Ident, ty: &Ty) -> Vec<TypedPlace> {
+    fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<TypedPlace> {
         fn proj(mut pl: internal::Place, idx: usize) -> internal::Place {
             pl.path.push(idx);
             pl
         }
 
-        fn explode(pl: internal::Place, ty: Ty) -> Vec<TypedPlace> {
+        fn explode(pl: internal::Place, dty: DataTy) -> Vec<TypedPlace> {
             use DataTyKind as d;
 
-            match &ty.ty {
-                TyKind::Ident(_)
-                | TyKind::Fn(_, _, _, _)
-                | TyKind::Data(DataTy { dty: d::Range, .. })
-                | TyKind::Data(DataTy {
-                    dty: d::Atomic(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Scalar(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Array(_, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::ArrayShape(_, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::At(_, _), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Ref(_, _, _, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::RawPtr(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Ident(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Dead(_), ..
-                })
-                | TyKind::Dead(_) => vec![(pl, ty.clone())],
-                TyKind::Data(DataTy {
-                    dty: d::Tuple(tys), ..
-                }) => {
-                    let mut place_frame = vec![(pl.clone(), ty.clone())];
+            match &dty.dty {
+                d::Range
+                | d::Atomic(_)
+                | d::Scalar(_)
+                | d::Array(_, _)
+                | d::ArrayShape(_, _)
+                | d::At(_, _)
+                | d::Ref(_)
+                | d::RawPtr(_)
+                | d::Ident(_)
+                | d::Dead(_) => vec![(pl, dty.clone())],
+                d::Tuple(tys) => {
+                    let mut place_frame = vec![(pl.clone(), dty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
-                        let mut exploded_index = explode(
-                            proj(pl.clone(), index),
-                            Ty::new(TyKind::Data(proj_ty.clone())),
-                        );
+                        let mut exploded_index = explode(proj(pl.clone(), index), proj_ty.clone());
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
@@ -228,7 +206,7 @@ impl TyCtx {
             }
         }
 
-        explode(internal::Place::new(ident.clone(), vec![]), ty.clone())
+        explode(internal::Place::new(ident.clone(), vec![]), dty.clone())
     }
 
     pub fn ty_of_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
@@ -308,19 +286,7 @@ impl TyCtx {
 
     pub fn kill_place(self, pl: &internal::Place) -> Self {
         if let Ok(pl_dty) = self.place_dty(pl) {
-            self.set_place_dty(
-                pl,
-                match &pl_dty.dty {
-                    TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_dty.clone()))),
-                    TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_dty.clone()))),
-                    TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(
-                        Box::new(dty.clone()),
-                    )))),
-                    TyKind::Dead(_) => {
-                        panic!("Cannot kill dead type.")
-                    }
-                },
-            )
+            self.set_place_dty(pl, DataTy::new(DataTyKind::Dead(Box::new(pl_dty))))
         } else {
             panic!("Trying to kill the type of a place that doesn't exist.")
         }
@@ -490,7 +456,7 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    items: HashMap<Box<str>, Ty>,
+    items: HashMap<Box<str>, FnTy>,
 }
 
 impl GlobalCtx {
@@ -504,23 +470,23 @@ impl GlobalCtx {
         self.items.extend(
             gl_fun_defs
                 .iter()
-                .map(|gl_fun_def| (gl_fun_def.name.clone(), gl_fun_def.ty())),
+                .map(|gl_fun_def| (gl_fun_def.ident.name.clone(), gl_fun_def.fn_ty())),
         );
         self
     }
 
-    pub fn append_fun_decls(mut self, fun_decls: &[(&str, Ty)]) -> Self {
+    pub fn append_fun_decls(mut self, fun_decls: &[(&str, FnTy)]) -> Self {
         self.items.extend(
             fun_decls
                 .iter()
-                .map(|(name, ty)| (String::from(*name), ty.clone())),
+                .map(|(name, ty)| (String::from(*name).into_boxed_str(), ty.clone())),
         );
         self
     }
 
-    pub fn fun_ty_by_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
+    pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
         match self.items.get(&ident.name) {
-            Some(ty) => Ok(ty),
+            Some(fn_ty) => Ok(fn_ty),
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
@@ -531,17 +497,19 @@ fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
     let x = IdentTyped::new(
         Ident::new("x"),
-        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32,
+        ))))),
         Mutability::Const,
     );
     let place = internal::Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);
     ty_ctx = ty_ctx.kill_place(&place);
     assert!(matches!(
-        ty_ctx.idents_typed().next().unwrap().ty.ty,
-        TyKind::Data(DataTy {
+        ty_ctx.idents_typed().next().unwrap().ty.dty(),
+        DataTy {
             dty: DataTyKind::Dead(_),
             ..
-        })
+        }
     ));
 }

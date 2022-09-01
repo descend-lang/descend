@@ -32,7 +32,7 @@ impl<'a> CompilUnit<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunDef {
-    pub name: String,
+    pub ident: Ident,
     pub generic_params: Vec<IdentKinded>,
     pub param_decls: Vec<ParamDecl>,
     pub ret_dty: DataTy,
@@ -42,7 +42,7 @@ pub struct FunDef {
 }
 
 impl FunDef {
-    pub fn ty(&self) -> FnTy {
+    pub fn fn_ty(&self) -> FnTy {
         let param_tys: Vec<_> = self
             .param_decls
             .iter()
@@ -776,23 +776,22 @@ impl fmt::Display for ExecKind {
 #[derive(Debug, Clone)]
 pub struct Ty {
     pub ty: TyKind,
-    pub constraints: Vec<Constraint>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct FnTy {
-    generics: Vec<IdentKinded>,
-    param_tys: Vec<Ty>,
-    exec_ty: ExecTy,
-    ret_ty: Box<Ty>,
+    pub generics: Vec<IdentKinded>,
+    pub param_tys: Vec<Ty>,
+    pub exec_ty: ExecTy,
+    pub ret_ty: Box<Ty>,
 }
 
 impl FnTy {
-    fn new(
+    pub fn new(
         generics: Vec<IdentKinded>,
-        param_tys: Vec<DataTy>,
+        param_tys: Vec<Ty>,
         exec_ty: ExecTy,
         ret_ty: Ty,
     ) -> Self {
@@ -810,7 +809,7 @@ impl FnTy {
 pub enum TyKind {
     Data(Box<DataTy>),
     // <x:k,..>(ty..) -[x:exec]-> ty
-    Fn(Box<FnTy>),
+    FnTy(Box<FnTy>),
     Ident(Ident),
     Dead(Box<Ty>),
 }
@@ -824,25 +823,12 @@ pub enum Constraint {
 
 impl Ty {
     pub fn new(ty: TyKind) -> Self {
-        Ty {
-            ty,
-            constraints: vec![],
-            span: None,
-        }
-    }
-
-    pub fn with_constr(ty: TyKind, constraints: Vec<Constraint>) -> Ty {
-        Ty {
-            ty,
-            constraints,
-            span: None,
-        }
+        Ty { ty, span: None }
     }
 
     pub fn with_span(ty: TyKind, span: Span) -> Ty {
         Ty {
             ty,
-            constraints: vec![],
             span: Some(span),
         }
     }
@@ -872,7 +858,7 @@ impl Ty {
     pub fn copyable(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
-            TyKind::Fn(_) => true,
+            TyKind::FnTy(_) => true,
             TyKind::Ident(_) => false,
             TyKind::Dead(_) => panic!(
                 "This case is not expected to mean anything.\
@@ -884,7 +870,7 @@ impl Ty {
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::Ident(_) | TyKind::Fn(_) => true,
+            TyKind::Ident(_) | TyKind::FnTy(_) => true,
             TyKind::Dead(_) => false,
         }
     }
@@ -913,7 +899,7 @@ impl Ty {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
-            TyKind::Fn(fn_ty) => {
+            TyKind::FnTy(fn_ty) => {
                 fn_ty
                     .param_tys
                     .iter()
@@ -930,7 +916,7 @@ impl Ty {
             TyKind::Data(dty) => Ty::new(TyKind::Data(Box::new(
                 dty.subst_ident_kinded(ident_kinded, with),
             ))),
-            TyKind::Fn(fn_ty) => Ty::new(TyKind::Fn(Box::new(FnTy::new(
+            TyKind::FnTy(fn_ty) => Ty::new(TyKind::FnTy(Box::new(FnTy::new(
                 fn_ty.generics.clone(),
                 fn_ty
                     .param_tys
@@ -1658,7 +1644,7 @@ mod size_asserts {
     static_assert_size!(ExecTyKind, 40);
     static_assert_size!(Expr, 128);
     static_assert_size!(ExprKind, 104);
-    static_assert_size!(FunDef, 256);
+    static_assert_size!(FunDef, 264);
     static_assert_size!(Ident, 32); // maybe too large?
     static_assert_size!(IdentExec, 40);
     static_assert_size!(Lit, 16);
@@ -1669,6 +1655,6 @@ mod size_asserts {
     static_assert_size!(PlaceExpr, 88);
     static_assert_size!(PlaceExprKind, 40);
     static_assert_size!(ScalarTy, 1);
-    static_assert_size!(DataTy, 56);
+    static_assert_size!(Ty, 56);
     static_assert_size!(TyKind, 40);
 }

@@ -178,12 +178,9 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
     ty_ctx
         .all_places()
         .into_iter()
-        .filter(|(_, ty)| match &ty.ty {
-            TyKind::Data(dty) => match &dty.dty {
-                DataTyKind::Ref(reff) => match &reff.rgn {
-                    Provenance::Value(prv_name) => prv_name == prv,
-                    _ => false,
-                },
+        .filter(|(_, dty)| match &dty.dty {
+            DataTyKind::Ref(reff) => match &reff.rgn {
+                Provenance::Value(prv_name) => prv_name == prv,
                 _ => false,
             },
             _ => false,

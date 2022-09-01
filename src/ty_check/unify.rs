@@ -66,12 +66,12 @@ pub(super) fn inst_fn_ty_scheme(
         .collect();
     let mono_ret_ty = TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
 
-    Ok(Ty::new(TyKind::Fn(
+    Ok(Ty::new(TyKind::FnTy(Box::new(FnTy::new(
         vec![],
         mono_param_tys,
         exec_ty.clone(),
-        Box::new(mono_ret_ty),
-    )))
+        mono_ret_ty,
+    )))))
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -79,10 +79,11 @@ pub(super) struct PrvConstr(pub Provenance, pub Provenance);
 
 #[derive(Debug)]
 pub(super) struct ConstrainMap {
-    pub ty_unifier: HashMap<String, Ty>,
-    pub dty_unifier: HashMap<String, DataTy>,
-    pub nat_unifier: HashMap<String, Nat>,
-    pub mem_unifier: HashMap<String, Memory>,
+    // TODO swap Box<str> for something more abstract, like Symbol or Identifier
+    pub ty_unifier: HashMap<Box<str>, Ty>,
+    pub dty_unifier: HashMap<Box<str>, DataTy>,
+    pub nat_unifier: HashMap<Box<str>, Nat>,
+    pub mem_unifier: HashMap<Box<str>, Memory>,
 }
 
 impl ConstrainMap {
@@ -183,24 +184,23 @@ impl Constrainable for Ty {
         match (&mut self.ty, &mut other.ty) {
             (TyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
             (_, TyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
-            (
-                TyKind::Fn(idents_kinded1, param_tys1, exec1, ret_ty1),
-                TyKind::Fn(idents_kinded2, param_tys2, exec2, ret_ty2),
-            ) => {
-                assert!(idents_kinded1.is_empty());
-                assert!(idents_kinded2.is_empty());
+            (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
+                assert!(fn_ty1.generics.is_empty());
+                assert!(fn_ty2.generics.is_empty());
 
-                exec1.constrain(exec2, constr_map, prv_rels)?;
+                fn_ty1
+                    .exec_ty
+                    .constrain(&mut fn_ty2.exec_ty, constr_map, prv_rels)?;
 
-                if param_tys1.len() != param_tys2.len() {
+                if fn_ty1.param_tys.len() != fn_ty2.param_tys.len() {
                     return Err(TyError::CannotUnify);
                 }
                 // substitute result of unification for every following unification
                 // TODO Refactor: create iterator over Some((next_lhs, tail_lhs), (next_rhs, tail_rhs))?
                 //  move into function
                 let mut i = 0;
-                let mut remain_lhs = &mut param_tys1[i..];
-                let mut remain_rhs = &mut param_tys2[i..];
+                let mut remain_lhs = &mut fn_ty1.param_tys[i..];
+                let mut remain_rhs = &mut fn_ty2.param_tys[i..];
                 while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
                     (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
                 {
@@ -213,11 +213,13 @@ impl Constrainable for Ty {
                         .for_each(|ty| substitute(constr_map, ty));
 
                     i += 1;
-                    remain_lhs = &mut param_tys1[i..];
-                    remain_rhs = &mut param_tys2[i..];
+                    remain_lhs = &mut fn_ty1.param_tys[i..];
+                    remain_rhs = &mut fn_ty2.param_tys[i..];
                 }
 
-                ret_ty1.constrain(ret_ty2, constr_map, prv_rels)
+                fn_ty1
+                    .ret_ty
+                    .constrain(&mut fn_ty2.ret_ty, constr_map, prv_rels)
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
             (TyKind::Dead(_), _) => {
@@ -256,11 +258,24 @@ impl Constrainable for DataTy {
                     Ok(())
                 }
             }
-            (DataTyKind::Ref(prv1, own1, mem1, dty1), DataTyKind::Ref(prv2, own2, mem2, dty2)) => {
+            (DataTyKind::Ref(ref1), DataTyKind::Ref(ref2)) => {
+                let RefDty {
+                    rgn: rgn1,
+                    own: own1,
+                    mem: mem1,
+                    dty: dty1,
+                } = ref1.as_mut();
+                let RefDty {
+                    rgn: rgn2,
+                    own: own2,
+                    mem: mem2,
+                    dty: dty2,
+                } = ref2.as_mut();
+
                 if own1 != own2 {
                     return Err(TyError::CannotUnify);
                 }
-                prv1.constrain(prv2, constr_map, prv_rels)?;
+                rgn1.constrain(rgn2, constr_map, prv_rels)?;
                 mem1.constrain(mem2, constr_map, prv_rels)?;
                 dty1.constrain(dty2, constr_map, prv_rels)
             }
@@ -362,19 +377,19 @@ impl Constrainable for Dim {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (self, other) {
-            (Dim::XYZ(ln1, ln2, ln3), Dim::XYZ(rn1, rn2, rn3)) => {
-                ln1.constrain(rn1, constr_map, prv_rels)?;
-                ln2.constrain(rn2, constr_map, prv_rels)?;
-                ln3.constrain(rn3, constr_map, prv_rels)
+            (Dim::XYZ(ldim), Dim::XYZ(rdim)) => {
+                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
+                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)?;
+                ldim.2.constrain(&mut rdim.2, constr_map, prv_rels)
             }
-            (Dim::XY(ln1, ln2), Dim::XY(rn1, rn2))
-            | (Dim::XZ(ln1, ln2), Dim::XZ(rn1, rn2))
-            | (Dim::YZ(ln1, ln2), Dim::YZ(rn1, rn2)) => {
-                ln1.constrain(rn1, constr_map, prv_rels)?;
-                ln2.constrain(rn2, constr_map, prv_rels)
+            (Dim::XY(ldim), Dim::XY(rdim))
+            | (Dim::XZ(ldim), Dim::XZ(rdim))
+            | (Dim::YZ(ldim), Dim::YZ(rdim)) => {
+                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
+                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)
             }
-            (Dim::X(ln), Dim::X(rn)) | (Dim::Y(ln), Dim::Y(rn)) | (Dim::Z(ln), Dim::Z(rn)) => {
-                ln.constrain(rn, constr_map, prv_rels)
+            (Dim::X(ld), Dim::X(rd)) | (Dim::Y(ld), Dim::Y(rd)) | (Dim::Z(ld), Dim::Z(rd)) => {
+                ld.0.constrain(&mut rd.0, constr_map, prv_rels)
             }
             _ => Err(TyError::CannotUnify),
         }
@@ -717,15 +732,15 @@ fn scalar() -> TyResult<()> {
 
 #[test]
 fn shrd_ref() -> TyResult<()> {
-    let mut shrd_ref = DataTy::new(DataTyKind::Ref(
+    let mut shrd_ref = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
         Provenance::Value("r".to_string()),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Array(
+        DataTy::new(DataTyKind::Array(
             Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
             Nat::Ident(Ident::new("n")),
-        ))),
-    ));
+        )),
+    ))));
     let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
     let (subst, _) = constrain(&mut shrd_ref, &mut t)?;
     substitute(&subst, &mut shrd_ref);
@@ -736,21 +751,21 @@ fn shrd_ref() -> TyResult<()> {
 
 #[test]
 fn shrd_ref_inner_var() -> TyResult<()> {
-    let mut shrd_ref = DataTy::new(DataTyKind::Ref(
+    let mut shrd_ref = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
         Provenance::Value("r".to_string()),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Array(
+        DataTy::new(DataTyKind::Array(
             Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
             Nat::Ident(Ident::new("n")),
-        ))),
-    ));
-    let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(
+        )),
+    ))));
+    let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
         Provenance::Value("r".to_string()),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
-    ));
+        DataTy::new(DataTyKind::Ident(Ident::new("t"))),
+    ))));
     let (subst, _) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
     println!("{:?}", subst);
     substitute(&subst, &mut shrd_ref);
@@ -761,21 +776,21 @@ fn shrd_ref_inner_var() -> TyResult<()> {
 
 #[test]
 fn prv_val_ident() -> TyResult<()> {
-    let mut shrd_ref = DataTy::new(DataTyKind::Ref(
+    let mut shrd_ref = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
         Provenance::Value("r".to_string()),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Array(
+        DataTy::new(DataTyKind::Array(
             Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
             Nat::Ident(Ident::new("n")),
-        ))),
-    ));
-    let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(
+        )),
+    ))));
+    let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
         Provenance::Ident(Ident::new("a")),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
-    ));
+        DataTy::new(DataTyKind::Ident(Ident::new("t"))),
+    ))));
     let (subst, prv_rels) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
     println!("{:?}", subst);
     substitute(&subst, &mut shrd_ref);

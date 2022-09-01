@@ -177,7 +177,7 @@ pub fn walk_fn_ty<V: VisitMut>(visitor: &mut V, fn_ty: &mut FnTy) {
 pub fn walk_ty<V: VisitMut>(visitor: &mut V, ty: &mut Ty) {
     match &mut ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::Fn(fn_ty) => {
+        TyKind::FnTy(fn_ty) => {
             visitor.visit_fn_ty(fn_ty);
         }
         TyKind::Ident(ident) => visitor.visit_ident(ident),
@@ -406,7 +406,7 @@ pub fn walk_param_decl<V: VisitMut>(visitor: &mut V, param_decl: &mut ParamDecl)
 
 pub fn walk_fun_def<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDef) {
     let FunDef {
-        name: _,
+        ident: _,
         generic_params,
         param_decls: params,
         ret_dty,

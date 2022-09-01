@@ -932,7 +932,7 @@ impl TyChecker {
             empty_ty_ctx
         );
 
-        let fun_ty = Ty::new(TyKind::Fn(
+        let fun_ty = Ty::new(TyKind::FnTy(
             vec![],
             params
                 .iter()
@@ -1411,7 +1411,7 @@ impl TyChecker {
         // TODO check well-kinded: FrameTyping, Prv, Ty
         let (mut res_ty_ctx, f_remain_gen_args, f_subst_param_tys, f_subst_ret_ty, mut f_mono_ty) =
             self.ty_check_dep_app(kind_ctx, ty_ctx, ident_exec, ef, k_args)?;
-        let exec_f = if let TyKind::Fn(_, _, exec_f, _) = &ef.ty.as_ref().unwrap().ty {
+        let exec_f = if let TyKind::FnTy(_, _, exec_f, _) = &ef.ty.as_ref().unwrap().ty {
             if !exec_f.callable_in(&ident_exec.ty) {
                 return Err(TyError::String(format!(
                     "Trying to apply function for execution resource `{}` \
@@ -1433,7 +1433,7 @@ impl TyChecker {
         let ret_ty = Ty::new(utils::fresh_ident("ret_ty", TyKind::Ident));
         unify::unify(
             &mut f_mono_ty,
-            &mut Ty::new(TyKind::Fn(
+            &mut Ty::new(TyKind::FnTy(
                 vec![],
                 args.iter()
                     .map(|arg| arg.ty.unwrap().as_ref().clone())
@@ -1450,7 +1450,7 @@ impl TyChecker {
         );
         k_args.append(&mut inferred_k_args);
 
-        if let TyKind::Fn(_, _, _, ret_ty_f) = &f_mono_ty.ty {
+        if let TyKind::FnTy(_, _, _, ret_ty_f) = &f_mono_ty.ty {
             // TODO check provenance relations
             return Ok((res_ty_ctx, *ret_ty_f.clone()));
         }
@@ -1467,7 +1467,7 @@ impl TyChecker {
         k_args: &mut [ArgKinded],
     ) -> TyResult<(TyCtx, Vec<IdentKinded>, Vec<Ty>, Ty, Ty)> {
         let res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, ef)?;
-        if let TyKind::Fn(gen_params, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
+        if let TyKind::FnTy(gen_params, param_tys, exec_f, out_ty) = &ef.ty.as_ref().unwrap().ty {
             if gen_params.len() < k_args.len() {
                 return Err(TyError::String(format!(
                     "Wrong amount of generic arguments. Expected {}, found {}",
@@ -1550,7 +1550,7 @@ impl TyChecker {
                     "Tuple elements must be data types, but found general type identifier."
                         .to_string(),
                 )),
-                TyKind::Fn(_, _, _, _) => Err(TyError::String(
+                TyKind::FnTy(_, _, _, _) => Err(TyError::String(
                     "Tuple elements must be data types, but found function type.".to_string(),
                 )),
                 TyKind::Dead(_) => {
@@ -1797,10 +1797,10 @@ impl TyChecker {
         }
         unify::unify(
             pl_expr.ty.unwrap().as_mut(),
-            &mut Ty::new(TyKind::Data(DataTy::with_constr(
+            &mut Ty::new(TyKind::Data(Box::new(DataTy::with_constr(
                 utils::fresh_ident("pl_deref", DataTyKind::Ident),
                 vec![Constraint::Copyable],
-            ))),
+            )))),
         )?;
         if pl_expr.ty.as_ref().unwrap().copyable() {
             Ok((ty_ctx, pl_expr.ty.unwrap().as_ref().clone()))
@@ -1818,7 +1818,7 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let place = pl_expr.to_place().unwrap();
         // If place is an identifier referring to a globally declared function
-        let (res_ty_ctx, pl_ty) = if let Ok(fun_ty) = self.gl_ctx.fun_ty_by_ident(&place.ident) {
+        let (res_ty_ctx, pl_ty) = if let Ok(fun_ty) = self.gl_ctx.fn_ty_by_ident(&place.ident) {
             (ty_ctx, fun_ty.clone())
         } else {
             // If place is NOT referring to a globally declared function
@@ -1937,7 +1937,7 @@ impl TyChecker {
                     ));
                 },
             ),
-            TyKind::Fn(_, _, _, _) => {
+            TyKind::FnTy(_, _, _, _) => {
                 return Err(TyError::String("Trying to borrow a function.".to_string()))
             }
             TyKind::Ident(_) => {
@@ -2030,7 +2030,7 @@ impl TyChecker {
         let ty = if let Ok(tty) = ty_ctx.ty_of_ident(ident) {
             tty
         } else {
-            self.gl_ctx.fun_ty_by_ident(ident)?
+            self.gl_ctx.fn_ty_by_ident(ident)?
         };
 
         match &ty.ty {
@@ -2054,7 +2054,7 @@ impl TyChecker {
                     vec![],
                 ))
             }
-            TyKind::Fn(_, _, _, _) => {
+            TyKind::FnTy(_, _, _, _) => {
                 if !ty.is_fully_alive() {
                     panic!("This should never happen.")
                 }
@@ -2321,7 +2321,7 @@ impl TyChecker {
                 }
             }
             // TODO check well-formedness of Nats
-            TyKind::Fn(idents_kinded, param_tys, exec_ty, ret_ty) => {
+            TyKind::FnTy(idents_kinded, param_tys, exec_ty, ret_ty) => {
                 let extended_kind_ctx = kind_ctx.clone().append_idents(idents_kinded.clone());
                 self.ty_well_formed(&extended_kind_ctx, ty_ctx, exec_ty, ret_ty)?;
                 for param_ty in param_tys {
