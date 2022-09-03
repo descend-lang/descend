@@ -148,7 +148,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, comp_unit: &[desc::FunDef], idx_checks: bo
     } = gl_fun;
 
     cu::Item::FunDef {
-        name: name.clone(),
+        name: name.name.to_string(),
         templ_params: gen_templ_params(ty_idents),
         params: gen_param_decls(params),
         ret_ty: gen_ty(

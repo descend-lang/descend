@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
-use std::fmt::Formatter;
 
 use descend_derive::span_derive;
 pub use span::*;
@@ -270,27 +269,82 @@ impl Expr {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct ParForWith(
-    pub Option<Vec<Expr>>,
-    pub DimCompo,
-    pub Option<Ident>,
-    pub ExecExpr,
-    pub Vec<Ident>,
-    pub Vec<Expr>,
-    pub Box<Expr>,
-);
+pub struct ParForWith {
+    // TODO remove decls
+    pub decls: Option<Vec<Expr>>,
+    pub dim: DimCompo,
+    pub inner_exec: Option<Ident>,
+    pub exec: ExecExpr,
+    pub input_idents: Vec<Ident>,
+    pub input_views: Vec<Expr>,
+    pub body: Box<Expr>,
+}
+
+impl ParForWith {
+    pub fn new(
+        decls: Option<Vec<Expr>>,
+        dim: DimCompo,
+        inner_exec: Option<Ident>,
+        exec: ExecExpr,
+        input_idents: Vec<Ident>,
+        input_views: Vec<Expr>,
+        body: Expr,
+    ) -> Self {
+        ParForWith {
+            decls,
+            dim,
+            inner_exec,
+            exec,
+            input_idents,
+            input_views,
+            body: Box::new(body),
+        }
+    }
+}
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct ExprSplit(
-    pub Option<String>,
-    pub Option<String>,
-    pub Ownership,
-    pub Nat,
-    pub Box<PlaceExpr>,
-);
+pub struct ExprSplit {
+    pub lrgn: Option<String>,
+    pub rrgn: Option<String>,
+    pub own: Ownership,
+    pub pos: Nat,
+    pub view: Box<PlaceExpr>,
+}
+
+impl ExprSplit {
+    pub fn new(
+        lrgn: Option<String>,
+        rrgn: Option<String>,
+        own: Ownership,
+        pos: Nat,
+        view: PlaceExpr,
+    ) -> Self {
+        ExprSplit {
+            lrgn,
+            rrgn,
+            own,
+            pos,
+            view: Box::new(view),
+        }
+    }
+}
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct ParBranch(pub ExecExpr, pub Vec<Ident>, pub Vec<Expr>);
+pub struct ParBranch {
+    pub split_exec: ExecExpr,
+    pub branch_idents: Vec<Ident>,
+    pub branch_bodies: Vec<Expr>,
+}
+
+impl ParBranch {
+    pub fn new(split_exec: ExecExpr, branch_idents: Vec<Ident>, branch_bodies: Vec<Expr>) -> Self {
+        ParBranch {
+            split_exec,
+            branch_idents,
+            branch_bodies,
+        }
+    }
+}
 
 // TODO box PlaceExpr?
 #[derive(PartialEq, Debug, Clone)]
@@ -705,7 +759,7 @@ impl ExecExpr {
 }
 
 impl fmt::Display for ExecExpr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.exec)
     }
 }
@@ -728,7 +782,7 @@ impl ExecSplit {
 }
 
 impl fmt::Display for ExecSplit {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Split<{}, {}, {}>", self.split_dim, self.pos, self.exec)
     }
 }
@@ -757,7 +811,7 @@ impl ExecKind {
 }
 
 impl fmt::Display for ExecKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExecKind::Ident(ident) => write!(f, "{}", ident),
             ExecKind::CpuThread => write!(f, "cpu.thread"),
@@ -981,6 +1035,31 @@ pub enum Dim {
     Y(Box<Dim1d>),
     Z(Box<Dim1d>),
 }
+impl Dim {
+    pub fn new_3d(n1: Nat, n2: Nat, n3: Nat) -> Self {
+        Dim::XYZ(Box::new(Dim3d(n1, n2, n3)))
+    }
+
+    pub fn new_2d<F: Fn(Box<Dim2d>) -> Self>(constr: F, n1: Nat, n2: Nat) -> Self {
+        constr(Box::new(Dim2d(n1, n2)))
+    }
+    pub fn new_1d<F: Fn(Box<Dim1d>) -> Self>(constr: F, n: Nat) -> Self {
+        constr(Box::new(Dim1d(n)))
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use Dim::*;
+        match self {
+            XYZ(dim3d) => XYZ(Box::new(dim3d.subst_ident_kinded(ident_kinded, with))),
+            XY(dim2d) => XY(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
+            XZ(dim2d) => XZ(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
+            YZ(dim2d) => YZ(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
+            X(dim1d) => X(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
+            Y(dim1d) => Y(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
+            Z(dim1d) => Z(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
+        }
+    }
+}
 
 impl fmt::Display for Dim {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -1001,58 +1080,6 @@ impl fmt::Display for Dim {
     }
 }
 
-impl Dim {
-    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
-        use Dim::*;
-        match self {
-            XYZ(dim3d) => XYZ(Box::new(dim3d.subst_ident_kinded(ident_kinded, with))),
-            XY(dim2d) => XY(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
-            XZ(dim2d) => XZ(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
-            YZ(dim2d) => YZ(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
-            X(dim1d) => X(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
-            Y(dim1d) => Y(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
-            Z(dim1d) => Z(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
-        }
-    }
-
-    pub fn remove_dim(&self, dim_compo: DimCompo) -> Option<Self> {
-        match (self, dim_compo) {
-            (Dim::XYZ(dim3d), DimCompo::X) => Some(Dim::YZ(Box::new(Dim2d(
-                dim3d.as_ref().1.clone(),
-                dim3d.2.clone(),
-            )))),
-            (Dim::XYZ(dim3d), DimCompo::Y) => Some(Dim::XZ(Box::new(Dim2d(
-                dim3d.as_ref().0.clone(),
-                dim3d.2.clone(),
-            )))),
-            (Dim::XYZ(dim3d), DimCompo::Z) => Some(Dim::XY(Box::new(Dim2d(
-                dim3d.as_ref().0.clone(),
-                dim3d.as_ref().1.clone(),
-            )))),
-            (Dim::XY(dim2d), DimCompo::X) => {
-                Some(Dim::Y(Box::new(Dim1d(dim2d.as_ref().1.clone()))))
-            }
-            (Dim::XY(dim2d), DimCompo::Y) => {
-                Some(Dim::X(Box::new(Dim1d(dim2d.as_ref().0.clone()))))
-            }
-            (Dim::XZ(dim2d), DimCompo::X) => {
-                Some(Dim::Z(Box::new(Dim1d(dim2d.as_ref().1.clone()))))
-            }
-            (Dim::XZ(dim2d), DimCompo::Z) => {
-                Some(Dim::X(Box::new(Dim1d(dim2d.as_ref().0.clone()))))
-            }
-            (Dim::YZ(dim2d), DimCompo::Y) => {
-                Some(Dim::Z(Box::new(Dim1d(dim2d.as_ref().1.clone()))))
-            }
-            (Dim::YZ(dim2d), DimCompo::Z) => {
-                Some(Dim::Y(Box::new(Dim1d(dim2d.as_ref().0.clone()))))
-            }
-            (Dim::X(_), DimCompo::X) | (Dim::Y(_), DimCompo::Y) | (Dim::Z(_), DimCompo::Z) => None,
-            _ => panic!("provided dimension component does not exist"),
-        }
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum DimCompo {
     X,
@@ -1061,7 +1088,7 @@ pub enum DimCompo {
 }
 
 impl fmt::Display for DimCompo {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DimCompo::X => write!(f, "X"),
             DimCompo::Y => write!(f, "Y"),
@@ -1079,43 +1106,6 @@ pub struct DataTy {
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct RefDty {
-    pub rgn: Provenance,
-    pub own: Ownership,
-    pub mem: Memory,
-    pub dty: Box<DataTy>,
-}
-
-impl RefDty {
-    pub fn new(rgn: Provenance, own: Ownership, mem: Memory, dty: DataTy) -> Self {
-        RefDty {
-            rgn,
-            own,
-            mem,
-            dty: Box::new(dty),
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum DataTyKind {
-    Ident(Ident),
-    Scalar(ScalarTy),
-    Atomic(ScalarTy),
-    Array(Box<DataTy>, Nat),
-    // [[ dty; n ]]
-    ArrayShape(Box<DataTy>, Nat),
-    Tuple(Vec<DataTy>),
-    At(Box<DataTy>, Memory),
-    Ref(Box<RefDty>),
-    RawPtr(Box<DataTy>),
-    Range,
-    // Only for type checking purposes.
-    Dead(Box<DataTy>),
-}
-
 impl DataTy {
     pub fn new(dty: DataTyKind) -> Self {
         DataTy {
@@ -1279,6 +1269,42 @@ impl DataTy {
     }
 }
 
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct RefDty {
+    pub rgn: Provenance,
+    pub own: Ownership,
+    pub mem: Memory,
+    pub dty: Box<DataTy>,
+}
+
+impl RefDty {
+    pub fn new(rgn: Provenance, own: Ownership, mem: Memory, dty: DataTy) -> Self {
+        RefDty {
+            rgn,
+            own,
+            mem,
+            dty: Box::new(dty),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum DataTyKind {
+    Ident(Ident),
+    Scalar(ScalarTy),
+    Atomic(ScalarTy),
+    Array(Box<DataTy>, Nat),
+    // [[ dty; n ]]
+    ArrayShape(Box<DataTy>, Nat),
+    Tuple(Vec<DataTy>),
+    At(Box<DataTy>, Memory),
+    Ref(Box<RefDty>),
+    RawPtr(Box<DataTy>),
+    Range,
+    // Only for type checking purposes.
+    Dead(Box<DataTy>),
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ScalarTy {
     Unit,
@@ -1352,7 +1378,7 @@ impl Memory {
 }
 
 impl fmt::Display for Memory {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Memory::CpuMem => write!(f, "cpu.mem"),
             Memory::GpuGlobal => write!(f, "gpu.global"),
@@ -1389,7 +1415,7 @@ impl ExecTy {
 }
 
 impl fmt::Display for ExecTy {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.ty)
     }
 }
@@ -1408,7 +1434,7 @@ pub enum ExecTyKind {
 }
 
 impl fmt::Display for ExecTyKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExecTyKind::CpuThread => write!(f, "cpu.thread"),
             ExecTyKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),

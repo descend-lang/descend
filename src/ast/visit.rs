@@ -219,31 +219,49 @@ pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
 }
 
 pub fn walk_par_branch<V: Visit>(visitor: &mut V, par_branch: &ParBranch) {
-    let ParBranch(split_exec, branch_idents, branch_bodies) = par_branch;
+    let ParBranch {
+        split_exec,
+        branch_idents,
+        branch_bodies,
+    } = par_branch;
     visitor.visit_exec_expr(split_exec);
     walk_list!(visitor, visit_ident, branch_idents);
     walk_list!(visitor, visit_expr, branch_bodies);
 }
 
 pub fn walk_par_for<V: Visit>(visitor: &mut V, par_for: &ParForWith) {
-    let ParForWith(decls, par_dim, par_elem, exec_expr, input_elems, input, body) = par_for;
-    visitor.visit_dim_compo(par_dim);
+    let ParForWith {
+        decls,
+        dim,
+        inner_exec,
+        exec,
+        input_idents,
+        input_views,
+        body,
+    } = par_for;
+    visitor.visit_dim_compo(dim);
     for d in decls {
         walk_list!(visitor, visit_expr, d)
     }
-    for ident in par_elem {
+    for ident in inner_exec {
         visitor.visit_ident(ident)
     }
-    visitor.visit_exec_expr(exec_expr);
-    walk_list!(visitor, visit_ident, input_elems);
-    walk_list!(visitor, visit_expr, input);
+    visitor.visit_exec_expr(exec);
+    walk_list!(visitor, visit_ident, input_idents);
+    walk_list!(visitor, visit_expr, input_views);
     visitor.visit_expr(body);
 }
 
 pub fn walk_expr_split<V: Visit>(visitor: &mut V, expr_split: &ExprSplit) {
-    let ExprSplit(_prv_val1, _prv_val2, own, s, view) = expr_split;
+    let ExprSplit {
+        lrgn: _lrgn,
+        rrgn: _rgn,
+        own,
+        pos,
+        view,
+    } = expr_split;
     visitor.visit_own(own);
-    visitor.visit_nat(s);
+    visitor.visit_nat(pos);
     visitor.visit_pl_expr(view);
 }
 

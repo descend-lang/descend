@@ -302,7 +302,7 @@ peg::parser! {
             begin:position!() "split" __ r1:(prv:prov_value() __ { prv })?
                     r2:(prv:prov_value()  __ { prv })? o:ownership() __
                     s:nat() __ view:place_expression() end:position!() {
-                Expr::new(ExprKind::Split(Box::new(ExprSplit(r1, r2, o, s, Box::new(view)))))
+                Expr::new(ExprKind::Split(Box::new(ExprSplit::new(r1, r2, o, s, view))))
             }
             begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
@@ -381,7 +381,7 @@ peg::parser! {
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
-                Expr::new(ExprKind::ParBranch(Box::new(ParBranch(split_exec,
+                Expr::new(ExprKind::ParBranch(Box::new(ParBranch::new(split_exec,
                     branch.iter().map(|(i, _)| i.clone()).collect(),
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
             }
@@ -390,10 +390,10 @@ peg::parser! {
                 par_ident:maybe_ident() __ "in" __ exec_expr:exec_expr() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
             "from" __ input:expression() **<1,> (_ "," _) _ body:block() {
-                Expr::new(ExprKind::ParForWith(Box::new(ParForWith(decls, match par_dim {
+                Expr::new(ExprKind::ParForWith(Box::new(ParForWith::new(decls, match par_dim {
                     Some(pd) => pd,
                     None => DimCompo::X,
-                }, par_ident, exec_expr, input_elems, input, Box::new(body)))))
+                }, par_ident, exec_expr, input_elems, input, body))))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
