@@ -31,7 +31,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                     let active_half0 = active_halves.0;
                     let active_half1 = active_halves.1;
                     // Fixme: At thies point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
-                    par_branch split_exec x k block {
+                    par_branch split_exec(X) k block {
                         active =>
                             parfor _ in active
                             with a, b from active_half0, active_half1 {
@@ -42,7 +42,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                  };
                  let tmp_view2 = to_view_mut::<'f, gpu.shared, bs, i32>(&'f uniq tmp);
                  let tmp_res = (split 'u1 'u2 uniq 1 (*tmp_view2)).0;
-                 par_branch split_exec x 1 block {
+                 par_branch split_exec(X) 1 block {
                     single_thread =>
                         parfor _ in single_thread
                         with out, tmp_val from out_elem, tmp_res {

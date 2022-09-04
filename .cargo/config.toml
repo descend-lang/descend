@@ -1,3 +1,0 @@
-[env]
-# set stack size to 8MB
-# RUST_MIN_STACK = "536870912"

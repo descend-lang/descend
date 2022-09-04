@@ -14,7 +14,7 @@ fn reduce<n: nat, a: prv, b: prv>(
                     let split_ib = (split uniq 2*k (*ib)).0;
                     let (active_half0, active_half1) = split uniq k (*split_ib);
 
-                    par_branch split_exec x k block {
+                    par_branch split_exec(X) k block {
                         active_threads => {
                             parfor _ in active_threads
                             with fst_half, snd_half from active_half0, active_half1 {

@@ -79,9 +79,6 @@ impl Visit for FreeKindedIdents {
 
     fn visit_ty(&mut self, ty: &Ty) {
         match &ty.ty {
-            TyKind::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty))),
             TyKind::FnTy(fn_ty) => {
                 if !fn_ty.generics.is_empty() {
                     panic!("Generic function types can not appear, only their instatiated counter parts.")

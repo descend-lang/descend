@@ -55,14 +55,10 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                         }
                         Kind::Memory => *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded)),
                         Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
-                        Kind::Ty => {
-                            // TODO how to deal with View??!! This is a problem!
-                            //  Ident only for Ty but not for DataTy or ViewTy?
-                            *gen_arg = ArgKinded::Ty(Ty::new(TyKind::Data(Box::new(DataTy::new(
-                                DataTyKind::Ident(to_be_kinded),
-                            )))))
+                        Kind::DataTy => {
+                            *gen_arg =
+                                ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(to_be_kinded)))
                         }
-                        _ => panic!("This kind can not be referred to with an identifier."),
                     }
                 }
             }
@@ -409,9 +405,9 @@ peg::parser! {
             / "_" { None }
 
         rule dim_component() -> DimCompo =
-            "x" { DimCompo::X }
-        /   "y" { DimCompo::Y }
-        /   "z" { DimCompo::Z }
+            "X" { DimCompo::X }
+        /   "Y" { DimCompo::Y }
+        /   "Z" { DimCompo::Z }
 
         rule block() -> Expr =
             prov_values:("<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _ { prov_values })?
@@ -444,7 +440,7 @@ peg::parser! {
             = !identifier() result:(
                 n:nat() { ArgKinded::Nat(n) }
                 / mem:memory_kind() { ArgKinded::Memory(mem) }
-                / ty:ty() { match ty.ty { TyKind::Data(dty) => ArgKinded::DataTy(*dty), _ => ArgKinded::Ty(ty) } }
+                / dty:dty() { ArgKinded::DataTy(dty) }
                 / prov:provenance() { ArgKinded::Provenance(prov) }
             ) { result }
             / ident:ident() { ArgKinded::Ident(ident)}
@@ -573,7 +569,7 @@ peg::parser! {
 
         rule exec_expr_kind() -> ExecKind =
             ident:ident() { ExecKind::Ident(ident) }
-            / "split_exec" __ d:dim_component() __ n:nat() __ exec:exec_expr() {
+            / "split_exec" _ "(" _ d:dim_component() _ ")" __ n:nat() __ exec:exec_expr() {
                 ExecKind::Split(Box::new(ExecSplit::new(d, n, exec)))
             }
 
@@ -625,7 +621,7 @@ peg::parser! {
         pub(crate) rule kind() -> Kind
             = "nat" { Kind::Nat }
             / "mem" { Kind::Memory }
-            / "ty" { Kind::Ty }
+            / "dty" { Kind::DataTy }
             / "prv" { Kind::Provenance }
 
         rule dim() -> Dim
@@ -1207,9 +1203,9 @@ mod tests {
             "does not recognize mem kind"
         );
         assert_eq!(
-            descend::kind("ty"),
-            Ok(Kind::Ty),
-            "does not recognize ty kind"
+            descend::kind("dty"),
+            Ok(Kind::DataTy),
+            "does not recognize dty kind"
         );
         assert_eq!(
             descend::kind("prv"),
@@ -1846,7 +1842,7 @@ mod tests {
     #[test]
     fn global_fun_def_all_function_kinds() {
         // all currently available kinds are tested
-        let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem>(
+        let src = r#"fn test_kinds<n: nat, a: prv, d: dty, m: mem>(
             ha_array: &a uniq cpu.mem [i32; n]
         ) -[ex: cpu.thread]-> () <>{
             42
@@ -1859,7 +1855,7 @@ mod tests {
         let generic_params = vec![
             IdentKinded::new(&Ident::new("n"), Kind::Nat),
             IdentKinded::new(&Ident::new("a"), Kind::Provenance),
-            IdentKinded::new(&Ident::new("t"), Kind::Ty),
+            IdentKinded::new(&Ident::new("d"), Kind::DataTy),
             IdentKinded::new(&Ident::new("m"), Kind::Memory),
         ];
         let params = vec![ParamDecl {

@@ -597,8 +597,7 @@ fn gen_decl_init(
 }
 
 fn has_generatable_ty(e: &desc::Expr) -> bool {
-    matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Ident(_))
-        || matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Data(_))
+    matches!(&e.ty.as_ref().unwrap().ty, desc::TyKind::Data(_))
 }
 
 fn gen_if_else(
@@ -881,10 +880,7 @@ fn gen_exec(
                         name: ki.ident.name.to_string(),
                         ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
                     },
-                    desc::Kind::Ty
-                    | desc::Kind::Provenance
-                    | desc::Kind::Memory
-                    | desc::Kind::DataTy => {
+                    desc::Kind::Provenance | desc::Kind::Memory | desc::Kind::DataTy => {
                         panic!("Unexpected found {:?}.", ki.ident.name)
                     }
                 })
@@ -1301,8 +1297,8 @@ fn gen_check_idx_stmt(
                 body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
                     cu::Stmt::Expr(cu::Expr::FunCall {
                         fun: Box::new(cu::Expr::Ident("descend::atomic_set".to_string())),
-                        template_args: gen_args_kinded(&vec![ArgKinded::Ty(Ty::new(
-                            TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
+                        template_args: gen_args_kinded(&vec![ArgKinded::DataTy(DataTy::new(
+                            DataTyKind::Scalar(ScalarTy::I32),
                         ))]),
                         args: vec![
                             cu::Expr::Ident("global_failure".to_string()),
@@ -2338,10 +2334,13 @@ fn gen_templ_param(ty_ident: &desc::IdentKinded) -> cu::TemplParam {
             param_name: name.to_string(),
             ty: cu::Ty::Scalar(cu::ScalarTy::Memory),
         },
-        desc::Kind::Ty => cu::TemplParam::TyName {
+        desc::Kind::DataTy => cu::TemplParam::TyName {
             name: name.to_string(),
         },
-        _ => panic!("Cannot generate template parameter for {:?}", ty_ident.kind),
+        desc::Kind::Provenance => panic!(
+            "Cannot generate template parameter for {:?}",
+            desc::Kind::Provenance
+        ),
     }
 }
 
@@ -2364,18 +2363,6 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
-        desc::ArgKinded::Ty(desc::Ty {
-            ty: ty @ desc::TyKind::Data(_),
-            ..
-        }) => Some(cu::TemplateArg::Ty(gen_ty(&ty, desc::Mutability::Mut))),
-        desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::Ident(_),
-            ..
-        }) => unimplemented!(),
-        desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::FnTy(_),
-            ..
-        }) => unimplemented!("needed?"),
         desc::ArgKinded::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
             &desc::TyKind::Data(Box::new(dty.clone())),
             desc::Mutability::Mut,
@@ -2383,10 +2370,6 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
         desc::ArgKinded::Memory(_) | desc::ArgKinded::Provenance(_) | desc::ArgKinded::Ident(_) => {
             None
         }
-        desc::ArgKinded::Ty(desc::Ty {
-            ty: desc::TyKind::Dead(_),
-            ..
-        }) => panic!("Dead types cannot be generated."),
     }
 }
 
@@ -2400,7 +2383,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
 
     let m = desc::Mutability::Mut;
     let cu_ty = match ty {
-        Ident(ident) => cu::Ty::Ident(ident.name.to_string()),
         Data(dty) => {
             match &dty.dty {
                 d::Atomic(a) => match a {
@@ -2500,7 +2482,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             }
         }
         FnTy(_) => unimplemented!("needed?"),
-        Dead(_) => panic!("Dead types cannot be generated."),
     };
 
     if matches!(mutbl, desc::Mutability::Mut) {

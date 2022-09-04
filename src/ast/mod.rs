@@ -192,8 +192,6 @@ impl Expr {
         struct SubstKindedIdents<'a> {
             subst_map: HashMap<&'a str, &'a ArgKinded>,
         }
-        // FIXME currently not able to deal with identifiers for which the kind is not known,
-        //  i.e., pre codegneration, there still exist ArgKinded::Ident(_)
         impl VisitMut for SubstKindedIdents<'_> {
             fn visit_nat(&mut self, nat: &mut Nat) {
                 match nat {
@@ -237,28 +235,13 @@ impl Expr {
             fn visit_dty(&mut self, dty: &mut DataTy) {
                 match &mut dty.dty {
                     DataTyKind::Ident(ident) => {
-                        if let Some(ArgKinded::Ty(Ty {
-                            ty: TyKind::Data(dty_arg),
-                            ..
-                        })) = self.subst_map.get::<str>(ident.name.as_ref())
+                        if let Some(ArgKinded::DataTy(dty_arg)) =
+                            self.subst_map.get::<str>(ident.name.as_ref())
                         {
-                            *dty = dty_arg.as_ref().clone()
+                            *dty = dty_arg.clone()
                         }
                     }
                     _ => visit_mut::walk_dty(self, dty),
-                }
-            }
-
-            fn visit_ty(&mut self, ty: &mut Ty) {
-                match &ty.ty {
-                    TyKind::Ident(ident) => {
-                        if let Some(ArgKinded::Ty(ty_arg)) =
-                            self.subst_map.get::<str>(ident.name.as_ref())
-                        {
-                            *ty = ty_arg.clone();
-                        }
-                    }
-                    _ => visit_mut::walk_ty(self, ty),
                 }
             }
         }
@@ -580,7 +563,6 @@ impl fmt::Display for BinOp {
 pub enum Kind {
     Nat,
     Memory,
-    Ty,
     DataTy,
     Provenance,
 }
@@ -590,7 +572,6 @@ impl fmt::Display for Kind {
         let str = match self {
             Kind::Nat => "nat",
             Kind::Memory => "mem",
-            Kind::Ty => "type",
             Kind::DataTy => "dty",
             Kind::Provenance => "prv",
         };
@@ -603,7 +584,6 @@ pub enum ArgKinded {
     Ident(Ident),
     Nat(Nat),
     Memory(Memory),
-    Ty(Ty),
     DataTy(DataTy),
     Provenance(Provenance),
 }
@@ -614,7 +594,6 @@ impl ArgKinded {
             ArgKinded::Ident(_) => {
                 panic!("Unexpected: unkinded identifier should have been removed after parsing")
             }
-            ArgKinded::Ty(_) => Kind::Ty,
             ArgKinded::DataTy(_) => Kind::DataTy,
             ArgKinded::Provenance(_) => Kind::Provenance,
             ArgKinded::Memory(_) => Kind::Memory,
@@ -864,8 +843,6 @@ pub enum TyKind {
     Data(Box<DataTy>),
     // <x:k,..>(ty..) -[x:exec]-> ty
     FnTy(Box<FnTy>),
-    Ident(Ident),
-    Dead(Box<Ty>),
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -913,19 +890,13 @@ impl Ty {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
             TyKind::FnTy(_) => true,
-            TyKind::Ident(_) => false,
-            TyKind::Dead(_) => panic!(
-                "This case is not expected to mean anything.\
-                The type is dead. There is nothing we can do with it."
-            ),
         }
     }
 
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::Ident(_) | TyKind::FnTy(_) => true,
-            TyKind::Dead(_) => false,
+            TyKind::FnTy(_) => true,
         }
     }
 
@@ -960,7 +931,6 @@ impl Ty {
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
                     || fn_ty.ret_ty.contains_ref_to_prv(prv_val_name)
             }
-            TyKind::Ident(_) | TyKind::Dead(_) => false,
         }
     }
 
@@ -980,18 +950,6 @@ impl Ty {
                 fn_ty.exec_ty.clone(),
                 fn_ty.ret_ty.subst_ident_kinded(ident_kinded, with),
             )))),
-            TyKind::Ident(ident) => {
-                if &ident_kinded.ident == ident && ident_kinded.kind == Kind::Ty {
-                    match with {
-                        ArgKinded::Ident(idk) => Ty::new(TyKind::Ident(idk.clone())),
-                        ArgKinded::Ty(ty) => ty.clone(),
-                        _ => panic!("Trying to substitute type identifier with non-type value."),
-                    }
-                } else {
-                    self.clone()
-                }
-            }
-            TyKind::Dead(ty) => ty.subst_ident_kinded(ident_kinded, with),
         }
     }
 }
@@ -1676,11 +1634,11 @@ mod size_asserts {
     static_assert_size!(Lit, 16);
     static_assert_size!(Memory, 32);
     static_assert_size!(Nat, 56);
-    static_assert_size!(ParamDecl, 96);
+    static_assert_size!(ParamDecl, 72);
     static_assert_size!(Pattern, 40);
     static_assert_size!(PlaceExpr, 88);
     static_assert_size!(PlaceExprKind, 40);
     static_assert_size!(ScalarTy, 1);
-    static_assert_size!(Ty, 56);
-    static_assert_size!(TyKind, 40);
+    static_assert_size!(Ty, 32);
+    static_assert_size!(TyKind, 16);
 }

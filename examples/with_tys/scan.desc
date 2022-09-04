@@ -16,7 +16,7 @@ fn upsweep<a: prv>(
         let tmp_up_view = group_mut::<64/d, 'a, gpu.shared, 64, i32>(
             to_view_mut::<'a, gpu.shared, 64, i32>(&'a uniq *arr_ref));
 
-        par_branch split_exec x d block {
+        par_branch split_exec(X) d block {
             active =>
                 parfor _ in active
                 with arr from tmp_up_view
@@ -40,7 +40,7 @@ fn downsweep<a: prv>(
     for_nat d in doubled_range(1, 32) <'b>{
         let tmp_down_view = group_mut::<64 / d, 'b, gpu.shared, 64, i32>(
             to_view_mut::<'b, gpu.shared, 64, i32 > (&'b uniq *arr_ref));
-        par_branch split_exec x d block {
+        par_branch split_exec(X) d block {
             active =>
                 parfor _ in active
                 with arr from tmp_down_view {
@@ -117,7 +117,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                     let tmp_view2 = to_view_mut::<'l, gpu.shared, 64, i32>(&'l uniq tmp);
                     let tmp_last: &'l2 uniq gpu.shared [[i32; 1]] =
                         (split 'l1 'l2 uniq 63 (*tmp_view2)).1;
-                    par_branch split_exec x 1 block {
+                    par_branch split_exec(X) 1 block {
                         active =>
                             parfor _ in active
                             with sum, last from bsum, tmp_last

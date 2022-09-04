@@ -67,7 +67,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
 fn to_raw_ptr_ty() -> FnTy {
     let r = Ident::new("r");
     let m = Ident::new("m");
-    let t = Ident::new("t");
+    let d = Ident::new("d");
 
     let r_prv = IdentKinded {
         ident: r.clone(),
@@ -77,24 +77,24 @@ fn to_raw_ptr_ty() -> FnTy {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
 
     FnTy::new(
-        vec![r_prv, m_mem, t_ty],
+        vec![r_prv, m_mem, d_dty],
         vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
             DataTyKind::Ref(Box::new(RefDty::new(
                 Provenance::Ident(r),
                 Ownership::Uniq,
                 Memory::Ident(m),
-                DataTy::new(DataTyKind::Ident(t.clone())),
+                DataTy::new(DataTyKind::Ident(d.clone())),
             ))),
         ))))],
         ExecTy::new(ExecTyKind::GpuThread),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
-            Box::new(DataTy::new(DataTyKind::Ident(t))),
+            Box::new(DataTy::new(DataTyKind::Ident(d))),
         ))))),
     )
 }
@@ -104,17 +104,17 @@ fn to_raw_ptr_ty() -> FnTy {
 //      RawPtr<t>, i32
 // ) -[gpu.thread]-> RawPtr<t>
 fn offset_raw_ptr_ty() -> FnTy {
-    let t = Ident::new("t");
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d = Ident::new("d");
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
 
     FnTy::new(
-        vec![t_ty],
+        vec![d_dty],
         vec![
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
-                Box::new(DataTy::new(DataTyKind::Ident(t.clone()))),
+                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
             ))))),
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::I32,
@@ -122,7 +122,7 @@ fn offset_raw_ptr_ty() -> FnTy {
         ],
         ExecTy::new(ExecTyKind::GpuThread),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
-            Box::new(DataTy::new(DataTyKind::Ident(t))),
+            Box::new(DataTy::new(DataTyKind::Ident(d))),
         ))))),
     )
 }
@@ -130,7 +130,7 @@ fn offset_raw_ptr_ty() -> FnTy {
 fn atomic_set_ty() -> FnTy {
     let p = Ident::new("p");
     let m = Ident::new("m");
-    let t = Ident::new("t");
+    let d = Ident::new("d");
 
     let p_prv = IdentKinded {
         ident: p.clone(),
@@ -140,22 +140,22 @@ fn atomic_set_ty() -> FnTy {
         ident: m.clone(),
         kind: Kind::Memory,
     };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
     };
     FnTy::new(
-        vec![p_prv, m_mem, t_ty],
+        vec![p_prv, m_mem, d_dty],
         vec![
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
                 Box::new(RefDty::new(
                     Provenance::Ident(p),
                     Ownership::Uniq,
                     Memory::Ident(m),
-                    DataTy::new(DataTyKind::Ident(t.clone())),
+                    DataTy::new(DataTyKind::Ident(d.clone())),
                 )),
             ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(t))))),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(d))))),
         ],
         ExecTy::new(ExecTyKind::GpuThread),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(

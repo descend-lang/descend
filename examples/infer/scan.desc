@@ -15,7 +15,7 @@ fn upsweep<a: prv>(
     for_nat d in halved_range(32) {
 // FIXME the next line uses d:nat but group_mut is defined via d:dty, which clashes
         let tmp_up_view = group_mut::<64/d>(to_view_mut(&uniq *arr_ref));
-        par_branch split_exec x d block {
+        par_branch split_exec(X) d block {
             active =>
                 parfor _ in active
                 with arr from tmp_up_view
@@ -40,7 +40,7 @@ fn downsweep<a: prv>(
         let tmp_down_view = group_mut::<64 / d>(
             to_view_mut(&uniq *arr_ref));
 
-        par_branch split_exec x d block {
+        par_branch split_exec(X) d block {
             active =>
                 parfor _ in active
                 with arr from tmp_down_view {
@@ -105,7 +105,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                 {
                     let tmp_view2 = to_view_mut(&uniq tmp);
                     let tmp_last = (split uniq 63 (*tmp_view2)).1;
-                    par_branch split_exec x 1 block {
+                    par_branch split_exec(X) 1 block {
                         active =>
                             parfor _ in active
                             with sum, last from bsum, tmp_last

@@ -72,7 +72,6 @@ macro_rules! panic_if_neq {
 
 fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &Ty) {
     match (&poly_ty.ty, &mono_ty.ty) {
-        (TyKind::Ident(id), _) => insert_checked!(map, ArgKinded::Ty, id, mono_ty),
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
             if !fn_ty1.generics.is_empty() || !fn_ty2.generics.is_empty() {
@@ -82,7 +81,6 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
             panic_if_neq!(fn_ty1.exec_ty, fn_ty2.exec_ty);
             infer_kargs_tys(map, &fn_ty1.ret_ty, &fn_ty2.ret_ty)
         }
-        (TyKind::Dead(ty1), TyKind::Dead(ty2)) => infer_kargs_tys(map, ty1, ty2),
         _ => panic_no_inst!(),
     }
 }

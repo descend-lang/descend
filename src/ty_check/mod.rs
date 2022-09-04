@@ -335,7 +335,7 @@ impl TyChecker {
         )?;
 
         let split_ty = if let TyKind::Data(dty) = &view.ty.as_ref().unwrap().ty {
-            if let DataTyKind::Array(elem_dty, n) = &dty.dty {
+            if let DataTyKind::ArrayShape(elem_dty, n) = &dty.dty {
                 if s > n {
                     return Err(TyError::String(
                         "Trying to access array out-of-bounds.".to_string(),
@@ -934,7 +934,10 @@ impl TyChecker {
                     ident: ident.clone(),
                     ty: match ty {
                         Some(tty) => tty.clone(),
-                        None => Ty::new(utils::fresh_ident("param_ty", TyKind::Ident)),
+                        None => Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
+                            "param_ty",
+                            DataTyKind::Ident,
+                        ))))),
                     },
                     mutbl: *mutbl,
                 })
@@ -1462,7 +1465,10 @@ impl TyChecker {
         for arg in args.iter_mut() {
             res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, ident_exec, arg)?;
         }
-        let ret_ty = Ty::new(utils::fresh_ident("ret_ty", TyKind::Ident));
+        let ret_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
+            "ret_ty",
+            DataTyKind::Ident,
+        )))));
         unify::unify(
             &mut f_mono_ty,
             &mut Ty::new(TyKind::FnTy(Box::new(FnTy::new(
@@ -1471,7 +1477,7 @@ impl TyChecker {
                     .map(|arg| arg.ty.as_ref().unwrap().as_ref().clone())
                     .collect(),
                 exec_f,
-                ret_ty,
+                ret_dty,
             )))),
         )?;
         let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
@@ -1580,19 +1586,9 @@ impl TyChecker {
             .iter()
             .map(|elem| match &elem.ty.as_ref().unwrap().ty {
                 TyKind::Data(dty) => Ok(dty.as_ref().clone()),
-                TyKind::Ident(_) => Err(TyError::String(
-                    "Tuple elements must be data types, but found general type identifier."
-                        .to_string(),
-                )),
                 TyKind::FnTy(_) => Err(TyError::String(
                     "Tuple elements must be data types, but found function type.".to_string(),
                 )),
-                TyKind::Dead(_) => {
-                    panic!(
-                        "It shouldn't be possible to pass a value of a dead type\
-                        to a tuple constructor."
-                    )
-                }
             })
             .collect();
         Ok((
@@ -1968,9 +1964,6 @@ impl TyChecker {
         }
 
         let (reffed_ty, rmem) = match &pl_expr_ty.ty {
-            TyKind::Dead(_) => {
-                panic!("Cannot happen because of the alive check.")
-            }
             TyKind::Data(dty) => match &dty.dty {
                 DataTyKind::Dead(_) => panic!("Cannot happen because of the alive check."),
                 DataTyKind::At(inner_ty, m) => (inner_ty.deref().clone(), m.clone()),
@@ -1990,13 +1983,6 @@ impl TyChecker {
             },
             TyKind::FnTy(_) => {
                 return Err(TyError::String("Trying to borrow a function.".to_string()))
-            }
-            TyKind::Ident(_) => {
-                return Err(TyError::String(
-                    "Borrowing from value of unspecified type. This could be a view.\
-            Therefore it is not allowed to borrow."
-                        .to_string(),
-                ))
             }
         };
         if rmem == Memory::GpuLocal {
@@ -2263,7 +2249,7 @@ impl TyChecker {
                 | DataTyKind::RawPtr(_)
                 | DataTyKind::Dead(_) => {}
                 DataTyKind::Ident(ident) => {
-                    if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
+                    if !kind_ctx.ident_of_kind_exists(ident, Kind::DataTy) {
                         Err(CtxError::KindedIdentNotFound(ident.clone()))?
                     }
                 }
@@ -2377,11 +2363,6 @@ impl TyChecker {
                     )?;
                 }
             },
-            TyKind::Ident(ident) => {
-                if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
-                    Err(CtxError::KindedIdentNotFound(ident.clone()))?
-                }
-            }
             // TODO check well-formedness of Nats
             TyKind::FnTy(fn_ty) => {
                 let extended_kind_ctx = kind_ctx.clone().append_idents(fn_ty.generics.clone());
@@ -2390,7 +2371,6 @@ impl TyChecker {
                     self.ty_well_formed(&extended_kind_ctx, ty_ctx, exec_ty, param_ty)?;
                 }
             }
-            TyKind::Dead(_) => {}
         }
         Ok(())
     }

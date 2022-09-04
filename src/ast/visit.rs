@@ -180,8 +180,6 @@ pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
         TyKind::FnTy(fn_ty) => {
             visitor.visit_fn_ty(fn_ty);
         }
-        TyKind::Ident(ident) => visitor.visit_ident(ident),
-        TyKind::Dead(ty) => visitor.visit_ty(ty),
     }
 }
 
@@ -200,7 +198,6 @@ pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
         ArgKinded::Ident(ident) => visitor.visit_ident(ident),
         ArgKinded::Nat(n) => visitor.visit_nat(n),
         ArgKinded::Memory(mem) => visitor.visit_mem(mem),
-        ArgKinded::Ty(ty) => visitor.visit_ty(ty),
         ArgKinded::DataTy(dty) => visitor.visit_dty(dty),
         ArgKinded::Provenance(prv) => visitor.visit_prv(prv),
     }

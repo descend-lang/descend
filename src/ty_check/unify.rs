@@ -48,7 +48,6 @@ pub(super) fn inst_fn_ty_scheme(
     let mono_idents: Vec<_> = idents_kinded
         .iter()
         .map(|i| match i.kind {
-            Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
             Kind::DataTy => {
                 ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
             }
@@ -80,7 +79,6 @@ pub(super) struct PrvConstr(pub Provenance, pub Provenance);
 #[derive(Debug)]
 pub(super) struct ConstrainMap {
     // TODO swap Box<str> for something more abstract, like Symbol or Identifier
-    pub ty_unifier: HashMap<Box<str>, Ty>,
     pub dty_unifier: HashMap<Box<str>, DataTy>,
     pub nat_unifier: HashMap<Box<str>, Nat>,
     pub mem_unifier: HashMap<Box<str>, Memory>,
@@ -89,42 +87,10 @@ pub(super) struct ConstrainMap {
 impl ConstrainMap {
     fn new() -> Self {
         ConstrainMap {
-            ty_unifier: HashMap::new(),
             dty_unifier: HashMap::new(),
             nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
         }
-    }
-}
-
-impl Ty {
-    fn bind_to_ident(&self, ident: &Ident, constr_map: &mut ConstrainMap) -> TyResult<()> {
-        if let TyKind::Ident(ty_id) = &self.ty {
-            if ty_id == ident {
-                return Ok(());
-            }
-        }
-        if Self::occurs_check(&IdentKinded::new(ident, Kind::Ty), self) {
-            return Err(TyError::InfiniteType);
-        }
-        if let Some(old) = constr_map
-            .ty_unifier
-            .insert(ident.name.clone(), self.clone())
-        {
-            if &old != self {
-                panic!(
-                    "Rebinding bound type variable.\n\
-                    Old: {:?}\n\
-                    New: {:?}",
-                    old, self
-                );
-            }
-        }
-        constr_map
-            .ty_unifier
-            .values_mut()
-            .for_each(|ty| SubstIdent::new(ident, self).visit_ty(ty));
-        Ok(())
     }
 }
 
@@ -182,8 +148,6 @@ impl Constrainable for Ty {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (&mut self.ty, &mut other.ty) {
-            (TyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
-            (_, TyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
             (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
                 assert!(fn_ty1.generics.is_empty());
                 assert!(fn_ty2.generics.is_empty());
@@ -222,9 +186,6 @@ impl Constrainable for Ty {
                     .constrain(&mut fn_ty2.ret_ty, constr_map, prv_rels)
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
-            (TyKind::Dead(_), _) => {
-                panic!()
-            }
             _ => Err(TyError::CannotUnify),
         }
     }
@@ -459,20 +420,8 @@ impl Constrainable for Nat {
     ) -> TyResult<()> {
         match (&mut *self, &mut *other) {
             (Nat::Ident(n1i), Nat::Ident(n2i)) => match (n1i.is_implicit, n2i.is_implicit) {
-                (true, true) => other.bind_to(n1i, constr_map, prv_rels),
-                (true, false) => other.bind_to(n1i, constr_map, prv_rels),
-                (false, true) => self.bind_to(n2i, constr_map, prv_rels),
-                (false, false) => {
-                    if n1i != n2i {
-                        panic!(
-                            "We can probably not bind to explicitly declared identifiers\
-                            `{}` and `{}`.",
-                            n1i, n2i
-                        )
-                    } else {
-                        Ok(())
-                    }
-                }
+                (true, _) => other.bind_to(n1i, constr_map, prv_rels),
+                (false, _) => self.bind_to(n2i, constr_map, prv_rels),
             },
             (Nat::Ident(n1i), _) => other.bind_to(n1i, constr_map, prv_rels),
             (_, Nat::Ident(n2i)) => self.bind_to(n2i, constr_map, prv_rels),
@@ -626,15 +575,6 @@ impl<'a> VisitMut for ApplySubst<'a> {
             _ => visit_mut::walk_dty(self, dty),
         }
     }
-
-    fn visit_ty(&mut self, ty: &mut Ty) {
-        match &mut ty.ty {
-            TyKind::Ident(ident) if self.subst.ty_unifier.contains_key(&ident.name) => {
-                *ty = self.subst.ty_unifier.get(&ident.name).unwrap().clone()
-            }
-            _ => visit_mut::walk_ty(self, ty),
-        }
-    }
 }
 
 struct SubstIdent<'a, S: Constrainable> {
@@ -671,15 +611,6 @@ impl<'a> VisitMut for SubstIdent<'a, Provenance> {
         match prv {
             Provenance::Ident(ident) if ident.name == self.ident.name => *prv = self.term.clone(),
             _ => visit_mut::walk_prv(self, prv),
-        }
-    }
-}
-
-impl<'a> VisitMut for SubstIdent<'a, Ty> {
-    fn visit_ty(&mut self, ty: &mut Ty) {
-        match &mut ty.ty {
-            TyKind::Ident(ident) if ident.name == self.ident.name => *ty = self.term.clone(),
-            _ => visit_mut::walk_ty(self, ty),
         }
     }
 }
