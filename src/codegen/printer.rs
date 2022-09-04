@@ -168,7 +168,7 @@ impl std::fmt::Display for Expr {
                 is_dev_fun,
             } => {
                 let dev_qual = if *is_dev_fun { "__device__" } else { "" };
-                writeln!(f, "[");
+                writeln!(f, "[")?;
                 fmt_vec(f, &captures, ",")?;
                 writeln!(f, "] {} (", dev_qual)?;
                 fmt_vec(f, &params, ",\n")?;

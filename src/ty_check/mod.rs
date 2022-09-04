@@ -19,13 +19,14 @@ type TyResult<T> = Result<T, TyError>;
 
 macro_rules! matches_dty {
     ($ty: expr, $dty_pat: pat_param) => {
-        if let TyKind::Data(d) = $ty.ty {
+        if let crate::ast::TyKind::Data(d) = &$ty.ty {
             matches!(d.as_ref(), $dty_pat)
         } else {
             false
         }
     };
 }
+pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------
@@ -188,7 +189,7 @@ impl TyChecker {
                 ident_exec,
                 &mut parfor.decls,
                 &mut parfor.dim,
-                &mut parfor.inner_exec,
+                &mut parfor.exec_ident,
                 &mut parfor.exec,
                 &mut parfor.input_idents,
                 &mut parfor.input_views,
@@ -987,7 +988,7 @@ impl TyChecker {
         // TODO do we have to check that the prvs in res_ty_ctx have loans now?
         let body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_prvs, ident_exec, body)?;
         let res_ty_ctx = body_ty_ctx.drop_last_frame();
-        Ok((res_ty_ctx, body.ty.unwrap().as_ref().clone()))
+        Ok((res_ty_ctx, body.ty.as_ref().unwrap().as_ref().clone()))
     }
 
     fn check_mutable(ty_ctx: &TyCtx, pl: &Place) -> TyResult<()> {
@@ -1046,7 +1047,7 @@ impl TyChecker {
             // }
         }
 
-        let e_dty = if let TyKind::Data(dty) = &mut e.ty.unwrap().as_mut().ty {
+        let e_dty = if let TyKind::Data(dty) = &mut e.ty.as_mut().unwrap().as_mut().ty {
             dty.as_mut()
         } else {
             return Err(TyError::UnexpectedType);
@@ -1097,7 +1098,7 @@ impl TyChecker {
         let after_subty_ctx = unify::sub_unify(
             kind_ctx,
             assigned_val_ty_ctx,
-            e.ty.unwrap().as_mut(),
+            e.ty.as_mut().unwrap().as_mut(),
             deref_ty,
         )?;
 
@@ -1175,7 +1176,7 @@ impl TyChecker {
             //  consume the array view.
             DataTyKind::Ref(reff) => match &reff.dty.dty {
                 DataTyKind::ArrayShape(sdty, n) if matches!(&sdty.dty, DataTyKind::Scalar(_)) => {
-                    (n, reff.own, reff.mem, sdty.as_ref())
+                    (n, reff.own, &reff.mem, sdty.as_ref())
                 }
                 DataTyKind::ArrayShape(_, _) => return Err(TyError::AssignToView),
                 _ => {
@@ -1467,7 +1468,7 @@ impl TyChecker {
             &mut Ty::new(TyKind::FnTy(Box::new(FnTy::new(
                 vec![],
                 args.iter()
-                    .map(|arg| arg.ty.unwrap().as_ref().clone())
+                    .map(|arg| arg.ty.as_ref().unwrap().as_ref().clone())
                     .collect(),
                 exec_f,
                 ret_ty,
@@ -1615,7 +1616,7 @@ impl TyChecker {
         }
 
         let tuple_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, e)?;
-        let e_dty = if let TyKind::Data(dty) = &e.ty.unwrap().as_ref().ty {
+        let e_dty = if let TyKind::Data(dty) = &e.ty.as_ref().unwrap().ty {
             dty.as_ref()
         } else {
             return Err(TyError::UnexpectedType);
@@ -1809,7 +1810,10 @@ impl TyChecker {
                 .ty_check_expr(kind_ctx, ty_ctx, ident_exec, e)?
                 .garbage_collect_loans();
         }
-        Ok((ty_ctx, es.last().unwrap().ty.unwrap().as_ref().clone()))
+        Ok((
+            ty_ctx,
+            es.last().unwrap().ty.as_ref().unwrap().as_ref().clone(),
+        ))
     }
 
     fn ty_check_pl_expr_with_deref(
@@ -1846,14 +1850,14 @@ impl TyChecker {
             )));
         }
         unify::unify(
-            pl_expr.ty.unwrap().as_mut(),
+            pl_expr.ty.as_mut().unwrap().as_mut(),
             &mut Ty::new(TyKind::Data(Box::new(DataTy::with_constr(
                 utils::fresh_ident("pl_deref", DataTyKind::Ident),
                 vec![Constraint::Copyable],
             )))),
         )?;
         if pl_expr.ty.as_ref().unwrap().copyable() {
-            Ok((ty_ctx, pl_expr.ty.unwrap().as_ref().clone()))
+            Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().as_ref().clone()))
         } else {
             Err(TyError::String("Data type is not copyable.".to_string()))
         }
@@ -2209,6 +2213,9 @@ impl TyChecker {
                     passed_prvs,
                 ))
             }
+            _ => Err(TyError::String(
+                "Trying to dereference non reference type.".to_string(),
+            )),
         }
     }
 

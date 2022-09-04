@@ -47,6 +47,7 @@ macro_rules! walk_list {
         }
     };
 }
+pub(crate) use walk_list;
 
 pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
     match n {
@@ -233,7 +234,7 @@ pub fn walk_par_for<V: Visit>(visitor: &mut V, par_for: &ParForWith) {
     let ParForWith {
         decls,
         dim,
-        inner_exec,
+        exec_ident: inner_exec,
         exec,
         input_idents,
         input_views,

@@ -124,25 +124,26 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
     }
 }
 
-fn infer_dim(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
-    match (poly_dim, mono_dim) {
-        (Dim::XYZ(diml), Dim::XYZ(dimr)) => {
-            infer_kargs_nats(map, &diml.0, &dimr.0);
-            infer_kargs_nats(map, &diml.1, &dimr.1);
-            infer_kargs_nats(map, &diml.2, &dimr.2);
-        }
-        (Dim::XY(diml), Dim::XY(dimr))
-        | (Dim::XZ(diml), Dim::XZ(dimr))
-        | (Dim::YZ(diml), Dim::YZ(dimr)) => {
-            infer_kargs_nats(map, &diml.0, &dimr.0);
-            infer_kargs_nats(map, &diml.1, &dimr.1);
-        }
-        (Dim::X(diml), Dim::X(dimr))
-        | (Dim::Y(diml), Dim::Y(dimr))
-        | (Dim::Z(diml), Dim::Z(dimr)) => infer_kargs_nats(map, &diml.0, &dimr.0),
-        _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
-    }
-}
+// TODO remove? or is this required somewhere?
+// fn infer_dim(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
+//     match (poly_dim, mono_dim) {
+//         (Dim::XYZ(diml), Dim::XYZ(dimr)) => {
+//             infer_kargs_nats(map, &diml.0, &dimr.0);
+//             infer_kargs_nats(map, &diml.1, &dimr.1);
+//             infer_kargs_nats(map, &diml.2, &dimr.2);
+//         }
+//         (Dim::XY(diml), Dim::XY(dimr))
+//         | (Dim::XZ(diml), Dim::XZ(dimr))
+//         | (Dim::YZ(diml), Dim::YZ(dimr)) => {
+//             infer_kargs_nats(map, &diml.0, &dimr.0);
+//             infer_kargs_nats(map, &diml.1, &dimr.1);
+//         }
+//         (Dim::X(diml), Dim::X(dimr))
+//         | (Dim::Y(diml), Dim::Y(dimr))
+//         | (Dim::Z(diml), Dim::Z(dimr)) => infer_kargs_nats(map, &diml.0, &dimr.0),
+//         _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
+//     }
+// }
 
 fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_nat: &Nat) {
     match (poly_nat, mono_nat) {

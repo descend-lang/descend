@@ -11,10 +11,8 @@ use crate::parser::SourceCode;
 pub mod internal;
 
 mod span;
-#[macro_use]
-pub mod visit;
 pub mod utils;
-#[macro_use]
+pub mod visit;
 pub mod visit_mut;
 
 #[derive(Clone, Debug)]
@@ -273,7 +271,7 @@ pub struct ParForWith {
     // TODO remove decls
     pub decls: Option<Vec<Expr>>,
     pub dim: DimCompo,
-    pub inner_exec: Option<Ident>,
+    pub exec_ident: Option<Ident>,
     pub exec: ExecExpr,
     pub input_idents: Vec<Ident>,
     pub input_views: Vec<Expr>,
@@ -293,7 +291,7 @@ impl ParForWith {
         ParForWith {
             decls,
             dim,
-            inner_exec,
+            exec_ident: inner_exec,
             exec,
             input_idents,
             input_views,
@@ -1203,7 +1201,7 @@ impl DataTy {
         match &self.dty {
             Scalar(_) | Atomic(_) | Ident(_) | Range | Dead(_) => false,
             Ref(reff) => {
-                let found_reference = if let Provenance::Value(prv_val_n) = reff.rgn {
+                let found_reference = if let Provenance::Value(prv_val_n) = &reff.rgn {
                     prv_val_name == prv_val_n
                 } else {
                     false

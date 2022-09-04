@@ -1,3 +1,4 @@
+use crate::ast::visit::walk_list;
 use crate::ast::visit::Visit;
 use crate::ast::{
     visit, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,

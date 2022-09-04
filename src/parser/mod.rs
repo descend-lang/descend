@@ -86,7 +86,7 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                 ExprKind::App(f, gen_args, args) => {
                     self.visit_expr(f);
                     self.subst_in_gen_args(gen_args);
-                    walk_list!(self, visit_expr, args)
+                    visit_mut::walk_list!(self, visit_expr, args)
                 }
                 ExprKind::ForNat(ident, _, body) => {
                     self.ident_names_to_kinds

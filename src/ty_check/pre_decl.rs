@@ -706,21 +706,21 @@ fn group_ty(own: Ownership) -> FnTy {
 }
 
 // +: <t: ty>(t, t) -> t
-fn bin_op() -> FnTy {
-    let t = Ident::new("t");
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
-    };
-    FnTy::new(
-        vec![t_ty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Ident(t.clone()),
-        ))))],
-        ExecTy::new(ExecTyKind::GpuThread),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(t))))),
-    )
-}
+// fn bin_op() -> FnTy {
+//     let t = Ident::new("t");
+//     let t_ty = IdentKinded {
+//         ident: t.clone(),
+//         kind: Kind::Ty,
+//     };
+//     FnTy::new(
+//         vec![t_ty],
+//         vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+//             DataTyKind::Ident(t.clone()),
+//         ))))],
+//         ExecTy::new(ExecTyKind::GpuThread),
+//         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(t))))),
+//     )
+// }
 
 // join/join_mut:
 //  <r: prv, m: mem, o: nat, n: nat, d: dty>(&r W m [[ [[d; n]]; o]]) -> [[d; n*o]]
