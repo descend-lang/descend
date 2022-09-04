@@ -1848,7 +1848,7 @@ mod tests {
         // all currently available kinds are tested
         let src = r#"fn test_kinds<n: nat, a: prv, t: ty, m: mem>(
             ha_array: &a uniq cpu.mem [i32; n]
-        ) -[cpu.thread]-> () <>{
+        ) -[ex: cpu.thread]-> () <>{
             42
         }"#;
         let body = r#"42"#;
@@ -1856,7 +1856,6 @@ mod tests {
         let result = descend::global_fun_def(src).expect("Parsing failed");
 
         // TODO: Do proper check against expected AST
-        let name = "test_kinds".into();
         let generic_params = vec![
             IdentKinded::new(&Ident::new("n"), Kind::Nat),
             IdentKinded::new(&Ident::new("a"), Kind::Provenance),
@@ -1883,7 +1882,7 @@ mod tests {
         let prv_rels = vec![];
 
         let intended = FunDef {
-            ident: name,
+            ident: Ident::new("test_kinds"),
             param_decls: params,
             exec_decl: exec,
             prv_rels,
@@ -1911,14 +1910,14 @@ mod tests {
         let src_1 = r#"fn no_kinds(
             ha_array: &'a uniq cpu.mem [i32; n],
             hb_array: &'b shrd cpu.mem [i32; n]
-        ) -[cpu.thread]-> () <>{
+        ) -[t: cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
         let src_2 = r#"fn no_kinds<>(
             ha_array: &'a uniq cpu.mem [i32; n],
             hb_array: &'b shrd cpu.mem [i32; n]
-        ) -[cpu.thread]-> () <>{
+        ) -[t: cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
@@ -1938,7 +1937,7 @@ mod tests {
         let src = r#"fn wrong_kind_spelling<n: nat, a: prov, b: prv>(
             ha_array: &'a uniq cpu.heap [i32; n],
             hb_array: &'b shrd cpu.heap [i32; n]
-        ) -[cpu.thread]-> () {
+        ) -[t: cpu.thread]-> () {
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
@@ -1950,7 +1949,7 @@ mod tests {
 
     #[test]
     fn global_fun_def_no_function_parameters_required() {
-        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () <>{            
+        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[t: cpu.thread]-> () <>{            
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
@@ -2050,7 +2049,7 @@ mod tests {
     fn compil_unit_test_one() {
         let src = r#"
         
-        fn foo() -[cpu.thread]-> () <>{
+        fn foo() -[t: cpu.thread]-> () <>{
             42
         }
         
@@ -2064,16 +2063,16 @@ mod tests {
     fn compil_unit_test_multiple() {
         let src = r#"
         
-        fn foo() -[cpu.thread]-> () <>{
+        fn foo() -[t: cpu.thread]-> () <>{
             42
         }
 
-        fn bar() -[cpu.thread]-> () <>{
+        fn bar() -[t: cpu.thread]-> () <>{
             24
         }
 
 
-        fn baz() -[cpu.thread]-> () <>{
+        fn baz() -[t: cpu.thread]-> () <>{
             1337
         }
         

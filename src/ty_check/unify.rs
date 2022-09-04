@@ -437,7 +437,7 @@ impl Nat {
     }
 
     // FIXME: Add constrains?!
-    fn unify(n1: &Nat, n2: &Nat, constr_map: &mut ConstrainMap) -> TyResult<()> {
+    fn unify(n1: &Nat, n2: &Nat, _constr_map: &mut ConstrainMap) -> TyResult<()> {
         if n1 == n2 {
             Ok(())
         } else {
@@ -528,10 +528,10 @@ impl Constrainable for Memory {
         &mut self,
         other: &mut Self,
         constr_map: &mut ConstrainMap,
-        prv_rels: &mut Vec<PrvConstr>,
+        _prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (self, other) {
-            (Memory::Ident(i1), Memory::Ident(i2)) => Ok(()),
+            (Memory::Ident(i1), Memory::Ident(i2)) if i1 == i2 => Ok(()),
             (Memory::Ident(i), o) => o.bind_to(i, constr_map),
             (s, Memory::Ident(i)) => s.bind_to(i, constr_map),
             (mem1, mem2) if mem1 == mem2 => Ok(()),
@@ -551,37 +551,11 @@ impl Constrainable for Memory {
     }
 }
 
-impl Provenance {
-    fn bind_to(&self, ident: &Ident, constr_map: &mut ConstrainMap) -> TyResult<()> {
-        unimplemented!()
-        // match &self {
-        //     _ if Self::occurs_check(&IdentKinded::new(ident, Kind::Provenance), self) => {
-        //         Err(TyError::InfiniteType)
-        //     }
-        //
-        //         // if let Some(old) = constr_map
-        //         //     .prv_unifier
-        //         //     .insert(ident.name.clone(), self.clone())
-        //         // {
-        //         //     if &old != self {
-        //         //         panic!(
-        //         //             "Attempting to bind to same variable name twice.\n\
-        //         // Old value: `{:?}` replaced by new value: `{:?}`",
-        //         //             old, self
-        //         //         )
-        //         //     }
-        //         // }
-        //         Ok(())
-        //     }
-        // }
-    }
-}
-
 impl Constrainable for Provenance {
     fn constrain(
         &mut self,
         other: &mut Self,
-        constr_map: &mut ConstrainMap,
+        _constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         if self == other {

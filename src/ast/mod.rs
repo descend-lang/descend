@@ -12,7 +12,9 @@ pub mod internal;
 
 mod span;
 pub mod utils;
+#[allow(dead_code)]
 pub mod visit;
+#[allow(dead_code)]
 pub mod visit_mut;
 
 #[derive(Clone, Debug)]

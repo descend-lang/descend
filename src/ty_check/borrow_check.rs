@@ -72,11 +72,11 @@ pub(super) fn ownership_safe(
 
 // TODO remove!
 fn ownership_safe_deref_raw(
-    ty_checker: &TyChecker,
-    kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
-    exec_ty: &ExecTy,
-    reborrows: &[internal::Place],
+    _ty_checker: &TyChecker,
+    _kind_ctx: &KindCtx,
+    _ty_ctx: &TyCtx,
+    _exec_ty: &ExecTy,
+    _reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,

@@ -833,7 +833,7 @@ fn gen_exec(
             );
 
             // Remember to inline input shape expression
-            let in_name = &params[1].ident.name.clone();
+            let in_name = &params[0].ident.name.clone();
             fresh_parall_codegen_ctx
                 .shape_ctx
                 .insert(in_name, cu_input_expr);

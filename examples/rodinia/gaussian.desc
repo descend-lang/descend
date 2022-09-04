@@ -2,7 +2,7 @@ fn gaussian<n: nat>(
     m: &uniq cpu.mem [f32; n*n],
     a: &uniq cpu.mem [f32; n*n],
     b: &uniq cpu.mem [f32; n]
-) -[cpu.thread]-> () {
+) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
     let mut m_cuda = gpu_alloc_copy(&uniq gpu, &shrd *m);
     let mut a_cuda = gpu_alloc_copy(&uniq gpu, &shrd *a);
@@ -10,8 +10,8 @@ fn gaussian<n: nat>(
 
     for_nat t in range(0,n-1) {
         exec::<(n/512), 512>(&uniq gpu, (&uniq m_cuda, &shrd a_cuda),
-        | grid: BlockGrp<X<n/512>, ThreadGrp<X<512>>>, inputs: (&r1 uniq gpu.global [f32; n*n], &r2 shrd gpu.global [f32; n*n]) | -[gpu.grid]-> () {
-            par_branch split_thread_grp::<(n-1-t)>(to_thread_grp(grid)) {
+        | inputs: (&r1 uniq gpu.global [f32; n*n], &r2 shrd gpu.global [f32; n*n]) | -[grid: gpu.grid<X<n/512>, X<512>>]-> () {
+            par_branch split_exec x (n-1-t) to_thread_grp(grid) {
                 active => {
                     let m = group_mut::<n>(to_view_mut(inputs.0));
                     let a = group::<n>(to_view(inputs.1));
@@ -30,10 +30,12 @@ fn gaussian<n: nat>(
         });
 
         exec_xy::<(n/4), (n/4), 4, 4>(&uniq gpu, (&shrd m_cuda, &uniq a_cuda, &uniq b_cuda),
-        |grid: BlockGrp<XY<n/4, n/4>, ThreadGrp<XY<4, 4>>>, inputs: (&shrd gpu.global [f32; n*n], &uniq gpu.global [f32; n*n], &uniq gpu.global [f32; n])| -[gpu.grid2d]-> () {
-            par_branch split_xy_thread_grp_x::<(n-1-t)>(to_xy_thread_grp(grid)) {
+        | inputs: (&shrd gpu.global [f32; n*n],
+                   &uniq gpu.global [f32; n*n],
+                   &uniq gpu.global [f32; n])| -[grid: gpu.grid<XY<n/4, n/4>, XY<4, 4>>]-> () {
+            par_branch split_exec x (n-1-t) to_xy_thread_grp(grid) {
                 active_x =>
-                    par_branch split_xy_thread_grp_y::<(n-t)>(active_x) {
+                    par_branch split_exec y (n-t) active_x {
                         active_xy => {
                             let m = group::<n>(to_view(inputs.0));
                             let a = group_mut::<n>(to_view_mut(inputs.1));

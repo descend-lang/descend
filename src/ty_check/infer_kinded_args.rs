@@ -1,5 +1,5 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Dim, Ident, IdentKinded, Memory, Nat, Provenance, Ty, TyKind,
+    ArgKinded, DataTy, DataTyKind, Ident, IdentKinded, Memory, Nat, Provenance, Ty, TyKind,
 };
 use std::collections::HashMap;
 

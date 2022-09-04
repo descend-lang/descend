@@ -40,21 +40,6 @@ impl TyCtx {
         self
     }
 
-    pub fn drop_ident(mut self, ident: &Ident) -> Option<Self> {
-        for frame in self.frame.iter_mut().rev() {
-            let rev_pos_if_exists = frame.iter().rev().position(|ty_entry| match ty_entry {
-                FrameEntry::Var(ident_typed) => &ident_typed.ident == ident,
-                _ => false,
-            });
-            if let Some(rev_pos) = rev_pos_if_exists {
-                let pos = frame.len() - (rev_pos + 1);
-                frame.remove(pos);
-                return Some(self);
-            }
-        }
-        None
-    }
-
     pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
         let frame_typing = self.frame.iter_mut().last().unwrap();
         frame_typing.push(FrameEntry::PrvMapping(prv_mapping));
@@ -404,25 +389,6 @@ impl KindCtx {
                 None
             }
         })
-    }
-
-    pub fn get_kind(&self, ident: &Ident) -> CtxResult<&Kind> {
-        let res = self.ctx.iter().find_map(|entry| {
-            if let KindingCtxEntry::Ident(IdentKinded { ident: id, kind }) = entry {
-                if id == ident {
-                    Some(kind)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
-        if let Some(kind) = res {
-            Ok(kind)
-        } else {
-            Err(CtxError::KindedIdentNotFound(ident.clone()))
-        }
     }
 
     pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {

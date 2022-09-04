@@ -1,12 +1,12 @@
 fn scale_vec<n: nat>(
     h_vec: &uniq cpu.mem [f64; n]
-) -[cpu.thread]-> () {
+) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
     exec::<64, 1024>(
         &uniq gpu,
         (&uniq a_array,),
-        | grid: BlockGrp<X<64>, ThreadGrp<X<1024>>>, vec: (&uniq gpu.global [f64; n]) | -[gpu.grid]-> () {
+        | vec: (&uniq gpu.global [f64; n]) | -[grid: gpu.grid<X<64>, X<1024>>]-> () {
             let groups = group_mut::<1024>(to_view_mut(vec.0));
             parfor block in grid with g from groups {
                 parfor _ in block with v from g {
