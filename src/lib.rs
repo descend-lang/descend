@@ -1,3 +1,5 @@
+#![feature(iter_partition_in_place)]
+
 use parser::SourceCode;
 
 use crate::error::ErrorReported;
@@ -21,7 +23,7 @@ pub fn compile_src(source: &str) -> Result<String, ErrorReported> {
 }
 
 fn compile_source(source: &SourceCode) -> Result<String, ErrorReported> {
-    let mut compil_unit = parser::parse(&source)?;
+    let mut compil_unit = parser::parse(source)?;
     ty_check::ty_check(&mut compil_unit)?;
     Ok(codegen::gen(&compil_unit, false))
 }

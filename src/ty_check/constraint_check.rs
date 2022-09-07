@@ -1,22 +1,28 @@
-use crate::ast::{Constraint, DataTyKind, IdentKinded};
+use crate::ast::{Constraint, DataTy, DataTyKind, IdentKinded};
 
 use crate::ast::SubstKindedIdents;
+use crate::ast::{Ident, Kind};
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
 use crate::ty_check::utils::fresh_name;
 
+use super::ctxs::KindCtx;
 use super::unify::substitute;
-
-#[derive(Debug)]
-pub struct ConstraintEnv {
-    theta: Vec<ConstraintScheme>,
-    ident_constraints: Vec<(String, Constraint)>,
-}
 
 #[derive(Debug, Clone)]
 pub struct ConstraintScheme {
     pub generics: Vec<IdentKinded>,
     pub implican: Vec<Constraint>,
     pub implied: Constraint,
+}
+
+#[derive(Debug)]
+pub struct IdentConstraints {
+    ident_cons: Vec<(String, Constraint)>,
+}
+
+#[derive(Debug)]
+pub struct ConstraintEnv {
+    theta: Vec<ConstraintScheme>,
 }
 
 impl ConstraintScheme {
@@ -83,12 +89,38 @@ impl PartialEq for ConstraintScheme {
     }
 }
 
-impl ConstraintEnv {
+impl IdentConstraints {
     pub fn new() -> Self {
         Self {
-            theta: Vec::new(),
-            ident_constraints: Vec::new(),
+            ident_cons: Vec::new(),
         }
+    }
+
+    pub fn add_ident_constraints<I>(&mut self, ident_constraints: I)
+    where
+        I: Iterator<Item = (String, Constraint)>,
+    {
+        self.ident_cons.extend(ident_constraints)
+    }
+
+    pub fn consume_constraints(&mut self, ident: &str) -> impl Iterator<Item = Constraint> + '_ {
+        let index_ident_constraints = self
+            .ident_cons
+            .iter_mut()
+            .partition_in_place(|(name, _)| *name != *ident);
+        self.ident_cons
+            .drain(index_ident_constraints..)
+            .map(|(_, con)| con)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ident_cons.is_empty()
+    }
+}
+
+impl ConstraintEnv {
+    pub fn new() -> Self {
+        Self { theta: Vec::new() }
     }
 
     pub fn append_constraint_scheme(&mut self, con: &ConstraintScheme) {
@@ -134,55 +166,17 @@ impl ConstraintEnv {
         });
     }
 
-    pub fn add_ident_constraints<I>(&mut self, ident_constraints: I)
-    where
-        I: Iterator<Item = (String, Constraint)>,
-    {
-        self.ident_constraints.extend(ident_constraints)
-    }
+    pub(crate) fn check_constraint(
+        &self,
+        //Goal which should be prooved
+        //Apply all substitutions which are made while prooving this goal to this goal
+        constraint: &mut Constraint,
+        //List of constraints for implicit idents which are necessary to prove the goal
+        implicit_ident_cons: &mut IdentConstraints,
+        //Type vars in scope
+        kind_ctx: &KindCtx,
+    ) -> bool {
 
-    pub fn get_constraints<'a, 'b>(
-        &'a self,
-        ident: &'b str,
-    ) -> impl Iterator<Item = &'a Constraint> + '_
-    where
-        'b: 'a,
-    {
-        self.ident_constraints
-            .iter()
-            .filter_map(|(name, constraint)| {
-                if *name == *ident {
-                    Some(constraint)
-                } else {
-                    None
-                }
-            })
-    }
-
-    pub fn remove_ident_constraint(&mut self, ident: &str) {
-        self.ident_constraints.retain(|(name, _)| *name != *ident);
-    }
-
-    pub fn check_constraints<'a, I>(&self, goals: I) -> Result<Vec<(String, Constraint)>, ()>
-    where
-        I: Iterator<Item = &'a Constraint>,
-    {
-        //TODO there exists a more efficient way to do this
-        goals.fold(Ok(vec![]), |res, constraint| {
-            if let Ok(mut res_cons) = res {
-                if let Ok(cons) = self.check_constraint(constraint) {
-                    res_cons.extend(cons.into_iter());
-                    Ok(res_cons)
-                } else {
-                    Err(())
-                }
-            } else {
-                res
-            }
-        })
-    }
-
-    pub fn check_constraint(&self, goal: &Constraint) -> Result<Vec<(String, Constraint)>, ()> {
         //A struct for backtracking
         struct Backtrack {
             //the last goal that was tried to prove
@@ -193,23 +187,28 @@ impl ConstraintEnv {
             //the index of the constraint_scheme in theta that was tried to use to prove the goal
             current_index: usize,
             //the length of implicit_ident_constraints
-            implicit_ident_constraints_len: usize,
+            implicit_ident_cons_len: usize,
+            //state of passed constraint with applied substitutions
+            constraint: Constraint,
         }
 
+        //Save the length of implicit ident constraints
+        let implicit_ident_cons_len = implicit_ident_cons.ident_cons.len();
+
+        //For the unify::constrain-method
         let mut constr_map = ConstrainMap::new();
         let mut prv_rels = Vec::new();
+        let mut constr_map_without_idetifier_in_kind_ctx = ConstrainMap::new();
 
         //List with all constraints which are tried to prove
         let mut goals: Vec<Constraint> = Vec::new();
-        //List of constraints for implicit idents which are necessary to prove the goal
-        let mut implicit_ident_constraints: Vec<(String, Constraint)> = Vec::new();
         //List of backtrack-objects for backtracking
         let mut backtracks: Vec<Backtrack> = Vec::new();
         //Index to run over all type_schemes in theta
         let mut index = 0;
 
         //Start with passed constraint as first goal
-        goals.push(goal.clone());
+        goals.push(constraint.clone());
         //Prove all goals
         while !goals.is_empty() {
             //Try to prove goal
@@ -230,7 +229,7 @@ impl ConstraintEnv {
             if let Some(ident_name) = constrait_param_ident {
                 //Remember this constraint and assume its fulfilled
                 //The constraint is checked when the identifier is replaced by a concrete type
-                implicit_ident_constraints.push((ident_name, goal));
+                implicit_ident_cons.ident_cons.push((ident_name, goal));
             }
             //Else try to prove the goal
             else {
@@ -240,17 +239,51 @@ impl ConstraintEnv {
 
                     constr_map.clear();
                     prv_rels.clear();
+                    constr_map_without_idetifier_in_kind_ctx.clear();
 
                     //Can implied from "current_con" and current goal be unified?
                     if goal
                         .constrain(&current_con.implied, &mut constr_map, &mut prv_rels)
-                        .is_ok()
+                        .is_ok() &&
+                        //Check if this is a valid substitution
+                        //Explicit identifier can only be substituted if they are not in kinding_ctx
+                        constr_map.dty_unifier.iter().fold(true,
+                            |res, (name, bound)|
+                            {
+                                if res {
+                                    if kind_ctx.ident_of_kind_exists(&Ident::new(name), Kind::DataTy) {
+                                        if let DataTyKind::Ident(ident) = &bound.dty {
+                                            if ident.name == *name {
+                                                true
+                                            } else if kind_ctx.ident_of_kind_exists(ident, Kind::DataTy){
+                                                false
+                                            } else {
+                                                if let Some(_) = constr_map_without_idetifier_in_kind_ctx.dty_unifier.insert(
+                                                    ident.name.clone(),
+                                                    DataTy::new(DataTyKind::Ident(Ident::new(name)))) {
+                                                    panic!("What to do here?")
+                                                } else {
+                                                    true
+                                                }
+                                            }
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        true
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                        )
                     {
                         if !current_con.implican.is_empty() {
                             //Push all constraints which implies the current implied constraint to list of goals which must be prooved
                             goals.extend(current_con.implican.iter().map(|con| {
                                 let mut goal = con.clone();
                                 substitute(&constr_map, &mut goal);
+                                substitute(&constr_map_without_idetifier_in_kind_ctx, &mut goal);
                                 goal
                             }));
 
@@ -272,10 +305,12 @@ impl ConstraintEnv {
                                     current_number_of_goals: goals.len()
                                         - current_con.implican.len(),
                                     current_index: index,
-                                    implicit_ident_constraints_len: implicit_ident_constraints
-                                        .len(),
+                                    implicit_ident_cons_len: implicit_ident_cons.ident_cons.len(),
+                                    constraint: constraint.clone(),
                                 });
 
+                                constraint.substitute(&constr_map);
+                                constraint.substitute(&constr_map_without_idetifier_in_kind_ctx);
                                 index = 0;
                                 break;
                             }
@@ -288,6 +323,8 @@ impl ConstraintEnv {
                                 }
                             }
 
+                            constraint.substitute(&constr_map);
+                            constraint.substitute(&constr_map_without_idetifier_in_kind_ctx);
                             index = 0;
                             break;
                         }
@@ -305,15 +342,24 @@ impl ConstraintEnv {
                     goals.truncate(backtrack.current_number_of_goals);
                     goals.push(backtrack.current_goal);
                     index = backtrack.current_index + 1;
-                    implicit_ident_constraints.truncate(backtrack.implicit_ident_constraints_len)
+                    implicit_ident_cons
+                        .ident_cons
+                        .truncate(backtrack.implicit_ident_cons_len);
+                    *constraint = backtrack.constraint;
                 }
                 //no more possibilities for backtracking -> prooving the constrain failed
                 else {
-                    return Err(());
+                    //Restore state of implicit_ident_cons
+                    implicit_ident_cons
+                        .ident_cons
+                        .truncate(implicit_ident_cons_len);
+
+                    return false;
                 }
             }
         }
 
-        Ok(implicit_ident_constraints)
+        //Sucessfull computation
+        true
     }
 }

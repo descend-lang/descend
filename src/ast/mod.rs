@@ -607,13 +607,20 @@ pub enum ExprKind {
     Idx(Box<Expr>, Nat),
 }
 
-#[span_derive(PartialEq, Eq, Hash)]
+#[span_derive(Hash)]
 #[derive(Clone, Debug)]
 pub struct Ident {
     pub name: String,
     #[span_derive_ignore]
     pub span: Option<Span>,
     pub is_implicit: bool,
+}
+
+impl Eq for Ident {}
+impl PartialEq for Ident {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
 }
 
 impl Ident {
@@ -831,7 +838,7 @@ impl SubstKindedIdents for ArgKinded {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match self {
             ArgKinded::Ident(ident) => {
-                if ident.name == ident_kinded.ident.name {
+                if *ident == ident_kinded.ident {
                     with.clone()
                 } else {
                     ArgKinded::Ident(ident.clone())
@@ -1012,7 +1019,7 @@ impl TypeScheme {
             .map(|gen| gen.arg_kinded())
             .collect::<Vec<_>>();
         //Create a new TypeScheme with the new fresh names for generic params
-        let mut result = self.instantiate(&new_generic_args);
+        let mut result = self.partial_apply(&new_generic_args);
         result.generic_params = new_generics;
         result
     }
@@ -1026,7 +1033,7 @@ impl TypeScheme {
             })
     }
 
-    pub fn instantiate(&self, with: &[ArgKinded]) -> Self {
+    pub fn partial_apply(&self, with: &[ArgKinded]) -> Self {
         assert!(self.generic_params.len() >= with.len());
         TypeScheme {
             generic_params: self.generic_params[with.len()..].to_vec(),
@@ -1052,9 +1059,9 @@ impl TypeScheme {
                 .iter()
                 .map(|gen| gen.arg_kinded())
                 .collect::<Vec<ArgKinded>>();
-            self.instantiate(args.as_slice())
+            self.partial_apply(args.as_slice())
                 .mono_ty
-                .eq_structure(&other.instantiate(args.as_slice()).mono_ty)
+                .eq_structure(&other.partial_apply(args.as_slice()).mono_ty)
         } else {
             false
         }
@@ -1519,7 +1526,7 @@ impl SubstKindedIdents for DataTy {
         match &self.dty {
             Scalar(_) | Atomic(_) | Range => self.clone(),
             Ident(id) => {
-                if &ident_kinded.ident == id && ident_kinded.kind == Kind::DataTy {
+                if ident_kinded.ident == *id && ident_kinded.kind == Kind::DataTy {
                     match with {
                         ArgKinded::Ident(idk) => DataTy::new(Ident(idk.clone())),
                         ArgKinded::DataTy(dty) => dty.clone(),

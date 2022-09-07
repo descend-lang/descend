@@ -182,7 +182,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                 if let Some(struct_decl) = visitor.structs.get(&struct_ty.name) {
                     let inst_struct_mono = struct_decl
                         .ty()
-                        .instantiate(&struct_ty.generic_args)
+                        .partial_apply(&struct_ty.generic_args)
                         .mono_ty;
                     if let TyKind::Data(dataty) = inst_struct_mono.ty {
                         if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
@@ -443,6 +443,10 @@ peg::parser! {
             = "impl" _ g:generic_params()? _ trait_impl:(t:trait_mono_ty() __ "for" __ { t })?
             dty:dty() _ w:where_clause()? _ "{" _
             decls:(_ i:associated_item() ** _ {i}) _ "}" {
+                match dty.dty {
+                    DataTyKind::Ident(name) if name.name == "Self" => panic!("impls for ident \"Self\" are not allowed"),
+                    _ => (),
+                }
                 let generic_params = g.unwrap_or(vec![]);
                 let constraints = w.unwrap_or(vec![]);
                 ImplDef { dty, generic_params, constraints, decls, trait_impl}

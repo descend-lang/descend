@@ -9,31 +9,34 @@ use crate::ty_check::ConstraintEnv;
 use crate::ty_check::TyResult;
 use std::collections::{HashMap, HashSet};
 
+use super::constraint_check::IdentConstraints;
+
 pub(crate) fn substitute_multiple<'a, I, T: 'a>(
-    constraint_env: &mut ConstraintEnv,
+    constraint_env: &ConstraintEnv,
+    implicit_ident_constraints: &mut IdentConstraints,
     constr_map: &ConstrainMap,
     types: I,
+    kind_ctx: &KindCtx,
 ) -> TyResult<()>
 where
     T: Constrainable,
     I: Iterator<Item = &'a mut T>,
 {
     //Check if this substitution fullfills all implicit_ident_constraints
-    if let Some((name, dty)) = constr_map.dty_unifier.iter().find(|(name, _)| {
+    if let Some((name, dty)) = constr_map.dty_unifier.iter().find(|(name, dty)| {
         //Check if all constraints of implicit identifier which is substituted are fulfilled
-        if let Ok(implicit_ident_constraints) =
-            constraint_env.check_constraints(constraint_env.get_constraints(*name))
-        {
-            //Constraints on this identifier are not longer needed
-            constraint_env.remove_ident_constraint(name);
-            //There are may new constraints on implicit identifier
-            constraint_env.add_ident_constraints(implicit_ident_constraints.into_iter());
-
-            false
-        } else {
-            true
-        }
+        let mut constraints_to_check: Vec<_> = implicit_ident_constraints
+            .consume_constraints(*name)
+            .collect();
+        constraints_to_check.iter_mut().fold(false, |res, con| {
+            *con = con.subst_ident_kinded(
+                &IdentKinded::new(&Ident::new(name), Kind::DataTy),
+                &ArgKinded::DataTy((*dty).clone()),
+            );
+            res || constraint_env.check_constraint(con, implicit_ident_constraints, kind_ctx)
+        })
     }) {
+        //Found an unfulfilled implicit ident constraint
         //TODO throw more verbose error
         return Err(TyError::CannotUnify);
     } else {
@@ -73,7 +76,7 @@ pub(crate) fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(C
 }
 
 pub(super) fn inst_ty_scheme(tyscheme: &TypeScheme) -> (Ty, Vec<Constraint>) {
-    let inst_tyscheme = tyscheme.instantiate(
+    let inst_tyscheme = tyscheme.partial_apply(
         &tyscheme
             .generic_params
             .iter()

@@ -194,14 +194,15 @@ impl<'a> Monomorphiser<'a> {
                                             }
                                         ).is_some()
                                     }).is_some() {
-                                    eprintln!("function {} \"{}\" is never used. Because this function has constraint \
+                                    eprintln!("function \"{}\" of kind {:?} is never used. Because this function has constraint \
                                         generic params, which needs to be monomoprhised, no code can be generated \
                                         for this function.",
+                                        fun_name.name,
                                         match fun_name.fun_kind {
-                                            FunctionKind::GlobalFun => "global_fun",
-                                            FunctionKind::TraitFun(_) => "trait_fun",
-                                            FunctionKind::ImplFun(_, _) => "impl_fun"
-                                        }, fun_name.name)
+                                            FunctionKind::GlobalFun => "GlobalFun".to_string(),
+                                            FunctionKind::TraitFun(name) => format!("TraitFun({})", name),
+                                            FunctionKind::ImplFun(_, _) => "ImplFun".to_string()
+                                        })
                                 }
                                 //Because the orginal functions didnt need to be monomorphised
                                 else {

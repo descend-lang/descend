@@ -2643,35 +2643,37 @@ impl ParallelityCollec {
                     ..
                 }) = &f.expr
                 {
-                    if ident.name == crate::ty_check::pre_decl::SPLIT_THREAD_GRP
-                        || ident.name == crate::ty_check::pre_decl::SPLIT_BLOCK_GRP
-                        || ident.name == crate::ty_check::pre_decl::SPLIT_WARP_GRP
-                    {
-                        if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
-                            (&gen_args[0], &gen_args[1], args.first())
-                        {
-                            return ParallelityCollec::Split {
-                                pos: k.clone(),
-                                coll_size: n.clone(),
-                                parall_expr: Box::new(ParallelityCollec::create_from(
-                                    p, parall_ctx,
-                                )),
-                            };
+                    match ident.name.as_str() {
+                        crate::ty_check::pre_decl::SPLIT_THREAD_GRP
+                        | crate::ty_check::pre_decl::SPLIT_BLOCK_GRP
+                        | crate::ty_check::pre_decl::SPLIT_WARP_GRP => {
+                            if let (desc::ArgKinded::Nat(k), desc::ArgKinded::Nat(n), Some(p)) =
+                                (&gen_args[0], &gen_args[1], args.first())
+                            {
+                                return ParallelityCollec::Split {
+                                    pos: k.clone(),
+                                    coll_size: n.clone(),
+                                    parall_expr: Box::new(ParallelityCollec::create_from(
+                                        p, parall_ctx,
+                                    )),
+                                };
+                            }
+                            panic!("Cannot create `split` for parallel collection from the provided arguments.");
                         }
-                        panic!("Cannot create `split` for parallel collection from the provided arguments.");
-                    } else if ident.name == crate::ty_check::pre_decl::SPLIT_WARP {
-                        if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first()) {
-                            return ParallelityCollec::Split {
-                                pos: k.clone(),
-                                coll_size: desc::Nat::Lit(32),
-                                parall_expr: Box::new(ParallelityCollec::create_from(
-                                    p, parall_ctx,
-                                )),
-                            };
+                        crate::ty_check::pre_decl::SPLIT_WARP => {
+                            if let (desc::ArgKinded::Nat(k), Some(p)) = (&gen_args[0], args.first())
+                            {
+                                return ParallelityCollec::Split {
+                                    pos: k.clone(),
+                                    coll_size: desc::Nat::Lit(32),
+                                    parall_expr: Box::new(ParallelityCollec::create_from(
+                                        p, parall_ctx,
+                                    )),
+                                };
+                            }
+                            panic!("Cannot create `split` from the provided arguments.");
                         }
-                        panic!("Cannot create `split` from the provided arguments.");
-                    } else {
-                        unimplemented!()
+                        _ => unimplemented!(),
                     }
                 } else {
                     panic!(

@@ -38,14 +38,14 @@ fn test_struct_def() {
 #[test]
 fn test_trait_def() {
     let src = r#"
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
     "#;
     assert_compile!(src);
 
     let src = r#"
-    trait Eq {
+    trait Equal {
         //const magic_number: i32 = 42; //TODO const items
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
         fn eq2(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
@@ -63,15 +63,15 @@ fn test_impl_def() {
         x: i32,
         y: i32
     }
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
-    impl Eq for Point {
+    impl Equal for Point {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             (*self).x == (*other).x && (*self).y == (*other).y
         }
     }
-    impl Eq for i32 {
+    impl Equal for i32 {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             *self == *other
         }
@@ -87,12 +87,12 @@ fn test_method_call() {
         x: i32,
         y: i32
     }
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             false
         }
     }
-    impl Eq for Point {
+    impl Equal for Point {
     }
     impl Point {
         fn foo(self) -[cpu.thread]-> Point {
@@ -115,12 +115,11 @@ fn test_method_call() {
 }
 
 #[test]
-#[ignore] //TODO name conflicts?
 fn test_monomoprhisation() {
     let src = r#"
     trait Trait1 {}
     trait Trait2 {}
-    trait Eq<X, Y> where X: Trait1 {
+    trait Equal<X, Y> where X: Trait1 {
         fn new<Z>(z: Z) -[cpu.thread]-> i32 {
             let mut x: X;
             let mut y: Y;
@@ -131,11 +130,11 @@ fn test_monomoprhisation() {
         x: X,
         y: Y
     }
-    impl<A, B, C> Eq<A, B> for Point<B, C> where A: Trait1 + Trait2, B: Trait2 {
+    impl<A, B, C> Equal<A, B> for Point<B, C> where A: Trait1 + Trait2, B: Trait2 {
         fn new<Z>(z: Z) -[cpu.thread]-> i32 {
             let mut a: A;
             let mut b: B;
-            let p: Point<i32, i32> = Point::<i32, i32> { x: 42, y: 43 };
+            let p = Point { x: 42, y: 43 };
             foo::<i32>(p, true); //TODO infer generic
             42
         }
@@ -145,16 +144,21 @@ fn test_monomoprhisation() {
     impl Trait1 for f64 {}
     impl Trait2 for f64 {}
 
-    fn foo<X, Z, T>(t: T, z: Z) -[cpu.thread] -> i32 where X: Trait1, T: Eq<X, X> {
-        //T::new(z)
-        T::new::<T, X, X, Z>(z) //TODO generics should be inferred
+    fn foo<X, Z, T>(t: T, z: Z) -[cpu.thread] -> i32 where X: Trait1, T: Equal<X, X> {
+        T::new(z)
     }
 
     fn bar() -[cpu.thread]-> i32 {
-        let p: Point<f64, i32> = Point::<f64, i32> { x: 4.0, y: 42 };
+        let p = Point { x: 4.0, y: 42 };
         foo::<f64>(p, 42); //TODO infer generic
-        let p2: Point<i32, f64> = Point::<i32, f64> { x: 4, y: 42.0 };
+        let p2 = Point { x: 4, y: 42.0 };
         foo::<i32>(p2, 42.5); //TODO infer generic
+        let p3 = Point { x: 4, y: 42.0 };
+        //It is not possible to call "Point::new" because
+        //the generic argument for "A" cannnot be inferred.
+        //It is sytacticly not possible to pass this generic arg
+        //This seems also in Rust not possible
+        //Point::<i32, i32>::new::<f64>(true);
         42
     }
     "#;
@@ -162,9 +166,41 @@ fn test_monomoprhisation() {
 }
 
 #[test]
+fn test_infer_trait_args() {
+    let src = r#"
+    trait Equal<T> {
+        fn new<Z>(z: Z) -[cpu.thread]-> i32 {
+            let mut t: T;
+            42
+        }
+    }
+    impl<T> Equal<T> for T {}
+
+    fn foo<T>(t: T) -[cpu.thread] -> i32 {
+        T::new(26)
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    trait Equal<T> {
+        fn new<Z>(z: Z) -[cpu.thread]-> i32 {
+            let mut t: T;
+            42
+        }
+    }
+    impl<T, X> Equal<T> for X {}
+    fn foo<X>(t: X) -[cpu.thread] -> i32 {
+        X::new(z) //cannot infer "T"
+    }
+    "#;
+    assert_err_compile!(src);
+}
+
+#[test]
 fn test_fun_calls() {
     let src = r#"
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> i32 {
             1
         }
@@ -175,8 +211,8 @@ fn test_fun_calls() {
         x: T,
         y: T
     }
-    impl<T> Eq for Point<T> where T: SomeOtherTrait {}
-    fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Eq {
+    impl<T> Equal for Point<T> where T: SomeOtherTrait {}
+    fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Equal {
         let i1: i32 = (&shrd t).eq(&shrd t);
         let i2: i32 = T::eq(&shrd t, &shrd t);
         ()
@@ -199,7 +235,7 @@ fn test_fun_calls() {
     assert_compile!(src);
 
     let src = r#"
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> i32 {
             1
         }
@@ -210,8 +246,8 @@ fn test_fun_calls() {
         x: T,
         y: T
     }
-    impl<T> Eq for Point<T> {} //here "T" has no constraints
-    fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Eq {
+    impl<T> Equal for Point<T> {} //here "T" has no constraints
+    fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Equal {
         let i1: i32 = (&shrd t).eq(&shrd t);
         let i2: i32 = T::eq(&shrd t, &shrd t);
         ()
@@ -279,18 +315,18 @@ fn test_associated_const() {
         x: i32,
         y: i32
     }
-    trait Eq {
+    trait Equal {
         //const important_const: f32;
         //const PANIC: () = panic!("compile-time panic");
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
-    impl Eq for Point {
+    impl Equal for Point {
         //const important_const = 4.2;
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             (*self).x == (*other).x && (*self).y == (*other).y
         }
     }
-    impl Eq for i32 {
+    impl Equal for i32 {
         //const important_const = 4.2;
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             //let _ = PANIC;
@@ -305,18 +341,18 @@ fn test_associated_const() {
         x: i32,
         y: i32
     }
-    trait Eq {
+    trait Equal {
         //const important_const: f32 = 4.2; // initialize with some value
         //const PANIC: () = panic!("compile-time panic");
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
-    impl Eq for Point {
+    impl Equal for Point {
         //const important_const = 4.2;
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             (*self).x == (*other).x && (*self).y == (*other).y
         }
     }
-    impl Eq for i32 {
+    impl Equal for i32 {
         //const important_const = 4.2;
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             //let _ = PANIC;
@@ -331,18 +367,18 @@ fn test_associated_const() {
     //     x: i32,
     //     y: i32
     // }
-    // trait Eq {
+    // trait Equal {
     //     //const important_const: f32;
     //     //const PANIC: () = panic!("compile-time panic");
     //     fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     // }
-    // impl Eq for Point {
+    // impl Equal for Point {
     //     //const important_const = 4.2;
     //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
     //         (*self).x == (*other).x && (*self).y == (*other).y
     //     }
     // }
-    // impl Eq for i32 {
+    // impl Equal for i32 {
     //     //No definion of "important_const"
     //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
     //         //let _ = PANIC;
@@ -360,10 +396,10 @@ fn test_unimplmented_method_impl_def() {
         x: i32,
         y: i32
     }
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
-    impl Eq for Point {
+    impl Equal for Point {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             (*self).x == (*other).x && (*self).y == (*other).y
         }
@@ -376,13 +412,13 @@ fn test_unimplmented_method_impl_def() {
         x: i32,
         y: i32
     }
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
         fn eq2(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             true
         }
     }
-    impl Eq for Point {
+    impl Equal for Point {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             (*self).x == (*other).x && (*self).y == (*other).y
         }
@@ -395,11 +431,11 @@ fn test_unimplmented_method_impl_def() {
         x: i32,
         y: i32
     }
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
         fn eq2(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
-    impl Eq for Point {
+    impl Equal for Point {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             (*self).x == (*other).x && (*self).y == (*other).y
         }
@@ -570,14 +606,14 @@ fn test_invalid_type_in_struct() {
 #[test]
 fn test_invalid_generic_in_trait() {
     let src = r#"
-    trait Eq<T> {
+    trait Equal<T> {
         fn eq(&shrd cpu.mem self, T) -[cpu.thread]-> bool;
     }
     "#;
     assert_compile!(src);
 
     let src = r#"
-    trait Eq<i32> {
+    trait Equal<i32> {
         fn eq(&shrd cpu.mem self, i32) -[cpu.thread]-> bool;
     }
     "#;
@@ -627,8 +663,8 @@ fn test_invalid_number_generics_trait() {
         x: X,
         y: Y
     }
-    trait Eq<T> {}
-    impl<T> Eq<T> for Point<i32, i32> {}
+    trait Equal<T> {}
+    impl<T> Equal<T> for Point<i32, i32> {}
     "#;
     assert_compile!(src);
 
@@ -637,8 +673,8 @@ fn test_invalid_number_generics_trait() {
         x: X,
         y: Y
     }
-    trait Eq<T> {}
-    impl Eq<i32> for Point<i32, i32> {}
+    trait Equal<T> {}
+    impl Equal<i32> for Point<i32, i32> {}
     "#;
     assert_compile!(src);
 
@@ -647,8 +683,8 @@ fn test_invalid_number_generics_trait() {
         x: X,
         y: Y
     }
-    trait Eq<T> {}
-    impl Eq for Point<i32, i32> {}
+    trait Equal<T> {}
+    impl Equal for Point<i32, i32> {}
     "#;
     assert_err_compile!(src);
 
@@ -657,8 +693,8 @@ fn test_invalid_number_generics_trait() {
         x: X,
         y: Y
     }
-    trait Eq<T> {}
-    impl Eq<> for Point<i32, i32> {}
+    trait Equal<T> {}
+    impl Equal<> for Point<i32, i32> {}
     "#;
     assert_err_compile!(src);
 
@@ -667,8 +703,8 @@ fn test_invalid_number_generics_trait() {
         x: X,
         y: Y
     }
-    trait Eq<T> {}
-    impl Eq<i32, f32> for Point<i32, i32> {}
+    trait Equal<T> {}
+    impl Equal<i32, f32> for Point<i32, i32> {}
     "#;
     assert_err_compile!(src);
 }
@@ -680,8 +716,8 @@ fn test_invalid_generic_kind() {
         x: X,
         y: [i32; n]
     }
-    trait Eq {}
-    impl<T> Eq for Point<T, 42> {}
+    trait Equal {}
+    impl<T> Equal for Point<T, 42> {}
     "#;
     assert_compile!(src);
 
@@ -690,8 +726,8 @@ fn test_invalid_generic_kind() {
         x: X,
         y: [i32; n]
     }
-    trait Eq {}
-    impl<T, X: nat> Eq for Point<T, X> {}
+    trait Equal {}
+    impl<T, X: nat> Equal for Point<T, X> {}
     "#;
     assert_compile!(src);
 
@@ -700,8 +736,8 @@ fn test_invalid_generic_kind() {
         x: X,
         y: [i32; n]
     }
-    trait Eq {}
-    impl<T, X> Eq for Point<T, X> {}
+    trait Equal {}
+    impl<T, X> Equal for Point<T, X> {}
     "#;
     assert_err_compile!(src);
 
@@ -710,8 +746,8 @@ fn test_invalid_generic_kind() {
         x: X,
         y: [i32; n]
     }
-    trait Eq {}
-    impl<T: mem> Eq for Point<T, 42> {}
+    trait Equal {}
+    impl<T: mem> Equal for Point<T, 42> {}
     "#;
     assert_err_compile!(src);
 }
@@ -726,17 +762,17 @@ fn test_constraint_checker() {
         fn fun2(a: B) -[cpu.thread] -> i32;
     }
     fn foo<X, A>(x: X, a: A) -[cpu.thread] -> i32 where X: Trait1<A> {
-        X::fun1::<X>(a)
+        X::fun1(a)
     }
     //In this two functions is X not constraint to implement Trait1, but because
     //Trait1 is a supertrait this can be inferred
     fn bar<X, A>(x: X, a: A, a2: A) -[cpu.thread] -> i32 where X: Trait2<A> {
-        X::fun1::<X>(a);
-        X::fun2::<X>(a2)
+        X::fun1(a);
+        X::fun2(a2)
     }
     fn baz<X>(x: X) -[cpu.thread] -> i32 where X: Trait2<i32> {
-        X::fun1::<X>(1);
-        X::fun2::<X>(2)
+        X::fun1(1);
+        X::fun2(2)
     }
     "#;
     //This print some warnings because here is no codegen for foo, bar and baz possible
@@ -748,14 +784,14 @@ fn test_unfullfilled_constraints() {
     let src = r#"
     struct Struct1 { i: i32 }
     struct Struct2 { i: f32 }
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
-    struct Point<X, Y> where X: Eq, Y:Eq {
+    struct Point<X, Y> where X: Equal, Y:Equal {
         x: X,
         y: Y
     }
-    impl Eq for Struct1 {
+    impl Equal for Struct1 {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             false
         }
@@ -771,14 +807,14 @@ fn test_unfullfilled_constraints() {
     let src = r#"
     struct Struct1 { i: i32 }
     struct Struct2 { i: i32 }
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
     }
-    struct Point<X, Y> where X: Eq, Y:Eq {
+    struct Point<X, Y> where X: Equal, Y:Equal {
         x: X,
         y: Y
     }
-    impl Eq for Struct1 {
+    impl Equal for Struct1 {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             false
         }
@@ -795,18 +831,18 @@ fn test_unfullfilled_constraints() {
 #[test]
 fn test_unfullfilled_constraints2() {
     let src = r#"
-    trait Eq {
+    trait Equal {
         fn foo(x: i32) -[cpu.thread]-> bool {
             false
         }
     }
-    trait Ord: Eq {
+    trait Ord: Equal {
         fn foo2(x: i32) -[cpu.thread]-> bool;
     }
     trait SOrd: Ord {
         fn foo3(x: i32) -[cpu.thread]-> bool;
     }
-    struct Point<X, Y> where X: Eq, Y:Eq {
+    struct Point<X, Y> where X: Equal, Y:Equal {
         x: X,
         y: Y
     }
@@ -818,18 +854,18 @@ fn test_unfullfilled_constraints2() {
 
     //TODO cant pass ArgKinded with generic params
     // let src = r#"
-    // trait Eq {
+    // trait Equal {
     //     fn foo(x: i32) -[cpu.thread]-> bool {
     //         false
     //     }
     // }
-    // trait Ord: Eq {
+    // trait Ord: Equal {
     //     fn foo2(x: i32) -[cpu.thread]-> bool {false}
     // }
     // trait SOrd: Ord {
     //     fn foo3(x: i32) -[cpu.thread]-> bool {false}
     // }
-    // struct Point<X, Y> where X: Eq, Y:Eq {
+    // struct Point<X, Y> where X: Equal, Y:Equal {
     //     x: X,
     //     y: Y
     // }
@@ -842,18 +878,18 @@ fn test_unfullfilled_constraints2() {
     // assert_compile!(src);
 
     // let src = r#"
-    // trait Eq {
+    // trait Equal {
     //     fn foo(x: i32) -[cpu.thread]-> bool {
     //         false
     //     }
     // }
-    // trait Ord: Eq {
+    // trait Ord: Equal {
     //     fn foo2(x: i32) -[cpu.thread]-> bool {false}
     // }
     // trait SOrd: Ord {
     //     fn foo3(x: i32) -[cpu.thread]-> bool {false}
     // }
-    // struct Point<X, Y> where X: Eq, Y:Eq {
+    // struct Point<X, Y> where X: Equal, Y:Equal {
     //     x: X,
     //     y: Y
     // }
@@ -981,7 +1017,7 @@ fn test_different_generic_param_types() {
     trait Number {}
     impl Number for i32 {}
     impl Number for f64 {}
-    trait Eq {
+    trait Equal {
         fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
             false
         }
@@ -1006,7 +1042,7 @@ fn test_different_generic_param_types() {
     //     }
     // }
     // TODO "==" kann man in eq nicht benutzen, da es sich um generische Parameter handelt...
-    // impl<T> Eq for Point<T> where T: Number {
+    // impl<T> Equal for Point<T> where T: Number {
     //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
     //         (*self).x == (*other).x && *(self).y == (*other).y
     //     }
@@ -1033,7 +1069,7 @@ fn test_different_generic_param_types() {
     // trait Number {}
     // impl Number for i32 {}
     // impl Number for f64 {}
-    // trait Eq {
+    // trait Equal {
     //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
     //         false
     //     }
@@ -1052,11 +1088,11 @@ fn test_different_generic_param_types() {
     //     }
     // }
     // impl<n: nat, m: mem, a: prv> Point<i32, n, m, a> {
-    //     fn isFirstPointEqualSpecialPoint(&shrd cpu.mem self) -[cpu.thread]-> bool {
+    //     fn isFirstPointEqualualSpecialPoint(&shrd cpu.mem self) -[cpu.thread]-> bool {
     //         (&shrd self.getFirstPoint()).eq(self.special_point)
     //     }
     // }
-    // impl<T> Eq for Points<T> where T: Number {
+    // impl<T> Equal for Points<T> where T: Number {
     //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
     //         *self.x == *other.x && *self.y == *other.x
     //     }
@@ -1069,7 +1105,7 @@ fn test_different_generic_param_types() {
 
     //     let points1 = Points { points: [p11], special_point: &shrd p_special };
     //     let points2 = Points { points: [p21, p22], special_point: &shrd p_special };
-    //     let a = points1.isFirstPointEqualSpecialPoint();
+    //     let a = points1.isFirstPointEqualualSpecialPoint();
     //     let b = (&shrd p_special).eq((&shrd p_special));
     //     let c = (&shrd points2).getFirstPoint();
     //     ()
