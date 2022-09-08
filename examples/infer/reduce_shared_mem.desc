@@ -14,12 +14,10 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
             let block_group = group::<1024>(to_view(inputs.0));
             let view_out = group_mut::<1>(to_view_mut(inputs.1));
             // TODO remove decl and move out tmp declaration
-            decl {
-                let mut tmp: [i32; bs] @ gpu.shared
-            } parfor block in grid with ib, out_elem from block_group, view_out {
+            let mut tmp: [i32; bs] @ gpu.shared;
+            sched ib, out_elem in block_group, view_out to block in grid {
                  let tmp_view = to_view_mut(&uniq tmp);
-                 parfor _ in block
-                 with inp, tmp_in from ib, tmp_view { *tmp_in = *inp };
+                 sched inp, tmp_in in ib, tmp_view to _ in block { *tmp_in = *inp };
 
                  for_nat k in halved_range(bs/2) {
                     let tmp_view = to_view_mut(&uniq tmp);
@@ -30,10 +28,9 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                     let active_half1 = active_halves.1;
 
                     // Fixme: At this point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
-                    par_branch split_exec(X) k block {
+                    indep split_exec(X) k block {
                         active =>
-                            parfor _ in active
-                            with a, b from active_half0, active_half1 {
+                            sched a, b in active_half0, active_half1 to _ in active {
                                 * a = * a + * b
                             },
                         inactive => { () }
@@ -41,10 +38,9 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
                  };
                  let tmp_view2 = to_view_mut(&uniq tmp);
                  let tmp_res = (split uniq 1 (*tmp_view2)).0;
-                 par_branch split_exec(X) 1 block {
+                 indep split_exec(X) 1 block {
                     single_thread =>
-                        parfor _ in single_thread
-                        with out, tmp_val from out_elem, tmp_res {
+                        sched out, tmp_val in out_elem, tmp_res to _ in single_thread {
                             *out = *tmp_val
                         },
                     rest => { () }

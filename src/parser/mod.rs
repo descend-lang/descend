@@ -370,26 +370,27 @@ peg::parser! {
                 })
 
             }
-           "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
+            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "par_branch" __ split_exec:exec_expr() _ "{" _
+            "indep" __ split_exec:exec_expr() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
-                Expr::new(ExprKind::ParBranch(Box::new(ParBranch::new(split_exec,
+                Expr::new(ExprKind::Indep(Box::new(Indep::new(split_exec,
                     branch.iter().map(|(i, _)| i.clone()).collect(),
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
             }
             decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
-            "parfor" par_dim:(_ "(" _ par_dim:dim_component() _ ")" { par_dim })? __
-                par_ident:maybe_ident() __ "in" __ exec_expr:exec_expr() __
-            "with" __ input_elems:ident() **<1,> (_ "," _) __
-            "from" __ input:expression() **<1,> (_ "," _) _ body:block() {
-                Expr::new(ExprKind::ParForWith(Box::new(ParForWith::new(decls, match par_dim {
-                    Some(pd) => pd,
+            "sched" sched:(_ "(" _ dim:dim_component() _ ")" { dim })? __
+                input_idents:ident() **<1,> (_ "," _) __
+                "in" __ input:expression() **<1,> (_ "," _) __
+                "to" __ inner_exec:maybe_ident() __ "in" __ exec_expr:exec_expr() _
+                body:block() {
+                Expr::new(ExprKind::Sched(Box::new(Sched::new(decls, match sched {
+                    Some(d) => d,
                     None => DimCompo::X,
-                }, par_ident, exec_expr, input_elems, input, body))))
+                }, inner_exec, exec_expr, input_idents, input, body))))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
@@ -572,6 +573,9 @@ peg::parser! {
             / "split_exec" _ "(" _ d:dim_component() _ ")" __ n:nat() __ exec:exec_expr() {
                 ExecKind::Split(Box::new(ExecSplit::new(d, n, exec)))
             }
+            / "to_thread_grp" _ "(" _ exec:exec_expr() _ ")" {
+                ExecKind::ToThreadGrp(Box::new(exec))
+            }
 
         rule exec_ty() -> ExecTy =
             begin:position!() exec:exec_ty_kind() end:position!() {
@@ -662,10 +666,16 @@ peg::parser! {
             s.into()
         }
 
+        // Take care! The order of keywords matters.
+        //
+        // For example: if "in" comes before "indep", then
+        // "in" matches when parsing "indep". The negative lookahead at the end then checks that there
+        // are no follow-up symbols. But there is still "dep" left to be parsed.
+        // Therefore, the rule fails, even though it should have succeeded.
         rule keyword() -> ()
-            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
+            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to" / "with" / "decl"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
+                / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
                 / "cpu.mem" / "gpu.global" / "gpu.shared"
                 / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']

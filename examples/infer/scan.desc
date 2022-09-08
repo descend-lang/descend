@@ -15,11 +15,11 @@ fn upsweep<a: prv>(
     for_nat d in halved_range(32) {
 // FIXME the next line uses d:nat but group_mut is defined via d:dty, which clashes
         let tmp_up_view = group_mut::<64/d>(to_view_mut(&uniq *arr_ref));
-        par_branch split_exec(X) d block {
+        indep split_exec(X) d block {
             active =>
-                parfor _ in active
-                with arr from tmp_up_view
-                { arr[64/d-1] = arr[64/d-1] + arr[32/d-1] },
+                sched arr in tmp_up_view to _ in active {
+                    arr[64/d-1] = arr[64/d-1] + arr[32/d-1]
+                },
             inactive => { () }
         }
     }
@@ -40,10 +40,9 @@ fn downsweep<a: prv>(
         let tmp_down_view = group_mut::<64 / d>(
             to_view_mut(&uniq *arr_ref));
 
-        par_branch split_exec(X) d block {
+        indep split_exec(X) d block {
             active =>
-                parfor _ in active
-                with arr from tmp_down_view {
+                sched arr in tmp_down_view to _ in active {
                     let t = arr[32/d-1];
                     arr[32/d-1] = arr[64/d-1];
                     arr[64/d-1] = arr[64/d-1] + t
@@ -81,17 +80,15 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
 
             decl {
                 let mut tmp: [i32; 64] @ gpu.shared
-            } parfor block in grid
-            with ib, block_out, bsum from block_group, out_grp, block_sums_grp {
+            } sched ib, block_out, bsum in block_group, out_grp, block_sums_grp to block in grid {
                 {
                     let tmp_view = to_view_mut(&uniq tmp);
                     let tmp_halves = split uniq 32 (*tmp_view);
                     let input_halves = split shrd 32 (*ib);
 
                     // Copy to temporary shared memory storage
-                    parfor _ in block
-                    with s0, s1, d0, d1 from input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1
-                    {
+                    sched s0, s1, d0, d1 in input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1
+                    to _ in block {
                         *d0 = *s0;
                         *d1 = *s1
                     }
@@ -105,11 +102,9 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                 {
                     let tmp_view2 = to_view_mut(&uniq tmp);
                     let tmp_last = (split uniq 63 (*tmp_view2)).1;
-                    par_branch split_exec(X) 1 block {
+                    indep split_exec(X) 1 block {
                         active =>
-                            parfor _ in active
-                            with sum, last from bsum, tmp_last
-                            {
+                            sched sum, last in bsum, tmp_last to _ in active {
                                 *sum = *last;
                                 *last = 0
                             },
@@ -124,9 +119,8 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                     let tmp_halves3 = split uniq 32 (*tmp_view3);
                     // Copy results to global memory
                     let output_halves = split uniq 32 (*block_out);
-                    parfor _ in block
-                    with d0, d1, s0, s1 from output_halves.0, output_halves.1, tmp_halves3.0, tmp_halves3.1
-                    {
+                    sched d0, d1, s0, s1 in output_halves.0, output_halves.1, tmp_halves3.0, tmp_halves3.1
+                    to _ in block {
                         *d0 = *s0;
                         *d1 = *s1
                     }
@@ -148,12 +142,8 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                 group_mut::<64>(to_view_mut(inputs.0));
             let block_sums = group::<1>(to_view(inputs.1));
 
-            parfor block in grid
-            with scanned_vals_blocked, block_sum from scanned_vals, block_sums
-            {
-                parfor _ in block
-                with scanned_val, sum from scanned_vals_blocked, block_sum
-                {
+            sched scanned_vals_blocked, block_sum in scanned_vals, block_sums to block in grid {
+                sched scanned_val, sum in scanned_vals_blocked, block_sum to _ in block {
                     *scanned_val = *scanned_val + *sum
                 }
             }

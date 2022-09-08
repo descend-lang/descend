@@ -12,19 +12,11 @@ fn scale_vec() -> Res {
     ))
 }
 
-#[ignore]
-fn bitonic_sort_split_blocks() -> Res {
+#[test]
+fn bitonic_sort() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc")?
-    ))
-}
-
-#[ignore]
-fn bitonic_sort_shrd_mem() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/bitonic_sort/bitonic_sort_shrd_mem.desc")?
     ))
 }
 

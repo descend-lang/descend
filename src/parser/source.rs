@@ -36,7 +36,7 @@ impl<'a> SourceCode<'a> {
 
     fn line_offsets(source: &str) -> Vec<u32> {
         source
-            .split("\n")
+            .split('\n')
             .scan(0, |offset, line| {
                 let old_offset = *offset;
                 *offset += u32::try_from(line.len()).unwrap() + 1;
@@ -78,18 +78,6 @@ impl<'a> SourceCode<'a> {
         }
         let col_num = offset - line_off;
         (line_num, col_num)
-    }
-}
-
-pub struct SourceCodeSlice<'a> {
-    pub source: &'a SourceCode<'a>,
-    pub begin: u32,
-    pub end: u32,
-}
-
-impl<'a> SourceCodeSlice<'a> {
-    pub fn new(source: &'a SourceCode<'a>, begin: u32, end: u32) -> Self {
-        SourceCodeSlice { source, begin, end }
     }
 }
 

@@ -67,7 +67,7 @@ pub(super) fn check(
             Ok(res_back)
         }
         // Δ; Γ ⊢ (τ1, ..., τn) ≲ (τ1′, ..., τn′) ⇒ Γn
-        (DataTyKind::Tuple(sub_elems), DataTyKind::Tuple(sup_elems)) => {
+        (Tuple(sub_elems), Tuple(sup_elems)) => {
             let mut res_ctx = ty_ctx;
             for (sub, sup) in sub_elems.iter().zip(sup_elems) {
                 res_ctx = check(kind_ctx, res_ctx, sub, sup)?;
@@ -110,15 +110,13 @@ fn outlives(
             //  context. See ty_check_global_fun_def.
             kind_ctx
                 .outlives(longer, shorter)
-                .map_err(|err| SubTyError::CtxError(err))?;
+                .map_err(SubTyError::CtxError)?;
             Ok(ty_ctx)
         }
         // OL-LocalProvenances
         (Value(longer), Value(shorter)) => outl_check_val_prvs(ty_ctx, longer, shorter),
         // OL-LocalProvAbsProv
-        (Value(longer_val), Ident(shorter_ident)) => {
-            outl_check_val_ident_prv(kind_ctx, ty_ctx, longer_val, shorter_ident)
-        }
+        (Value(longer_val), Ident(_)) => outl_check_val_ident_prv(ty_ctx, longer_val),
         // OL-AbsProvLocalProv
         (Ident(longer_ident), Value(shorter_val)) => {
             outl_check_ident_val_prv(kind_ctx, ty_ctx, longer_ident, shorter_val)
@@ -151,13 +149,6 @@ fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> SubTyResul
     let longer_loans = ty_ctx.loans_in_prv(longer)?.clone();
     let res_ty_ctx = ty_ctx.extend_loans_for_prv(shorter, longer_loans)?;
     Ok(res_ty_ctx)
-}
-
-fn create_loan_set_err_msg(prv: &str, error_msg: &str) -> String {
-    format!(
-        "Error when trying to get loan set for {}: {}\n",
-        prv, error_msg
-    )
 }
 
 fn longer_occurs_before_shorter(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> bool {
@@ -197,12 +188,7 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         })
 }
 
-fn outl_check_val_ident_prv(
-    kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
-    longer_val: &str,
-    shorter_ident: &Ident,
-) -> SubTyResult<TyCtx> {
+fn outl_check_val_ident_prv(ty_ctx: TyCtx, longer_val: &str) -> SubTyResult<TyCtx> {
     // TODO how could the set ever be empty?
     let loan_set = ty_ctx.loans_in_prv(longer_val)?;
     if loan_set.is_empty() {
@@ -215,15 +201,10 @@ fn outl_check_val_ident_prv(
 
 // FIXME Makes no sense!
 fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: &HashSet<Loan>) -> bool {
-    ty_ctx.all_places().iter().any(|(pl, ty)| {
-        loan_set.iter().any(|loan| {
-            let Loan {
-                place_expr,
-                own: own_qual,
-            } = loan;
-            place_expr.equiv(pl)
-        })
-    })
+    ty_ctx
+        .all_places()
+        .iter()
+        .any(|(pl, _)| loan_set.iter().any(|loan| loan.place_expr.equiv(pl)))
 }
 
 fn outl_check_ident_val_prv(

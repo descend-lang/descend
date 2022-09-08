@@ -252,7 +252,7 @@ impl Expr {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct ParForWith {
+pub struct Sched {
     // TODO remove decls
     pub decls: Option<Vec<Expr>>,
     pub dim: DimCompo,
@@ -263,7 +263,7 @@ pub struct ParForWith {
     pub body: Box<Expr>,
 }
 
-impl ParForWith {
+impl Sched {
     pub fn new(
         decls: Option<Vec<Expr>>,
         dim: DimCompo,
@@ -273,7 +273,7 @@ impl ParForWith {
         input_views: Vec<Expr>,
         body: Expr,
     ) -> Self {
-        ParForWith {
+        Sched {
             decls,
             dim,
             exec_ident: inner_exec,
@@ -313,15 +313,15 @@ impl ExprSplit {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct ParBranch {
+pub struct Indep {
     pub split_exec: ExecExpr,
     pub branch_idents: Vec<Ident>,
     pub branch_bodies: Vec<Expr>,
 }
 
-impl ParBranch {
+impl Indep {
     pub fn new(split_exec: ExecExpr, branch_idents: Vec<Ident>, branch_bodies: Vec<Expr>) -> Self {
-        ParBranch {
+        Indep {
             split_exec,
             branch_idents,
             branch_bodies,
@@ -377,8 +377,8 @@ pub enum ExprKind {
     While(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
-    ParBranch(Box<ParBranch>),
-    ParForWith(Box<ParForWith>),
+    Indep(Box<Indep>),
+    Sched(Box<Sched>),
     Split(Box<ExprSplit>),
     Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
@@ -771,22 +771,14 @@ pub enum ExecKind {
     Ident(Ident),
     CpuThread,
     GpuGrid(Dim, Dim),
+    // TODO remove GpuBlock?! Can this ever be created?
     GpuBlock(Dim),
     GpuThread,
     Split(Box<ExecSplit>),
     Proj(u8, Box<ExecExpr>),
     Distrib(DimCompo, Box<ExecExpr>),
+    ToThreadGrp(Box<ExecExpr>),
     View,
-}
-
-impl ExecKind {
-    pub fn callable_in(self, exec: Self) -> bool {
-        if self == ExecKind::View {
-            true
-        } else {
-            self == exec
-        }
-    }
 }
 
 impl fmt::Display for ExecKind {
@@ -798,8 +790,9 @@ impl fmt::Display for ExecKind {
             ExecKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
             ExecKind::GpuThread => write!(f, "gpu.thread"),
             ExecKind::Split(exec_split) => write!(f, "{}", exec_split),
-            ExecKind::Proj(i, exec) => write!(f, "Proj{}<{}>", i, exec),
-            ExecKind::Distrib(d, exec) => write!(f, "Distrib<{}, {}>", d, exec),
+            ExecKind::Proj(i, exec) => write!(f, "proj{}<{}>", i, exec),
+            ExecKind::Distrib(d, exec) => write!(f, "distr<{}, {}>", d, exec),
+            ExecKind::ToThreadGrp(exec) => write!(f, "to_thread_grp<{}>", exec),
             ExecKind::View => write!(f, "view"),
         }
     }
@@ -838,18 +831,16 @@ impl FnTy {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-// TODO remove Ident, remove Dead types
 pub enum TyKind {
     Data(Box<DataTy>),
     // <x:k,..>(ty..) -[x:exec]-> ty
     FnTy(Box<FnTy>),
 }
 
+// TODO remove
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Constraint {
     Copyable,
-    NonCopyable,
-    Dead,
 }
 
 impl Ty {
@@ -882,10 +873,6 @@ impl Ty {
         }
     }
 
-    pub fn non_copyable(&self) -> bool {
-        !self.copyable()
-    }
-
     pub fn copyable(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
@@ -899,27 +886,6 @@ impl Ty {
             TyKind::FnTy(_) => true,
         }
     }
-
-    // TODO remove
-    // pub fn eq_structure(&self, other: &Self) -> bool {
-    //     match (&*self.ty, &*other.ty) {
-    //         (TyKind::Fn(gps1, ptys1, exec1, ret_ty1), TyKind::Fn(gps2, ptys2, exec2, ret_ty2)) => {
-    //             let mut res = true;
-    //             for (gp1, gp2) in gps1.iter().zip(gps2) {
-    //                 res &= gp1 == gp2;
-    //             }
-    //             for (pty1, pty2) in ptys1.iter().zip(ptys2) {
-    //                 res &= pty1.eq_structure(pty2);
-    //             }
-    //             res &= exec1 == exec2;
-    //             res & ret_ty1.eq_structure(ret_ty2)
-    //         }
-    //         (TyKind::Data(dty1), TyKind::Data(dty2)) => unimplemented!(), //dty1.eq_structure(dty2),
-    //         (TyKind::Ident(id1), TyKind::Ident(id2)) => id1 == id2,
-    //         (TyKind::Dead(ty1), TyKind::Dead(ty2)) => ty1.eq_structure(ty2),
-    //         _ => false,
-    //     }
-    // }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match &self.ty {
@@ -993,6 +959,7 @@ pub enum Dim {
     Y(Box<Dim1d>),
     Z(Box<Dim1d>),
 }
+
 impl Dim {
     pub fn new_3d(n1: Nat, n2: Nat, n3: Nat) -> Self {
         Dim::XYZ(Box::new(Dim3d(n1, n2, n3)))
@@ -1016,6 +983,27 @@ impl Dim {
             Y(dim1d) => Y(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
             Z(dim1d) => Z(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
         }
+    }
+
+    fn dim3d(&self) -> Dim3d {
+        use Dim::*;
+        match self {
+            XYZ(d) => d.as_ref().clone(),
+            XY(d) => Dim3d(d.0.clone(), d.1.clone(), Nat::Lit(1)),
+            XZ(d) => Dim3d(d.0.clone(), Nat::Lit(1), d.1.clone()),
+            YZ(d) => Dim3d(Nat::Lit(1), d.0.clone(), d.1.clone()),
+            X(d) => Dim3d(d.0.clone(), Nat::Lit(1), Nat::Lit(1)),
+            Y(d) => Dim3d(Nat::Lit(1), d.0.clone(), Nat::Lit(1)),
+            Z(d) => Dim3d(Nat::Lit(1), Nat::Lit(1), d.0.clone()),
+        }
+    }
+}
+
+impl std::ops::Mul for Dim {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        use Dim::*;
     }
 }
 

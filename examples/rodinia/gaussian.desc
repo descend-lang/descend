@@ -11,16 +11,14 @@ fn gaussian<n: nat>(
     for_nat t in range(0,n-1) {
         exec::<(n/512), 512>(&uniq gpu, (&uniq m_cuda, &shrd a_cuda),
         | inputs: (&r1 uniq gpu.global [f32; n*n], &r2 shrd gpu.global [f32; n*n]) | -[grid: gpu.grid<X<n/512>, X<512>>]-> () {
-            par_branch split_exec(X) (n-1-t) to_thread_grp(grid) {
+            indep split_exec(X) (n-1-t) to_thread_grp(grid) {
                 active => {
                     let m = group_mut::<n>(to_view_mut(inputs.0));
                     let a = group::<n>(to_view(inputs.1));
                     let (_, part_m) = split uniq (t+1) (*m);
                     let (_, part_a) = split shrd (t+1) (*a);
 
-                    parfor _ in active
-                    with part_m_row, part_a_row
-                    from part_m, part_a {
+                    sched part_m_row, part_a_row in part_m, part_a to _ in active {
                         let a_row = a[t];
                         part_m_row[t] = part_a_row[t] / a_row[t]
                     }
@@ -33,9 +31,9 @@ fn gaussian<n: nat>(
         | inputs: (&shrd gpu.global [f32; n*n],
                    &uniq gpu.global [f32; n*n],
                    &uniq gpu.global [f32; n])| -[grid: gpu.grid<XY<n/4, n/4>, XY<4, 4>>]-> () {
-            par_branch split_exec(X) (n-1-t) to_xy_thread_grp(grid) {
+            indep split_exec(X) (n-1-t) to_xy_thread_grp(grid) {
                 active_x =>
-                    par_branch split_exec(Y) (n-t) active_x {
+                    indep split_exec(Y) (n-t) active_x {
                         active_xy => {
                             let m = group::<n>(to_view(inputs.0));
                             let a = group_mut::<n>(to_view_mut(inputs.1));
@@ -46,19 +44,19 @@ fn gaussian<n: nat>(
                             let (part_b_passive, part_b_active) = split uniq (t+1) (*b);
                             ()
 
-                        //     parfor(x) active_y in active_xy
-                        //     with part_m_row, part_a_row, part_b_elem
-                        //     from part_m, part_a, part_b_active { ()
+                        //     sched(X) part_m_row, part_a_row, part_b_elem
+                        //              in part_m, part_a, part_b_active
+                        //     to active_y in active_xy { ()
                         //         // TODO split par_a_row in y dimension at t
-                        //         parfor(y) _ in active_y with prev_a_elem from read_prev_a[t], part_a_row {
+                        //        sched(Y) prev_a_elem in read_prev_a[t], part_a_row to _ in active_y {
                         //             *part_a_row = part_a_row - part_m_row[t] * (*prev_a_elem)
                         //         }
                         //         // TODO split b_cuda such that t can be read but gid + t + 1 and more is distributed
                         //         //  second view on m_cuda (split at t+1) and distributed over x with the first view inner split at t
                         //         //  then distributed over
-                        //         par_branch split_y_thread_grp_y::<1>(active_y) {
+                        //         indep split_y_thread_grp_y::<1>(active_y) {
                         //             thread => {
-                        //                 parfor(y) _ in thread with part_m_elem from part_m_row {
+                        //                 sched(Y) part_m_elem in part_m_row to _ in thread {
                         //                     part_b_elem = part_b_elem - part_m_elem * (&shrd *part_b_passive)[t]
                         //                 }
                         //             }

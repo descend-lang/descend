@@ -30,8 +30,8 @@ pub trait Visit: Sized {
     fn visit_lit(&mut self, _lit: &Lit) {}
     fn visit_ident(&mut self, _ident: &Ident) {}
     fn visit_pattern(&mut self, pattern: &Pattern) { walk_pattern(self, pattern) }
-    fn visit_par_branch(&mut self, par_branch: &ParBranch) { walk_par_branch(self, par_branch) }
-    fn visit_par_for(&mut self, par_for: &ParForWith) { walk_par_for(self, par_for) }
+    fn visit_par_branch(&mut self, par_branch: &Indep) { walk_par_branch(self, par_branch) }
+    fn visit_par_for(&mut self, par_for: &Sched) { walk_par_for(self, par_for) }
     fn visit_expr_split(&mut self, expr_split: &ExprSplit) { walk_expr_split(self, expr_split) }
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
     fn visit_exec_split(&mut self, exec_split: &ExecSplit) { walk_exec_split(self, exec_split) }
@@ -216,8 +216,8 @@ pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
     }
 }
 
-pub fn walk_par_branch<V: Visit>(visitor: &mut V, par_branch: &ParBranch) {
-    let ParBranch {
+pub fn walk_par_branch<V: Visit>(visitor: &mut V, par_branch: &Indep) {
+    let Indep {
         split_exec,
         branch_idents,
         branch_bodies,
@@ -227,8 +227,8 @@ pub fn walk_par_branch<V: Visit>(visitor: &mut V, par_branch: &ParBranch) {
     walk_list!(visitor, visit_expr, branch_bodies);
 }
 
-pub fn walk_par_for<V: Visit>(visitor: &mut V, par_for: &ParForWith) {
-    let ParForWith {
+pub fn walk_par_for<V: Visit>(visitor: &mut V, par_for: &Sched) {
+    let Sched {
         decls,
         dim,
         exec_ident: inner_exec,
@@ -343,10 +343,10 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
         }
-        ExprKind::ParBranch(par_branch) => {
+        ExprKind::Indep(par_branch) => {
             visitor.visit_par_branch(par_branch);
         }
-        ExprKind::ParForWith(par_for) => {
+        ExprKind::Sched(par_for) => {
             visitor.visit_par_for(par_for);
         }
         ExprKind::ForNat(ident, range, body) => {
@@ -401,6 +401,7 @@ pub fn walk_exec_expr<V: Visit>(visitor: &mut V, exec_expr: &ExecExpr) {
             visitor.visit_dim_compo(dim_compo);
             visitor.visit_exec_expr(exec_expr);
         }
+        ExecKind::ToThreadGrp(exec_expr) => visitor.visit_exec_expr(exec_expr),
         ExecKind::GpuGrid(gdim, bdim) => {
             visitor.visit_dim(gdim);
             visitor.visit_dim(bdim);

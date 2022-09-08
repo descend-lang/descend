@@ -175,7 +175,7 @@ impl TyChecker {
             ExprKind::IdxAssign(pl_expr, idx, e) => {
                 self.ty_check_idx_assign(kind_ctx, ty_ctx, ident_exec, pl_expr, idx, e)?
             }
-            ExprKind::ParBranch(par_branch) => self.ty_check_par_branch(
+            ExprKind::Indep(par_branch) => self.ty_check_par_branch(
                 kind_ctx,
                 ty_ctx,
                 ident_exec,
@@ -183,7 +183,7 @@ impl TyChecker {
                 &mut par_branch.branch_idents,
                 &mut par_branch.branch_bodies,
             )?,
-            ExprKind::ParForWith(parfor) => self.ty_check_par_for(
+            ExprKind::Sched(parfor) => self.ty_check_par_for(
                 kind_ctx,
                 ty_ctx,
                 ident_exec,
@@ -2400,6 +2400,9 @@ fn ty_check_exec(
         ExecKind::Distrib(d, exec_expr) => {
             ty_check_exec_distrib(kind_ctx, ident_exec, *d, exec_expr)?
         }
+        ExecKind::ToThreadGrp(exec_expr) => {
+            ty_check_exec_to_thread_grp(kind_ctx, ident_exec, exec_expr)?
+        }
         ExecKind::Split(exec_split) => ty_check_exec_split(
             kind_ctx,
             ident_exec,
@@ -2467,6 +2470,21 @@ fn ty_check_exec_distrib(
         }
     };
     Ok(exec_ty)
+}
+fn ty_check_exec_to_thread_grp(
+    kind_ctx: &KindCtx,
+    ident_exec: &IdentExec,
+    exec_expr: &mut ExecExpr,
+) -> TyResult<ExecTyKind> {
+    ty_check_exec(kind_ctx, ident_exec, exec_expr)?;
+    if let ExecTyKind::GpuGrid(gdim, bdim) = exec_expr.ty.as_ref().unwrap().ty {
+        Ok(ExecTyKind::GpuGlobalThreads(gdim * bdim))
+    } else {
+        Err(TyError::String(format!(
+            "expected grid but found {}",
+            exec_expr.ty.as_ref().unwrap().ty
+        )))
+    }
 }
 
 pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
