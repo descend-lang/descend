@@ -176,7 +176,6 @@ impl ConstraintEnv {
         //Type vars in scope
         kind_ctx: &KindCtx,
     ) -> bool {
-
         //A struct for backtracking
         struct Backtrack {
             //the last goal that was tried to prove

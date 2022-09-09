@@ -867,7 +867,7 @@ impl GlobalCtx {
         fun_name: &String,
         impl_dty: &DataTy,
         kind_ctx: &KindCtx,
-    ) -> CtxResult<(&FunctionName, Vec<ArgKinded>)> {
+    ) -> CtxResult<&FunctionName> {
         //Serach in all functions in context
         let mut result =
             self.funs
@@ -884,7 +884,7 @@ impl GlobalCtx {
                                 let mut impl_dty_canidate = impl_dty_canidate.clone();
                                 //if they can be unified, this is the searched function
                                 if unify(&mut impl_dty, &mut impl_dty_canidate.mono_ty).is_ok() {
-                                    res.push((fun_name_canidate, Vec::new()))
+                                    res.push(fun_name_canidate)
                                 }
                             }
                             //if the function_kind of the canidate-function references a trait
@@ -908,10 +908,7 @@ impl GlobalCtx {
                                     implicit_ident_cons,
                                     kind_ctx,
                                 ) {
-                                    res.push((
-                                        fun_name_canidate,
-                                        impl_trait_constraint.trait_bound.generics,
-                                    ));
+                                    res.push(fun_name_canidate);
                                 }
                             }
                             //if this is not a impl- or trait-function, its not the serached function
@@ -945,7 +942,7 @@ impl GlobalCtx {
         fun_name: &String,
         constraint_ident: &Ident,
         kind_ctx: &KindCtx,
-    ) -> CtxResult<(&FunctionName, Vec<ArgKinded>)> {
+    ) -> CtxResult<&FunctionName> {
         let mut result = {
             let mut res = Vec::with_capacity(1);
             //Serach in all functions in context (and use for loop to avoid borrowing problems)
@@ -988,7 +985,7 @@ impl GlobalCtx {
                             implicit_ident_cons,
                             kind_ctx,
                         ) {
-                            res.push((fun_name_canidate, c_ident_constraint.trait_bound.generics));
+                            res.push(fun_name_canidate);
                         }
                     }
                 }

@@ -45,6 +45,7 @@ where
     }
 }
 
+pub(crate) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
     let (subst, _) = constrain(t1, t2)?;
     substitute(&subst, t1);
     substitute(&subst, t2);
@@ -68,7 +69,10 @@ pub(super) fn sub_unify<C: Constrainable>(
     Ok(outlives_ctx)
 }
 
-pub(crate) fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
+pub(crate) fn constrain<S: Constrainable>(
+    t1: &S,
+    t2: &S,
+) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
     let mut constr_map = ConstrainMap::new();
     let mut prv_rels = Vec::new();
     t1.constrain(t2, &mut constr_map, &mut prv_rels)?;
@@ -157,19 +161,9 @@ impl DataTy {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::DataTy), self) {
             return Err(TyError::InfiniteType);
         }
-        if let Some(old) = constr_map
+        constr_map
             .dty_unifier
-            .insert(ident.name.clone(), self.clone())
-        {
-            if &old != self {
-                panic!(
-                    "Rebinding bound type variable {}.\n\
-                    Old: {:?}\n\
-                    New: {:?}",
-                    ident.name, old, self
-                );
-            }
-        }
+            .insert(ident.name.clone(), self.clone());
         constr_map
             .dty_unifier
             .values_mut()
@@ -835,7 +829,6 @@ fn shrd_ref_inner_var() -> TyResult<()> {
         Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
     ));
     let (subst, _) = constrain(&shrd_ref, &shrd_ref_t)?;
-    println!("{:?}", subst);
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut shrd_ref_t);
     assert_eq!(shrd_ref, shrd_ref_t);
@@ -860,7 +853,6 @@ fn prv_val_ident() -> TyResult<()> {
         Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
     ));
     let (subst, prv_rels) = constrain(&shrd_ref, &shrd_ref_t)?;
-    println!("{:?}", subst);
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut shrd_ref_t);
     assert_eq!(

@@ -1559,36 +1559,61 @@ fn gen_expr(
                 .iter()
                 .any(|(name, _)| &ident.name == name) =>
             {
-                let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
-                CheckedExpr::Expr(cu::Expr::FunCall {
-                    fun: Box::new(
-                        match gen_expr(
-                            &desc::Expr::with_type(
-                                PlaceExpr(desc::PlaceExpr::new(desc::PlaceExprKind::Ident(
-                                    pre_decl_ident,
-                                ))),
-                                fun.ty.as_ref().unwrap().clone(),
-                            ),
+                match ident.name.as_str() {
+                    crate::ty_check::pre_decl::NUMBERS_ADD
+                    | crate::ty_check::pre_decl::NUMBERS_SUB
+                    | crate::ty_check::pre_decl::NUMBERS_DIV
+                    | crate::ty_check::pre_decl::NUMBERS_EQ => {
+                        let op = match ident.name.as_str() {
+                            crate::ty_check::pre_decl::NUMBERS_ADD => desc::BinOp::Add,
+                            crate::ty_check::pre_decl::NUMBERS_SUB => desc::BinOp::Sub,
+                            crate::ty_check::pre_decl::NUMBERS_DIV => desc::BinOp::Div,
+                            crate::ty_check::pre_decl::NUMBERS_EQ => desc::BinOp::Eq,
+                            _ => panic!("This can not happen"),
+                        };
+                        gen_bin_op_expr(
+                            &op,
+                            &args[0],
+                            &args[1],
                             codegen_ctx,
                             comp_unit,
                             dev_fun,
                             idx_checks,
-                        ) {
-                            CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => expr,
-                        },
-                    ),
-                    template_args: gen_args_kinded(kinded_args),
-                    args: args
-                        .iter()
-                        .map(
-                            |e| match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                                CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => {
-                                    expr
-                                }
-                            },
                         )
-                        .collect::<Vec<_>>(),
-                })
+                    }
+                    _ => {
+                        let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
+                        CheckedExpr::Expr(cu::Expr::FunCall {
+                            fun: Box::new(
+                                match gen_expr(
+                                    &desc::Expr::with_type(
+                                        PlaceExpr(desc::PlaceExpr::new(
+                                            desc::PlaceExprKind::Ident(pre_decl_ident),
+                                        )),
+                                        fun.ty.as_ref().unwrap().clone(),
+                                    ),
+                                    codegen_ctx,
+                                    comp_unit,
+                                    dev_fun,
+                                    idx_checks,
+                                ) {
+                                    CheckedExpr::Expr(expr)
+                                    | CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                                },
+                            ),
+                            template_args: gen_args_kinded(kinded_args),
+                            args: args
+                                .iter()
+                                .map(|e| {
+                                    match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                                        CheckedExpr::Expr(expr)
+                                        | CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                                    }
+                                })
+                                .collect::<Vec<_>>(),
+                        })
+                    }
+                }
             }
             _ => {
                 let (reduced_fun, data_args, red_kinded_args) = match create_lambda_no_shape_args(

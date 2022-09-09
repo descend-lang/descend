@@ -60,7 +60,7 @@ impl std::fmt::Display for Item {
                 }
                 write!(
                     f,
-                    "{}auto {}(",
+                    "{} auto {}(",
                     if *is_dev_fun { "__device__ " } else { "" },
                     name
                 )?;
@@ -264,9 +264,13 @@ impl std::fmt::Display for Expr {
                     fmt_vec(f, template_args, ", ")?;
                     write!(f, ">")?;
                 }
-                write!(f, " {{\n")?;
-                fmt_vec(f, args, ",\n")?;
-                write!(f, "\n}}")
+                if args.len() > 0 {
+                    write!(f, " {{\n")?;
+                    fmt_vec(f, args, ",\n")?;
+                    write!(f, "\n}}")
+                } else {
+                    write!(f, " {{}}")
+                }
             }
             InitializerList { elems } => {
                 write!(f, "{{")?;

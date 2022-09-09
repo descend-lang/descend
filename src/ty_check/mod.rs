@@ -8,13 +8,14 @@ mod subty;
 pub(crate) mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
-use crate::ast::utils::FreeKindedIdents;
+use crate::ast::utils::{fresh_name, FreeKindedIdents};
 use crate::ast::visit::{walk_dty, Visit};
 use crate::ast::DataTyKind::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
 use crate::ty_check::infer_kinded_args::infer_kinded_args_from_mono_ty;
+use crate::ty_check::pre_decl::copy_Trait;
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
 use crate::SourceCode;
 use core::panic;
@@ -26,6 +27,7 @@ use std::sync::Once;
 
 use self::constraint_check::{ConstraintEnv, ConstraintScheme, IdentConstraints};
 use self::infer_kinded_args::infer_kinded_args_from_mono_dty;
+use self::pre_decl::bin_op_to_fun;
 
 type TyResult<T> = Result<T, TyError>;
 
@@ -87,7 +89,11 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
     ty_checker.ty_check(compil_unit).map_err(|err| {
         err.emit(compil_unit.source);
         ErrorReported
-    })
+    })?;
+
+    compil_unit.item_defs.extend(std_compil_unit.item_defs);
+
+    Ok(())
 }
 
 struct TyChecker {
@@ -340,6 +346,7 @@ impl TyChecker {
                         errors.push(TyError::UnfullfilledConstraint(constraint.clone()))
                     }
                 });
+            assert!(self.implicit_ident_cons.is_empty());
 
             //Check if all fun_decls from the trait are implemented here
             //This typescheme is only for error-messages
@@ -640,6 +647,17 @@ impl TyChecker {
     ) -> TyResult<TyCtx> {
         // TODO input contexts are well-formed
         //   well_formed_ctxs(gl_ctx, kind_ctx, &ty_ctx);
+
+        //Replace binary operation by function calls
+        if let ExprKind::BinOp(bin_op, lhs, rhs) = &expr.expr {
+            //TODO at the moment only implmented for GpuThread and "+" and "=="
+            if exec == Exec::GpuThread && (*bin_op == BinOp::Add || *bin_op == BinOp::Eq) {
+                let fun_app = bin_op_to_fun(bin_op, lhs.as_ref().clone(), rhs.as_ref().clone());
+                expr.expr = fun_app;
+            } else {
+            }
+        }
+
         let (res_ty_ctx, ty) = match &mut expr.expr {
             ExprKind::PlaceExpr(pl_expr) => {
                 if pl_expr.is_place() {
@@ -891,6 +909,17 @@ impl TyChecker {
             ),
         );
         generic_args.extend(inferred_generic_args);
+
+        //TODO is this necesarry? Where are "struct_dty.generic_args" used?
+        if let TyKind::Data(struct_dty) = &mut s_mono_ty.ty {
+            if let DataTyKind::Struct(struct_dty) = &mut struct_dty.dty {
+                struct_dty.generic_args = generic_args.clone();
+            } else {
+                panic!("Struct has a non-struct-datatype")
+            }
+        } else {
+            panic!("Struct has a non-datatype type")
+        };
 
         Ok((ty_ctx, s_mono_ty))
     }
@@ -2098,7 +2127,12 @@ impl TyChecker {
             ));
         }
 
-        if elem_dty.copyable() {
+        if is_dty_copyable(
+            &elem_dty,
+            &self.constraint_env,
+            &mut self.implicit_ident_cons,
+            kind_ctx,
+        ) {
             Ok((ty_ctx, Ty::new(TyKind::Data(elem_dty))))
         } else {
             Err(TyError::String(format!(
@@ -2233,49 +2267,64 @@ impl TyChecker {
             }
         }
 
-        //Infer function_kind from path and if its an trait-function infer generic trait arguments
-        let (function_kind, trait_args) = match path {
-            Path::Empty => (&FunctionKind::GlobalFun, Vec::new()),
+        //Infer function_kind from path
+        let function_kind = match path {
+            Path::Empty => FunctionKind::GlobalFun,
             Path::DataTy(dty) => {
+                //TODO it would be nice to automaticlly infer not specified generics e.g allow
+                //to write Point::function instead of Point::<T> function
                 self.dty_well_formed(kind_ctx, &ty_ctx, Some(exec), dty)?;
 
-                match &dty.dty {
-                    //If this is an ident only trait-functions can be called
-                    DataTyKind::Ident(ident) => {
-                        if ident.is_implicit {
-                            todo!()
+                if fun_kind.is_none() {
+                    match &dty.dty {
+                        //If this is an ident only trait-functions can be called
+                        DataTyKind::Ident(ident) => {
+                            if ident.is_implicit {
+                                todo!("The check \"ident impls a trait\" is true for all trait because this is an implicit ident.
+                                We can try to search in implicit_ident_constraints and may find a suitable function")
+                            }
+                            let function_name = self.gl_ctx.trait_fun_name(
+                                &self.constraint_env,
+                                &mut self.implicit_ident_cons,
+                                &fun_name.name,
+                                &ident,
+                                kind_ctx,
+                            )?;
+                            function_name.fun_kind.clone()
                         }
-                        let (function_name, trait_args) = self.gl_ctx.trait_fun_name(
-                            &self.constraint_env,
-                            &mut self.implicit_ident_cons,
-                            &fun_name.name,
-                            &ident,
-                            kind_ctx,
-                        )?;
-                        (&function_name.fun_kind, trait_args)
+                        //Else this dty corresponds to a concrete impl
+                        _ => {
+                            let function_name = self.gl_ctx.impl_fun_name_by_dty(
+                                &self.constraint_env,
+                                &mut self.implicit_ident_cons,
+                                &fun_name.name,
+                                dty,
+                                kind_ctx,
+                            )?;
+                            function_name.fun_kind.clone()
+                        }
                     }
-                    //Else this dty corresponds to a concrete impl
-                    _ => {
-                        let (function_name, trait_args) = self.gl_ctx.impl_fun_name_by_dty(
-                            &self.constraint_env,
-                            &mut self.implicit_ident_cons,
-                            &fun_name.name,
-                            dty,
-                            kind_ctx,
-                        )?;
-                        (&function_name.fun_kind, trait_args)
+                }
+                //Binop-functions have already a function_kind
+                else {
+                    //Some hacky way to avoid some problems with InferFromFirstArgPath auto dereferencing
+                    let first_arg = args.first_mut().unwrap();
+                    if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
+                        *path = Path::DataTy(dty.clone());
                     }
+
+                    fun_kind.as_ref().unwrap().clone()
                 }
             }
             Path::InferFromFirstArg => panic!("This should be already replaced by Path::DataTy"),
         };
-        *fun_kind = Some(function_kind.clone());
+        *fun_kind = Some(function_kind);
 
         //Get function type and number of implicit (inferred) kinded args (necessary for proper error messages)
         let (fun_ty, number_implicit_kargs) =
         //Then get function type from context
         //and infer implicit kinded args for traits and impls
-        match function_kind {
+        match fun_kind.as_ref().unwrap() {
             FunctionKind::GlobalFun => {
                 //if this is a global function in global context
                 if let Ok(fun_ty) = self
@@ -2301,7 +2350,7 @@ impl TyChecker {
                 let fun_ty =
                     if let Ok(fun_ty) = self
                     .gl_ctx
-                    .fun_ty_by_ident(&fun_name, function_kind)
+                    .fun_ty_by_ident(&fun_name, fun_kind.as_ref().unwrap())
                     {
                         fun_ty
                     } else {
@@ -2328,6 +2377,16 @@ impl TyChecker {
                     //Find trait in context
                     let trait_def = self.gl_ctx.trait_ty_by_name(trait_name).unwrap();
 
+                    //Implicit args for trait
+                    let trait_args = trait_def
+                        .generic_params
+                        .iter()
+                        .map(|gen| {
+                            let mut gen = gen.clone();
+                            gen.ident.name = fresh_name(&gen.ident.name);
+                            gen.arg_kinded_implicit()
+                        });
+
                     //Push self_arg and trait_args in front of k_args
                     let mut new_kargs = Vec::with_capacity(fun_ty.generic_params.len());
                     new_kargs.push(self_arg.clone());
@@ -2345,7 +2404,7 @@ impl TyChecker {
                 let fun_ty =
                 if let Ok(fun_ty) = self
                 .gl_ctx
-                .fun_ty_by_ident(&fun_name, function_kind)
+                .fun_ty_by_ident(&fun_name, fun_kind.as_ref().unwrap())
                 {
                     fun_ty
                 } else {
@@ -2432,15 +2491,12 @@ impl TyChecker {
         }
 
         //Tycheck args
-        let mut i = if let Path::InferFromFirstArg = path {
+        let mut i = if args.len() > 0 && args[0].ty != None {
             let (first, tail) = mono_fun_args.split_first_mut().unwrap();
             self.unify(
                 *first,
                 args.first_mut().unwrap().ty.as_mut().unwrap(),
-                tail.iter_mut().map(|ty| {
-                    let ty: &mut Ty = ty; // *ty dont work here
-                    ty
-                }),
+                tail.iter_mut().map(|ty| &mut (**ty)),
                 kind_ctx,
             )?;
             1
@@ -2459,10 +2515,7 @@ impl TyChecker {
                 ith_arg.ty.as_mut().unwrap(),
                 tail_mono
                     .iter_mut()
-                    .map(|ty| {
-                        let ty: &mut Ty = ty; // *ty dont work here
-                        ty
-                    })
+                    .map(|ty| &mut (**ty))
                     .chain(prev_args.iter_mut().map(|arg| arg.ty.as_mut().unwrap())),
                 kind_ctx,
             )?;
@@ -2499,7 +2552,7 @@ impl TyChecker {
         ty_ctx: &TyCtx,
         exec: Exec,
         ty_scheme: &TypeScheme,
-        k_args: &[ArgKinded],
+        k_args: &mut [ArgKinded],
         //Number of implicit kinded args which are always automatically inferred and should not regarded in Err-messages
         number_implicit_kargs: usize,
     ) -> TyResult<(TypeScheme, Ty)> {
@@ -2507,7 +2560,7 @@ impl TyChecker {
         if ty_scheme.generic_params.len() < k_args.len() {
             return Err(TyError::WrongNumberOfGenericParams {
                 expected: ty_scheme.generic_params.len() - number_implicit_kargs,
-                found: k_args.len(),
+                found: k_args.len() - number_implicit_kargs,
             });
         }
         //Check well-formedness of kinded args
@@ -2524,19 +2577,46 @@ impl TyChecker {
         )?;
 
         //Instantiate type_scheme with generics
-        let fun_ty_subs = ty_scheme.partial_apply(k_args);
+        let mut fun_ty_subs = ty_scheme.partial_apply(k_args);
         //And with new implicit kinded identifiers
-        let (fun_mono_ty, constraints) = unify::inst_ty_scheme(&fun_ty_subs);
+        let (mut fun_mono_ty, constraints) = unify::inst_ty_scheme(&fun_ty_subs);
 
         //Check if there are some unfulfilled constraints
         //And add constraints on implicit identifier, which are necessary to fulfills the constraints, to theta
         //The constraints for implicit identifier are checked in unfication when they are replaces by other types
         if let Some(unfulfilled_con) = constraints.iter().find(|con| {
-            !self.constraint_env.check_constraint(
-                &mut (**con).clone(),
+            let mut con = (**con).clone();
+            let con_trait_generics = con.trait_bound.generics.clone();
+
+            if self.constraint_env.check_constraint(
+                &mut con,
                 &mut self.implicit_ident_cons,
                 kind_ctx,
-            )
+            ) {
+                //Constraint check may also infer some generic args
+                con_trait_generics
+                    .iter()
+                    .zip(con.trait_bound.generics.iter())
+                    .for_each(|(gen_old, gen_new)| {
+                        if gen_old != gen_new {
+                            let constr_map =
+                                if let Ok((constr_map, _)) = unify::constrain(gen_old, gen_new) {
+                                    constr_map
+                                } else {
+                                    panic!(
+                                        "{:#?} is substituted by {:#?} while constraint checking.
+                                        But they are not constrainable!",
+                                        gen_old, gen_new
+                                    )
+                                };
+                            fun_mono_ty.substitute(&constr_map);
+                            fun_ty_subs.mono_ty.substitute(&constr_map);
+                        }
+                    });
+                false
+            } else {
+                true
+            }
         }) {
             Err(TyError::UnfullfilledConstraint(unfulfilled_con.clone()))?;
         }
@@ -2821,14 +2901,12 @@ impl TyChecker {
                 pl_expr
             )));
         }
-        unify::unify(
-            pl_expr.ty.as_mut().unwrap(),
-            &mut Ty::new(TyKind::Data(DataTy::with_constr(
-                utils::fresh_ident("pl_deref", DataTyKind::Ident),
-                vec![ConstraintOld::Copyable],
-            ))),
-        )?;
-        if pl_expr.ty.as_ref().unwrap().copyable() {
+        if is_ty_copyable(
+            pl_expr.ty.as_ref().unwrap(),
+            &self.constraint_env,
+            &mut self.implicit_ident_cons,
+            kind_ctx,
+        ) {
             Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
         } else {
             Err(TyError::String("Data type is not copyable.".to_string()))
@@ -2836,7 +2914,7 @@ impl TyChecker {
     }
 
     fn ty_check_pl_expr_without_deref(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -2859,7 +2937,12 @@ impl TyChecker {
                     pl_expr
                 )));
             }
-            let res_ty_ctx = if pl_ty.copyable() {
+            let res_ty_ctx = if is_ty_copyable(
+                &pl_ty,
+                &self.constraint_env,
+                &mut self.implicit_ident_cons,
+                kind_ctx,
+            ) {
                 // TODO refactor
                 borrow_check::ownership_safe(
                     self,
@@ -3298,7 +3381,7 @@ impl TyChecker {
             Memory::GpuShared => Ok(()),
             Memory::GpuLocal => Ok(()),
             Memory::Ident(ident) => {
-                if kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
+                if ident.is_implicit || kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
                     Ok(())
                 } else {
                     Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())))
@@ -3318,7 +3401,7 @@ impl TyChecker {
         match &ty.ty {
             TyKind::Data(dty) => self.dty_well_formed(kind_ctx, ty_ctx, exec, dty)?,
             TyKind::Ident(ident) => {
-                if !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
+                if !ident.is_implicit && !kind_ctx.ident_of_kind_exists(ident, Kind::Ty) {
                     Err(CtxError::KindedIdentNotFound(ident.clone()))?
                 }
             }
@@ -3367,7 +3450,7 @@ impl TyChecker {
             | DataTyKind::RawPtr(_)
             | DataTyKind::Dead(_) => {}
             DataTyKind::Ident(ident) => {
-                if !kind_ctx.ident_of_kind_exists(ident, Kind::DataTy) {
+                if !ident.is_implicit && !kind_ctx.ident_of_kind_exists(ident, Kind::DataTy) {
                     Err(CtxError::KindedIdentNotFound(ident.clone()))?
                 }
             }
@@ -3511,7 +3594,7 @@ impl TyChecker {
                 Err(err) => Err(TyError::from(err)),
             },
             Provenance::Ident(ident) => {
-                if kind_ctx.ident_of_kind_exists(ident, Kind::Provenance) {
+                if ident.is_implicit || kind_ctx.ident_of_kind_exists(ident, Kind::Provenance) {
                     Ok(())
                 } else {
                     Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())))
@@ -3587,5 +3670,55 @@ pub fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
             "Unexpected type or projection access. Found access: {:?} on ty {:#?}",
             proj, ty
         ))),
+    }
+}
+
+fn is_ty_copyable(
+    ty: &Ty,
+    constraint_env: &ConstraintEnv,
+    implicit_ident_cons: &mut IdentConstraints,
+    kind_ctx: &KindCtx,
+) -> bool {
+    match &ty.ty {
+        TyKind::Data(dty) => is_dty_copyable(dty, constraint_env, implicit_ident_cons, kind_ctx),
+        TyKind::Fn(_, _, _) => true,
+        TyKind::Ident(_) => false,
+        TyKind::Dead(_) => panic!(
+            "This case is not expected to mean anything.\
+            The type is dead. There is nothing we can do with it."
+        ),
+    }
+}
+
+fn is_dty_copyable(
+    dty: &DataTy,
+    constraint_env: &ConstraintEnv,
+    implicit_ident_cons: &mut IdentConstraints,
+    kind_ctx: &KindCtx,
+) -> bool {
+    use DataTyKind::*;
+
+    let mut is_dty_copy_constraint = Constraint {
+        param: dty.clone(),
+        trait_bound: copy_Trait(),
+    };
+
+    match &dty.dty {
+        // FIXME thread hierarchies and their splits should be non-copyable!
+        ThreadHierchy(_) => true,
+        SplitThreadHierchy(_, _) => true,
+        //TODO move this into constraint checker
+        Tuple(elem_tys) => elem_tys.iter().fold(true, |res, elem_ty| {
+            res && is_dty_copyable(elem_ty, constraint_env, implicit_ident_cons, kind_ctx)
+        }),
+        Dead(_) => panic!(
+            "This case is not expected to mean anything.\
+            The type is dead. There is nothign we can do with it."
+        ),
+        _ => constraint_env.check_constraint(
+            &mut is_dty_copy_constraint,
+            implicit_ident_cons,
+            kind_ctx,
+        ),
     }
 }

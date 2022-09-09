@@ -273,25 +273,10 @@ fn test_fun_calls() {
 #[test]
 fn test_moved_struct_attribute() {
     let src = r#"
-    struct Test;
-    struct Point {
-        x: Test,
-        y: i32
-    }
-    fn bar() -[cpu.thread]-> () {
-        let x = Test {};
-        let p = Point { x, y: 42 };
-        let z = p.x;
-        ()
-    }
-    "#;
-    assert_compile!(src);
-
-    let src = r#"
     struct Test<a: prv> {
         x: &a uniq cpu.mem i32
     }
-    struct Point { //StructDef -> StructDecl
+    struct Point {
         x: Test,
         y: i32
     }
@@ -301,6 +286,101 @@ fn test_moved_struct_attribute() {
         let p = Point { x, y: 42 };
         let z = p.x;
         let z2 = p.x; //Already moved
+        ()
+    }
+    "#;
+    assert_err_compile!(src);
+
+    let src = r#"
+    struct Test;
+    struct Point {
+        x: Test,
+        y: i32
+    }
+    fn bar() -[cpu.thread]-> () {
+        let x = Test {};
+        let p = Point { x, y: 42 };
+        let z = p.y;
+        let z2 = p.y; //y is copyable
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    struct Test;
+    struct Point {
+        x: Test,
+        y: i32
+    }
+    fn bar() -[cpu.thread]-> () {
+        let x = Test {};
+        let p = Point { x, y: 42 };
+        let z = p.x;
+        let z2 = p.x; //x is not copyable
+        ()
+    }
+    "#;
+    assert_err_compile!(src);
+
+    let src = r#"
+    struct Test;
+    impl Copy for Test {}
+    struct Point {
+        x: Test,
+        y: i32
+    }
+    fn bar() -[cpu.thread]-> () {
+        let x = Test {};
+        let p = Point { x, y: 42 };
+        let z = p.x;
+        let z2 = p.x; //x is copyable
+        ()
+    }
+    "#;
+    assert_compile!(src);
+}
+
+#[test]
+fn test_partitial_moved_struct() {
+    let src = r#"
+    struct Test;
+    impl Copy for Test {}
+    struct Point {
+        x: Test,
+        y: i32
+    }
+    impl Point {
+        fn foo(self) -[cpu.thread]-> Point {
+            self
+        }
+    }
+    fn bar() -[cpu.thread]-> () {
+        let x = Test {};
+        let p = Point { x, y: 42 };
+        let px = p.x;
+        let p2 = p.foo();
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    struct Test;
+    struct Point {
+        x: Test,
+        y: i32
+    }
+    impl Point {
+        fn foo(self) -[cpu.thread]-> Point {
+            self
+        }
+    }
+    fn bar() -[cpu.thread]-> () {
+        let x = Test {};
+        let p = Point { x, y: 42 };
+        let px = p.x;
+        let p2 = p.foo();
         ()
     }
     "#;
@@ -1006,7 +1086,130 @@ fn test_struct_with_lifetimes() {
         ()
     }
     "#;
+    assert_compile!(src);
+}
 
+#[test]
+fn test_bin_op() {
+    let src = r#"
+    fn foo() -[gpu.thread]-> () {
+        let x = 42;
+        let y = 43;
+        let z = x + y;
+        let z2 = x;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Number {
+        let z = x + y;
+        let z2 = x;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Add<T, T> {
+        let z = x + y;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Add<T, T> {
+        let z = x + y;
+        let z2 = x;
+        ()
+    }
+    "#;
+    assert_err_compile!(src);
+
+    let src = r#"
+    fn foo() -[gpu.thread]-> () {
+        let x = 42;
+        let y = 43;
+        let z = x == y;
+        let z2 = x;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Number {
+        let z = (x == y);
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Eq {
+        let z = x == y;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Eq {
+        let z = x + y;
+        let z2 = x;
+        ()
+    }
+    "#;
+    assert_err_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Eq + Copy {
+        let z = x == y;
+        let z2 = x;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+}
+
+#[test]
+fn test_std_lib() {
+    let src = r#"
+    trait Eq {} //Already defined
+    "#;
+    assert_err_compile!(src);
+
+    let src = r#"
+    fn foo<T>(t1: T, t2: T) -[gpu.thread]-> () where T: Eq {
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(t1: i32, t2: i32) -[gpu.thread]-> () {
+        let res = t1 == t2;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    //References to types which implements Eq and Copy are also allowed
+    let src = r#"
+    fn foo(t1: &shrd gpu.global i32, t2: &shrd gpu.global i32) -[gpu.thread]-> () {
+        let res = t1 == t2;
+        ()
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T, m:mem>(t1: &shrd m T, t2: &shrd m T) -[gpu.thread]-> () where T: Eq + Copy {
+        let res = (t1 == t2)
+    }
+    "#;
     assert_compile!(src);
 }
 

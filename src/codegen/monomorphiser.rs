@@ -475,8 +475,9 @@ impl<'a> Monomorphiser<'a> {
 impl<'a> VisitMut for Monomorphiser<'a> {
     fn visit_expr(&mut self, expr: &mut Expr) {
         match &mut expr.expr {
-            ExprKind::App(_, fun_kind, fun, generic_args, _) => {
-                self.monomorphise_fun_app(fun_kind, fun, generic_args)
+            ExprKind::App(_, fun_kind, fun, generic_args, exprs) => {
+                self.monomorphise_fun_app(fun_kind, fun, generic_args);
+                exprs.iter_mut().for_each(|expr| self.visit_expr(expr))
             }
             ExprKind::DepApp(_, _) => panic!("Does this happen? What to do now?"),
             _ => walk_expr(self, expr),
@@ -490,7 +491,10 @@ fn add_inherited_fun_defs(impl_def: &mut ImplDef, trait_defs: &Vec<TraitDef>) {
         let trait_def = trait_defs
             .iter()
             .find(|trait_def| trait_def.name == trait_ty.name)
-            .unwrap();
+            .expect(&format!(
+                "Did not find trait \"{}\" in global context",
+                trait_ty.name
+            ));
 
         trait_def.decls.iter().for_each(|decl| match decl {
             AssociatedItem::FunDef(fun_def) => {

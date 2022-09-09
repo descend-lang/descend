@@ -1072,7 +1072,6 @@ impl TypeScheme {
 #[derive(Debug, Clone)]
 pub struct Ty {
     pub ty: TyKind,
-    pub constraints: Vec<ConstraintOld>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
@@ -1085,34 +1084,14 @@ pub enum TyKind {
     Dead(Box<Ty>),
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub enum ConstraintOld {
-    Copyable,
-    NonCopyable,
-    Dead,
-}
-
 impl Ty {
     pub fn new(ty: TyKind) -> Self {
-        Ty {
-            ty,
-            constraints: vec![],
-            span: None,
-        }
-    }
-
-    pub fn with_constr(ty: TyKind, constraints: Vec<ConstraintOld>) -> Ty {
-        Ty {
-            ty,
-            constraints,
-            span: None,
-        }
+        Ty { ty, span: None }
     }
 
     pub fn with_span(ty: TyKind, span: Span) -> Ty {
         Ty {
             ty,
-            constraints: vec![],
             span: Some(span),
         }
     }
@@ -1132,22 +1111,6 @@ impl Ty {
             dty
         } else {
             panic!("cannot reach")
-        }
-    }
-
-    pub fn non_copyable(&self) -> bool {
-        !self.copyable()
-    }
-
-    pub fn copyable(&self) -> bool {
-        match &self.ty {
-            TyKind::Data(dty) => dty.copyable(),
-            TyKind::Fn(_, _, _) => true,
-            TyKind::Ident(_) => false,
-            TyKind::Dead(_) => panic!(
-                "This case is not expected to mean anything.\
-                The type is dead. There is nothing we can do with it."
-            ),
         }
     }
 
@@ -1282,7 +1245,6 @@ impl SubstKindedIdents for ThreadHierchyTy {
 #[derive(Debug, Clone)]
 pub struct DataTy {
     pub dty: DataTyKind,
-    pub constraints: Vec<ConstraintOld>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
@@ -1309,60 +1271,14 @@ pub enum DataTyKind {
 
 impl DataTy {
     pub fn new(dty: DataTyKind) -> Self {
-        DataTy {
-            dty,
-            constraints: vec![],
-            span: None,
-        }
-    }
-
-    pub fn with_constr(dty: DataTyKind, constraints: Vec<ConstraintOld>) -> Self {
-        DataTy {
-            dty,
-            constraints,
-            span: None,
-        }
+        DataTy { dty, span: None }
     }
 
     pub fn with_span(dty: DataTyKind, span: Span) -> Self {
         DataTy {
             dty,
-            constraints: vec![],
             span: Some(span),
         }
-    }
-
-    pub fn non_copyable(&self) -> bool {
-        use DataTyKind::*;
-
-        match &self.dty {
-            Scalar(_) => false,
-            Atomic(_) => false,
-            Ident(_) => true,
-            Ref(_, Ownership::Uniq, _, _) => true,
-            Ref(_, Ownership::Shrd, _, _) => false,
-            // FIXME thread hierarchies and their splits should be non-copyable!
-            ThreadHierchy(_) => false,
-            SplitThreadHierchy(_, _) => false,
-            At(_, _) => true,
-            ArrayShape(_, _) => true,
-            Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
-            Struct(struct_ty) => struct_ty
-                .attributes
-                .iter()
-                .any(|field| field.ty.non_copyable()),
-            Array(_, _) => false,
-            RawPtr(_) => true,
-            Range => true,
-            Dead(_) => panic!(
-                "This case is not expected to mean anything.\
-                The type is dead. There is nothign we can do with it."
-            ),
-        }
-    }
-
-    pub fn copyable(&self) -> bool {
-        !self.non_copyable()
     }
 
     pub fn is_fully_alive(&self) -> bool {

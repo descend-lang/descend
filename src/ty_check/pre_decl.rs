@@ -1,7 +1,10 @@
+use crate::ast::utils::fresh_name;
 use crate::ast::{
-    BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
-    Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind, TypeScheme,
+    BinOp, BinOpNat, Constraint, DataTy, DataTyKind, Exec, ExprKind, FunctionKind, Ident,
+    IdentKinded, Kind, Memory, Mutability, Nat, Ownership, Path, Pattern, Provenance, ScalarTy,
+    ThreadHierchyTy, TraitMonoType, Ty, TyKind, TypeScheme,
 };
+use crate::ty_check::{Expr, PlaceExpr, PlaceExprKind};
 
 pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
@@ -27,14 +30,57 @@ pub static JOIN_MUT: &str = "join_mut";
 pub static TRANSPOSE: &str = "transpose";
 pub static TRANSPOSE_MUT: &str = "transpose_mut";
 
-pub static SPLIT_BLOCK_GRP: &str = "split_block_grp";
+pub const SPLIT_BLOCK_GRP: &str = "split_block_grp";
 pub static GROUP_BLOCK_GRP: &str = "group_block_grp";
 pub static JOIN_BLOCK_GRP: &str = "join_block_grp";
 
 pub static TO_WARPS: &str = "to_warps";
-pub static SPLIT_THREAD_GRP: &str = "split_thread_grp";
-pub static SPLIT_WARP: &str = "split_warp";
-pub static SPLIT_WARP_GRP: &str = "split_warp_grp";
+pub const SPLIT_THREAD_GRP: &str = "split_thread_grp";
+pub const SPLIT_WARP: &str = "split_warp";
+pub const SPLIT_WARP_GRP: &str = "split_warp_grp";
+
+pub const NUMBERS_ADD: &str = "__add_internal";
+pub const NUMBERS_SUB: &str = "__sub_internal";
+pub const NUMBERS_MUL: &str = "__mul_internal";
+pub const NUMBERS_DIV: &str = "__div_internal";
+pub const NUMBERS_EQ: &str = "__eq_internal";
+
+pub fn number_Trait() -> TraitMonoType {
+    TraitMonoType {
+        name: "Number".to_string(),
+        generics: vec![],
+    }
+}
+pub fn copy_Trait() -> TraitMonoType {
+    TraitMonoType {
+        name: "Copy".to_string(),
+        generics: vec![],
+    }
+}
+
+pub fn bin_op_to_fun(binop: &BinOp, lhs: Expr, rhs: Expr) -> ExprKind {
+    let fun_name = Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
+        Ident::new(match binop {
+            BinOp::Add => "add",
+            BinOp::Eq => "eq",
+            _ => todo!(),
+        }),
+    ))));
+    ExprKind::App(
+        Path::InferFromFirstArg,
+        Some(FunctionKind::TraitFun(
+            match binop {
+                BinOp::Add => "Add",
+                BinOp::Eq => "Eq",
+                _ => todo!(),
+            }
+            .to_string(),
+        )),
+        Box::new(fun_name),
+        vec![],
+        vec![lhs, rhs],
+    )
+}
 
 pub fn fun_decls() -> Vec<(&'static str, TypeScheme)> {
     let decls = [
@@ -69,9 +115,60 @@ pub fn fun_decls() -> Vec<(&'static str, TypeScheme)> {
         (SPLIT_WARP_GRP, split_warp_grp_ty()),
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
+        (NUMBERS_ADD, number_bin_op_ty()),
+        (NUMBERS_SUB, number_bin_op_ty()),
+        (NUMBERS_MUL, number_bin_op_ty()),
+        (NUMBERS_DIV, number_bin_op_ty()),
+        (NUMBERS_EQ, number_eq_ty()),
     ];
 
     decls.to_vec()
+}
+
+fn number_bin_op_ty() -> TypeScheme {
+    let t = Ident::new("T");
+    let t_kinded = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::DataTy,
+    };
+    let t_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t.clone()))));
+    let number_constraint = Constraint {
+        param: DataTy::new(DataTyKind::Ident(t)),
+        trait_bound: number_Trait(),
+    };
+    TypeScheme {
+        generic_params: vec![t_kinded],
+        constraints: vec![number_constraint],
+        mono_ty: Ty::new(TyKind::Fn(
+            vec![t_ty.clone(), t_ty.clone()],
+            Exec::GpuThread,
+            Box::new(t_ty),
+        )),
+    }
+}
+
+fn number_eq_ty() -> TypeScheme {
+    let t = Ident::new("T");
+    let t_kinded = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::DataTy,
+    };
+    let t_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t.clone()))));
+    let number_constraint = Constraint {
+        param: DataTy::new(DataTyKind::Ident(t)),
+        trait_bound: number_Trait(),
+    };
+    TypeScheme {
+        generic_params: vec![t_kinded],
+        constraints: vec![number_constraint],
+        mono_ty: Ty::new(TyKind::Fn(
+            vec![t_ty.clone(), t_ty.clone()],
+            Exec::GpuThread,
+            Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Bool,
+            ))))),
+        )),
+    }
 }
 
 // to_raw_ptr:
@@ -367,30 +464,31 @@ fn split_thread_grp_ty() -> TypeScheme {
         generic_params: vec![k_nat, n1_nat, n2_nat, n3_nat],
         constraints: vec![],
         mono_ty: Ty::new(TyKind::Fn(
-                vec![input_ty],
-                Exec::View,
-                Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::SplitThreadHierchy(input_th_hy, Nat::Ident(k))))))
-                // Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
-                //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
-                //         ThreadHierchyTy::ThreadGrp(
-                //             Nat::Ident(k.clone()),
-                //             Nat::Ident(n2.clone()),
-                //             Nat::Ident(n3.clone()),
-                //         ),
-                //     ))),
-                //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
-                //         ThreadHierchyTy::ThreadGrp(
-                //             Nat::BinOp(
-                //                 BinOpNat::Sub,
-                //                 Box::new(Nat::Ident(n1)),
-                //                 Box::new(Nat::Ident(k)),
-                //             ),
-                //             Nat::Ident(n2.clone()),
-                //             Nat::Ident(n3.clone()),
-                //         ),
-                //     ))),
-                // ]))))),
-            )),
+            vec![input_ty],
+            Exec::View,
+            Box::new(Ty::new(TyKind::Data(DataTy::new(
+                DataTyKind::SplitThreadHierchy(input_th_hy, Nat::Ident(k)),
+            )))), // Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
+                  //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
+                  //         ThreadHierchyTy::ThreadGrp(
+                  //             Nat::Ident(k.clone()),
+                  //             Nat::Ident(n2.clone()),
+                  //             Nat::Ident(n3.clone()),
+                  //         ),
+                  //     ))),
+                  //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
+                  //         ThreadHierchyTy::ThreadGrp(
+                  //             Nat::BinOp(
+                  //                 BinOpNat::Sub,
+                  //                 Box::new(Nat::Ident(n1)),
+                  //                 Box::new(Nat::Ident(k)),
+                  //             ),
+                  //             Nat::Ident(n2.clone()),
+                  //             Nat::Ident(n3.clone()),
+                  //         ),
+                  //     ))),
+                  // ]))))),
+        )),
     }
 }
 
