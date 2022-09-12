@@ -57,7 +57,7 @@ pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
             visitor.visit_nat(l);
             visitor.visit_nat(r)
         }
-        Nat::Lit(_) => {}
+        Nat::GridIdx | Nat::BlockIdx(_) | Nat::BlockDim(_) | Nat::ThreadIdx(_) | Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
             walk_list!(visitor, visit_nat, args.as_ref())
@@ -406,8 +406,7 @@ pub fn walk_exec_expr<V: Visit>(visitor: &mut V, exec_expr: &ExecExpr) {
             visitor.visit_dim(gdim);
             visitor.visit_dim(bdim);
         }
-        ExecKind::GpuBlock(bdim) => visitor.visit_dim(bdim),
-        ExecKind::CpuThread | ExecKind::GpuThread | ExecKind::View => {}
+        ExecKind::CpuThread | ExecKind::View => {}
     }
 }
 

@@ -389,10 +389,12 @@ impl Nat {
             .nat_unifier
             .insert(ident.name.clone(), self.clone())
         {
-            println!(
-                "WARNING: Not able to check equality of Nats `{}` and `{}`",
-                old, self
-            )
+            if &old != self {
+                println!(
+                    "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                    old, self
+                )
+            }
         }
         Ok(())
     }

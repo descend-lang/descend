@@ -771,9 +771,6 @@ pub enum ExecKind {
     Ident(Ident),
     CpuThread,
     GpuGrid(Dim, Dim),
-    // TODO remove GpuBlock?! Can this ever be created?
-    GpuBlock(Dim),
-    GpuThread,
     Split(Box<ExecSplit>),
     Proj(u8, Box<ExecExpr>),
     Distrib(DimCompo, Box<ExecExpr>),
@@ -787,8 +784,6 @@ impl fmt::Display for ExecKind {
             ExecKind::Ident(ident) => write!(f, "{}", ident),
             ExecKind::CpuThread => write!(f, "cpu.thread"),
             ExecKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
-            ExecKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
-            ExecKind::GpuThread => write!(f, "gpu.thread"),
             ExecKind::Split(exec_split) => write!(f, "{}", exec_split),
             ExecKind::Proj(i, exec) => write!(f, "proj{}<{}>", i, exec),
             ExecKind::Distrib(d, exec) => write!(f, "distr<{}, {}>", d, exec),
@@ -1003,7 +998,7 @@ impl std::ops::Mul for Dim {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        use Dim::*;
+        unimplemented!()
     }
 }
 
@@ -1036,9 +1031,9 @@ pub enum DimCompo {
 impl fmt::Display for DimCompo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DimCompo::X => write!(f, "X"),
-            DimCompo::Y => write!(f, "Y"),
-            DimCompo::Z => write!(f, "Z"),
+            DimCompo::X => write!(f, "x"),
+            DimCompo::Y => write!(f, "y"),
+            DimCompo::Z => write!(f, "z"),
         }
     }
 }
@@ -1424,6 +1419,11 @@ impl IdentKinded {
 pub enum Nat {
     Ident(Ident),
     Lit(usize),
+    ThreadIdx(DimCompo),
+    BlockIdx(DimCompo),
+    BlockDim(DimCompo),
+    // Dummy that is always 0, i.e. equivalent to Lit(0)
+    GridIdx,
     BinOp(BinOpNat, Box<Nat>, Box<Nat>),
     // Use Box<[Nat]> to safe 8 bytes compared to Vec<Nat>
     App(Ident, Box<[Nat]>),
@@ -1459,7 +1459,11 @@ impl Nat {
 
     pub fn eval(&self) -> Result<usize, String> {
         match self {
-            Nat::Ident(i) => Err(format!("Cannot evaluate identifier `{}`.", i)),
+            Nat::Ident(_)
+            | Nat::GridIdx
+            | Nat::BlockIdx(_)
+            | Nat::BlockDim(_)
+            | Nat::ThreadIdx(_) => Err("Cannot evaluate.".to_string()),
             Nat::Lit(n) => Ok(*n),
             Nat::BinOp(op, l, r) => match op {
                 BinOpNat::Add => Ok(l.eval()? + r.eval()?),
@@ -1555,6 +1559,10 @@ impl fmt::Display for Nat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Ident(ident) => write!(f, "{}", ident),
+            Self::GridIdx => Ok(()),
+            Self::BlockIdx(d) => write!(f, "blockIdx.{}", d),
+            Self::BlockDim(d) => write!(f, "blockDim.{}", d),
+            Self::ThreadIdx(d) => write!(f, "threadIdx.{}", d),
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Self::App(func, args) => {
