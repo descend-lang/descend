@@ -37,10 +37,8 @@ impl<T> Eq for T where T: Number {
     }
 }
 
-impl<X, a: prv, m: mem> Eq for &a shrd m X where X: Eq + Copy {
+impl<T, a: prv, m: mem> Eq for &a shrd m T where T: Eq + Copy {
     fn eq(t1: Self, t2: Self) -[gpu.thread]-> bool {
-        let t1_d = *t1;
-        let t2_d = *t2;
-        X::eq(t1_d, t2_d)
+        T::eq(*t1, *t2)
     }
 }

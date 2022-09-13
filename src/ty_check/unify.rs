@@ -8,47 +8,79 @@ use crate::ty_check::subty::multiple_outlives;
 use crate::ty_check::ConstraintEnv;
 use crate::ty_check::TyResult;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use super::constraint_check::IdentConstraints;
 
 pub(crate) fn substitute_multiple<'a, I, T: 'a>(
     constraint_env: &ConstraintEnv,
     implicit_ident_constraints: &mut IdentConstraints,
-    constr_map: &ConstrainMap,
+    constr_map: &mut ConstrainMap,
     types: I,
-    kind_ctx: &KindCtx,
 ) -> TyResult<()>
 where
     T: Constrainable,
     I: Iterator<Item = &'a mut T>,
 {
-    //Check if this substitution fullfills all implicit_ident_constraints
-    if let Some((name, dty)) = constr_map.dty_unifier.iter().find(|(name, dty)| {
-        //Check if all constraints of implicit identifier which is substituted are fulfilled
-        let mut constraints_to_check: Vec<_> = implicit_ident_constraints
-            .consume_constraints(*name)
-            .collect();
-        constraints_to_check.iter_mut().fold(false, |res, con| {
-            *con = con.subst_ident_kinded(
-                &IdentKinded::new(&Ident::new(name), Kind::DataTy),
-                &ArgKinded::DataTy((*dty).clone()),
-            );
-            res || constraint_env.check_constraint(con, implicit_ident_constraints, kind_ctx)
-        })
-    }) {
-        //Found an unfulfilled implicit ident constraint
-        //TODO throw more verbose error
-        return Err(TyError::CannotUnify);
-    } else {
-        types.for_each(|ty| ty.substitute(constr_map));
-        Ok(())
-    }
-}
+    loop {
+        let mut constr_map_new = ConstrainMap::new();
 
-pub(crate) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
-    let (subst, _) = constrain(t1, t2)?;
-    substitute(&subst, t1);
-    substitute(&subst, t2);
+        //Check if this substitution fullfills all implicit_ident_constraints
+        for (name, dty) in &constr_map.dty_unifier {
+            //Check if all constraints of implicit identifier which is substituted are fulfilled
+            let mut constraints_to_check: Vec<_> = implicit_ident_constraints
+                .consume_constraints(name)
+                .collect();
+
+            //if the substituted type is an implicit ident: add constraints of this ident to other ident
+            if let DataTyKind::Ident(ident) = &dty.dty {
+                if ident.is_implicit {
+                    implicit_ident_constraints.add_ident_constraints(
+                        constraints_to_check.into_iter().map(|con| {
+                            con.subst_ident_kinded(
+                                &IdentKinded::new(&Ident::new(name), Kind::DataTy),
+                                &ArgKinded::DataTy((*dty).clone()),
+                            );
+                            (ident.name.clone(), con)
+                        }),
+                    );
+                    break;
+                }
+            }
+
+            //Check every constraint
+            for con in &mut constraints_to_check {
+                //Replace implicit identifier by concrete type
+                *con = con.subst_ident_kinded(
+                    &IdentKinded::new(&Ident::new(name), Kind::DataTy),
+                    &ArgKinded::DataTy((*dty).clone()),
+                );
+
+                if !constr_map_new.is_empty() {
+                    con.substitute(&constr_map_new);
+                }
+
+                //Check if constraint is fulfilled
+                if let Ok(constr_map) =
+                    constraint_env.check_constraint(con, implicit_ident_constraints)
+                {
+                    if !constr_map.is_empty() {
+                        constr_map_new.union(constr_map);
+                    }
+                } else {
+                    Err(TyError::UnfullfilledConstraint(con.clone()))?
+                }
+            }
+        }
+
+        if constr_map_new.is_empty() {
+            break;
+        } else {
+            constr_map.union(constr_map_new);
+        }
+    }
+
+    types.for_each(|ty| ty.substitute(constr_map));
     Ok(())
 }
 
@@ -79,18 +111,6 @@ pub(crate) fn constrain<S: Constrainable>(
     Ok((constr_map, prv_rels))
 }
 
-pub(super) fn inst_ty_scheme(tyscheme: &TypeScheme) -> (Ty, Vec<Constraint>) {
-    let inst_tyscheme = tyscheme.partial_apply(
-        &tyscheme
-            .generic_params
-            .iter()
-            .map(|i| i.arg_kinded_implicit())
-            .collect::<Vec<_>>(),
-    );
-
-    (inst_tyscheme.mono_ty, inst_tyscheme.constraints)
-}
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct PrvConstr(pub Provenance, pub Provenance);
 
@@ -117,6 +137,46 @@ impl ConstrainMap {
         self.dty_unifier.clear();
         self.nat_unifier.clear();
         self.mem_unifier.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ty_unifier.is_empty()
+            && self.dty_unifier.is_empty()
+            && self.nat_unifier.is_empty()
+            && self.mem_unifier.is_empty()
+    }
+
+    pub fn union(&mut self, other: ConstrainMap) {
+        self.ty_unifier
+            .iter()
+            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+        self.dty_unifier
+            .iter()
+            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+        self.nat_unifier
+            .iter()
+            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+        self.mem_unifier
+            .iter()
+            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+
+        self.ty_unifier
+            .iter_mut()
+            .for_each(|(_, bound)| bound.substitute(&other));
+        self.dty_unifier
+            .iter_mut()
+            .for_each(|(_, bound)| bound.substitute(&other));
+        self.nat_unifier
+            .iter_mut()
+            .for_each(|(_, bound)| bound.substitute(&other));
+        self.mem_unifier
+            .iter_mut()
+            .for_each(|(_, bound)| bound.substitute(&other));
+
+        self.ty_unifier.extend(other.ty_unifier.into_iter());
+        self.dty_unifier.extend(other.dty_unifier.into_iter());
+        self.nat_unifier.extend(other.nat_unifier.into_iter());
+        self.mem_unifier.extend(other.mem_unifier.into_iter());
     }
 }
 
@@ -161,9 +221,10 @@ impl DataTy {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::DataTy), self) {
             return Err(TyError::InfiniteType);
         }
-        constr_map
-            .dty_unifier
-            .insert(ident.name.clone(), self.clone());
+
+        let mut self_dty = self.clone();
+        self_dty.substitute(&constr_map);
+        constr_map.dty_unifier.insert(ident.name.clone(), self_dty);
         constr_map
             .dty_unifier
             .values_mut()
@@ -354,8 +415,9 @@ impl Constrainable for DataTy {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (&self.dty, &other.dty) {
-            (DataTyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
-            (_, DataTyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
+            (DataTyKind::Ident(i), _) if i.is_implicit => other.bind_to_ident(i, constr_map),
+            (_, DataTyKind::Ident(i)) if i.is_implicit => self.bind_to_ident(i, constr_map),
+            (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) if i1 == i2 => Ok(()),
             (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
                 if sty1 != sty2 {
                     Err(TyError::CannotUnify)
@@ -451,7 +513,10 @@ impl Constrainable for DataTy {
                 unimplemented!()
             }
             (DataTyKind::Dead(_), _) => {
-                panic!()
+                panic!(
+                    "Found a dead type.\n Tried to unify {:#?} with {:#?}",
+                    self, other
+                )
             }
             _ => Err(TyError::CannotUnify),
         }
@@ -536,8 +601,8 @@ impl Constrainable for Nat {
                     }
                 }
             },
-            (Nat::Ident(n1i), _) => other.bind_to(n1i, constr_map, prv_rels),
-            (_, Nat::Ident(n2i)) => self.bind_to(n2i, constr_map, prv_rels),
+            (Nat::Ident(n1i), _) if n1i.is_implicit => other.bind_to(n1i, constr_map, prv_rels),
+            (_, Nat::Ident(n2i)) if n2i.is_implicit => self.bind_to(n2i, constr_map, prv_rels),
             _ => Self::unify(self, other, constr_map),
         }
     }
@@ -784,7 +849,7 @@ impl<'a> VisitMut for SubstIdent<'a, DataTy> {
 #[test]
 fn scalar() -> TyResult<()> {
     let mut i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
-    let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
+    let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
     let (subst, _) = constrain(&i32, &t)?;
     substitute(&subst, &mut i32);
     substitute(&subst, &mut t);
@@ -803,7 +868,7 @@ fn shrd_ref() -> TyResult<()> {
             Nat::Ident(Ident::new("n")),
         ))),
     ));
-    let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
+    let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
     let (subst, _) = constrain(&shrd_ref, &t)?;
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut t);
@@ -826,7 +891,7 @@ fn shrd_ref_inner_var() -> TyResult<()> {
         Provenance::Value("r".to_string()),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
+        Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli("t")))),
     ));
     let (subst, _) = constrain(&shrd_ref, &shrd_ref_t)?;
     substitute(&subst, &mut shrd_ref);
@@ -850,7 +915,7 @@ fn prv_val_ident() -> TyResult<()> {
         Provenance::Ident(Ident::new("a")),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
+        Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli("t")))),
     ));
     let (subst, prv_rels) = constrain(&shrd_ref, &shrd_ref_t)?;
     substitute(&subst, &mut shrd_ref);

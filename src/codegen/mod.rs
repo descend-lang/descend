@@ -16,16 +16,20 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
+    //Transform all impls and traits to global functions with unique names
+    //and resolves all constraints from the functions
     let (structs, funs) =
         monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs.clone());
     let compil_unit = CompilUnit { structs, funs };
 
+    //Vector of struct declarations / struct definitions
     let (struct_decls, struct_defs) = compil_unit
         .structs
         .iter()
         .map(|struct_decl| (gen_struct_decl(struct_decl), gen_struct_def(struct_decl)))
         .unzip::<_, _, Vec<Item>, Vec<Item>>();
 
+    //Vector of function declarations / function definitions
     let (fun_decls, fun_defs) = compil_unit
         .funs
         .iter()
@@ -50,6 +54,7 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         })
         .unzip::<_, _, Vec<Item>, Vec<Item>>();
 
+    //Create cuda-program
     let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
         .chain(std::iter::once(cu::Item::EmptyLine))
         .chain(struct_decls)
@@ -60,6 +65,7 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         .chain(std::iter::once(cu::Item::EmptyLine))
         .chain(fun_defs)
         .collect::<cu::CuProgram>();
+    //Print generated cuda-program
     printer::print(&cu_program)
 }
 
@@ -2588,7 +2594,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
-        Fn(_, _, _) => unimplemented!("needed?"),
+        Fn(_, _, _) => cu::Ty::Scalar(cu::ScalarTy::Auto),
         Dead(_) => panic!("Dead types cannot be generated."),
         Data(desc::DataTy {
             dty: desc::DataTyKind::ThreadHierchy(_),

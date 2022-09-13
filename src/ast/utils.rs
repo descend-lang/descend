@@ -106,9 +106,9 @@ impl Visit for FreeKindedIdents {
                 self.visit_nat(collec);
 
                 let ident_kinded = IdentKinded::new(ident, Kind::Nat);
-                let contains = self.bound_idents.insert(ident_kinded.clone());
+                let not_already_contains = self.bound_idents.insert(ident_kinded.clone());
                 self.visit_expr(body);
-                if contains {
+                if not_already_contains {
                     self.bound_idents.remove(&ident_kinded);
                 }
             }
@@ -116,6 +116,8 @@ impl Visit for FreeKindedIdents {
         }
     }
 
+    //Visiting this items is not supported because this items can bound identifiers.
+    //This would require corresponding checks in "visit_dty" etc.
     fn visit_item_def(&mut self, _: &super::Item) {
         unimplemented!()
     }

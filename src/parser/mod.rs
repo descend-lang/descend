@@ -44,18 +44,25 @@ impl<'a> Parser<'a> {
     }
 }
 
+//Visit the parsed ast and make a few adjustments
 fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     struct Visitor {
+        //List with all name of structs and corresponding StructDecl
         structs: BTreeMap<String, StructDecl>,
+        //Ident_kinded which are currently in scope
         ident_kinded_in_scope: Vec<(String, Kind)>,
+        //datatype of impl if the visitor is visiting items inside this impl
         impl_dty_in_scope: Option<DataTy>,
+        //List of nested visited structs to prevent endless loops
         current_struct_chain: Vec<String>,
+        //List with errors wich occured
         errs: Vec<String>,
     }
 
     impl Visitor {
         fn new(items: &Vec<Item>) -> Self {
             Visitor {
+                //Iterate over all items and collect structs
                 structs: BTreeMap::from_iter(items.iter().filter_map(|item| {
                     if let Item::StructDecl(struct_decl) = item {
                         Some((struct_decl.name.clone(), struct_decl.clone()))
@@ -70,6 +77,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
             }
         }
 
+        //Add multiple ident_kinded to list of ident_kinded which are currently in scope
         fn add_generics(&mut self, generics: &Vec<IdentKinded>) {
             self.add_ident_kinded(
                 generics
@@ -78,6 +86,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
             );
         }
 
+        //Add pair of name and kind to list of ident_kinded which are currently in scope
         fn add_ident_kinded<I>(&mut self, ident_kinded: I)
         where
             I: Iterator<Item = (String, Kind)>,
@@ -85,11 +94,13 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
             self.ident_kinded_in_scope.extend(ident_kinded);
         }
 
+        //Remove the last n added ident_kinded from list of ident_kinded which are currently in scope
         fn pop_ident_kinded(&mut self, n: usize) {
             self.ident_kinded_in_scope
                 .truncate(self.ident_kinded_in_scope.len() - n);
         }
 
+        //Determinate if a ident is currently in scope
         fn contains_ident_kinded(&self, name: &str) -> bool {
             self.ident_kinded_in_scope
                 .iter()

@@ -6,7 +6,7 @@ use crate::ty_check::error::CtxError;
 use crate::ty_check::proj_elem_ty;
 use std::collections::{HashMap, HashSet};
 
-use super::unify::unify;
+use super::unify::{self, constrain, ConstrainMap, Constrainable};
 use super::TyResult;
 
 // TODO introduce proper struct
@@ -85,6 +85,11 @@ impl TyCtx {
                 None
             }
         })
+    }
+
+    pub(crate) fn substitute(&mut self, constr_map: &ConstrainMap) {
+        self.idents_typed_mut()
+            .for_each(|ident_typed| ident_typed.ty.substitute(constr_map))
     }
 
     pub(crate) fn prv_mappings(&self) -> impl DoubleEndedIterator<Item = &'_ PrvMapping> {
@@ -571,7 +576,6 @@ impl GlobalCtx {
     ) -> Vec<CtxError> {
         //HashSet with all datatypes of an impl and corresponding name of implemented trait
         //This is used to make sure there are no duplicate implementations of the same trait for the same datatype
-        //TODO i think this dont work very well
         let mut impl_defs_names: HashSet<(DataTy, String)> = HashSet::new();
 
         //Append every single item
@@ -619,6 +623,8 @@ impl GlobalCtx {
                             &mut errs,
                         );
                         //If this impl implements a trait
+                        //Types of functions are not needed in the context because
+                        //the corresponding trait already adds relevant function types
                         if let Some(trait_impl) = &impl_def.trait_impl {
                             constraint_env.append_constraint_scheme(&ConstraintScheme {
                                 generics: impl_def.generic_params.clone(),
@@ -773,25 +779,25 @@ impl GlobalCtx {
 
                     if let TyKind::Fn(args, exec, ret_ty) = ty.mono_ty.ty {
                         //Vector with all generics of trait_definition and all generics of the function
-                        let mut generics =
+                        let mut generic_params =
                             Vec::with_capacity(generics_tdef.len() + ty.generic_params.len());
-                        generics.extend(generics_tdef.clone());
-                        generics.extend(ty.generic_params.clone());
+                        generic_params.extend(generics_tdef.clone());
+                        generic_params.extend(ty.generic_params.clone());
                         //Vector with all constraints of trait_definition and all constraints of the function
                         let mut constraints = Vec::with_capacity(ty.constraints.len() + 1);
                         constraints.push(self_impl_trait.clone());
                         constraints.extend(ty.constraints.clone());
 
                         //Create extended typescheme of this function
-                        let ty = TypeScheme {
-                            generic_params: generics,
+                        let extended_ty_scheme = TypeScheme {
+                            generic_params,
                             constraints,
                             mono_ty: Ty::new(TyKind::Fn(args, exec, ret_ty)),
                         };
                         //Insert it in global context and make sure there are not multiple functions with the same name
                         if self
                             .funs
-                            .insert(FunctionName::from_trait(&name, t_def), ty)
+                            .insert(FunctionName::from_trait(&name, t_def), extended_ty_scheme)
                             .is_some()
                         {
                             errs.push(CtxError::MultipleDefinedFunctions(
@@ -805,7 +811,7 @@ impl GlobalCtx {
                 AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
             });
 
-            //Also add a constraints corresponding trait to the context
+            //Add constraint_schemes corresponding to the supertraits of this trait to the context
             let implican = vec![self_impl_trait];
             t_def
                 .supertraits_constraints()
@@ -859,15 +865,19 @@ impl GlobalCtx {
         }
     }
 
-    //Get a function by his name and the datatype of the corresponding impl
-    pub fn impl_fun_name_by_dty(
+    //Get a FunctionName by the name and the datatype of corresponding impl
+    pub fn fun_name_by_dty(
         &self,
         constraint_env: &ConstraintEnv,
         implicit_ident_cons: &mut IdentConstraints,
         fun_name: &String,
-        impl_dty: &DataTy,
-        kind_ctx: &KindCtx,
-    ) -> CtxResult<&FunctionName> {
+        dty: &DataTy,
+    ) -> CtxResult<(&FunctionName, ConstrainMap)> {
+        //Ty of impl of the searched function
+        let ty = Ty::new(TyKind::Data(dty.clone()));
+
+        let mut implicit_ident_cons_new = None;
+
         //Serach in all functions in context
         let mut result =
             self.funs
@@ -878,37 +888,21 @@ impl GlobalCtx {
                         match &fun_name_canidate.fun_kind {
                             //if the function_kind of the canidate-function references an impl
                             FunctionKind::ImplFun(impl_dty_canidate, _) => {
-                                //Dty of impl of the searched function
-                                let mut impl_dty = Ty::new(TyKind::Data(impl_dty.clone()));
-                                //Dty of impl of canidate-function
-                                let mut impl_dty_canidate = impl_dty_canidate.clone();
                                 //if they can be unified, this is the searched function
-                                if unify(&mut impl_dty, &mut impl_dty_canidate.mono_ty).is_ok() {
-                                    res.push(fun_name_canidate)
+                                if let Ok((constr_map, _)) =
+                                    constrain(&ty, &impl_dty_canidate.mono_ty)
+                                {
+                                    res.push((fun_name_canidate, constr_map))
                                 }
                             }
                             //if the function_kind of the canidate-function references a trait
                             FunctionKind::TraitFun(trait_name) => {
-                                //if the dty of impl of the searched function implements this trait, this is the searched function
-                                let mut impl_trait_constraint = Constraint {
-                                    param: impl_dty.clone(),
-                                    trait_bound: TraitMonoType {
-                                        name: trait_name.clone(),
-                                        generics: self
-                                            .trait_ty_by_name(trait_name)
-                                            .unwrap()
-                                            .generic_params
-                                            .iter()
-                                            .map(|gen| gen.arg_kinded())
-                                            .collect(),
-                                    },
-                                };
-                                if constraint_env.check_constraint(
-                                    &mut impl_trait_constraint,
-                                    implicit_ident_cons,
-                                    kind_ctx,
-                                ) {
-                                    res.push(fun_name_canidate);
+                                //Check if the passed dty impls the trait
+                                if let Some((constr_map, ident_constraints)) =
+                                    self.dty_impls_trait(constraint_env, dty.clone(), trait_name)
+                                {
+                                    implicit_ident_cons_new = Some(ident_constraints);
+                                    res.push((fun_name_canidate, constr_map));
                                 }
                             }
                             //if this is not a impl- or trait-function, its not the serached function
@@ -921,91 +915,69 @@ impl GlobalCtx {
         if result.len() > 1 {
             Err(CtxError::AmbiguousFunctionCall {
                 function_name: fun_name.clone(),
-                impl_dty: impl_dty.clone(),
+                impl_dty: dty.clone(),
             })
         }
         //if there if no function that meets the search criteria
         else if result.is_empty() {
             Err(CtxError::IdentNotFound(Ident::new(fun_name)))
         }
-        //if there is exaclty one function that meets the search criteria
+        //if there is exactly one function that meets the search criteria
         else {
-            Ok(result.remove(0))
+            //Add new implicit ident_constraints to "implicit_ident_cons"
+            if let Some(implicit_ident_cons_new) = implicit_ident_cons_new {
+                implicit_ident_cons.add_ident_constraints(implicit_ident_cons_new.into_iter());
+            }
+
+            let (fun_kind, constr_map) = result.remove(0);
+
+            //Remove irrelevant substitutions from constr_map
+            let mut ty_clone = ty.clone();
+            ty_clone.substitute(&constr_map);
+            let (constr_map, _) = unify::constrain(&ty, &ty_clone).unwrap();
+
+            Ok((fun_kind, constr_map))
         }
     }
 
-    //Get a function by his name and an ident for which can be deduced that it must implement a trait
-    pub fn trait_fun_name(
+    //Check if a datatype impls a trait
+    fn dty_impls_trait(
         &self,
         constraint_env: &ConstraintEnv,
-        implicit_ident_cons: &mut IdentConstraints,
-        fun_name: &String,
-        constraint_ident: &Ident,
-        kind_ctx: &KindCtx,
-    ) -> CtxResult<&FunctionName> {
-        let mut result = {
-            let mut res = Vec::with_capacity(1);
-            //Serach in all functions in context (and use for loop to avoid borrowing problems)
-            for (fun_name_canidate, _) in &self.funs {
-                //The canidate-function must have a TraitFun-kind
-                if let FunctionKind::TraitFun(trait_name) = &fun_name_canidate.fun_kind {
-                    //And must have the same name as the serached function
-                    if fun_name_canidate.name == *fun_name {
-                        //Get the trait_definition from the context
-                        let trait_def = self.trait_ty_by_name(&trait_name).unwrap();
+        dty: DataTy,
+        trait_name: &String,
+    ) -> Option<(ConstrainMap, IdentConstraints)> {
+        //Get the trait_definition from the context
+        let trait_def = self.trait_ty_by_name(trait_name).unwrap();
 
-                        //Generic params of the trait with fresh names
-                        let trait_def_generics = trait_def
-                            .generic_params
-                            .iter()
-                            .map(|k_ident| {
-                                let mut k_ident = k_ident.clone();
-                                k_ident.ident.name = fresh_name(&k_ident.ident.name);
-                                k_ident
-                            })
-                            .collect::<Vec<_>>();
-                        //ArgKinded-Identifier for every generic param of the trait
-                        let trait_def_generic_args = trait_def_generics
-                            .iter()
-                            .map(|k_ident| k_ident.arg_kinded_implicit())
-                            .collect::<Vec<_>>();
-
-                        //Constraint: "constraint_ident" implements the trait
-                        let mut c_ident_constraint = Constraint {
-                            param: DataTy::new(DataTyKind::Ident(constraint_ident.clone())),
-                            trait_bound: TraitMonoType {
-                                name: trait_name.clone(),
-                                generics: trait_def_generic_args,
-                            },
-                        };
-
-                        //if c_ident_constraint is fulfilled, this is the searched function
-                        if constraint_env.check_constraint(
-                            &mut c_ident_constraint,
-                            implicit_ident_cons,
-                            kind_ctx,
-                        ) {
-                            res.push(fun_name_canidate);
-                        }
-                    }
-                }
-            }
-            res
-        };
-        //if there are multiple possible functions that meets the search criteria
-        if result.len() > 1 {
-            Err(CtxError::AmbiguousFunctionCall {
-                function_name: fun_name.clone(),
-                impl_dty: DataTy::new(DataTyKind::Ident(constraint_ident.clone())),
+        //ArgKinded-Identifier for every generic param of the trait
+        let trait_def_generic_args = trait_def
+            .generic_params
+            .iter()
+            .map(|k_ident| {
+                let mut k_ident = k_ident.clone();
+                k_ident.ident.name = fresh_name(&k_ident.ident.name);
+                k_ident.arg_kinded_implicit()
             })
-        }
-        //if there if no function that meets the search criteria
-        else if result.is_empty() {
-            Err(CtxError::IdentNotFound(Ident::new(fun_name)))
-        }
-        //if there is exaclty one function that meets the search criteria
-        else {
-            Ok(result.remove(0))
+            .collect::<Vec<_>>();
+
+        //Constraint: "constraint_ident" implements the trait
+        let c_ident_constraint = Constraint {
+            param: dty,
+            trait_bound: TraitMonoType {
+                name: trait_name.clone(),
+                generics: trait_def_generic_args,
+            },
+        };
+
+        //Check if the constraint if fulfilled
+        let mut implicit_ident_cons = IdentConstraints::new();
+        if let Ok(constr_map) =
+            constraint_env.check_constraint(&c_ident_constraint, &mut implicit_ident_cons)
+        {
+            Some((constr_map, implicit_ident_cons))
+        } else {
+            None
         }
     }
 }

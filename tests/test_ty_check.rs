@@ -92,8 +92,7 @@ fn test_method_call() {
             false
         }
     }
-    impl Equal for Point {
-    }
+    impl Equal for Point {}
     impl Point {
         fn foo(self) -[cpu.thread]-> Point {
             self
@@ -109,6 +108,24 @@ fn test_method_call() {
         let p4 = Point::eq(&shrd p2, &shrd p2);
         let z = p2.x;
         ()
+    }
+    "#;
+    assert_compile!(src);
+}
+
+#[test]
+fn test_default_trait_impl_fun_call() {
+    let src = r#"
+    trait Foo {
+        fn foo() -[cpu.thread]-> i32 {
+            42
+        }
+    }
+    struct Bar;
+    impl Foo for Bar {}
+    fn main() -[cpu.thread]-> () {
+        let bar = Bar {};
+        let x = Bar::foo()
     }
     "#;
     assert_compile!(src);
@@ -150,9 +167,9 @@ fn test_monomoprhisation() {
 
     fn bar() -[cpu.thread]-> i32 {
         let p = Point { x: 4.0, y: 42 };
-        foo::<f64>(p, 42); //TODO infer generic
+        foo(p, 42);
         let p2 = Point { x: 4, y: 42.0 };
-        foo::<i32>(p2, 42.5); //TODO infer generic
+        foo(p2, 42.5);
         let p3 = Point { x: 4, y: 42.0 };
         //It is not possible to call "Point::new" because
         //the generic argument for "A" cannnot be inferred.
@@ -1213,6 +1230,143 @@ fn test_std_lib() {
     assert_compile!(src);
 }
 
+#[test]
+fn test_tuple_copy() {
+    let src = r#"
+    fn foo<T>(t1: T) -[gpu.thread]-> () where T: Copy {
+        ()
+    }
+    fn bar() -[gpu.thread]-> () {
+        let i1 = 42;
+        let i2 = 43;
+        foo((i1, i2))
+    }
+    "#;
+    assert_compile!(src);
+}
+
+#[test]
+fn test_lambda() {
+    //Simple lambda fun for addition should not compile because
+    //the types of x and y can not be inferred
+    //The let-statment itself should typecheck because we use implicit
+    //type identifiers $Y and $Y for the types of x and y and infer
+    //$X and $Y implements the "Add"-Trait
+    let src = r#"
+    fn main() -[gpu.thread]-> () {
+        let add = |x, y| -[gpu.thread]-> _ {
+            x + y
+        }
+    }
+    "#;
+    assert_err_compile!(src);
+
+    //if we call the lambda fun with two i32-dtys $X and $Y can be inferred
+    let src = r#"
+    fn main() -[gpu.thread]-> () {
+        let add = |x, y| -[gpu.thread]-> _ {
+            x + y
+        };
+        let x = add(42, 14)
+    }
+    "#;
+    assert_compile!(src);
+
+    //Same with two f64-dtys
+    let src = r#"
+    fn main() -[gpu.thread]-> () {
+        let add = |x, y| -[gpu.thread]-> _ {
+            x + y
+        };
+        let y = add(13.0, 15.0)
+    }
+    "#;
+    assert_compile!(src);
+
+    //Here we try two substitue $X with i32 and $Y with f64 which both implements Add
+    //But i32 implements Add<i32, i32> and f64 Add<f64, f64>
+    let src = r#"
+    fn main() -[gpu.thread]-> () {
+        let add = |x, y| -[gpu.thread]-> _ {
+            x + y
+        };
+        let x = add(42, 14.0)
+    }
+    "#;
+    assert_err_compile!(src);
+
+    //Before reaching "let y = ...", this should typecheck
+    //But then $X and $Y have been inferred as i32. So its
+    //not allowed to add two f64-dtys
+    let src = r#"
+    fn main() -[gpu.thread]-> () {
+        let add = |x, y| -[gpu.thread]-> _ {
+            x + y
+        };
+        let x = add(42, 14);
+        let y = add(13.0, 15.0)
+    }
+    "#;
+    assert_err_compile!(src);
+
+    //We can do the same also with references instead of values
+    let src = r#"
+    fn main(x: &shrd gpu.global i32, y: &shrd gpu.global i32, res: &uniq gpu.global i32) -[gpu.thread]-> () {
+        let add = |x, y, res| -[gpu.thread]-> () {
+            *res = *x + *y
+        };
+        let y = add(x, y, res)
+    }
+    "#;
+    assert_compile!(src);
+
+    //We can also use custom datatstructs for addition
+    let src = r#"
+    struct Point {
+        x: i32,
+        y: i32
+    }
+    impl Add<Point, Point> for Point {
+        fn add(self, other: Self) -[gpu.thread]-> Self {
+            Point {
+                x: self.x + other.x,
+                y: self.y + other.y
+            }
+        }
+    }
+    impl Copy for Point {}
+    fn main(x: &shrd gpu.global Point, y: &shrd gpu.global Point, res: &uniq gpu.global Point) -[gpu.thread]-> () {
+        let add = |x, y, res| -[gpu.thread]-> _ {
+            *res = *x + *y
+        };
+        let y = add(x, y, res)
+    }
+    "#;
+    assert_compile!(src);
+
+    //But if the custom do not implement copy this does not compile
+    let src = r#"
+    struct Point {
+        x: i32,
+        y: i32
+    }
+    impl Add<Point, Point> for Point {
+        fn add(self, other: Self) -[gpu.thread]-> Self {
+            Point {
+                x: self.x + other.x,
+                y: self.y + other.y
+            }
+        }
+    }
+    fn main(x: &shrd gpu.global Point, y: &shrd gpu.global Point, res: &uniq gpu.global Point) -[gpu.thread]-> () {
+        let add = |x, y, res| -[gpu.thread]-> _ {
+            *res = *x + *y
+        };
+        let y = add(x, y, res)
+    }
+    "#;
+    assert_err_compile!(src);
+}
 #[test]
 #[ignore]
 fn test_different_generic_param_types() {

@@ -1,4 +1,3 @@
-use core::panic;
 use std::{
     collections::{hash_map::RandomState, HashMap, HashSet},
     vec,
@@ -9,7 +8,7 @@ use crate::{
         visit_mut::{walk_expr, VisitMut},
         *,
     },
-    ty_check::unify::{constrain, Constrainable},
+    ty_check::unify::{constrain, ConstrainMap, Constrainable},
 };
 
 //Monomorphise functions
@@ -41,6 +40,7 @@ pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDecl
 
     //Monomorphise global functions, traits, impls to multiple global functions
     let fun_defs = Monomorphiser::monomorphise(&items);
+
     //Collect struct defs
     let struct_decls = items
         .into_iter()
@@ -52,6 +52,7 @@ pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDecl
             }
         })
         .collect::<Vec<StructDecl>>();
+
     (struct_decls, fun_defs)
 }
 
@@ -148,7 +149,7 @@ impl<'a> Monomorphiser<'a> {
             let mono_funs_with_name = match mono_funs.get_mut(&fun_name) {
                 Some(mono_funs) => mono_funs,
                 None => {
-                    let mono_funs_with_name = Vec::with_capacity(8);
+                    let mono_funs_with_name = Vec::with_capacity(4);
                     mono_funs.insert(fun_name.clone(), mono_funs_with_name);
                     mono_funs.get_mut(&fun_name).unwrap()
                 }
@@ -159,7 +160,7 @@ impl<'a> Monomorphiser<'a> {
             mono_funs_with_name.push(mono_fun);
         }
 
-        //Create a result vector of all monomorphised functions and all orginal functions which didnt need to be monomorphised
+        //Create a result vector of all monomorphised functions and all orginal functions which did not need to be monomorphised
         //Keep the orginal order of functions
         funs.into_iter().fold(
             Vec::<FunDef>::new(), |mut funs, (fun_name, mut fun_def, global_fun_name)| {
@@ -178,7 +179,7 @@ impl<'a> Monomorphiser<'a> {
                                     )
                                 );
                             },
-                            //The orginal functions was not monomorphised
+                            //The orginal function was not monomorphised
                             None => {
                                 let fun_generics = &fun_def.generic_params;
 
@@ -295,14 +296,16 @@ impl<'a> Monomorphiser<'a> {
             return;
         }
 
-        let fun_generics = fun_def.generic_params.clone(); //Prevents borrowing errors
-                                                           //Find now all generic params and corresponding generic arguments of
-                                                           //this function call which are constraint
+        //Prevents borrowing errors
+        let fun_generics = fun_def.generic_params.clone();
+        //Find now all generic constraint params with their corresponding generic arguments of
+        //this function call
         let (con_generics, con_generic_args): (Vec<IdentKinded>, Vec<ArgKinded>) = fun_generics
             .iter()
             .zip(generic_args.iter())
             .filter_map(|(gen, gen_arg)| {
                 assert!(gen.kind == gen_arg.kind());
+                //Check if the generic param ("gen") is constraint
                 if fun_def
                     .constraints
                     .iter()
@@ -380,52 +383,86 @@ impl<'a> Monomorphiser<'a> {
         } else {
             panic!("trait_fun_call with non TraitFun-Kind!")
         };
+
         //The generic arg for "Self" which is the datatype of the impl
         let impl_dty = match generic_args.first().unwrap() {
             ArgKinded::DataTy(dty) => dty.clone(),
             _ => panic!("Found non-datatype ArgKinded as generic arg for Self"),
         };
+
         //Find the defintion of the impl which implements the trait
-        //and remember the Substitutions which are necassary to unfiy
+        //and remember the substitutions which are necassary to unfiy
         //"impl_dty" with the datatype of the impl
-        let (impl_def, dty_unfication) = if let Err((impl_def, dty_unfication)) =
-            self.items.iter().try_fold((), |_, item| match item {
-                Item::ImplDef(impl_def) if impl_def.trait_impl.is_some() => {
-                    let trait_mono = impl_def.trait_impl.as_ref().unwrap();
-                    if trait_mono.name == trait_def.name {
-                        let mut impl_dty = impl_dty.clone();
-                        let mut impl_dty_canidate = impl_def.dty.clone();
-                        if let Ok((dty_unfication, _)) =
-                            constrain(&mut impl_dty_canidate, &mut impl_dty)
-                        {
-                            Err((impl_def, dty_unfication))
+        let (impl_def, dty_unfication) = {
+            let mut result: Option<(&ImplDef, ConstrainMap)> = None;
+            if self
+                .items
+                .iter()
+                .find(|item| match item {
+                    Item::ImplDef(impl_def) if impl_def.trait_impl.is_some() => {
+                        if impl_def.trait_impl.as_ref().unwrap().name == trait_def.name {
+                            //Get typescheme from impl_def
+                            let mut impl_ty_scheme = impl_def.ty();
+                            //Constraints are uninteresting
+                            impl_ty_scheme.constraints.clear();
+                            //Replace generic params with implicit generic params
+                            impl_ty_scheme = impl_ty_scheme.partial_apply(
+                                &impl_ty_scheme
+                                    .generic_params
+                                    .iter()
+                                    .map(|i| i.arg_kinded_implicit())
+                                    .collect::<Vec<_>>()
+                                    .as_slice(),
+                            );
+                            //The type should be a datatype
+                            let impl_dty_canidate =
+                                if let TyKind::Data(dty) = impl_ty_scheme.mono_ty.ty {
+                                    dty.clone()
+                                } else {
+                                    panic!("Expected a datatype but found a non-datatype")
+                                };
+
+                            //Try to unify "impl_dty" with current datatype-canidate for the impl
+                            if let Ok((dty_unfication, _)) =
+                                constrain(&impl_dty_canidate, &impl_dty)
+                            {
+                                result = Some((impl_def, dty_unfication));
+                                true
+                            } else {
+                                false
+                            }
                         } else {
-                            Ok(())
+                            false
                         }
-                    } else {
-                        Ok(())
                     }
-                }
-                _ => Ok(()),
-            }) {
-            (impl_def, dty_unfication)
-        } else {
-            panic!(
-                "could not find implementation of trait {} for dty {:#?}",
-                trait_def.name, impl_dty
-            );
+                    _ => false,
+                })
+                .is_some()
+            {
+                result.unwrap()
+            } else {
+                panic!(
+                    "could not find implementation of trait {} for dty {:#?}",
+                    trait_def.name, impl_dty
+                );
+            }
         };
 
         //The first generic arg is the arg for "Self"
         //The next args are the generic args for the generic params of the trait
         let trait_mono_args =
             Vec::from_iter(generic_args.drain(1..trait_def.generic_params.len() + 1));
-        //And the rest are generic args for the generic params of the function itself
+        //And the remaining generic args are for the generic params of the function itself
         let fun_generic_args = generic_args.drain(1..);
+
         //Infer generic args of impl from impl_dty and trait_mono_args
         //E.g. Infer "A,B,C" in "impl<A, B, C> Eq<A, B> for Point<B, C> ..."
-        let mut impl_trait_mono = TraitMonoType {
-            name: impl_def.trait_impl.as_ref().unwrap().name.clone(),
+        //Therefore unify "Eq<A, B>" and "Eq<trait_mono_args>" where trait_mono_args are the
+        //passed generic arguments in the function application for the generic params of the trait
+        let impl_trait_mono = TraitMonoType {
+            name: trait_def.name.clone(),
+            //Use as generics args for the trait the same generic args like in the impl_def,
+            //but replace explicit identifiers with implicit identifiers and apply "dty_unfication"
             generics: impl_def
                 .trait_impl
                 .as_ref()
@@ -434,22 +471,35 @@ impl<'a> Monomorphiser<'a> {
                 .iter()
                 .map(|gen_arg| {
                     let mut gen_arg = gen_arg.clone();
+                    gen_arg = gen_arg.subst_idents_kinded(
+                        impl_def.generic_params.iter(),
+                        impl_def
+                            .generic_params
+                            .iter()
+                            .map(|k_ident| k_ident.arg_kinded_implicit())
+                            .collect::<Vec<_>>()
+                            .iter(),
+                    );
                     gen_arg.substitute(&dty_unfication);
                     gen_arg
                 })
                 .collect(),
         };
-        let mut trait_mono = TraitMonoType {
+        let trait_mono = TraitMonoType {
             name: trait_def.name.clone(),
             generics: trait_mono_args,
         };
         let dty_unfication2 =
-            if let Ok((dty_unfication, _)) = constrain(&mut impl_trait_mono, &mut trait_mono) {
+            if let Ok((dty_unfication, _)) = constrain(&impl_trait_mono, &trait_mono) {
                 dty_unfication
             } else {
-                panic!("Cannot unify trait_mono with trait_mono_ty of impl")
+                panic!(
+                "Cannot unify trait_mono with trait_mono_ty of impl\nconstrain {:#?}\nwith {:#?}",
+                impl_trait_mono, trait_mono
+            )
             };
-        //Collect als inferred generic args
+
+        //Collect inferred generic args by apply substitutions to the generic params of the impl
         let impl_generics_args = impl_def
             .generic_params
             .iter()
@@ -475,7 +525,11 @@ impl<'a> Monomorphiser<'a> {
 impl<'a> VisitMut for Monomorphiser<'a> {
     fn visit_expr(&mut self, expr: &mut Expr) {
         match &mut expr.expr {
-            ExprKind::App(_, fun_kind, fun, generic_args, exprs) => {
+            ExprKind::App(path, fun_kind, fun, generic_args, exprs) => {
+                //Path is not longer needed and may contains some type identfiers
+                //that could cause problems in codegen
+                *path = Path::Empty;
+
                 self.monomorphise_fun_app(fun_kind, fun, generic_args);
                 exprs.iter_mut().for_each(|expr| self.visit_expr(expr))
             }
@@ -526,8 +580,8 @@ fn add_inherited_fun_defs(impl_def: &mut ImplDef, trait_defs: &Vec<TraitDef>) {
 //Create a new FunDef without constraint generics. The constraint generics inside the function are subsituted by the passed ArgKinded
 fn monomorphise_fun(
     fun_def: &FunDef,
-    generics: &Vec<IdentKinded>,
-    generic_args: &Vec<ArgKinded>,
+    cons_generics: &Vec<IdentKinded>,
+    cons_generic_args: &Vec<ArgKinded>,
 ) -> FunDef {
     FunDef {
         name: fun_def.name.clone(),
@@ -535,7 +589,7 @@ fn monomorphise_fun(
             .generic_params
             .iter()
             .filter_map(|generic| {
-                if generics
+                if cons_generics
                     .iter()
                     .find(|cons_generic| cons_generic.ident.name == generic.ident.name)
                     .is_none()
@@ -557,23 +611,22 @@ fn monomorphise_fun(
                         .ty
                         .as_ref()
                         .unwrap()
-                        .clone()
-                        .subst_idents_kinded(generics.iter(), generic_args.iter()),
+                        .subst_idents_kinded(cons_generics.iter(), cons_generic_args.iter()),
                 ),
                 mutbl: param_decl.mutbl,
             })
             .collect(),
         ret_dty: fun_def
             .ret_dty
-            .subst_idents_kinded(generics.iter(), generic_args.iter()),
+            .subst_idents_kinded(cons_generics.iter(), cons_generic_args.iter()),
         exec: fun_def.exec,
         prv_rels: fun_def.prv_rels.clone(),
         body_expr: {
             let mut body = fun_def.body_expr.clone();
             body.subst_kinded_idents(HashMap::from_iter(
-                generics
+                cons_generics
                     .iter()
-                    .zip(generic_args.iter())
+                    .zip(cons_generic_args.iter())
                     .map(|(generic, generic_arg)| (&*generic.ident.name, generic_arg)),
             ));
             body
@@ -595,7 +648,8 @@ fn impl_to_global_funs(impl_def: &ImplDef) -> impl Iterator<Item = (FunctionName
 
 //Create multiple global functions (with empty bodys) from an trait
 fn trait_to_global_funs(trait_def: &TraitDef) -> impl Iterator<Item = (FunctionName, FunDef)> + '_ {
-    fn self_chain_generics(trait_def: &TraitDef) -> Vec<IdentKinded> {
+    //Using a function instead of a let-statment avoids lifetime problems
+    fn self_and_trait_generics(trait_def: &TraitDef) -> Vec<IdentKinded> {
         std::iter::once(IdentKinded::new(&Ident::new("Self"), Kind::DataTy))
             .chain(trait_def.generic_params.clone())
             .collect()
@@ -609,35 +663,32 @@ fn trait_to_global_funs(trait_def: &TraitDef) -> impl Iterator<Item = (FunctionN
                 FunctionName::from_trait(&fun_def.name, trait_def),
                 polymorhpise_fun(
                     fun_def,
-                    &self_chain_generics(trait_def),
+                    &self_and_trait_generics(trait_def),
                     &trait_def.constraints,
                 ),
             )),
             AssociatedItem::FunDecl(fun_decl) => Some((
                 FunctionName::from_trait(&fun_decl.name, trait_def),
-                FunDef {
-                    name: fun_decl.name.clone(),
-                    generic_params: self_chain_generics(trait_def)
-                        .into_iter()
-                        .chain(fun_decl.generic_params.clone().into_iter())
-                        .collect(),
-                    constraints: trait_def
-                        .constraints
-                        .clone()
-                        .into_iter()
-                        .chain(fun_decl.constraints.clone().into_iter())
-                        .collect(),
-                    param_decls: vec![],
-                    ret_dty: fun_decl.ret_dty.clone(),
-                    exec: fun_decl.exec,
-                    prv_rels: fun_decl.prv_rels.clone(),
-                    body_expr: Expr::new(ExprKind::Seq(vec![])),
-                },
+                polymorhpise_fun(
+                    &FunDef {
+                        name: fun_decl.name.clone(),
+                        generic_params: fun_decl.generic_params.clone(),
+                        constraints: fun_decl.constraints.clone(),
+                        param_decls: vec![],
+                        ret_dty: fun_decl.ret_dty.clone(),
+                        exec: fun_decl.exec,
+                        prv_rels: fun_decl.prv_rels.clone(),
+                        body_expr: Expr::new(ExprKind::Seq(vec![])),
+                    },
+                    &self_and_trait_generics(trait_def),
+                    &trait_def.constraints,
+                ),
             )),
             AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
         })
 }
 
+//Create a new function definition with additional passed generics and constraints
 fn polymorhpise_fun(
     fun_def: &FunDef,
     generics: &Vec<IdentKinded>,
@@ -646,14 +697,14 @@ fn polymorhpise_fun(
     FunDef {
         name: fun_def.name.clone(),
         generic_params: generics
-            .clone()
-            .into_iter()
-            .chain(fun_def.generic_params.clone().into_iter())
+            .iter()
+            .chain(fun_def.generic_params.iter())
+            .map(|c| c.clone())
             .collect(),
         constraints: constraints
-            .clone()
-            .into_iter()
-            .chain(fun_def.constraints.clone().into_iter())
+            .iter()
+            .chain(fun_def.constraints.iter())
+            .map(|c| c.clone())
             .collect(),
         param_decls: fun_def.param_decls.clone(),
         ret_dty: fun_def.ret_dty.clone(),

@@ -159,15 +159,23 @@ pub struct StructDataType {
 }
 
 impl StructDataType {
-    pub fn get_ty(&self, name: &String) -> Option<&DataTy> {
-        match self.attributes.iter().find(|field| field.name == *name) {
+    pub fn get_ty(&self, attribute_name: &String) -> Option<&DataTy> {
+        match self
+            .attributes
+            .iter()
+            .find(|field| field.name == *attribute_name)
+        {
             Some(field) => Some(&field.ty),
             None => None,
         }
     }
 
-    pub fn get_ty_mut(&mut self, name: &String) -> Option<&mut DataTy> {
-        match self.attributes.iter_mut().find(|field| field.name == *name) {
+    pub fn get_ty_mut(&mut self, attribute_name: &String) -> Option<&mut DataTy> {
+        match self
+            .attributes
+            .iter_mut()
+            .find(|field| field.name == *attribute_name)
+        {
             Some(field) => Some(&mut field.ty),
             None => None,
         }
@@ -212,13 +220,14 @@ impl FunctionName {
 pub enum Path {
     Empty,
     DataTy(DataTy),
-    InferFromFirstArg, //Replaced in type_checking through DataTy
+    //Replaced in type_checking through DataTy of the first arg
+    InferFromFirstArg,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum FunctionKind {
     GlobalFun,
-    //Typescheme of impl, and (if existing) trait which is implemented
+    //Typescheme of impl, and (if existing) name of the trait which is implemented
     ImplFun(TypeScheme, Option<String>),
     TraitFun(String),
 }
@@ -1648,7 +1657,7 @@ impl IdentKinded {
     }
 
     pub fn arg_kinded(&self) -> ArgKinded {
-        self.arg_kinded_with_implicit(false)
+        self.arg_kinded_with_implicit(self.ident.is_implicit)
     }
 
     pub fn arg_kinded_implicit(&self) -> ArgKinded {

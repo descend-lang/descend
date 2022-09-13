@@ -88,6 +88,7 @@ pub enum TyError {
         expected: Kind,
         found: Kind,
     },
+    TypeAnnotationsNeeded(String),
     UnfullfilledConstraint(Constraint),
     IllegalProjection(String),
     // TODO remove as soon as possible
@@ -298,6 +299,9 @@ impl TyError {
                     "Wrong Kind. Expected: \"{}\" Found: \"{}\"",
                     expected, found
                 );
+            }
+            TyError::TypeAnnotationsNeeded(expr) => {
+                eprintln!("Type annotations needed. Could not infer type {}", expr)
             }
             TyError::UnfullfilledConstraint(con) => {
                 eprintln!("Constraint \"{:#?}\" is not fulfilled.", con)
