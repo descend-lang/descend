@@ -160,8 +160,6 @@ impl Constrainable for Ty {
                     return Err(TyError::CannotUnify);
                 }
                 // substitute result of unification for every following unification
-                // TODO Refactor: create iterator over Some((next_lhs, tail_lhs), (next_rhs, tail_rhs))?
-                //  move into function
                 let mut i = 0;
                 let mut remain_lhs = &mut fn_ty1.param_tys[i..];
                 let mut remain_rhs = &mut fn_ty2.param_tys[i..];
@@ -263,7 +261,7 @@ impl Constrainable for DataTy {
                     Ok(())
                 }
             }
-            (DataTyKind::Range, DataTyKind::Range) => Ok(()), // FIXME/ REMOVE
+            (DataTyKind::Range, DataTyKind::Range) => Ok(()),
             (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
                 unimplemented!()
             }
@@ -399,7 +397,6 @@ impl Nat {
         Ok(())
     }
 
-    // FIXME: Add constrains?!
     fn unify(n1: &Nat, n2: &Nat, _constr_map: &mut ConstrainMap) -> TyResult<()> {
         if n1 == n2 {
             Ok(())
@@ -431,15 +428,15 @@ impl Constrainable for Nat {
         }
     }
 
-    fn substitute(&mut self, subst: &ConstrainMap) {
-        let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_nat(self);
-    }
-
     fn free_idents(&self) -> HashSet<IdentKinded> {
         let mut free_idents = FreeKindedIdents::new();
         free_idents.visit_nat(self);
         free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_nat(self);
     }
 }
 
@@ -490,15 +487,15 @@ impl Constrainable for Memory {
         }
     }
 
-    fn substitute(&mut self, subst: &ConstrainMap) {
-        let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_mem(self);
-    }
-
     fn free_idents(&self) -> HashSet<IdentKinded> {
         let mut free_idents = FreeKindedIdents::new();
         free_idents.visit_mem(self);
         free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_mem(self);
     }
 }
 
@@ -626,88 +623,81 @@ impl<'a> VisitMut for SubstIdent<'a, DataTy> {
     }
 }
 
-#[test]
-fn scalar() -> TyResult<()> {
-    let mut i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
-    let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
-    let (subst, _) = constrain(&mut i32, &mut t)?;
-    substitute(&subst, &mut i32);
-    substitute(&subst, &mut t);
-    assert_eq!(i32, t);
-    Ok(())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn shrd_ref() -> TyResult<()> {
-    let mut shrd_ref = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-        Provenance::Value("r".to_string()),
-        Ownership::Shrd,
-        Memory::GpuGlobal,
-        DataTy::new(DataTyKind::Array(
-            Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-            Nat::Ident(Ident::new("n")),
-        )),
-    ))));
-    let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
-    let (subst, _) = constrain(&mut shrd_ref, &mut t)?;
-    substitute(&subst, &mut shrd_ref);
-    substitute(&subst, &mut t);
-    assert_eq!(shrd_ref, t);
-    Ok(())
-}
-
-#[test]
-fn shrd_ref_inner_var() -> TyResult<()> {
-    let mut shrd_ref = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-        Provenance::Value("r".to_string()),
-        Ownership::Shrd,
-        Memory::GpuGlobal,
-        DataTy::new(DataTyKind::Array(
-            Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-            Nat::Ident(Ident::new("n")),
-        )),
-    ))));
-    let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-        Provenance::Value("r".to_string()),
-        Ownership::Shrd,
-        Memory::GpuGlobal,
-        DataTy::new(DataTyKind::Ident(Ident::new("t"))),
-    ))));
-    let (subst, _) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
-    println!("{:?}", subst);
-    substitute(&subst, &mut shrd_ref);
-    substitute(&subst, &mut shrd_ref_t);
-    assert_eq!(shrd_ref, shrd_ref_t);
-    Ok(())
-}
-
-#[test]
-fn prv_val_ident() -> TyResult<()> {
-    let mut shrd_ref = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-        Provenance::Value("r".to_string()),
-        Ownership::Shrd,
-        Memory::GpuGlobal,
-        DataTy::new(DataTyKind::Array(
-            Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-            Nat::Ident(Ident::new("n")),
-        )),
-    ))));
-    let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-        Provenance::Ident(Ident::new("a")),
-        Ownership::Shrd,
-        Memory::GpuGlobal,
-        DataTy::new(DataTyKind::Ident(Ident::new("t"))),
-    ))));
-    let (subst, prv_rels) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
-    println!("{:?}", subst);
-    substitute(&subst, &mut shrd_ref);
-    substitute(&subst, &mut shrd_ref_t);
-    assert_eq!(
-        prv_rels[0],
-        PrvConstr(
+    fn shrd_ref_ty() -> DataTy {
+        DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
             Provenance::Value("r".to_string()),
-            Provenance::Ident(Ident::new("a"))
-        )
-    );
-    Ok(())
+            Ownership::Shrd,
+            Memory::GpuGlobal,
+            DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
+                Nat::Ident(Ident::new("n")),
+            )),
+        ))))
+    }
+
+    #[test]
+    fn scalar() -> TyResult<()> {
+        let mut i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
+        let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
+        let (subst, _) = constrain(&mut i32, &mut t)?;
+        substitute(&subst, &mut i32);
+        substitute(&subst, &mut t);
+        assert_eq!(i32, t);
+        Ok(())
+    }
+
+    #[test]
+    fn shrd_reft() -> TyResult<()> {
+        let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
+        let mut shrd_ref = shrd_ref_ty();
+        let (subst, _) = constrain(&mut shrd_ref, &mut t)?;
+        substitute(&subst, &mut shrd_ref);
+        substitute(&subst, &mut t);
+        assert_eq!(shrd_ref, t);
+        Ok(())
+    }
+
+    #[test]
+    fn shrd_ref_inner_var() -> TyResult<()> {
+        let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
+            Provenance::Value("r".to_string()),
+            Ownership::Shrd,
+            Memory::GpuGlobal,
+            DataTy::new(DataTyKind::Ident(Ident::new("t"))),
+        ))));
+        let mut shrd_ref = shrd_ref_ty();
+        let (subst, _) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
+        println!("{:?}", subst);
+        substitute(&subst, &mut shrd_ref);
+        substitute(&subst, &mut shrd_ref_t);
+        assert_eq!(shrd_ref, shrd_ref_t);
+        Ok(())
+    }
+
+    #[test]
+    fn prv_val_ident() -> TyResult<()> {
+        let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
+            Provenance::Ident(Ident::new("a")),
+            Ownership::Shrd,
+            Memory::GpuGlobal,
+            DataTy::new(DataTyKind::Ident(Ident::new("t"))),
+        ))));
+        let mut shrd_ref = shrd_ref_ty();
+        let (subst, prv_rels) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
+        println!("{:?}", subst);
+        substitute(&subst, &mut shrd_ref);
+        substitute(&subst, &mut shrd_ref_t);
+        assert_eq!(
+            prv_rels[0],
+            PrvConstr(
+                Provenance::Value("r".to_string()),
+                Provenance::Ident(Ident::new("a"))
+            )
+        );
+        Ok(())
+    }
 }

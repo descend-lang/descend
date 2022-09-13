@@ -75,7 +75,6 @@ impl TyChecker {
         let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())?;
 
         // TODO check that every prv_rel only uses provenance variables bound in generic_params
-
         // Build frame typing for this function
         let glf_frame = internal::append_idents_typed(
             &vec![],
@@ -105,16 +104,19 @@ impl TyChecker {
             gf.body_expr.ty.as_ref().unwrap().dty(),
             &gf.ret_dty,
         )?;
+
+        #[cfg(debug_assertions)]
+        utils::no_free_idents_fn_def(gf);
         //TODO why is this the case?
-        assert!(
+        debug_assert!(
             empty_ty_ctx.is_empty(),
             "Expected typing context to be empty. But TyCtx:\n {:?}",
             empty_ty_ctx
         );
+
         Ok(())
     }
 
-    // TODO find out if Gamma is always correct by construction (similarly to Delta), also all 3 combined
     // e has type τ under Σ, Δ, and Γ, producing output context Γ'
     // sideconditions: Global Function Context Σ, Kinding context Δ and typing context are well-formed and
     //   type τ is well-formed under well-formed GlFunCtxt, kinding ctx, output context Γ'.
@@ -180,21 +182,10 @@ impl TyChecker {
                 ty_ctx,
                 ident_exec,
                 &mut par_branch.split_exec,
-                &mut par_branch.branch_idents,
+                &par_branch.branch_idents,
                 &mut par_branch.branch_bodies,
             )?,
-            ExprKind::Sched(parfor) => self.ty_check_par_for(
-                kind_ctx,
-                ty_ctx,
-                ident_exec,
-                &mut parfor.decls,
-                &mut parfor.dim,
-                &mut parfor.exec_ident,
-                &mut parfor.exec,
-                &mut parfor.input_idents,
-                &mut parfor.input_views,
-                &mut parfor.body,
-            )?,
+            ExprKind::Sched(sched) => self.ty_check_sched(kind_ctx, ty_ctx, ident_exec, sched)?,
             ExprKind::ForNat(var, range, body) => {
                 self.ty_check_for_nat(kind_ctx, ty_ctx, ident_exec, var, range, body)?
             }
@@ -767,23 +758,17 @@ impl TyChecker {
         ))
     }
 
-    fn ty_check_par_for(
+    fn ty_check_sched(
         &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
-        decls: &mut Option<Vec<Expr>>,
-        par_dim: &DimCompo,
-        body_exec_ident: &Option<Ident>,
-        exec_expr: &mut ExecExpr,
-        input_idents: &[Ident],
-        input_exprs: &mut [Expr],
-        body: &mut Expr,
+        sched: &mut Sched,
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO remove decl block and allow proper scoping and declarations instead
         // Add declarations to context
         let mut decl_ty_ctx = ty_ctx;
-        for decls in decls {
+        for decls in &mut sched.decls {
             for d in decls {
                 if !matches!(d.expr, ExprKind::LetUninit(_, _)) {
                     return Err(TyError::String(
@@ -821,12 +806,12 @@ impl TyChecker {
         }
 
         let mut distrib_exec = ExecExpr::new(ExecKind::Distrib(
-            par_dim.clone(),
-            Box::new(exec_expr.clone()),
+            sched.dim.clone(),
+            Box::new(sched.exec.clone()),
         ));
         ty_check_exec(kind_ctx, ident_exec, &mut distrib_exec)?;
         let body_exec = distrib_exec.ty.as_ref().unwrap().clone();
-        let body_ident_exec = if let Some(body_exec_ident) = body_exec_ident {
+        let body_ident_exec = if let Some(body_exec_ident) = &sched.exec_ident {
             IdentExec::new(body_exec_ident.clone(), body_exec.as_ref().clone())
         } else {
             IdentExec::new(
@@ -843,10 +828,11 @@ impl TyChecker {
         //     )));
         // }
         let mut input_ty_ctx = decl_ty_ctx;
-        for e in input_exprs.iter_mut() {
+        for e in sched.input_views.iter_mut() {
             input_ty_ctx = self.ty_check_expr(kind_ctx, input_ty_ctx, ident_exec, e)?;
         }
-        let input_idents_typed = TyChecker::type_input_idents(input_idents, input_exprs)?;
+        let input_idents_typed =
+            TyChecker::type_input_idents(&sched.input_idents, &sched.input_views)?;
 
         let mut frm_ty = input_idents_typed
             .into_iter()
@@ -854,12 +840,20 @@ impl TyChecker {
             .collect::<Vec<_>>();
         let ty_ctx_with_idents = input_ty_ctx.clone().append_frame(frm_ty.clone());
 
-        let body_ty_ctx_fst =
-            self.ty_check_expr(kind_ctx, ty_ctx_with_idents, &body_ident_exec, body)?;
+        let body_ty_ctx_fst = self.ty_check_expr(
+            kind_ctx,
+            ty_ctx_with_idents,
+            &body_ident_exec,
+            &mut sched.body,
+        )?;
         // Run type checking again to see whether there were illegal moves
         let body_ty_ctx_with_idents = body_ty_ctx_fst.drop_last_frame().append_frame(frm_ty);
-        let no_moves_ty_ctx =
-            self.ty_check_expr(kind_ctx, body_ty_ctx_with_idents, &body_ident_exec, body)?;
+        let no_moves_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            body_ty_ctx_with_idents,
+            &body_ident_exec,
+            &mut sched.body,
+        )?;
 
         Ok((
             no_moves_ty_ctx.drop_last_frame(),

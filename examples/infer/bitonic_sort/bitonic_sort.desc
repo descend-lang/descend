@@ -1,4 +1,4 @@
-fn bitonicsort<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n])-[cpu.thread]->(){
+fn bitonicsort<n: nat, a: prv>(ha_array: &a uniq cpu.mem [i32; n]) -[t: cpu.thread]-> () {
     let mut gpu =gpu_device(0);
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
     for_nat k in doubled_range(2,(n/2)) {

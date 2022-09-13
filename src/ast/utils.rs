@@ -105,3 +105,12 @@ impl Visit for FreeKindedIdents {
         }
     }
 }
+
+pub fn no_free_idents_fn_def(f: &super::FunDef) {
+    let mut free_idents = FreeKindedIdents::new();
+    free_idents.visit_fun_def(f);
+    if !free_idents.set.is_empty() {
+        eprintln!("Function: {}", f.ident);
+        eprintln!("{:?}", free_idents.set)
+    }
+}

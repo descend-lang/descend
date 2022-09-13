@@ -43,9 +43,7 @@ fn downsweep<a: prv>(
         indep split_exec(X) d block {
             active =>
                 sched arr in tmp_down_view to _ in active {
-                    let t = arr[32/d-1];
-                    arr[32/d-1] = arr[64/d-1];
-                    arr[64/d-1] = arr[64/d-1] + t
+                    downsweep_inplace_red_add(arr)
                 },
             inactive => { () }
         }

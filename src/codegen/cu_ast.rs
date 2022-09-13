@@ -2,17 +2,18 @@ use crate::ast::Nat;
 
 pub(super) type CuProgram = Vec<Item>;
 
-// TODO big difference in sizes beteween variants
 pub(super) enum Item {
     Include(String),
-    FunDef {
-        name: String,
-        templ_params: Vec<TemplParam>,
-        params: Vec<ParamDecl>,
-        ret_ty: Ty,
-        body: Stmt,
-        is_dev_fun: bool,
-    },
+    FunDef(Box<FunDef>),
+}
+
+pub(super) struct FunDef {
+    pub(super) name: String,
+    pub(super) templ_params: Vec<TemplParam>,
+    pub(super) params: Vec<ParamDecl>,
+    pub(super) ret_ty: Ty,
+    pub(super) body: Stmt,
+    pub(super) is_dev_fun: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -58,7 +59,6 @@ pub(super) enum Stmt {
 
 #[derive(Clone, Debug)]
 pub(super) enum Expr {
-    // TODO Is there a better way to represent Unit values in C++?
     Empty,
     Ident(String),
     Lit(Lit),
@@ -150,12 +150,6 @@ pub(super) enum TemplateArg {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum Exec {
-    Host,
-    Device,
-}
-
-#[derive(Clone, Debug)]
 pub(super) enum GpuAddrSpace {
     Global,
     Shared,
@@ -175,10 +169,6 @@ pub(super) enum Ty {
     Ptr(Box<Ty>, Option<GpuAddrSpace>),
     // The pointer itself is mutable, but the underlying data is not.
     PtrConst(Box<Ty>, Option<GpuAddrSpace>),
-    // TODO In C++ const is a type qualifier (as opposed to qualifying an identifier).
-    //  However the way we generate code let's us treat const as an identifier qualifier (we would
-    //  not return a const value from a function for example, but e.g., a non-const const pointer).
-    //  Should the AST be changed to reflect this?
     // const in a parameter declaration changes the parameter type in a definition but not
     // "necessarily" the function signature ... https://abseil.io/tips/109
     // Top-level const
@@ -187,7 +177,6 @@ pub(super) enum Ty {
     Ident(String),
 }
 
-// TODO this is not really a Cuda type and should maybe be represented by a generic type construct
 #[derive(Clone, Debug)]
 pub(super) enum BufferKind {
     CpuMem,

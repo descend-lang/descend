@@ -1,7 +1,7 @@
 use super::cu_ast::{
     BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
+use crate::codegen::cu_ast::{FunDef, GpuAddrSpace, Lit};
 use std::fmt::Formatter;
 
 // function cuda_fmt takes Formatter and recursively formats
@@ -45,31 +45,36 @@ impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Item::Include(path) => write!(f, "#include \"{}\"", path),
-            Item::FunDef {
-                name,
-                templ_params,
-                params,
-                ret_ty,
-                body,
-                is_dev_fun,
-            } => {
-                if !templ_params.is_empty() {
-                    write!(f, "template<")?;
-                    fmt_vec(f, templ_params, ", ")?;
-                    writeln!(f, ">")?;
-                }
-                writeln!(
-                    f,
-                    "{}auto {}(",
-                    if *is_dev_fun { "__device__ " } else { "" },
-                    name
-                )?;
-                fmt_vec(f, params, ",\n")?;
-                writeln!(f, "\n) -> {} {{", ret_ty)?;
-                write!(f, "{}", body)?;
-                writeln!(f, "\n}}")
-            }
+            Item::FunDef(fun_def) => write!(f, "{}", fun_def.as_ref()),
         }
+    }
+}
+
+impl std::fmt::Display for FunDef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let FunDef {
+            name,
+            templ_params,
+            params,
+            ret_ty,
+            body,
+            is_dev_fun,
+        } = self;
+        if !templ_params.is_empty() {
+            write!(f, "template<")?;
+            fmt_vec(f, templ_params, ", ")?;
+            writeln!(f, ">")?;
+        }
+        writeln!(
+            f,
+            "{}auto {}(",
+            if *is_dev_fun { "__device__ " } else { "" },
+            name
+        )?;
+        fmt_vec(f, params, ",\n")?;
+        writeln!(f, "\n) -> {} {{", ret_ty)?;
+        write!(f, "{}", body)?;
+        writeln!(f, "\n}}")
     }
 }
 
@@ -169,9 +174,9 @@ impl std::fmt::Display for Expr {
             } => {
                 let dev_qual = if *is_dev_fun { "__device__" } else { "" };
                 writeln!(f, "[")?;
-                fmt_vec(f, &captures, ",")?;
+                fmt_vec(f, captures, ",")?;
                 writeln!(f, "] {} (", dev_qual)?;
-                fmt_vec(f, &params, ",\n")?;
+                fmt_vec(f, params, ",\n")?;
                 writeln!(f, ") -> {} {{", ret_ty)?;
                 writeln!(f, "{}", &body)?;
                 write!(f, "}}")
@@ -305,7 +310,6 @@ impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
-            // TODO print __restrict__
             Ptr(ty, Some(addr_space)) => write!(f, "{} {} *", addr_space, ty),
             Ptr(ty, None) => write!(f, "{} *", ty),
             PtrConst(ty, Some(addr_space)) => write!(f, "{} const {} *", addr_space, ty),
@@ -370,7 +374,7 @@ fn test_print_program() -> std::fmt::Result {
     use Ty::*;
     let program = vec![
         Item::Include("descend.cuh".to_string()),
-        Item::FunDef {
+        Item::FunDef(Box::new(FunDef {
             name: "test_fun".to_string(),
             templ_params: vec![TemplParam::Value {
                 param_name: "n".to_string(),
@@ -392,12 +396,12 @@ fn test_print_program() -> std::fmt::Result {
             ret_ty: Scalar(ScalarTy::Void),
             body: Stmt::VarDecl {
                 name: "a_f".to_string(),
-                ty: Ty::Scalar(ScalarTy::Auto),
+                ty: Scalar(ScalarTy::Auto),
                 addr_space: None,
                 expr: Some(Expr::Ident("a".to_string())),
             },
             is_dev_fun: true,
-        },
+        })),
     ];
     let code = print(&program);
     print!("{}", code);
