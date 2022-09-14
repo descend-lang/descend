@@ -1,7 +1,7 @@
 use super::cu_ast::{
     BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::codegen::cu_ast::{FunDef, GpuAddrSpace, Lit};
+use crate::codegen::cu_ast::{FnDef, FnSig, GpuAddrSpace, Lit};
 use std::fmt::Formatter;
 
 // function cuda_fmt takes Formatter and recursively formats
@@ -9,7 +9,7 @@ use std::fmt::Formatter;
 // implement Display for CuAst by calling cuda_fmt in fmt passing the formatter and completely handing
 // over the computation
 
-pub(super) fn print(program: &[Item]) -> String {
+pub(super) fn print(program: &[&Item]) -> String {
     use std::fmt::Write;
 
     let mut code = String::new();
@@ -41,25 +41,27 @@ fn clang_format(code: &str) -> String {
     String::from_utf8(clang_fmt_output.stdout).expect("cannot read clang-format output as String")
 }
 
-impl std::fmt::Display for Item {
+impl<'a> std::fmt::Display for Item<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Item::Include(path) => write!(f, "#include \"{}\"", path),
-            Item::FunDef(fun_def) => write!(f, "{}", fun_def.as_ref()),
+            Item::FunDecl(fn_decl) => write!(f, "{};", fn_decl),
+            Item::FnDef(fn_def) => write!(f, "{}", fn_def.as_ref()),
+            Item::MultiLineComment(str) => write!(f, "/*\n{}\n*/", str),
         }
     }
 }
 
-impl std::fmt::Display for FunDef {
+impl std::fmt::Display for FnSig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let FunDef {
+        let FnSig {
             name,
             templ_params,
             params,
             ret_ty,
-            body,
-            is_dev_fun,
+            is_dev_fn,
         } = self;
+
         if !templ_params.is_empty() {
             write!(f, "template<")?;
             fmt_vec(f, templ_params, ", ")?;
@@ -68,13 +70,19 @@ impl std::fmt::Display for FunDef {
         writeln!(
             f,
             "{}auto {}(",
-            if *is_dev_fun { "__device__ " } else { "" },
+            if *is_dev_fn { "__device__ " } else { "" },
             name
         )?;
         fmt_vec(f, params, ",\n")?;
-        writeln!(f, "\n) -> {} {{", ret_ty)?;
-        write!(f, "{}", body)?;
-        writeln!(f, "\n}}")
+        writeln!(f, "\n) -> {}", ret_ty)
+    }
+}
+
+impl std::fmt::Display for FnDef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let FnDef { fn_sig, body } = self;
+        write!(f, "{}", fn_sig)?;
+        write!(f, "{}", body)
     }
 }
 
@@ -102,9 +110,9 @@ impl std::fmt::Display for Stmt {
                 write!(f, ";")
             }
             Block(stmt) => {
-                writeln!(f, "{{")?;
-                writeln!(f, "{}", stmt)?;
-                write!(f, "}}")
+                write!(f, "{{")?;
+                write!(f, "{}", stmt)?;
+                writeln!(f, "}}")
             }
             Seq(stmt) => {
                 let (last, leading) = stmt.split_last().unwrap();
@@ -177,9 +185,8 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, captures, ",")?;
                 writeln!(f, "] {} (", dev_qual)?;
                 fmt_vec(f, params, ",\n")?;
-                writeln!(f, ") -> {} {{", ret_ty)?;
-                writeln!(f, "{}", &body)?;
-                write!(f, "}}")
+                writeln!(f, ") -> {}", ret_ty)?;
+                write!(f, "{}", &body)
             }
             FunCall {
                 fun,
@@ -367,43 +374,4 @@ fn fmt_vec<D: std::fmt::Display>(f: &mut Formatter<'_>, v: &[D], sep: &str) -> s
     } else {
         Ok(())
     }
-}
-
-#[test]
-fn test_print_program() -> std::fmt::Result {
-    use Ty::*;
-    let program = vec![
-        Item::Include("descend.cuh".to_string()),
-        Item::FunDef(Box::new(FunDef {
-            name: "test_fun".to_string(),
-            templ_params: vec![TemplParam::Value {
-                param_name: "n".to_string(),
-                ty: Scalar(ScalarTy::SizeT),
-            }],
-            params: vec![
-                ParamDecl {
-                    name: "a".to_string(),
-                    ty: Const(Box::new(PtrConst(
-                        Box::new(Scalar(ScalarTy::I32)),
-                        Some(GpuAddrSpace::Shared),
-                    ))),
-                },
-                ParamDecl {
-                    name: "b".to_string(),
-                    ty: Ptr(Box::new(Scalar(ScalarTy::I32)), None),
-                },
-            ],
-            ret_ty: Scalar(ScalarTy::Void),
-            body: Stmt::VarDecl {
-                name: "a_f".to_string(),
-                ty: Scalar(ScalarTy::Auto),
-                addr_space: None,
-                expr: Some(Expr::Ident("a".to_string())),
-            },
-            is_dev_fun: true,
-        })),
-    ];
-    let code = print(&program);
-    print!("{}", code);
-    Ok(())
 }

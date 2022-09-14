@@ -95,7 +95,7 @@ impl ConstrainMap {
 }
 
 impl DataTy {
-    fn bind_to_ident(&self, ident: &Ident, constr_map: &mut ConstrainMap) -> TyResult<()> {
+    fn bind_to(&self, ident: &Ident, constr_map: &mut ConstrainMap) -> TyResult<()> {
         if let DataTyKind::Ident(ty_id) = &self.dty {
             if ty_id == ident {
                 return Ok(());
@@ -208,8 +208,14 @@ impl Constrainable for DataTy {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (&mut self.dty, &mut other.dty) {
-            (DataTyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
-            (_, DataTyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
+            (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) => {
+                match (i1.is_implicit, i2.is_implicit) {
+                    (true, _) => other.bind_to(i1, constr_map),
+                    (false, _) => self.bind_to(i2, constr_map),
+                }
+            }
+            (DataTyKind::Ident(i), _) => other.bind_to(i, constr_map),
+            (_, DataTyKind::Ident(i)) => self.bind_to(i, constr_map),
             (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
                 if sty1 != sty2 {
                     Err(TyError::CannotUnify)
@@ -373,16 +379,8 @@ impl Nat {
         constr_map: &mut ConstrainMap,
         _: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
+        // No occurs check.
         // Nats can be equal to an expression in which the nat appears again. E.g., a = a * 1
-        // match &self {
-        //     _ if Self::occurs_check(&IdentKinded::new(ident, Kind::Nat), self) => {
-        //         Err(TyError::InfiniteType)
-        //     }
-        //     _ => {
-        constr_map
-            .nat_unifier
-            .values_mut()
-            .for_each(|n| SubstIdent::new(ident, self).visit_nat(n));
         if let Some(old) = constr_map
             .nat_unifier
             .insert(ident.name.clone(), self.clone())
@@ -394,6 +392,10 @@ impl Nat {
                 )
             }
         }
+        constr_map
+            .nat_unifier
+            .values_mut()
+            .for_each(|n| SubstIdent::new(ident, self).visit_nat(n));
         Ok(())
     }
 
@@ -424,6 +426,16 @@ impl Constrainable for Nat {
             },
             (Nat::Ident(n1i), _) => other.bind_to(n1i, constr_map, prv_rels),
             (_, Nat::Ident(n2i)) => self.bind_to(n2i, constr_map, prv_rels),
+            (Nat::BinOp(op1, n1l, n1r), Nat::BinOp(op2, n2l, n2r)) if op1 == op2 => {
+                n1l.constrain(n2l, constr_map, prv_rels)?;
+                n1r.constrain(n2r, constr_map, prv_rels)
+            }
+            (Nat::App(f1, ns1), Nat::App(f2, ns2)) if f1 == f2 => {
+                for (n1, n2) in ns1.iter_mut().zip(ns2.iter_mut()) {
+                    n1.constrain(n2, constr_map, prv_rels)?;
+                }
+                Ok(())
+            }
             _ => Self::unify(self, other, constr_map),
         }
     }
@@ -478,8 +490,12 @@ impl Constrainable for Memory {
         constr_map: &mut ConstrainMap,
         _prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        match (self, other) {
+        match (&mut *self, &mut *other) {
             (Memory::Ident(i1), Memory::Ident(i2)) if i1 == i2 => Ok(()),
+            (Memory::Ident(i1), Memory::Ident(i2)) => match (i1.is_implicit, i2.is_implicit) {
+                (true, _) => other.bind_to(i1, constr_map),
+                (false, _) => self.bind_to(i2, constr_map),
+            },
             (Memory::Ident(i), o) => o.bind_to(i, constr_map),
             (s, Memory::Ident(i)) => s.bind_to(i, constr_map),
             (mem1, mem2) if mem1 == mem2 => Ok(()),

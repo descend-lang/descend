@@ -1,7 +1,10 @@
 use crate::ast::visit::walk_list;
 use crate::ast::visit::Visit;
 use crate::ast::{
-    visit, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    visit, ArgKinded, BinOp, BinOpNat, DataTy, Dim, Dim1d, Dim2d, Dim3d, DimCompo, ExecExpr,
+    ExecSplit, ExecTy, Expr, ExprKind, ExprSplit, FnTy, FunDef, Ident, IdentExec, IdentKinded,
+    Indep, Kind, Lit, Memory, Mutability, Nat, Ownership, ParamDecl, Pattern, PlaceExpr,
+    Provenance, PrvRel, RefDty, ScalarTy, Sched, Ty, TyKind, UnOp,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -106,11 +109,25 @@ impl Visit for FreeKindedIdents {
     }
 }
 
-pub fn no_free_idents_fn_def(f: &super::FunDef) {
-    let mut free_idents = FreeKindedIdents::new();
-    free_idents.visit_fun_def(f);
-    if !free_idents.set.is_empty() {
-        eprintln!("Function: {}", f.ident);
-        eprintln!("{:?}", free_idents.set)
+pub fn implicit_idents_without_rgns(f: &FunDef) -> Option<HashSet<Ident>> {
+    struct ImplicitIdents(HashSet<Ident>);
+    impl Visit for ImplicitIdents {
+        fn visit_prv(&mut self, _prv: &Provenance) {
+            // ignore
+        }
+
+        fn visit_ident(&mut self, ident: &Ident) {
+            if ident.is_implicit {
+                self.0.insert(ident.clone());
+            }
+        }
+    }
+
+    let mut impl_idents = ImplicitIdents(HashSet::new());
+    impl_idents.visit_fun_def(f);
+    if impl_idents.0.is_empty() {
+        None
+    } else {
+        Some(impl_idents.0)
     }
 }

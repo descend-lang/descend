@@ -329,7 +329,6 @@ impl Indep {
     }
 }
 
-// TODO box PlaceExpr?
 #[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
@@ -1614,7 +1613,6 @@ mod size_asserts {
             const _: [(); $size] = [(); ::std::mem::size_of::<$ty>()];
         };
     }
-    // TODO make smaller?
     static_assert_size!(Dim, 16);
     static_assert_size!(DataTy, 112);
     static_assert_size!(DataTyKind, 72);

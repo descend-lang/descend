@@ -112,7 +112,7 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
                     }
                 };
 
-                downsweep>(block, &uniq tmp);
+                downsweep(block, &uniq tmp);
 
                 {
                     let tmp_view3 = to_view_mut(&uniq tmp);

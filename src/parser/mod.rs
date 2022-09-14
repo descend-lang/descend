@@ -558,7 +558,7 @@ peg::parser! {
             / "&" _ prov:(prv:provenance() __ { prv })? own:ownership() __ mem:memory_kind() __ dty:dty() {
                 DataTyKind::Ref(Box::new(RefDty::new(match prov {
                     Some(prv) => prv,
-                    None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$r")))
+                    None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("r")))
                 }, own, mem, dty)))
             }
             / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$d"))) }
@@ -1132,7 +1132,6 @@ mod tests {
             Ok(Lit::F32(1.)),
             "does not correctly parse 1f32 to f32"
         );
-        // TODO: Do proper float comparison (test error against threshold)
         assert_eq!(
             descend::literal("1.0f32"),
             Ok(Lit::F32(1.0)),
@@ -1861,7 +1860,6 @@ mod tests {
 
         let result = descend::global_fun_def(src).expect("Parsing failed");
 
-        // TODO: Do proper check against expected AST
         let generic_params = vec![
             IdentKinded::new(&Ident::new("n"), Kind::Nat),
             IdentKinded::new(&Ident::new("a"), Kind::Provenance),
@@ -1900,13 +1898,13 @@ mod tests {
             ret_dty,
         };
 
-        // assert_eq!(result.name, intended.name);
-        // assert_eq!(result.params, intended.params);
-        // assert_eq!(result.exec, intended.exec);
-        // assert_eq!(result.prv_rels, intended.prv_rels);
-        // assert_eq!(result.body_expr, intended.body_expr);
-        // assert_eq!(result.generic_params, intended.generic_params);
-        // assert_eq!(result.ret_dty, intended.ret_dty);
+        assert_eq!(result.ident, intended.ident);
+        assert_eq!(result.param_decls, intended.param_decls);
+        assert_eq!(result.exec_decl, intended.exec_decl);
+        assert_eq!(result.prv_rels, intended.prv_rels);
+        assert_eq!(result.body_expr, intended.body_expr);
+        assert_eq!(result.generic_params, intended.generic_params);
+        assert_eq!(result.ret_dty, intended.ret_dty);
         assert_eq!(result, intended);
     }
 

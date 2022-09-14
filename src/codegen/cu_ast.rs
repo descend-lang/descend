@@ -1,19 +1,51 @@
 use crate::ast::Nat;
 
-pub(super) type CuProgram = Vec<Item>;
+pub(super) type CuProgram<'a> = Vec<Item<'a>>;
 
-pub(super) enum Item {
+pub(super) enum Item<'a> {
     Include(String),
-    FunDef(Box<FunDef>),
+    FunDecl(&'a FnSig),
+    FnDef(Box<FnDef>),
+    MultiLineComment(String),
 }
 
-pub(super) struct FunDef {
+#[derive(Clone)]
+pub(super) struct FnSig {
     pub(super) name: String,
     pub(super) templ_params: Vec<TemplParam>,
     pub(super) params: Vec<ParamDecl>,
     pub(super) ret_ty: Ty,
+    pub(super) is_dev_fn: bool,
+}
+
+impl FnSig {
+    pub(super) fn new(
+        name: String,
+        templ_params: Vec<TemplParam>,
+        params: Vec<ParamDecl>,
+        ret_ty: Ty,
+        is_dev_fn: bool,
+    ) -> Self {
+        FnSig {
+            name,
+            templ_params,
+            params,
+            ret_ty,
+            is_dev_fn,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct FnDef {
+    pub(super) fn_sig: FnSig,
     pub(super) body: Stmt,
-    pub(super) is_dev_fun: bool,
+}
+
+impl FnDef {
+    pub(super) fn new(fn_sig: FnSig, body: Stmt) -> Self {
+        FnDef { fn_sig, body }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +170,7 @@ pub(super) enum BinOp {
     Neq,
 }
 
+#[derive(Clone)]
 pub(super) enum TemplParam {
     Value { param_name: String, ty: Ty },
     TyName { name: String },

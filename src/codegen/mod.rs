@@ -35,20 +35,26 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         debug_assert_eq!(codegen_ctx.shape_ctx.map.len(), 0);
     }
 
-    let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
-        .chain(
-            codegen_ctx
-                .inst_fn_ctx
-                .into_values()
-                .map(|f| cu::Item::FunDef(Box::new(f))),
-        )
+    let cu_fn_defs = codegen_ctx
+        .inst_fn_ctx
+        .into_values()
+        .map(|f| cu::Item::FnDef(Box::new(f)))
         .chain(
             initial_fns
                 .into_iter()
-                .rev()
-                .map(|f| cu::Item::FunDef(Box::new(f))),
+                .map(|f| cu::Item::FnDef(Box::new(f))),
         )
-        .collect::<cu::CuProgram>();
+        .collect::<Vec<_>>();
+    let fn_decls = collect_fn_decls(&cu_fn_defs);
+    let include = cu::Item::Include("descend.cuh".to_string());
+    let decl_comment = cu::Item::MultiLineComment("function declarations".to_string());
+    let def_comment = cu::Item::MultiLineComment("function defintions".to_string());
+    let cu_program = std::iter::once(&include)
+        .chain(std::iter::once(&decl_comment))
+        .chain(&fn_decls)
+        .chain(std::iter::once(&def_comment))
+        .chain(&cu_fn_defs)
+        .collect::<Vec<_>>();
     printer::print(&cu_program)
 }
 
@@ -77,9 +83,22 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         .collect::<Vec<desc::FunDef>>()
 }
 
+fn collect_fn_decls<'a>(items: &'a [cu::Item<'a>]) -> Vec<cu::Item<'a>> {
+    items
+        .iter()
+        .filter_map(|fn_def| {
+            if let cu::Item::FnDef(fn_def) = fn_def {
+                Some(cu::Item::FunDecl(&fn_def.fn_sig))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 struct CodegenCtx<'a> {
     shape_ctx: ShapeCtx,
-    inst_fn_ctx: HashMap<String, cu::FunDef>,
+    inst_fn_ctx: HashMap<String, cu::FnDef>,
     exec: desc::ExecExpr,
     comp_unit: &'a [desc::FunDef],
     idx_checks: bool,
@@ -184,7 +203,7 @@ impl CheckedExpr {
 
 // TODO why do we need to pass the comp_unit around. this is not type checking.
 //  function calls can still be applied?
-fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FunDef {
+fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef {
     let desc::FunDef {
         ident: name,
         generic_params: ty_idents,
@@ -195,15 +214,20 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FunDe
         ..
     } = gl_fun;
 
-    cu::FunDef {
-        name: name.name.to_string(),
-        templ_params: gen_templ_params(ty_idents),
-        params: gen_param_decls(params),
-        ret_ty: gen_ty(
+    let fn_sig = cu::FnSig::new(
+        name.name.to_string(),
+        gen_templ_params(ty_idents),
+        gen_param_decls(params),
+        gen_ty(
             &desc::TyKind::Data(Box::new(ret_ty.clone())),
             desc::Mutability::Mut,
         ),
-        body: gen_stmt(
+        is_dev_fun(&exec_decl.ty),
+    );
+
+    cu::FnDef::new(
+        fn_sig,
+        gen_stmt(
             body_expr,
             !matches!(
                 ret_ty,
@@ -214,8 +238,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FunDe
             ),
             codegen_ctx,
         ),
-        is_dev_fun: is_dev_fun(&exec_decl.ty),
-    }
+    )
 }
 
 // Generate CUDA code for Descend syntax that allows sequencing.
@@ -1315,7 +1338,7 @@ fn gen_global_fn_call(
             codegen_ctx.push_scope();
             bind_view_args_to_params(&fun.param_decls, args, codegen_ctx);
             let mut new_fun_def = gen_fun_def(fun, codegen_ctx);
-            new_fun_def.name = mangled.clone();
+            new_fun_def.fn_sig.name = mangled.clone();
             codegen_ctx.drop_scope();
             codegen_ctx.inst_fn_ctx.insert(mangled.clone(), new_fun_def);
         }

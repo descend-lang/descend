@@ -105,8 +105,13 @@ impl TyChecker {
             &gf.ret_dty,
         )?;
 
+        // TODO there should never exist implicit regions either. They are created during parsing and
+        //  never removed. Problem with unification? Problem with region rewriting?! Compare to Oxide.
         #[cfg(debug_assertions)]
-        utils::no_free_idents_fn_def(gf);
+        if let Some(hm) = utils::implicit_idents_without_rgns(gf) {
+            panic!("Implicit Idents:\n{:?}", hm)
+        }
+
         //TODO why is this the case?
         debug_assert!(
             empty_ty_ctx.is_empty(),

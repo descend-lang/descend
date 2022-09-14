@@ -31,7 +31,7 @@ fn gaussian<n: nat>(
         | inputs: (&shrd gpu.global [f32; n*n],
                    &uniq gpu.global [f32; n*n],
                    &uniq gpu.global [f32; n])| -[grid: gpu.grid<XY<n/4, n/4>, XY<4, 4>>]-> () {
-            indep split_exec(X) (n-1-t) to_xy_thread_grp(grid) {
+            indep split_exec(X) (n-1-t) to_thread_grp(grid) {
                 active_x =>
                     indep split_exec(Y) (n-t) active_x {
                         active_xy => {
@@ -43,7 +43,7 @@ fn gaussian<n: nat>(
                             let read_prev_a = &shrd *prev_a;
                             let (part_b_passive, part_b_active) = split uniq (t+1) (*b);
                             ()
-
+                        }
                         //     sched(X) part_m_row, part_a_row, part_b_elem
                         //              in part_m, part_a, part_b_active
                         //     to active_y in active_xy { ()
@@ -68,8 +68,8 @@ fn gaussian<n: nat>(
                         // inactive => { () }
                     },
                 inactive => { () }
-            }
-        })
+            })
+        }
     };
 
     copy_to_host(&shrd m_cuda, m);
