@@ -1398,7 +1398,6 @@ fn test_struct_dead_types() {
 }
 
 #[test]
-#[ignore] //Some codgen problems with generating fun_app of lambda_fun
 fn test_lambda2() {
     let src = r#"
     struct Array<T, N: nat> {

@@ -86,7 +86,7 @@ impl<'a> Monomorphiser<'a> {
                                 (
                                     fun_name.clone(),
                                     fun_def,
-                                    name_generator.generate_name(&fun_name),
+                                    name_generator.generate_name(&fun_name, None),
                                 )
                             }))
                         }
@@ -95,7 +95,7 @@ impl<'a> Monomorphiser<'a> {
                             funs.push((
                                 fun_name.clone(),
                                 fun_def.clone(),
-                                name_generator.generate_name(&fun_name),
+                                name_generator.generate_name(&fun_name, None),
                             ));
                         }
                         Item::TraitDef(trait_def) => funs.extend(
@@ -103,7 +103,7 @@ impl<'a> Monomorphiser<'a> {
                                 (
                                     fun_name.clone(),
                                     fun_def,
-                                    name_generator.generate_name(&fun_name),
+                                    name_generator.generate_name(&fun_name, None),
                                 )
                             }),
                         ),
@@ -334,7 +334,7 @@ impl<'a> Monomorphiser<'a> {
             } else {
                 //Create a new function definition for this specific function call
                 let mut mono_fun = monomorphise_fun(&fun_def, &con_generics, &key_generated.1);
-                let new_fun_name = self.name_generator.generate_name(&key_generated.0);
+                let new_fun_name = self.name_generator.generate_name(&key_generated.0, Some(&key_generated.1));
                 mono_fun.name = new_fun_name.clone();
                 //And insert it in corresponding lists
                 self.generated_funs.push((key_generated.0.clone(), mono_fun));
@@ -874,23 +874,37 @@ impl NameGenerator {
         }
     }
 
-    //TODO change names and print name of generics
-    pub fn generate_name(&mut self, function_name: &FunctionName) -> String {
+    pub fn generate_name(
+        &mut self,
+        function_name: &FunctionName,
+        ark_kinded: Option<&Vec<ArgKinded>>,
+    ) -> String {
         let name = &function_name.name;
-        if let FunctionKind::ImplFun(impl_dty_scheme, _) = &function_name.fun_kind {
-            if let TyKind::Data(dty) = &impl_dty_scheme.mono_ty.ty {
-                match &dty.dty {
-                    //e.g. Point::function() or Point::_new()
-                    DataTyKind::Struct(struct_dty) => {
-                        self.generate_name_internal(&format!("{}__{}", struct_dty.name, name))
-                    }
-                    _ => self.generate_name_internal(name),
+        let arg_kinded = match ark_kinded {
+            Some(args) => Some(args.iter().fold(String::new(), |res, arg| {
+                format!("{}_{}", res, NameGenerator::print_arg_kinded(arg))
+            })),
+            None => None,
+        };
+        match &function_name.fun_kind {
+            FunctionKind::GlobalFun => {
+                if let Some(arg_kinded) = arg_kinded {
+                    self.generate_name_internal(&format!("{}_{}", name, arg_kinded))
+                } else {
+                    self.generate_name_internal(name)
                 }
-            } else {
-                self.generate_name_internal(name)
             }
-        } else {
-            self.generate_name_internal(name)
+            FunctionKind::ImplFun(impl_dty_scheme, _) => {
+                let ty = NameGenerator::print_ty(&impl_dty_scheme.mono_ty);
+                if let Some(arg_kinded) = arg_kinded {
+                    self.generate_name_internal(&format!("{}__{}__{}", ty, arg_kinded, name))
+                } else {
+                    self.generate_name_internal(&format!("{}__{}", ty, name))
+                }
+            }
+            FunctionKind::TraitFun(trait_name) => {
+                self.generate_name_internal(&format!("_TRAIT_FUN_{}_{}", trait_name, name))
+            }
         }
     }
 
@@ -906,11 +920,88 @@ impl NameGenerator {
                 let mut result = format!("{}{}", name, counter);
                 while self.generated_names.get(&result).is_some() {
                     counter += 1;
-                    result = format!("{}{}", name, counter)
+                    result = format!("{}_{}", name, counter)
                 }
                 result
             };
         self.generated_names.insert(res.clone());
         res
+    }
+
+    fn print_arg_kinded(arg: &ArgKinded) -> String {
+        match arg {
+            ArgKinded::Ident(ident) => panic!("There should be no idents without kinds"),
+            ArgKinded::Nat(nat) => format!("{}", nat),
+            ArgKinded::Memory(mem) => format!("{}", mem),
+            ArgKinded::Ty(ty) => NameGenerator::print_ty(ty),
+            ArgKinded::DataTy(dty) => NameGenerator::print_dty(dty),
+            ArgKinded::Provenance(prov) => format!("{}", prov),
+        }
+    }
+
+    fn print_ty(ty: &Ty) -> String {
+        match &ty.ty {
+            TyKind::Data(dty) => NameGenerator::print_dty(dty),
+            TyKind::Fn(_, _, _) => unimplemented!("needed?"),
+            TyKind::Ident(_) => unimplemented!("needed?"),
+            TyKind::Dead(_) => panic!("This should not contain dead types"),
+        }
+    }
+
+    fn print_dty(dty: &DataTy) -> String {
+        match &dty.dty {
+            DataTyKind::Ident(i) => format!("{}", i.name),
+            DataTyKind::Scalar(s) => String::from(match s {
+                ScalarTy::Bool => "bool",
+                ScalarTy::Unit => "Unit",
+                ScalarTy::I32 => "i32",
+                ScalarTy::U32 => "u32",
+                ScalarTy::F32 => "f32",
+                ScalarTy::F64 => "f64",
+                ScalarTy::Gpu => "gpu",
+            }),
+            DataTyKind::Atomic(s) => format!(
+                "Atomic_{}_",
+                NameGenerator::print_dty(&DataTy::new(DataTyKind::Scalar(s.clone())))
+            ),
+            DataTyKind::Array(dty, nat) => {
+                format!("Array_{}_{}_", NameGenerator::print_dty(dty), nat)
+            }
+            DataTyKind::ArrayShape(dty, nat) => {
+                format!("ArrayShape_{}_{}_", NameGenerator::print_dty(dty), nat)
+            }
+            DataTyKind::Tuple(dtys) => format!(
+                "{}_",
+                dtys.iter().fold(String::from("Tuple"), |res, dty| format!(
+                    "{}_{}",
+                    res,
+                    NameGenerator::print_dty(dty)
+                ))
+            ),
+            DataTyKind::Struct(sdty) => {
+                if sdty.generic_args.len() > 0 {
+                    format!(
+                        "{}{}_",
+                        sdty.name,
+                        sdty.generic_args
+                            .iter()
+                            .fold(String::new(), |res, arg| format!(
+                                "{}_{}",
+                                res,
+                                NameGenerator::print_arg_kinded(arg)
+                            ))
+                    )
+                } else {
+                    sdty.name.clone()
+                }
+            }
+            DataTyKind::At(_, _) => todo!(),
+            DataTyKind::Ref(_, _, _, dty) => format!("Ref_{}_", NameGenerator::print_dty(dty)),
+            DataTyKind::ThreadHierchy(_) => todo!(),
+            DataTyKind::SplitThreadHierchy(_, _) => todo!(),
+            DataTyKind::RawPtr(dty) => format!("RawPtr_{}_", NameGenerator::print_dty(dty)),
+            DataTyKind::Range => String::from("Range"),
+            DataTyKind::Dead(_) => panic!("This should not contain dead types"),
+        }
     }
 }

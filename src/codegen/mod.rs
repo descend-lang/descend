@@ -1859,26 +1859,33 @@ fn create_lambda_no_shape_args(
             pl_expr: desc::PlaceExprKind::Ident(f),
             ..
         }) => {
-            let fun_def = comp_unit.get_fun_def(&f.name);
-            if !contains_shape_or_th_hierchy_params(&fun_def.param_decls) {
-                return None;
+            match comp_unit.funs.iter().find(|fun_def| fun_def.name == f.name) {
+                Some(fun_def) => {
+                    if !contains_shape_or_th_hierchy_params(&fun_def.param_decls) {
+                        return None;
+                    }
+                    let partial_app_fun = partial_app_gen_args(fun_def, generic_args);
+                    let (param_decls, new_body) =
+                        if let desc::ExprKind::Lambda(param_decls, _, _, body) =
+                            &partial_app_fun.expr
+                        {
+                            (param_decls, body.as_ref())
+                        } else {
+                            panic!("Expected a lambda.")
+                        };
+                    Some(create_lambda_and_args_only_dtys(
+                        fun,
+                        param_decls,
+                        args,
+                        new_body,
+                        fun_def.exec,
+                        &fun_def.ret_dty,
+                        codegen_ctx,
+                    ))
+                }
+                //TODO What with lambda-functions?
+                None => None,
             }
-            let partial_app_fun = partial_app_gen_args(fun_def, generic_args);
-            let (param_decls, new_body) =
-                if let desc::ExprKind::Lambda(param_decls, _, _, body) = &partial_app_fun.expr {
-                    (param_decls, body.as_ref())
-                } else {
-                    panic!("Expected a lambda.")
-                };
-            Some(create_lambda_and_args_only_dtys(
-                fun,
-                param_decls,
-                args,
-                new_body,
-                fun_def.exec,
-                &fun_def.ret_dty,
-                codegen_ctx,
-            ))
         }
         _ => panic!(
             "Functions cannot be created dynamically, so they have to either be\
