@@ -204,7 +204,7 @@ impl FunctionName {
         };
         FunctionName {
             name: String::from(name),
-            fun_kind: FunctionKind::ImplFun(impl_def.ty(), trait_name),
+            fun_kind: FunctionKind::ImplFun(impl_def.ty().generic_params_to_implicit(), trait_name),
         }
     }
 
@@ -1009,6 +1009,23 @@ impl TypeScheme {
             Some(self.mono_ty.clone())
         } else {
             None
+        }
+    }
+
+    pub fn generic_params_to_implicit(&self) -> Self {
+        let implicit_args: Vec<_> = self
+            .generic_params
+            .iter()
+            .map(|arg| arg.arg_kinded_implicit())
+            .collect();
+        TypeScheme {
+            generic_params: self.generic_params.clone(),
+            constraints: self
+                .constraints
+                .iter()
+                .map(|con| self.instantiate_single(con, implicit_args.as_slice()))
+                .collect(),
+            mono_ty: self.instantiate_single(&self.mono_ty, implicit_args.as_slice()),
         }
     }
 

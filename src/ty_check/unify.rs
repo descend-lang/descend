@@ -7,8 +7,8 @@ use crate::ty_check::error::TyError;
 use crate::ty_check::subty::multiple_outlives;
 use crate::ty_check::ConstraintEnv;
 use crate::ty_check::TyResult;
+use core::fmt;
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 
 use super::constraint_check::IdentConstraints;
 
@@ -190,19 +190,9 @@ impl Ty {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::Ty), self) {
             return Err(TyError::InfiniteType);
         }
-        if let Some(old) = constr_map
-            .ty_unifier
-            .insert(ident.name.clone(), self.clone())
-        {
-            if &old != self {
-                panic!(
-                    "Rebinding bound type variable.\n\
-                    Old: {:?}\n\
-                    New: {:?}",
-                    old, self
-                );
-            }
-        }
+        let mut self_ty = self.clone();
+        self_ty.substitute(&constr_map);
+        constr_map.ty_unifier.insert(ident.name.clone(), self_ty);
         constr_map
             .ty_unifier
             .values_mut()
@@ -233,7 +223,7 @@ impl DataTy {
     }
 }
 
-pub(crate) trait Constrainable {
+pub(crate) trait Constrainable: fmt::Debug {
     fn constrain(
         &self,
         other: &Self,
@@ -352,8 +342,9 @@ impl Constrainable for Ty {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (&self.ty, &other.ty) {
-            (TyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
-            (_, TyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
+            (TyKind::Ident(i), _) if i.is_implicit => other.bind_to_ident(i, constr_map),
+            (_, TyKind::Ident(i)) if i.is_implicit => self.bind_to_ident(i, constr_map),
+            (TyKind::Ident(i1), TyKind::Ident(i2)) if i1 == i2 => Ok(()),
             (TyKind::Fn(param_tys1, exec1, ret_ty1), TyKind::Fn(param_tys2, exec2, ret_ty2)) => {
                 if exec1 != exec2 {
                     return Err(TyError::CannotUnify);
@@ -555,10 +546,12 @@ impl Nat {
             .nat_unifier
             .insert(ident.name.clone(), self.clone())
         {
-            println!(
-                "WARNING: Not able to check equality of Nats `{}` and `{}`",
-                old, self
-            )
+            if old != *self {
+                println!(
+                    "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                    old, self
+                )
+            }
         }
         Ok(())
     }
@@ -630,18 +623,9 @@ impl Memory {
                 return Ok(());
             }
         }
-        if let Some(old) = constr_map
-            .mem_unifier
-            .insert(ident.name.clone(), self.clone())
-        {
-            if &old != self {
-                panic!(
-                    "Attempting to bind same variable name twice.\n\
-        Old value: `{:?}` replaced by new value: `{:?}`",
-                    old, self
-                )
-            }
-        }
+        let mut self_mem = self.clone();
+        self_mem.substitute(&constr_map);
+        constr_map.mem_unifier.insert(ident.name.clone(), self_mem);
         constr_map
             .mem_unifier
             .values_mut()
@@ -655,12 +639,12 @@ impl Constrainable for Memory {
         &self,
         other: &Self,
         constr_map: &mut ConstrainMap,
-        prv_rels: &mut Vec<PrvConstr>,
+        _: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (self, other) {
-            (Memory::Ident(i1), Memory::Ident(i2)) => Ok(()),
-            (Memory::Ident(i), o) => o.bind_to(i, constr_map),
-            (s, Memory::Ident(i)) => s.bind_to(i, constr_map),
+            (Memory::Ident(i1), Memory::Ident(i2)) if i1 == i2 => Ok(()),
+            (Memory::Ident(i), o) if i.is_implicit => o.bind_to(i, constr_map),
+            (s, Memory::Ident(i)) if i.is_implicit => s.bind_to(i, constr_map),
             (mem1, mem2) if mem1 == mem2 => Ok(()),
             _ => Err(TyError::CannotUnify),
         }

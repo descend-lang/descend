@@ -208,7 +208,7 @@ fn test_infer_trait_args() {
     }
     impl<T, X> Equal<T> for X {}
     fn foo<X>(t: X) -[cpu.thread] -> i32 {
-        X::new(z) //cannot infer "T"
+        X::new(t) //cannot infer "T"
     }
     "#;
     assert_err_compile!(src);
@@ -240,8 +240,7 @@ fn test_fun_calls() {
 
         let p2: Point<T> = Point::<T> { x: t3, y: t4 };
         (&shrd p2).eq(&shrd p2);
-        Point<T>::eq(&shrd p2, &shrd p2);
-        // Point::eq(&shrd p2, &shrd p2); //TODO infer generic
+        Point<_>::eq(&shrd p2, &shrd p2);
         ()
     }
     fn bar() -[cpu.thread]-> () {
@@ -275,8 +274,7 @@ fn test_fun_calls() {
 
         let p2: Point<T> = Point::<T> { x: t3, y: t4 };
         (&shrd p2).eq(&shrd p2);
-        Point<T>::eq(&shrd p2, &shrd p2);
-        // Point::eq(&shrd p2, &shrd p2); //TODO infer generic
+        Point<_>::eq(&shrd p2, &shrd p2);
         ()
     }
     fn bar() -[cpu.thread]-> () {
@@ -1283,14 +1281,24 @@ fn test_lambda() {
     "#;
     assert_compile!(src);
 
-    //Here we try two substitue $X with i32 and $Y with f64 which both implements Add
-    //But i32 implements Add<i32, i32> and f64 Add<f64, f64>
+    //Adding an i32 is sufficient to infer all types
     let src = r#"
     fn main() -[gpu.thread]-> () {
         let add = |x, y| -[gpu.thread]-> _ {
-            x + y
-        };
-        let x = add(42, 14.0)
+            let z = x + y;
+            (1 + z) + x
+        }
+    }
+    "#;
+    assert_compile!(src);
+
+    //This does not compile because we can only infer $Z implements Add<i32, $OUTPUT>
+    let src = r#"
+    fn main() -[gpu.thread]-> () {
+        let add = |x, y| -[gpu.thread]-> _ {
+            let z = x + y;
+            (z + 1) + x
+        }
     }
     "#;
     assert_err_compile!(src);
@@ -1367,107 +1375,105 @@ fn test_lambda() {
     "#;
     assert_err_compile!(src);
 }
+
 #[test]
 #[ignore]
-fn test_different_generic_param_types() {
+fn test_struct_dead_types() {
     let src = r#"
-    trait Number {}
-    impl Number for i32 {}
-    impl Number for f64 {}
-    trait Equal {
-        fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
-            false
-        }
+    struct Test<a: prv, m: mem> {
+        test: &a uniq m i32
     }
-    struct Point<T> {
-        x: T,
-        y: T
+    fn foo<m: mem>(a: &uniq m i32) -[cpu.thread]-> () {
+        ()
     }
-    struct Points<T: dty, n: nat, m: mem> {
-        points: [Point<T>; n],
-        special_point: Point<i32>
+    fn test() -[cpu.thread]-> () {
+        let mut x = 42;
+        let mut x2 = x;
+        let mut t = Test { test: &uniq x };
+        foo(t.test);
+        t.test = &uniq x2 //t.test is dead
     }
-    //TODO BorrowIndex is not implemented
-    impl<T, n: nat, m: mem> Points<T, n, m> {
-        fn getFirstPoint<a: prv>(&a shrd cpu.mem self) -[cpu.thread]-> &a shrd cpu.mem Point<T> {
-            &a shrd (*self).points[0]
-        }
-    }
-    // impl<n: nat, m: mem> Point<i32, n, m> {
-    //     fn isFirstPointEqualSpecialPoint(&shrd cpu.mem self) -[cpu.thread]-> bool {
-    //         (&shrd self.getFirstPoint()).eq(&shrd self.special_point)
-    //     }
-    // }
-    // TODO "==" kann man in eq nicht benutzen, da es sich um generische Parameter handelt...
-    // impl<T> Equal for Point<T> where T: Number {
-    //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
-    //         (*self).x == (*other).x && *(self).y == (*other).y
-    //     }
-    // }
-    fn main() -[cpu.thread]-> () {
-    // TODO infer generic params
-    //     let p_special = Point {x: 42, y: 43};
-    //     let p_special2 = Point {x: 42, y: 43};
-    //     let p_special3 = Point {x: 42, y: 43};
-    //     let p11 = Point {x: 42, y: 43};
-    //     let p21 = Point {x: 42.2, y: 43.3};
-    //     let p22 = Point {x: 24.2, y: 34.3}
+    "#;
+    assert_compile!(src);
+}
 
-    //     let points1 = Points { points: [p11], special_point: p_special };
-    //     let points2 = Points { points: [p21, p22], special_point: p_special2 };
-    //     let a = points1.isFirstPointEqualSpecialPoint();
-    //     let b = (&shrd p_special3).eq((&shrd p_special3));
-    //     let c = (&shrd points2).getFirstPoint();
+#[test]
+#[ignore] //Some codgen problems with generating fun_app of lambda_fun
+fn test_lambda2() {
+    let src = r#"
+    struct Array<T, N: nat> {
+        data: [T; N]
+    }
+    impl<T, N: nat> Array<T, N> {
+        fn new_pair(t1: T, t2: T) -[gpu.thread]-> Array<T, 2> {
+            Array {
+                data: [t1, t2]
+            }
+        }
+    }
+    impl<T, N: nat, m: mem> Array<T, N> where T: Number {
+        fn reduce(&shrd m self, zero: T) -[gpu.thread]-> T {
+            let mut result = zero;
+            for_nat i in range(0, N) {
+                result = result + (*self).data[i]
+            };
+            result
+        }
+    }
+    fn main(array_global: &shrd gpu.global Array<i32, 2>) -[gpu.thread]-> () {
+        let red = |vec, zero| -[gpu.thread]-> _ {
+            vec.reduce(zero)
+        };
+        let array2 = Array<_, 2>::new_pair(16, 27);
+        let res = red(array_global, 0);
         ()
     }
     "#;
-    //TODO use lifetimes
-    // let src = r#"
-    // trait Number {}
-    // impl Number for i32 {}
-    // impl Number for f64 {}
-    // trait Equal {
-    //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
-    //         false
-    //     }
-    // }
-    // struct Point<T> {
-    //     x: T,
-    //     y: T
-    // }
-    // struct Points<T: dty, n: nat, m: mem, a: prv> {
-    //     points: [Point<T>, n],
-    //     special_point: &a shrd m Point<i32>
-    // }
-    // impl<T, n: nat, m: mem, a: prv> Points<T, n, m, a> {
-    //     fn getFirstPoint(&shrd cpu.mem self) -[cpu.thread]-> Point<T> {
-    //         self.points[0];
-    //     }
-    // }
-    // impl<n: nat, m: mem, a: prv> Point<i32, n, m, a> {
-    //     fn isFirstPointEqualualSpecialPoint(&shrd cpu.mem self) -[cpu.thread]-> bool {
-    //         (&shrd self.getFirstPoint()).eq(self.special_point)
-    //     }
-    // }
-    // impl<T> Equal for Points<T> where T: Number {
-    //     fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
-    //         *self.x == *other.x && *self.y == *other.x
-    //     }
-    // }
-    // fn main() -[cpu.thread]-> () {
-    //     let p_special = Point {x: 42, y: 43};
-    //     let p11 = Point {x: 42, y: 43};
-    //     let p21 = Point {x: 42.2, y: 43.3};
-    //     let p22 = Point {x: 24.2, y: 34.3}
+    assert_compile!(src);
+}
 
-    //     let points1 = Points { points: [p11], special_point: &shrd p_special };
-    //     let points2 = Points { points: [p21, p22], special_point: &shrd p_special };
-    //     let a = points1.isFirstPointEqualualSpecialPoint();
-    //     let b = (&shrd p_special).eq((&shrd p_special));
-    //     let c = (&shrd points2).getFirstPoint();
-    //     ()
-    // }
-    // "#;
+#[test]
+fn test_different_generic_param_types() {
+    let src = r#"
+    trait Trait<T, m: mem> {
+        fn getX(&uniq m self) -[gpu.thread]-> T;
+    }
+    struct Point<T> where T: Copy {
+        x: T,
+        y: T
+    }
+    struct Points<T: dty, n: nat, m: mem, a: prv> {
+        points: [Point<T>; n],
+        special_point: &a uniq m Point<i32>
+    }
+    impl<T> Copy for Point<T> {}
+    impl<T, m: mem> Trait<T, m> for Point<T> where T: Number {
+        fn getX(&uniq m self) -[gpu.thread]-> T {
+            (*self).x
+        }
+    }
+    impl<T, n: nat, a: prv> Points<T, n, gpu.global, a> where T: Copy {
+        fn newPoint(self, t: T) -[gpu.thread]-> Point<T> {
+            Point {
+                x: t,
+                y: t
+            }
+        }
+    }
+    fn main(p_global1: &uniq gpu.global Point<i32>,
+            p_global2: &uniq gpu.global Point<i32>) -[gpu.thread]-> () {
+        let x = 42;
+        let y = 43;
+        let p1 = Point {x, y};
+        let p2 = Point {x: 42, y};
+        let p3 = Point {x, y: 43};
+        let p4 = Point {x: 42.2, y: 43.3};
+        let points1 = Points { points: [p1, p2, p3], special_point: p_global1 };
+        let x_ret = points1.special_point.getX();
+        let points1 = Points { points: [p1, p2, p3], special_point: p_global2 };
+        let p5 = points1.newPoint(38)
+    }
+    "#;
     assert_compile!(src);
 }
 

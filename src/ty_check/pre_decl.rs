@@ -1,8 +1,7 @@
-use crate::ast::utils::fresh_name;
 use crate::ast::{
     BinOp, BinOpNat, Constraint, DataTy, DataTyKind, Exec, ExprKind, FunctionKind, Ident,
-    IdentKinded, Kind, Memory, Mutability, Nat, Ownership, Path, Pattern, Provenance, ScalarTy,
-    ThreadHierchyTy, TraitMonoType, Ty, TyKind, TypeScheme,
+    IdentKinded, Kind, Memory, Nat, Ownership, Path, Provenance, ScalarTy, ThreadHierchyTy,
+    TraitMonoType, Ty, TyKind, TypeScheme,
 };
 use crate::ty_check::{Expr, PlaceExpr, PlaceExprKind};
 
@@ -45,13 +44,13 @@ pub const NUMBERS_MUL: &str = "__mul_internal";
 pub const NUMBERS_DIV: &str = "__div_internal";
 pub const NUMBERS_EQ: &str = "__eq_internal";
 
-pub fn number_Trait() -> TraitMonoType {
+pub fn number_trait() -> TraitMonoType {
     TraitMonoType {
         name: "Number".to_string(),
         generics: vec![],
     }
 }
-pub fn copy_Trait() -> TraitMonoType {
+pub fn copy_trait() -> TraitMonoType {
     TraitMonoType {
         name: "Copy".to_string(),
         generics: vec![],
@@ -134,7 +133,7 @@ fn number_bin_op_ty() -> TypeScheme {
     let t_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t.clone()))));
     let number_constraint = Constraint {
         param: DataTy::new(DataTyKind::Ident(t)),
-        trait_bound: number_Trait(),
+        trait_bound: number_trait(),
     };
     TypeScheme {
         generic_params: vec![t_kinded],
@@ -156,7 +155,7 @@ fn number_eq_ty() -> TypeScheme {
     let t_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t.clone()))));
     let number_constraint = Constraint {
         param: DataTy::new(DataTyKind::Ident(t)),
-        trait_bound: number_Trait(),
+        trait_bound: number_trait(),
     };
     TypeScheme {
         generic_params: vec![t_kinded],

@@ -402,18 +402,7 @@ impl<'a> Monomorphiser<'a> {
                     Item::ImplDef(impl_def) if impl_def.trait_impl.is_some() => {
                         if impl_def.trait_impl.as_ref().unwrap().name == trait_def.name {
                             //Get typescheme from impl_def
-                            let mut impl_ty_scheme = impl_def.ty();
-                            //Constraints are uninteresting
-                            impl_ty_scheme.constraints.clear();
-                            //Replace generic params with implicit generic params
-                            impl_ty_scheme = impl_ty_scheme.partial_apply(
-                                &impl_ty_scheme
-                                    .generic_params
-                                    .iter()
-                                    .map(|i| i.arg_kinded_implicit())
-                                    .collect::<Vec<_>>()
-                                    .as_slice(),
-                            );
+                            let impl_ty_scheme = impl_def.ty().generic_params_to_implicit();
                             //The type should be a datatype
                             let impl_dty_canidate =
                                 if let TyKind::Data(dty) = impl_ty_scheme.mono_ty.ty {

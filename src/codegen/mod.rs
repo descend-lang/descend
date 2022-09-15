@@ -81,13 +81,6 @@ struct CompilUnit {
 }
 
 impl CompilUnit {
-    fn get_struct_decl(&self, name: &str) -> &desc::StructDecl {
-        self.structs
-            .iter()
-            .find(|struct_decl| struct_decl.name == *name)
-            .expect("Could not find struct definition.")
-    }
-
     fn get_fun_def(&self, name: &str) -> &desc::FunDef {
         self.funs
             .iter()
@@ -2594,6 +2587,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         }) => {
             panic!("Dead types are only for type checking and cannot be generated.")
         }
+        //TODO is this always correct?
         Fn(_, _, _) => cu::Ty::Scalar(cu::ScalarTy::Auto),
         Dead(_) => panic!("Dead types cannot be generated."),
         Data(desc::DataTy {

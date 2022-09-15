@@ -6,7 +6,7 @@ use crate::ty_check::error::CtxError;
 use crate::ty_check::proj_elem_ty;
 use std::collections::{HashMap, HashSet};
 
-use super::unify::{self, constrain, ConstrainMap, Constrainable};
+use super::unify::{constrain, ConstrainMap, Constrainable};
 use super::TyResult;
 
 // TODO introduce proper struct
@@ -872,7 +872,7 @@ impl GlobalCtx {
         implicit_ident_cons: &mut IdentConstraints,
         fun_name: &String,
         dty: &DataTy,
-    ) -> CtxResult<(&FunctionName, ConstrainMap)> {
+    ) -> CtxResult<&FunctionName> {
         //Ty of impl of the searched function
         let ty = Ty::new(TyKind::Data(dty.clone()));
 
@@ -889,20 +889,18 @@ impl GlobalCtx {
                             //if the function_kind of the canidate-function references an impl
                             FunctionKind::ImplFun(impl_dty_canidate, _) => {
                                 //if they can be unified, this is the searched function
-                                if let Ok((constr_map, _)) =
-                                    constrain(&ty, &impl_dty_canidate.mono_ty)
-                                {
-                                    res.push((fun_name_canidate, constr_map))
+                                if constrain(&ty, &impl_dty_canidate.mono_ty).is_ok() {
+                                    res.push(fun_name_canidate)
                                 }
                             }
                             //if the function_kind of the canidate-function references a trait
                             FunctionKind::TraitFun(trait_name) => {
                                 //Check if the passed dty impls the trait
-                                if let Some((constr_map, ident_constraints)) =
+                                if let Some(ident_constraints) =
                                     self.dty_impls_trait(constraint_env, dty.clone(), trait_name)
                                 {
                                     implicit_ident_cons_new = Some(ident_constraints);
-                                    res.push((fun_name_canidate, constr_map));
+                                    res.push(fun_name_canidate);
                                 }
                             }
                             //if this is not a impl- or trait-function, its not the serached function
@@ -929,14 +927,7 @@ impl GlobalCtx {
                 implicit_ident_cons.add_ident_constraints(implicit_ident_cons_new.into_iter());
             }
 
-            let (fun_kind, constr_map) = result.remove(0);
-
-            //Remove irrelevant substitutions from constr_map
-            let mut ty_clone = ty.clone();
-            ty_clone.substitute(&constr_map);
-            let (constr_map, _) = unify::constrain(&ty, &ty_clone).unwrap();
-
-            Ok((fun_kind, constr_map))
+            Ok(result.remove(0))
         }
     }
 
@@ -946,7 +937,7 @@ impl GlobalCtx {
         constraint_env: &ConstraintEnv,
         dty: DataTy,
         trait_name: &String,
-    ) -> Option<(ConstrainMap, IdentConstraints)> {
+    ) -> Option<IdentConstraints> {
         //Get the trait_definition from the context
         let trait_def = self.trait_ty_by_name(trait_name).unwrap();
 
@@ -972,10 +963,11 @@ impl GlobalCtx {
 
         //Check if the constraint if fulfilled
         let mut implicit_ident_cons = IdentConstraints::new();
-        if let Ok(constr_map) =
-            constraint_env.check_constraint(&c_ident_constraint, &mut implicit_ident_cons)
+        if constraint_env
+            .check_constraint(&c_ident_constraint, &mut implicit_ident_cons)
+            .is_ok()
         {
-            Some((constr_map, implicit_ident_cons))
+            Some(implicit_ident_cons)
         } else {
             None
         }

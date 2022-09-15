@@ -15,7 +15,7 @@ use crate::ast::DataTyKind::Scalar;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
-use crate::ty_check::pre_decl::copy_Trait;
+use crate::ty_check::pre_decl::copy_trait;
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
 use crate::SourceCode;
 use core::panic;
@@ -235,10 +235,10 @@ impl TyChecker {
             .collect();
 
         if errs.is_empty() {
-            iter_TyResult_to_TyResult!(compil_unit
-                .item_defs
-                .iter_mut()
-                .map(|item| self.ty_check_item_def(item),))
+            for item in &mut compil_unit.item_defs {
+                self.ty_check_item_def(item)?;
+            }
+            Ok(())
         } else {
             Err(TyError::MultiError(errs))
         }
@@ -785,7 +785,7 @@ impl TyChecker {
                 args,
             )?,
             // TODO remove
-            ExprKind::DepApp(ef, k_args) => {
+            ExprKind::DepApp(_, _) => {
                 unimplemented!()
             }
             ExprKind::StructInst(name, generic_args, inst_exprs) => {
@@ -2396,23 +2396,12 @@ impl TyChecker {
                 self.dty_well_formed(kind_ctx, &ty_ctx, Some(exec), dty)?;
 
                 if fun_kind.is_none() {
-                    let (fun_name, mut constr_map) = self.gl_ctx.fun_name_by_dty(
+                    let fun_name = self.gl_ctx.fun_name_by_dty(
                         &self.constraint_env,
                         &mut self.implicit_ident_cons,
                         &fun_name.name,
                         dty,
                     )?;
-
-                    if !constr_map.is_empty() {
-                        unify::substitute_multiple(
-                            &self.constraint_env,
-                            &mut self.implicit_ident_cons,
-                            &mut constr_map,
-                            std::iter::once(dty),
-                        )?;
-                        ty_ctx.substitute(&constr_map);
-                        self.implicit_ident_substitution.union(constr_map);
-                    }
 
                     fun_name.fun_kind.clone()
                 }
@@ -2507,7 +2496,9 @@ impl TyChecker {
                     let fun_ty = fun_ty?.fresh_generic_param_names();
 
                     //Use implicit identifier as args for impl
-                    let impl_ty_scheme = impl_ty_scheme.fresh_generic_param_names();
+                    let impl_ty_scheme = impl_ty_scheme
+                        .fresh_generic_param_names()
+                        .generic_params_to_implicit();
                     let impl_args = impl_ty_scheme
                         .generic_params
                         .iter()
@@ -2530,7 +2521,11 @@ impl TyChecker {
                     } else {
                         panic!("Found a trait-function with an invalid path")
                     };
-                    let (constr_map, _) = unify::constrain(impl_mono_dty, path_dty).unwrap();
+                    let (constr_map, _) =
+                        unify::constrain(impl_mono_dty, path_dty).expect(&format!(
+                        "Tryied to unify {:#?} with {:#?} but it doesnt work. How is this possible?\
+                         They should be already constraint while determinating function_name!",
+                        impl_mono_dty, path_dty));
                     k_args[0..impl_ty_scheme.generic_params.len()]
                         .iter_mut()
                         .for_each(|arg| arg.substitute(&constr_map));
@@ -3433,7 +3428,7 @@ impl TyChecker {
     fn nat_well_formed(&self, kind_ctx: &KindCtx, nat: &Nat) -> TyResult<()> {
         match nat {
             Nat::Ident(ident) => {
-                if kind_ctx.ident_of_kind_exists(ident, Kind::Nat) {
+                if ident.is_implicit || kind_ctx.ident_of_kind_exists(ident, Kind::Nat) {
                     Ok(())
                 } else {
                     Err(TyError::from(CtxError::KindedIdentNotFound(ident.clone())))
@@ -3777,7 +3772,7 @@ fn is_dty_copyable(
 
     let is_dty_copy_constraint = Constraint {
         param: dty.clone(),
-        trait_bound: copy_Trait(),
+        trait_bound: copy_trait(),
     };
 
     match &dty.dty {

@@ -203,7 +203,7 @@ impl TyError {
                 if let Some(pl_expr_span) = pl_expr.span {
                     let label = format!("expected tuple type but found `{:?}`", ty_kind);
                     let (begin_line, begin_column) = source.get_line_col(pl_expr_span.begin);
-                    let (end_line, end_column) = source.get_line_col(pl_expr_span.end);
+                    let (_, end_column) = source.get_line_col(pl_expr_span.end);
                     let snippet = error::single_line_snippet(
                         source,
                         &label,

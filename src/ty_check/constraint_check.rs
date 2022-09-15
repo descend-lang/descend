@@ -226,7 +226,7 @@ impl ConstraintEnv {
         //Index to run over all type_schemes in theta
         let mut index = 0;
 
-        let copy_trait = pre_decl::copy_Trait();
+        let copy_trait = pre_decl::copy_trait();
 
         //Start with passed constraint as first goal
         goals.push(constraint.clone());
