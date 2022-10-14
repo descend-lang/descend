@@ -1,0 +1,61 @@
+fn reduce_shared_mem<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: prv, codewordlens: prv, out_data: prv, out_idx: prv>(
+    h_source_data: &source_data shrd cpu.mem [i32; gs*bs],
+    h_codewords: &codewords shrd cpu.mem [i32; num_symbols],
+    h_codewordlens: &codewordlens shrd cpu.mem [i32; num_symbols],
+    h_out_data: &out_data shrd cpu.mem [i32; gs*bs],
+    h_out_idx: &out_idx shrd cpu.mem [i32; gs]
+) -[cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let source_data = gpu_alloc_copy(&uniq gpu, h_source_data);
+    let codewords = gpu_alloc_copy(&uniq gpu, h_codewords);
+    let codewordlens = gpu_alloc_copy(&uniq gpu, h_codewordlens);
+
+    let mut out_data = gpu_alloc_copy(&uniq gpu, &shrd *h_out_data);
+    let mut out_idx = gpu_alloc_copy(&uniq gpu, &shrd *h_out_idx);
+    exec::<gs, bs>(
+        &uniq gpu,
+        (&shrd a_array, &uniq out_array),
+        | grid: BlockGrp<gs, ThreadGrp<bs>>,
+          inputs: (&shrd gpu.global [i32; gs*bs],
+                   &shrd gpu.global [i32; num_symbols],
+                   &shrd gpu.global [i32; num_symbols],
+                   &uniq gpu.global [i32; gs*bs]),
+                   &uniq gpu.global [i32; gs])| -[gpu.grid]-> ()
+          {
+            decl {
+                let mut sm_cw: [i32; bs] @ gpu.shared
+            }
+            decl {
+                let mut sm_cwl: [i32; num_symbols] @ gpu.shared
+            }
+            decl {
+                let mut sm_as: [i32; num_symbols] @ gpu.shared
+            }
+
+            let d_groups = group_mut::<bs>(to_view_mut(vec.0));
+            let cw_groups = group_mut::<bs>(to_view_mut(vec.1));
+            let cwl_groups = group_mut::<bs>(to_view_mut(vec.2));
+
+            parfor block in grid with d_group, cw_group, cwl_group from d_groups, cw_groups, cwl_groups {
+                let sm_cw_view = to_view_mut(&uniq sm_cw);
+                let sm_cwl_view = to_view_mut(&uniq sm_cwl);
+
+                parfor _ in block with d_item, cw_item, cwl_item, sm_cw_item, sm_cwl_item from d_group, cw_group, cwl_group, sm_cw_view, sm_cwl_view {
+                    let sm_cw_item = cw_item;
+                    let sm_cwl_item = cwl_item;
+                }
+
+                let sm_as_view = to_view_mut(&uniq sm_as);
+
+                parfor _ in block with d_item, sm_as_item from d_group, sm_as_view {
+                    let val32 = d_item;
+                    let codewordlen = 0;
+
+                    let sm_as_item = codewordlen;
+                }
+
+
+            }
+          }
+}
