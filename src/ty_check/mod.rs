@@ -987,7 +987,6 @@ impl TyChecker {
         for prv in prvs {
             ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping::new(prv))
         }
-        // TODO do we have to check that the prvs in res_ty_ctx have loans now?
         let body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_prvs, ident_exec, body)?;
         let res_ty_ctx = body_ty_ctx.drop_last_frame();
         Ok((res_ty_ctx, body.ty.as_ref().unwrap().as_ref().clone()))
@@ -1134,9 +1133,7 @@ impl TyChecker {
         idx: &Nat,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        if &ident_exec.ty.ty != &ExecTyKind::CpuThread
-            && &ident_exec.ty.ty != &ExecTyKind::GpuThread
-        {
+        if ident_exec.ty.ty != ExecTyKind::CpuThread && ident_exec.ty.ty != ExecTyKind::GpuThread {
             return Err(TyError::String(format!(
                 "Trying to assign to memory from {}.",
                 &ident_exec.ty.ty
