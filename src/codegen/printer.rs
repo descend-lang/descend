@@ -4,7 +4,6 @@ use super::cu_ast::{
 use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
 use std::fmt::Formatter;
 use std::env;
-use std::env::VarError;
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
