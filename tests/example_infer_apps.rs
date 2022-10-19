@@ -50,6 +50,14 @@ fn reduce_shared_mem() -> Res {
 }
 
 #[test]
+fn vlc_encode() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/vlc_encode.desc")?
+    ))
+}
+
+#[test]
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",
