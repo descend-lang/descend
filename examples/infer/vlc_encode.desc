@@ -1,7 +1,7 @@
 fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: prv, codewordlens: prv, out_data: prv, out_idx: prv>(
-    h_source_data: &source_data shrd cpu.mem [i32; gs*bs],
-    h_codewords: &codewords shrd cpu.mem [i32; num_symbols],
-    h_codewordlens: &codewordlens shrd cpu.mem [i32; num_symbols],
+    h_source_data: &source_data shrd cpu.mem [(u8, u8, u8, u8)); gs*bs],
+    h_codewords: &codewords shrd cpu.mem [u32; num_symbols],
+    h_codewordlens: &codewordlens shrd cpu.mem [u32; num_symbols],
     h_out_data: &out_data uniq cpu.mem [i32; gs*bs],
     h_out_idx: &out_idx uniq cpu.mem [i32; gs]
 ) -[cpu.thread]-> () {
@@ -17,19 +17,12 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
         &uniq gpu,
         (&shrd a_array, &uniq out_array),
         | grid: BlockGrp<gs, ThreadGrp<bs>>,
-          inputs: (&shrd gpu.global [i32; gs*bs],
-                   &shrd gpu.global [i32; num_symbols],
-                   &shrd gpu.global [i32; num_symbols],
+          inputs: (&shrd gpu.global [(u8, u8, u8, u8); gs*bs],
+                   &shrd gpu.global [u32; num_symbols],
+                   &shrd gpu.global [u32; num_symbols],
                    &uniq gpu.global [i32; gs*bs]),
                    &uniq gpu.global [i32; gs])| -[gpu.grid]-> ()
           {
-            decl {
-                let mut sm_cw: [i32; bs] @ gpu.shared
-                let mut sm_cwl: [i32; num_symbols] @ gpu.shared
-                let mut sm_as: [i32; num_symbols] @ gpu.shared
-                let mut sm_kcmax: [i32, 1] @ gpu.shared
-            }
-
             let d_groups = group::<bs>(to_view(inputs.0));
             let cw_input = inputs.1;
             let cwl_input = inputs.2;
@@ -37,74 +30,78 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
             let out_data_groups = group_mut::<bs>(to_view_mut(inputs.3));
             let out_idx_groups = group_mut::<1>(to_view_mut(inputs.4));
 
-            parfor block in grid with d_group, cw_group, cwl_group, out_data_group, out_idx_group from d_groups, cw_input, cwl_input, out_data_groups, out_idx_groups {
+            decl {
+                let mut sm_cw: [u32; num_symbols] @ gpu.shared
+                let mut sm_cwl: [u32; num_symbols] @ gpu.shared
+                let mut sm_as: [i32; bs] @ gpu.shared
+                let mut sm_kcmax: [i32, 1] @ gpu.shared
+            } parfor block in grid with d_group, cw_group, cwl_group, out_data_group, out_idx_group from d_groups, cw_input, cwl_input, out_data_groups, out_idx_groups {
+                // create shared memory views
                 let sm_cw_view = to_view_mut(&uniq sm_cw);
                 let sm_cwl_view = to_view_mut(&uniq sm_cwl);
                 let sm_as_view = to_view_mut(&uniq sm_as);
                 let sm_kcmax_view = to_view_mut(&uniq sm_kcmax);
 
-                // CUDA-Zeile 61
+                // Declare register variables for information that is needed throughout the algorithm, but can be most
+                // efficiently calculated some steps before the information is needed (e.g. codeword, codewordlen).
+                // These variables would go out of scope if declared inside "parfor _ in block"!
+                let mut codeword: u64;      // codeword for four symbols that is encoded by a single thread
+                let mut codewordlen: u32;   // length of the codeword that is encoded by a single thread (in bits)
+                let mut kc: u32;            // index of the value in the output array (32 bits per value) where the
+                                            // codeword of the current thread starts
+                let mut startbit: u32;      // bit-index inside of the value in the output array where the codeword of
+                                            // the current thread starts
+
+                // cache the codewords and their lengths (in bits) in shared memory
                 parfor _ in block
-                with d_item, cw_item, cwl_item, sm_cw_item, sm_cwl_item
-                from d_group, cw_group, cwl_group, sm_cw_view, sm_cwl_view {
+                with cw_item, cwl_item, sm_cw_item, sm_cwl_item
+                from cw_group, cwl_group, sm_cw_view, sm_cwl_view {
                     let sm_cw_item = cw_item;
                     let sm_cwl_item = cwl_item;
                 }
 
-                // CUDA-Zeile 64
+                // encode four input symbols per thread
+                // and save the total bit-length of the encoded symbols per thread in shared memory
+                // todo raw pointer needed for access to shared memory?
                 parfor _ in block
-                with d_item, sm_as_item, sm_cw_ptr, sm_cwl_ptr
-                from d_group, sm_as_view, &uniq *sm_cw_view, &uniq *sm_cwl_view {
-                    let val32: u32 = d_item;
-                    let mut cw64: u64 = 0;
-                    let mut codewordlen: u32 = 0;
+                with d_item, sm_as_item
+                from d_group, sm_as_view {
+                    codeword = 0;
+                    codewordlen = 0;
 
-                    let mut tmpbyte: u8 = 0;
-                    let mut tmpcwlen: u8 = 0;
-                    let mut tmpcw32: u32 = 0;
-
-                    let raw_ptr_sm_cw = to_raw_ptr(&uniq *sm_cw_ptr);
-                    let raw_ptr_sm_cwl = to_raw_ptr(&uniq *sm_cwl_ptr);
+                    let mut tmp_d_item_i: u8 = 0;
+                    let mut tmpcwl: u8 = 0;
+                    let mut tmpcw: u32 = 0;
 
                     for_nat i in range(0, 4) {
-                        tmpbyte = (val32>>((3-i)*8)) as u8;
-                        //todo raw pointer location should not be affected by thread id!
-                        let raw_ptr_sm_cw_offset = offset_raw_ptr::<i32>(raw_ptr_sm_cw, tmpbyte);
-                        let raw_ptr_sm_cwl_offset = offset_raw_ptr::<i32>(raw_ptr_sm_cwl, tmpbyte);
-                        unsafe {
-                            tmpcw32 = *raw_ptr_sm_cw_offset;
-                            tmpcwlen = *raw_ptr_sm_cwl_offset;
-                        }
-                        cw64 = (cw64<<tmpcwlen) | tmpcw32;
-                        codewordlen = codewordlen + tmpcwlen;
+                        tmp_d_item_i = d_item.i;
+                        tmpcw = sm_cw[tmp_d_item_i];
+                        tmpcwl = sm_cwl[tmp_d_item_i];
+                        codeword = (codeword<<tmpcwl) | tmpcw;
+                        codewordlen = codewordlen + tmpcwl;
                     }
 
                     let sm_as_item = codewordlen;
                 }
 
-                // CUDA-Zeile 90
-                for_nat d in halved_range(gs/2) {
-                    let (active_threads, _) = split_thread_grp::<d>(block);
+                // calculate prefix sum (scan) of codeword lengths
+                // (required for position of encoded symbols in output)
+                // work-efficient shared memory implementation (optimization possible when using shuffle instructions!)
+                // step 1: up-sweep phase
+                for_nat offset in doubled_range(bs/2) {
+                    let sm_as_tmp_view_1 = group_mut::<offset>(sm_as_view);
+                    let sm_as_tmp_view_2 = transpose_mut(sm_as_tmp_view_1);
+                    let sm_as_tmp_view_3 = sm_as_tmp_view_2.(offset-1);
+                    let sm_as_scan_tuples = group_mut::<2>(sm_as_tmp_view_3);
+                    let (active_threads, _) = split_thread_grp::<(bs/2)/offset>(block);
                     parfor _ in active_threads
-                    with sm_as_ptr
-                    from &uniq *sm_as_view {
-                        let offset = (gs/2)/d;
-                        //todo access to thread-id possible?
-                        let ai: u8 = offset * (2 * thread_id_x + 1) -1;
-                        let bi: u8 = offset * (2 * thread_id_x + 2) -1;
-
-                        let raw_ptr_sm_as = to_raw_ptr(&uniq *sm_as_ptr);
-
-                        //todo raw pointer location should not be affected by thread id!
-                        let raw_ptr_sm_as_offset_ai = offset_raw_ptr::<i32>(raw_ptr_sm_as, ai);
-                        let raw_ptr_sm_as_offset_bi = offset_raw_ptr::<i32>(raw_ptr_sm_as, bi);
-                        unsafe {
-                            *raw_ptr_sm_as_offset_bi = *raw_ptr_sm_as_offset_bi + *raw_ptr_sm_as_offset_ai;
-                        }
+                    with sm_as_scan_tuple
+                    from sm_as_scan_tuples {
+                        sm_as_scan_tuple[1] = sm_as_scan_tuple[0] + sm_as_scan_tuple[1]
                     }
                 }
 
-                // CUDA-Zeile 101
+                // step 2: set last value to zero
                 let split_sm_as = split uniq 1 sm_as_view;
                 parfor _ in split_thread_grp::<1>(block).0
                 with sm_as_last
@@ -112,91 +109,83 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                     sm_as_last = 0;
                 }
 
-                // CUDA-Zeile 105
-                for_nat d in doubled_range(gs/2) {
-                    let (active_threads, _) = split_thread_grp::<d>(block);
+                // step 3: down-sweep phase
+                for_nat offset in halved_range(bs/2) {
+                    let sm_as_tmp_view_1 = group_mut::<offset>(sm_as_view);
+                    let sm_as_tmp_view_2 = transpose_mut(sm_as_tmp_view_1);
+                    let sm_as_tmp_view_3 = sm_as_tmp_view_2.(offset-1);
+                    let sm_as_scan_tuples = group_mut::<2>(sm_as_tmp_view_3);
+                    let (active_threads, _) = split_thread_grp::<(bs/2)/offset>(block);
                     parfor _ in active_threads
-                    with sm_as_ptr
-                    from &uniq *sm_as_view {
-                        let offset = (gs / 2) / d;
-                        //todo access to thread-id possible?
-                        let mut ai: u8 = offset * (2 * thread_id_x + 1) - 1;
-                        let mut bi: u8 = offset * (2 * thread_id_x + 2) - 1;
-
-                        let raw_ptr_sm_as = to_raw_ptr(&uniq *sm_as_ptr);
-
-                        //todo raw pointer location should not be affected by thread id!
-                        let raw_ptr_sm_as_offset_ai = offset_raw_ptr::<i32>(raw_ptr_sm_as, ai);
-                        let raw_ptr_sm_as_offset_bi = offset_raw_ptr::<i32>(raw_ptr_sm_as, bi);
-                        unsafe {
-                            let tmp_ai = *raw_ptr_sm_as_offset_ai;
-                            let *raw_ptr_sm_as_offset_ai = *raw_ptr_sm_as_offset_bi;
-                            let *raw_ptr_sm_as_offset_bi = *raw_ptr_sm_as_offset_bi + tmp_ai;
-                        }
+                    with sm_as_scan_tuple
+                    from sm_as_scan_tuples {
+                        sm_as_scan_tuple[1] = sm_as_scan_tuple[0] + sm_as_scan_tuple[1]
                     }
                 }
 
-                // CUDA-Zeile 119
-                let split_sm_kcmax = split uniq 1 sm_kcmax_view;
+                // output the bit-index after the last codeword of the block for every block (out_idx_item)
+                // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)
+                let split_sm_kcmax = group_mut::<1>(sm_kcmax_view);
                 parfor _ in split_thread_grp::<1>(block).(gs-1)
                 with sm_as_item, out_idx_item, sm_kcmax_item
                 from sm_as_view, out_idx_group, split_sm_kcmax.0 {
-                    //todo codewordlen is out of scope!
                     out_idx_item = sm_as_item + codewordlen;
                     sm_kcmax_item = (sm_as_item + codewordlen) / 32;
                 }
 
-                // CUDA-Zeile 124
+                // kc =       index of the value in the output array (32 bits per value) where the codeword of the
+                //            current thread starts
+                // startbit = bit-index inside of the value in the output array where the codeword of the current thread
+                //            starts
+                // set all values in sm_as to 0 to use it for storing the encoded symbols for every block
                 parfor _ in block
                 with sm_as_item
                 from sm_as_view {
-                    let mut kc: u32 = sm_as_item / 32;
-                    let mut startbit: u32 = sm_as_item % 32;
+                    kc = sm_as_item / 32;
+                    startbit = sm_as_item % 32;
                     sm_as_item = 0U;
                 }
 
-                // CUDA-Zeile 130
+                // combine the encoded symbols of every thread in a block inside shared memory
+                // encoded symbols of a thread can span across 3 32-bit values in shared memory!
+                // todo atomics are required since multiple threads need access to single values in shared memory!
                 parfor _ in block
                 with sm_as_ptr
                 from &uniq *sm_as_view {
                     let raw_ptr_sm_as = to_raw_ptr(&uniq *sm_as_ptr);
 
-                    //todo cw64, codewordlen, kc and startbit are out of scope!
-
-                    // Part 1
+                    // Part 1 (first value in shared memory)
                     let mut wrbits: u32 = codewordlen > (32-startbit)? (32-startbit): codewordlen;
-                    let mut tmpcw32: u32 = (cw64>>(codewordlen - wrbits)) as u32;
+                    let mut tmpcw: u32 = (codeword>>(codewordlen - wrbits)) as u32;
                     //todo raw pointer location should not be affected by thread id!
                     let raw_ptr_sm_as_offset_p1 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc);
-                    //todo atomics need to be added to descend
                     unsafe {
-                        atomic_or(raw_ptr_sm_as_offset_p1, tmpcw32<<(32-startbit-wrbits));
+                        atomic_or(raw_ptr_sm_as_offset_p1, tmpcw<<(32-startbit-wrbits));
                     }
                     codewordlen = codewordlen - wrbits;
 
-                    // Part 2
+                    // Part 2 (second value in shared memory)
                     wrbits = codewordlen > 32 ? 32: codewordlen;
-                    tmpcw32 = (cw64>>(codewordlen - wrbits)) & ((1<<wrbits)-1) as u32;
+                    tmpcw = (codeword>>(codewordlen - wrbits)) & ((1<<wrbits)-1) as u32;
                     //todo raw pointer location should not be affected by thread id!
                     let raw_ptr_sm_as_offset_p2 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 1);
-                    //todo atomics need to be added to descend
                     unsafe {
-                        atomic_or(raw_ptr_sm_as_offset_p2, tmpcw32<<(32-wrbits));
+                        atomic_or(raw_ptr_sm_as_offset_p2, tmpcw<<(32-wrbits));
                     }
                     codewordlen = codewordlen - wrbits;
 
-                    // Part 3
-                    tmpcw32 = (cw64 & ((1<<codewordlen)-1)) as u32;
+                    // Part 3 (third value in shared memory)
+                    tmpcw = (codeword & ((1<<codewordlen)-1)) as u32;
                     //todo raw pointer location should not be affected by thread id!
                     let raw_ptr_sm_as_offset_p3 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 2);
-                    //todo atomics need to be added to descend
                     unsafe {
-                        atomic_or(raw_ptr_sm_as_offset_p3, tmpcw32<<(32-codewordlen));
+                        atomic_or(raw_ptr_sm_as_offset_p3, tmpcw<<(32-codewordlen));
                     }
 
                 }
 
-                // CUDA-Zeile 158
+                // write block solution to global memory output
+                // todo use sm_kcmax for threadfence!
                 parfor _ in block
                 with out_data_item, sm_as_item
                 from out_data_group, sm_as_view {
