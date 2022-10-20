@@ -1424,7 +1424,10 @@ impl TyChecker {
             | BinOp::Div
             | BinOp::Mod
             | BinOp::And
-            | BinOp::Or => lhs_ty.clone(),
+            | BinOp::Or
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::BitOr => lhs_ty.clone(),
             BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Neq => Ty::new(
                 TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::Bool))),
             ),

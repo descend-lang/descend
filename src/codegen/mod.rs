@@ -1612,6 +1612,9 @@ fn gen_bin_op_expr(
             desc::BinOp::Gt => cu::BinOp::Gt,
             desc::BinOp::Ge => cu::BinOp::Ge,
             desc::BinOp::Neq => cu::BinOp::Neq,
+            desc::BinOp::Shl => cu::BinOp::Shl,
+            desc::BinOp::Shr => cu::BinOp::Shr,
+            desc::BinOp::BitOr => cu::BinOp::BitOr,
         };
         use CheckedExpr as ce;
         match (

@@ -136,6 +136,9 @@ pub(super) enum BinOp {
     Gt,
     Ge,
     Neq,
+    Shl,
+    Shr,
+    BitOr,
 }
 
 pub(super) enum TemplParam {

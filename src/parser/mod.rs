@@ -256,6 +256,11 @@ peg::parser! {
             x:(@) _ ">" _ y:@ { utils::make_binary(BinOp::Gt, x, y) }
             x:(@) _ ">=" _ y:@ { utils::make_binary(BinOp::Ge, x, y) }
             --
+            x:(@) _ "|" _ y:@ { utils::make_binary(BinOp::BitOr, x, y) }
+            --
+            x:(@) _ "<<" _ y:@ { utils::make_binary(BinOp::Shl, x, y) }
+            x:(@) _ ">>" _ y:@ { utils::make_binary(BinOp::Shr, x, y) }
+            --
             x:(@) _ "+" _ y:@ { utils::make_binary(BinOp::Add, x, y) }
             x:(@) _ "-" _ y:@ { utils::make_binary(BinOp::Sub, x, y) }
             --

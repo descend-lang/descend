@@ -470,6 +470,9 @@ pub enum BinOp {
     Gt,
     Ge,
     Neq,
+    Shl,
+    Shr,
+    BitOr,
 }
 
 impl fmt::Display for BinOp {
@@ -488,6 +491,9 @@ impl fmt::Display for BinOp {
             Self::Gt => ">",
             Self::Ge => ">=",
             Self::Neq => "!=",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
+            Self::BitOr => "|",
         };
         write!(f, "{}", str)
     }

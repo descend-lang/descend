@@ -286,6 +286,9 @@ impl std::fmt::Display for BinOp {
             Self::Gt => ">",
             Self::Ge => ">=",
             Self::Neq => "!=",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
+            Self::BitOr => "|",
         };
         write!(f, "{}", str)
     }

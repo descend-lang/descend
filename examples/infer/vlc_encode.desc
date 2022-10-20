@@ -74,7 +74,7 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                     let mut tmpcw: u32 = 0;
 
                     for_nat i in range(0, 4) {
-                        tmp_d_item_i = d_item.0;
+                        tmp_d_item_i = d_item.i;
                         tmpcw = sm_cw[tmp_d_item_i];
                         tmpcwl = sm_cwl[tmp_d_item_i];
                         codeword = (codeword<<tmpcwl) | tmpcw;
@@ -106,7 +106,7 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                 parfor _ in split_thread_grp::<1>(block).0
                 with sm_as_last
                 from split_sm_as.(gs-1) {
-                    sm_as_last = 0;
+                    sm_as_last = 0
                 };
 
                 // step 3: down-sweep phase
