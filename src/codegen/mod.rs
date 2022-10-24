@@ -16,20 +16,25 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
-    //Transform all impls and traits to global functions with unique names
-    //and resolves all constraints from the functions
+    // Transform all impls and traits to global functions with unique names
+    // and resolves all constraints from the functions
     let (structs, funs) =
         monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs.clone());
     let compil_unit = CompilUnit { structs, funs };
 
-    //Vector of struct declarations / struct definitions
+    // Vector of struct forward declarations / struct declarations
     let (struct_decls, struct_defs) = compil_unit
         .structs
         .iter()
-        .map(|struct_decl| (gen_struct_decl(struct_decl), gen_struct_def(struct_decl)))
+        .map(|struct_decl| {
+            (
+                gen_struct_forward_decl(struct_decl),
+                gen_struct_decl(struct_decl),
+            )
+        })
         .unzip::<_, _, Vec<Item>, Vec<Item>>();
 
-    //Vector of function declarations / function definitions
+    // Vector of function forward declarations / function definitions
     let (fun_decls, fun_defs) = compil_unit
         .funs
         .iter()
@@ -54,7 +59,7 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         })
         .unzip::<_, _, Vec<Item>, Vec<Item>>();
 
-    //Create cuda-program
+    // Create CUDA-program
     let cu_program = std::iter::once(cu::Item::Include("descend.cuh".to_string()))
         .chain(std::iter::once(cu::Item::EmptyLine))
         .chain(struct_decls)
@@ -65,7 +70,7 @@ pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         .chain(std::iter::once(cu::Item::EmptyLine))
         .chain(fun_defs)
         .collect::<cu::CuProgram>();
-    //Print generated cuda-program
+    // Print generated cuda-program
     printer::print(&cu_program)
 }
 
@@ -81,6 +86,8 @@ struct CompilUnit {
 }
 
 impl CompilUnit {
+    /// Returns the Descend function definition
+    /// * `name` - name of the function which should be returned
     fn get_fun_def(&self, name: &str) -> &desc::FunDef {
         self.funs
             .iter()
@@ -188,31 +195,31 @@ impl CheckedExpr {
     }
 }
 
-fn gen_struct_decl(struct_decl: &desc::StructDecl) -> cu::Item {
-    cu::Item::StructDecl {
+fn gen_struct_forward_decl(struct_decl: &desc::StructDecl) -> cu::Item {
+    cu::Item::StructForwardDecl {
         name: struct_decl.name.clone(),
         templ_params: gen_templ_params(&struct_decl.generic_params),
     }
 }
 
-fn gen_struct_def(struct_decl: &desc::StructDecl) -> cu::Item {
+fn gen_struct_decl(struct_decl: &desc::StructDecl) -> cu::Item {
     let desc::StructDecl {
         name,
         generic_params,
         constraints: _,
-        decls,
+        struct_fields,
     } = struct_decl;
 
-    cu::Item::StructDef {
+    cu::Item::StructDecl {
         name: name.clone(),
         templ_params: gen_templ_params(generic_params),
-        attributes: decls
+        attributes: struct_fields
             .iter()
             .map(|struct_field| {
                 (
                     struct_field.name.clone(),
                     gen_ty(
-                        &desc::TyKind::Data(struct_field.ty.clone()),
+                        &desc::TyKind::Data(struct_field.dty.clone()),
                         desc::Mutability::Mut,
                     ),
                 )
@@ -233,7 +240,7 @@ fn gen_fun_decl(fun_def: &desc::FunDef) -> cu::Item {
         body_expr: _,
     } = fun_def;
 
-    cu::Item::FunDecl {
+    cu::Item::FunForwardDecl {
         name: name.clone(),
         templ_params: gen_templ_params(generic_params),
         params: gen_param_decls(params),
@@ -1561,12 +1568,18 @@ fn gen_expr(
                 match ident.name.as_str() {
                     crate::ty_check::pre_decl::NUMBERS_ADD
                     | crate::ty_check::pre_decl::NUMBERS_SUB
+                    | crate::ty_check::pre_decl::NUMBERS_MUL
                     | crate::ty_check::pre_decl::NUMBERS_DIV
+                    | crate::ty_check::pre_decl::NUMBERS_REM_I32
+                    | crate::ty_check::pre_decl::NUMBERS_REM_U32
                     | crate::ty_check::pre_decl::NUMBERS_EQ => {
                         let op = match ident.name.as_str() {
                             crate::ty_check::pre_decl::NUMBERS_ADD => desc::BinOp::Add,
                             crate::ty_check::pre_decl::NUMBERS_SUB => desc::BinOp::Sub,
+                            crate::ty_check::pre_decl::NUMBERS_MUL => desc::BinOp::Mul,
                             crate::ty_check::pre_decl::NUMBERS_DIV => desc::BinOp::Div,
+                            crate::ty_check::pre_decl::NUMBERS_REM_I32 => desc::BinOp::Mod,
+                            crate::ty_check::pre_decl::NUMBERS_REM_U32 => desc::BinOp::Mod,
                             crate::ty_check::pre_decl::NUMBERS_EQ => desc::BinOp::Eq,
                             _ => panic!("This can not happen"),
                         };

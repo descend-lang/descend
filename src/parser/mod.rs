@@ -44,18 +44,23 @@ impl<'a> Parser<'a> {
     }
 }
 
-//Visit the parsed ast and make a few adjustments
+/// Visit the parsed AST and make a few adjustments:
+/// * Replace unkinded args by kinded args
+/// * Distinguish between kinded identifier and struct names
+/// * Initialize struct_fields of struct-datatypes
+/// * Remove syntatic sugar for "Self" in impls
+/// * Check if struct-definitions are not cyclic
 fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     struct Visitor {
-        //List with all name of structs and corresponding StructDecl
+        /// List with all name of structs and corresponding StructDecl
         structs: BTreeMap<String, StructDecl>,
-        //Ident_kinded which are currently in scope
-        ident_kinded_in_scope: Vec<(String, Kind)>,
-        //datatype of impl if the visitor is visiting items inside this impl
+        /// Kinded identifier which are currently in scope
+        kinded_identifier_in_scope: Vec<(String, Kind)>,
+        /// Datatype of impl if the visitor is visiting items inside an impl
         impl_dty_in_scope: Option<DataTy>,
-        //List of nested visited structs to prevent endless loops
-        current_struct_chain: Vec<String>,
-        //List with errors wich occured
+        /// List of nested visited structs to prevent endless loops
+        struct_visit_stack: Vec<String>,
+        /// List with errors which occured
         errs: Vec<String>,
     }
 
@@ -70,39 +75,39 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                         None
                     }
                 })),
-                ident_kinded_in_scope: Vec::with_capacity(32),
+                kinded_identifier_in_scope: Vec::new(),
                 impl_dty_in_scope: None,
-                current_struct_chain: Vec::with_capacity(8),
+                struct_visit_stack: Vec::new(),
                 errs: vec![],
             }
         }
 
-        //Add multiple ident_kinded to list of ident_kinded which are currently in scope
-        fn add_generics(&mut self, generics: &Vec<IdentKinded>) {
-            self.add_ident_kinded(
+        /// Add multiple kinded identifier to the list of kinded identifier which are currently in scope
+        fn add_idents_kinded(&mut self, generics: &Vec<IdentKinded>) {
+            self.add_kinded_idents(
                 generics
                     .iter()
                     .map(|ident_kinded| (ident_kinded.ident.name.clone(), ident_kinded.kind)),
             );
         }
 
-        //Add pair of name and kind to list of ident_kinded which are currently in scope
-        fn add_ident_kinded<I>(&mut self, ident_kinded: I)
+        /// Add pairs consisting of name and kind to the list of kinded identifier which are currently in scope
+        fn add_kinded_idents<I>(&mut self, ident_kinded: I)
         where
             I: Iterator<Item = (String, Kind)>,
         {
-            self.ident_kinded_in_scope.extend(ident_kinded);
+            self.kinded_identifier_in_scope.extend(ident_kinded);
         }
 
-        //Remove the last n added ident_kinded from list of ident_kinded which are currently in scope
-        fn pop_ident_kinded(&mut self, n: usize) {
-            self.ident_kinded_in_scope
-                .truncate(self.ident_kinded_in_scope.len() - n);
+        /// Remove the last n added ident_kinded from the list of kinded identifier which are currently in scope
+        fn pop_kinded_idents(&mut self, n: usize) {
+            self.kinded_identifier_in_scope
+                .truncate(self.kinded_identifier_in_scope.len() - n);
         }
 
-        //Determinate if a ident is currently in scope
-        fn contains_ident_kinded(&self, name: &str) -> bool {
-            self.ident_kinded_in_scope
+        /// Determinate if an kinded identifier is currently in scope
+        fn contains_kinded_ident(&self, name: &str) -> bool {
+            self.kinded_identifier_in_scope
                 .iter()
                 .rev()
                 .find(|(generic_name, _)| generic_name == name)
@@ -110,11 +115,11 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         }
     }
 
-    //Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
+    /// Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
     fn replace_arg_kinded_kind(visitor: &mut Visitor, arg: &mut ArgKinded) {
         if let ArgKinded::Ident(ident) = arg {
             let ident_kind = visitor
-                .ident_kinded_in_scope
+                .kinded_identifier_in_scope
                 .iter()
                 .rev()
                 .find(|(name, _)| *name == ident.name);
@@ -154,7 +159,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         }
     }
 
-    //Replace the special ident "Self" in impls with the type of the impl
+    /// Replace "Self" in impls with the type of the impl
     fn replace_self_in_impls(visitor: &Visitor, dty: &mut DataTy) {
         if let Some(impl_dty_in_scope) = &visitor.impl_dty_in_scope {
             if let DataTyKind::Ident(ident) = &dty.dty {
@@ -165,11 +170,11 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         }
     }
 
-    //Distinguish between type variables and struct names without generic params
+    /// Distinguish between type variables and struct names without generic params
     fn replace_tyidents_struct_names(visitor: &mut Visitor, dty: &mut DataTy) {
         if let DataTyKind::Ident(name) = &mut dty.dty {
             let struct_decl = visitor.structs.get(&name.name);
-            let is_type_ident = visitor.contains_ident_kinded(&name.name);
+            let is_type_ident = visitor.contains_kinded_ident(&name.name);
 
             match (struct_decl.is_some(), is_type_ident) {
                 (true, false) => {
@@ -186,10 +191,11 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         }
     }
 
-    //Initialize attributes list of struct_types
-    fn initialize_struct_attribute_lists(visitor: &mut Visitor, dty: &mut DataTy) {
+    /// Initialize struct_fields of struct-datatypes
+    fn initialize_struct_fields(visitor: &mut Visitor, dty: &mut DataTy) {
         if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
-            if struct_ty.attributes.len() == 0 {
+            //if the struct_fields arent initialized
+            if struct_ty.struct_fields.len() == 0 {
                 if let Some(struct_decl) = visitor.structs.get(&struct_ty.name) {
                     let inst_struct_mono = struct_decl
                         .ty()
@@ -197,7 +203,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                         .mono_ty;
                     if let TyKind::Data(dataty) = inst_struct_mono.ty {
                         if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
-                            struct_ty.attributes = inst_struct_ty.attributes;
+                            struct_ty.struct_fields = inst_struct_ty.struct_fields;
                         } else {
                             panic!("Instantiated struct def should have struct type")
                         }
@@ -221,43 +227,43 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                     self.visit_fun_def(fun_def);
                 }
                 Item::StructDecl(struct_decl) => {
-                    self.add_generics(&struct_decl.generic_params);
+                    self.add_idents_kinded(&struct_decl.generic_params);
                     walk_struct_decl(self, struct_decl);
-                    self.ident_kinded_in_scope.clear();
+                    self.kinded_identifier_in_scope.clear();
                 }
                 Item::TraitDef(trait_def) => {
-                    self.add_generics(&trait_def.generic_params);
+                    self.add_idents_kinded(&trait_def.generic_params);
                     walk_trait_def(self, trait_def);
-                    self.ident_kinded_in_scope.clear();
+                    self.kinded_identifier_in_scope.clear();
                 }
                 Item::ImplDef(impl_def) => {
-                    self.add_generics(&impl_def.generic_params);
+                    self.add_idents_kinded(&impl_def.generic_params);
                     self.impl_dty_in_scope = Some(impl_def.dty.clone());
                     walk_impl_def(self, impl_def);
                     self.impl_dty_in_scope = None;
-                    self.ident_kinded_in_scope.clear();
+                    self.kinded_identifier_in_scope.clear();
                 }
             }
         }
 
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
-            self.add_generics(&fun_def.generic_params);
+            self.add_idents_kinded(&fun_def.generic_params);
             walk_fun_def(self, fun_def);
-            self.pop_ident_kinded(fun_def.generic_params.len());
+            self.pop_kinded_idents(fun_def.generic_params.len());
         }
 
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
                 ExprKind::Block(prvs, body) => {
-                    self.add_ident_kinded(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
+                    self.add_kinded_idents(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
                     self.visit_expr(body);
-                    self.pop_ident_kinded(prvs.len());
+                    self.pop_kinded_idents(prvs.len());
                 }
                 ExprKind::ForNat(ident, _, body) => {
-                    self.ident_kinded_in_scope
+                    self.kinded_identifier_in_scope
                         .push((ident.name.clone(), Kind::Nat));
                     self.visit_expr(body);
-                    self.ident_kinded_in_scope.pop();
+                    self.kinded_identifier_in_scope.pop();
                 }
                 _ => {
                     walk_expr(self, expr);
@@ -268,21 +274,21 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         fn visit_dty(&mut self, dty: &mut DataTy) {
             replace_self_in_impls(self, dty);
             replace_tyidents_struct_names(self, dty);
-            initialize_struct_attribute_lists(self, dty);
+            initialize_struct_fields(self, dty);
 
             match &dty.dty {
                 //This prevents infinite loops when visit cylic struct definitions
                 DataTyKind::Struct(struct_dty) => {
-                    if !self.current_struct_chain.contains(&struct_dty.name) {
-                        self.current_struct_chain.push(struct_dty.name.clone());
+                    if !self.struct_visit_stack.contains(&struct_dty.name) {
+                        self.struct_visit_stack.push(struct_dty.name.clone());
                         walk_dty(self, dty);
-                        self.current_struct_chain.pop();
+                        self.struct_visit_stack.pop();
                     } else {
                         self.errs.push(format!(
                             "struct \"{}\" has cylic definition. Multiple visits of struct \"{}\" while visiting attributes of struct \"{}\"",
-                            self.current_struct_chain.first().unwrap(),
+                            self.struct_visit_stack.first().unwrap(),
                             struct_dty.name,
-                            self.current_struct_chain.first().unwrap(),
+                            self.struct_visit_stack.first().unwrap(),
                         ))
                     }
                 }
@@ -423,7 +429,7 @@ peg::parser! {
                             / ";" {None}) _ {
                 let generic_params = g.unwrap_or(vec![]);
                 let constraints = w.unwrap_or(vec![]);
-                let decls: Vec<StructField> = match struct_fields {
+                let struct_fields: Vec<StructField> = match struct_fields {
                     Some(struct_fields) => match struct_fields {Some(s) => s, None => vec![]},
                     None => vec![]
                 };
@@ -431,21 +437,21 @@ peg::parser! {
                     name,
                     generic_params,
                     constraints,
-                    decls,
+                    struct_fields,
                 }
             }
 
         pub(crate) rule trait_def() -> TraitDef
             = "trait" __ name:identifier() _ g:generic_params()?
             supertraits:(_ ":" _ t:trait_mono_ty() **<1,> (_ "+" _) {t})?
-            _ w:where_clause()? _ "{" _ decls:(_ i:associated_item() ** _ {i}) _ "}"   {
+            _ w:where_clause()? _ "{" _ ass_items:(_ i:associated_item() ** _ {i}) _ "}"   {
                 let generic_params = g.unwrap_or(vec![]);
                 let mut constraints = w.unwrap_or(vec![]);
                 TraitDef {
                     name,
                     generic_params,
                     constraints,
-                    decls,
+                    ass_items,
                     supertraits: supertraits.unwrap_or(vec![])
                 }
             }
@@ -453,14 +459,14 @@ peg::parser! {
         pub(crate) rule impl_def() -> ImplDef
             = "impl" _ g:generic_params()? _ trait_impl:(t:trait_mono_ty() __ "for" __ { t })?
             dty:dty() _ w:where_clause()? _ "{" _
-            decls:(_ i:associated_item() ** _ {i}) _ "}" {
+            ass_items:(_ i:associated_item() ** _ {i}) _ "}" {
                 match dty.dty {
                     DataTyKind::Ident(name) if name.name == "Self" => panic!("impls for ident \"Self\" are not allowed"),
                     _ => (),
                 }
                 let generic_params = g.unwrap_or(vec![]);
                 let constraints = w.unwrap_or(vec![]);
-                ImplDef { dty, generic_params, constraints, decls, trait_impl}
+                ImplDef { dty, generic_params, constraints, ass_items, trait_impl}
         }
 
         rule associated_item() -> AssociatedItem
@@ -474,12 +480,12 @@ peg::parser! {
 
         rule trait_mono_ty() -> TraitMonoType
             = name:identifier() generic_args:(_ "<" _ generic_args:(k:kind_argument() ** (_ "," _) {k}) _ ">" { generic_args })? {
-                TraitMonoType { name, generics: generic_args.unwrap_or(vec![]) }
+                TraitMonoType { name, generic_args: generic_args.unwrap_or(vec![]) }
             }
 
         rule struct_field() -> StructField
-            = name:identifier() _ ":" _ ty:dty() {
-                StructField {name, ty}
+            = name:identifier() _ ":" _ dty:dty() {
+                StructField {name, dty}
         }
 
         rule generic_params() -> Vec<IdentKinded>
@@ -987,7 +993,7 @@ peg::parser! {
             / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
             / name:identifier() _ "<" _ params:(k:kind_argument() ** (_ "," _) {k}) _ ">"
                 { DataTyKind::Struct( StructDataType{
-                    name, attributes: vec![], generic_args: params, })}
+                    name, struct_fields: vec![], generic_args: params, })}
             // this could be also a structType. That is decided later
             / name:ident() { DataTyKind::Ident(name) }
             / "Self" { DataTyKind::Ident(Ident::new("Self")) }
@@ -2446,7 +2452,6 @@ mod tests {
             T::eq(t);
             t.eq()
         }
-
         "#;
         let result = descend::compil_unit(src)
             .expect("Cannot parse compilation unit with different function calls");
@@ -2458,18 +2463,13 @@ mod tests {
         let src = "struct Test ;";
         let result = descend::struct_decl(src).expect("Cannot parse empty struct");
 
-        let name = String::from("Test");
-        let generic_params: Vec<IdentKinded> = vec![];
-        let constraints: Vec<Constraint> = vec![];
-        let decls: Vec<StructField> = vec![];
-
         assert_eq!(
             result,
             StructDecl {
-                name,
-                generic_params,
-                constraints,
-                decls
+                name: String::from("Test"),
+                generic_params: vec![],
+                constraints: vec![],
+                struct_fields: vec![],
             }
         );
     }
@@ -2479,18 +2479,13 @@ mod tests {
         let src = "struct Test { }";
         let result = descend::struct_decl(src).expect("Cannot parse empty struct");
 
-        let name = String::from("Test");
-        let generic_params: Vec<IdentKinded> = vec![];
-        let constraints: Vec<Constraint> = vec![];
-        let decls: Vec<StructField> = vec![];
-
         assert_eq!(
             result,
             StructDecl {
-                name,
-                generic_params,
-                constraints,
-                decls
+                name: String::from("Test"),
+                generic_params: vec![],
+                constraints: vec![],
+                struct_fields: vec![],
             }
         )
     }
@@ -2500,30 +2495,22 @@ mod tests {
         let src = "struct Test { a: i32, b: f32 }";
         let result = descend::struct_decl(src).expect("Cannot parse struct");
 
-        let name = String::from("Test");
-        let generic_params: Vec<IdentKinded> = vec![];
-        let constraints: Vec<Constraint> = vec![];
-        let name_a = String::from("a");
-        let name_b = String::from("b");
-        let ty_a = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
-        let ty_b = DataTy::new(DataTyKind::Scalar(ScalarTy::F32));
-        let field1 = StructField {
-            name: name_a,
-            ty: ty_a,
-        };
-        let field2 = StructField {
-            name: name_b,
-            ty: ty_b,
-        };
-        let decls: Vec<StructField> = vec![field1, field2];
-
         assert_eq!(
             result,
             StructDecl {
-                name,
-                generic_params,
-                constraints,
-                decls
+                name: String::from("Test"),
+                generic_params: vec![],
+                constraints: vec![],
+                struct_fields: vec![
+                    StructField {
+                        name: String::from("a"),
+                        dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                    },
+                    StructField {
+                        name: String::from("b"),
+                        dty: DataTy::new(DataTyKind::Scalar(ScalarTy::F32)),
+                    }
+                ]
             }
         );
     }
@@ -2533,32 +2520,31 @@ mod tests {
         let src = "struct Test<T: dty, Q: dty> where Q:Number { }";
         let result = descend::struct_decl(src).expect("Cannot parse empty struct with generics");
 
-        let name = String::from("Test");
-        let gen_param1 = Ident::with_span(String::from("T"), Span::new(12, 13));
-        let gen_param2 = Ident::with_span(String::from("Q"), Span::new(20, 21));
-        let generic_params: Vec<IdentKinded> = vec![
-            IdentKinded::new(&gen_param1, Kind::DataTy),
-            IdentKinded::new(&gen_param2, Kind::DataTy),
-        ];
-        let constraints: Vec<Constraint> = vec![Constraint {
-            param: DataTy::with_span(
-                DataTyKind::Ident(Ident::with_span(String::from("Q"), Span::new(34, 35))),
-                Span::new(32, 33),
-            ),
-            trait_bound: TraitMonoType {
-                name: String::from("Number"),
-                generics: vec![],
-            },
-        }];
-        let decls: Vec<StructField> = vec![];
-
         assert_eq!(
             result,
             StructDecl {
-                name,
-                generic_params,
-                constraints,
-                decls
+                name: String::from("Test"),
+                generic_params: vec![
+                    IdentKinded::new(
+                        &Ident::with_span(String::from("T"), Span::new(12, 13)),
+                        Kind::DataTy,
+                    ),
+                    IdentKinded::new(
+                        &Ident::with_span(String::from("Q"), Span::new(20, 21)),
+                        Kind::DataTy,
+                    ),
+                ],
+                constraints: vec![Constraint {
+                    param: DataTy::with_span(
+                        DataTyKind::Ident(Ident::with_span(String::from("Q"), Span::new(34, 35))),
+                        Span::new(32, 33),
+                    ),
+                    trait_bound: TraitMonoType {
+                        name: String::from("Number"),
+                        generic_args: vec![],
+                    },
+                }],
+                struct_fields: vec![]
             }
         );
     }
@@ -2573,56 +2559,51 @@ mod tests {
         }"#;
         let result = descend::trait_def(src).expect("Cannot parse trait");
 
-        assert_eq!(result.decls.len(), 2);
-        let params1 = match &result.decls[0] {
+        assert_eq!(result.ass_items.len(), 2);
+        let params1 = match &result.ass_items[0] {
             AssociatedItem::FunDecl(fun_decl) => fun_decl.param_decls.clone(),
             _ => vec![],
         };
-        let params2 = match &result.decls[1] {
+        let params2 = match &result.ass_items[1] {
             AssociatedItem::FunDef(fun_decl) => fun_decl.param_decls.clone(),
             _ => vec![],
         };
 
-        let name = String::from("Eq");
-        let generic_params: Vec<IdentKinded> = vec![];
-        let constraints: Vec<Constraint> = vec![];
-        let decls: Vec<AssociatedItem> = vec![
-            AssociatedItem::FunDecl(FunDecl {
-                name: String::from("eq"),
-                generic_params: vec![],
-                constraints: vec![],
-                param_decls: params1,
-                ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
-                exec: Exec::CpuThread,
-                prv_rels: vec![],
-            }),
-            AssociatedItem::FunDef(FunDef {
-                name: String::from("eq2"),
-                generic_params: vec![],
-                constraints: vec![],
-                param_decls: params2,
-                ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
-                exec: Exec::CpuThread,
-                prv_rels: vec![],
-                body_expr: Expr::new(ExprKind::Block(
-                    vec![],
-                    Box::new(Expr::with_type(
-                        ExprKind::Lit(Lit::Bool(false)),
-                        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::Bool,
-                        )))),
-                    )),
-                )),
-            }),
-        ];
-
         assert_eq!(
             result,
             TraitDef {
-                name,
-                generic_params,
-                constraints,
-                decls,
+                name: String::from("Eq"),
+                generic_params: vec![],
+                constraints: vec![],
+                ass_items: vec![
+                    AssociatedItem::FunDecl(FunDecl {
+                        name: String::from("eq"),
+                        generic_params: vec![],
+                        constraints: vec![],
+                        param_decls: params1,
+                        ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                        exec: Exec::CpuThread,
+                        prv_rels: vec![],
+                    }),
+                    AssociatedItem::FunDef(FunDef {
+                        name: String::from("eq2"),
+                        generic_params: vec![],
+                        constraints: vec![],
+                        param_decls: params2,
+                        ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                        exec: Exec::CpuThread,
+                        prv_rels: vec![],
+                        body_expr: Expr::new(ExprKind::Block(
+                            vec![],
+                            Box::new(Expr::with_type(
+                                ExprKind::Lit(Lit::Bool(false)),
+                                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                    ScalarTy::Bool,
+                                )))),
+                            )),
+                        )),
+                    }),
+                ],
                 supertraits: vec![]
             }
         );
@@ -2638,11 +2619,11 @@ mod tests {
         let result = descend::trait_def(src).expect("Cannot parse empty struct");
         let supertraits = vec![TraitMonoType {
             name: String::from("Eq"),
-            generics: vec![],
+            generic_args: vec![],
         }];
         assert_eq!(result.constraints, vec![]);
         assert_eq!(result.supertraits, supertraits);
-        assert_eq!(result.decls.len(), 2);
+        assert_eq!(result.ass_items.len(), 2);
     }
 
     #[test]
@@ -2656,16 +2637,16 @@ mod tests {
         let supertraits = vec![
             TraitMonoType {
                 name: String::from("Eq"),
-                generics: vec![],
+                generic_args: vec![],
             },
             TraitMonoType {
                 name: String::from("Eq2"),
-                generics: vec![],
+                generic_args: vec![],
             },
         ];
         assert_eq!(result.constraints, vec![]);
         assert_eq!(result.supertraits, supertraits);
-        assert_eq!(result.decls.len(), 2);
+        assert_eq!(result.ass_items.len(), 2);
     }
 
     #[test]
@@ -2748,7 +2729,7 @@ mod tests {
                 DataTy::with_span(
                     DataTyKind::Struct(StructDataType {
                         name: String::from("Point"),
-                        attributes: vec![],
+                        struct_fields: vec![],
                         generic_args: vec![
                             ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
                             ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
@@ -2777,7 +2758,7 @@ mod tests {
             .item_defs;
         assert_eq!(result.len(), 2);
 
-        let letty = if let Item::FunDef(fun_def) = &result[1] {
+        let let_ty = if let Item::FunDef(fun_def) = &result[1] {
             if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
                 if let ExprKind::Let(_, ty, _) = &expr.expr {
                     ty.clone().unwrap().ty
@@ -2793,14 +2774,14 @@ mod tests {
 
         let struct_ty = StructDataType {
             name: String::from("Point"),
-            attributes: vec![StructField {
+            struct_fields: vec![StructField {
                 name: String::from("x"),
-                ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
             }],
             generic_args: vec![],
         };
 
-        if let TyKind::Data(dataty) = letty {
+        if let TyKind::Data(dataty) = let_ty {
             assert_eq!(
                 dataty,
                 DataTy::with_span(DataTyKind::Struct(struct_ty), Span::new(59, 64))
@@ -2826,7 +2807,7 @@ mod tests {
             .item_defs;
         assert_eq!(result.len(), 2);
 
-        let letty = if let Item::FunDef(fun_def) = &result[1] {
+        let let_ty = if let Item::FunDef(fun_def) = &result[1] {
             if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
                 if let ExprKind::Let(_, ty, _) = &expr.expr {
                     ty.clone().unwrap().ty
@@ -2842,14 +2823,14 @@ mod tests {
 
         let struct_ty = StructDataType {
             name: String::from("Point"),
-            attributes: vec![
+            struct_fields: vec![
                 StructField {
                     name: String::from("x"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
                 },
                 StructField {
                     name: String::from("y"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
                 },
             ],
             generic_args: vec![ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(
@@ -2857,7 +2838,7 @@ mod tests {
             )))],
         };
 
-        if let TyKind::Data(dataty) = letty {
+        if let TyKind::Data(dataty) = let_ty {
             assert_eq!(
                 dataty,
                 DataTy::with_span(DataTyKind::Struct(struct_ty), Span::new(59, 64))
@@ -2909,14 +2890,14 @@ mod tests {
         "#;
         let struct_ty = StructDataType {
             name: String::from("Point"),
-            attributes: vec![
+            struct_fields: vec![
                 StructField {
                     name: String::from("x"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
                 },
                 StructField {
                     name: String::from("y"),
-                    ty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
                 },
             ],
             generic_args: vec![],
@@ -2926,8 +2907,8 @@ mod tests {
             .item_defs;
         assert_eq!(result.len(), 2);
         if let Item::ImplDef(impl_def) = &result[1] {
-            assert_eq!(impl_def.decls.len(), 1);
-            if let AssociatedItem::FunDef(fun_def) = &impl_def.decls[0] {
+            assert_eq!(impl_def.ass_items.len(), 1);
+            if let AssociatedItem::FunDef(fun_def) = &impl_def.ass_items[0] {
                 assert_eq!(fun_def.param_decls.len(), 1);
                 assert_eq!(fun_def.param_decls[0].ident.name, "self");
                 assert_eq!(

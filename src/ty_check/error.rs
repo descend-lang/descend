@@ -89,7 +89,7 @@ pub enum TyError {
         found: Kind,
     },
     TypeAnnotationsNeeded(String),
-    UnfullfilledConstraint(Constraint),
+    UnfulfilledConstraint(Constraint),
     IllegalProjection(String),
     // TODO remove as soon as possible
     String(String),
@@ -303,7 +303,7 @@ impl TyError {
             TyError::TypeAnnotationsNeeded(expr) => {
                 eprintln!("Type annotations needed. Could not infer type {}", expr)
             }
-            TyError::UnfullfilledConstraint(con) => {
+            TyError::UnfulfilledConstraint(con) => {
                 eprintln!("Constraint \"{:#?}\" is not fulfilled.", con)
             }
             TyError::CtxError(ctx_error) => {

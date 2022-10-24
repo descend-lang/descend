@@ -46,7 +46,7 @@ impl std::fmt::Display for Item {
         match self {
             Item::EmptyLine => writeln!(f),
             Item::Include(path) => write!(f, "#include \"{}\"", path),
-            Item::FunDecl {
+            Item::FunForwardDecl {
                 name,
                 templ_params,
                 params,
@@ -99,7 +99,7 @@ impl std::fmt::Display for Item {
                 write!(f, "{}", body)?;
                 writeln!(f, "\n}}")
             }
-            Item::StructDecl { name, templ_params } => {
+            Item::StructForwardDecl { name, templ_params } => {
                 if !templ_params.is_empty() {
                     write!(f, "template<")?;
                     fmt_vec(f, templ_params, ", ")?;
@@ -107,7 +107,7 @@ impl std::fmt::Display for Item {
                 }
                 write!(f, "struct {};", name)
             }
-            Item::StructDef {
+            Item::StructDecl {
                 name,
                 templ_params,
                 attributes,

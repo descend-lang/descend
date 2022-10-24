@@ -2,10 +2,14 @@ trait Copy {}
 
 trait Number: Copy {}
 
-trait Add<RHS, OUTPUT> {
-    fn add(Self, RHS) -[gpu.thread]-> OUTPUT;
-}
+trait Add<RHS, OUTPUT> { fn add(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Sub<RHS, OUTPUT> { fn sub(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Mul<RHS, OUTPUT> { fn mul(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Div<RHS, OUTPUT> { fn div(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Rem<RHS, OUTPUT> { fn rem(Self, RHS) -[gpu.thread]-> OUTPUT; } // (modulo operator)
 
+// TODO: Add Ord-Trait
+// Eq uses no references at the moment!
 trait Eq {
     fn eq(Self, Self) -[gpu.thread]-> bool;
 }
@@ -28,6 +32,31 @@ impl Number for u32 {}
 impl<T> Add<T, T> for T where T: Number {
     fn add(t1: T, t2: T) -[gpu.thread]-> T {
         __add_internal(t1, t2)
+    }
+}
+impl<T> Sub<T, T> for T where T: Number {
+    fn sub(t1: T, t2: T) -[gpu.thread]-> T {
+        __sub_internal(t1, t2)
+    }
+}
+impl<T> Mul<T, T> for T where T: Number {
+    fn mul(t1: T, t2: T) -[gpu.thread]-> T {
+        __mul_internal(t1, t2)
+    }
+}
+impl<T> Div<T, T> for T where T: Number {
+    fn div(t1: T, t2: T) -[gpu.thread]-> T {
+        __div_internal(t1, t2)
+    }
+}
+impl Rem<i32, i32> for i32 {
+    fn rem(t1: i32, t2: i32) -[gpu.thread]-> i32 {
+        __rem_internal_i32(t1, t2)
+    }
+}
+impl Rem<u32, u32> for u32 {
+    fn rem(t1: u32, t2: u32) -[gpu.thread]-> u32 {
+        __rem_internal_u32(t1, t2)
     }
 }
 

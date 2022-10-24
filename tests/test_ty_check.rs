@@ -7,7 +7,7 @@ macro_rules! assert_compile {
         let res = descend::compile_src($src);
         if let Err(error) = res {
             eprintln!("{}\n{:#?}", $src, error);
-            panic!("Unexpted error while typechecking");
+            panic!("Unexpected error while typechecking");
         } else {
             println!("{}", res.unwrap())
         }
@@ -106,8 +106,7 @@ fn test_method_call() {
         let q2x = q.foo().x;
         let p3 = (&shrd p2).eq(&shrd p2);
         let p4 = Point::eq(&shrd p2, &shrd p2);
-        let z = p2.x;
-        ()
+        let z = p2.x
     }
     "#;
     assert_compile!(src);
@@ -172,8 +171,8 @@ fn test_monomoprhisation() {
         foo(p2, 42.5);
         let p3 = Point { x: 4, y: 42.0 };
         //It is not possible to call "Point::new" because
-        //the generic argument for "A" cannnot be inferred.
-        //It is sytacticly not possible to pass this generic arg
+        //the generic argument for "A" cannot be inferred.
+        //It is syntactically not possible to pass this generic arg
         //This seems also in Rust not possible
         //Point::<i32, i32>::new::<f64>(true);
         42
@@ -231,21 +230,19 @@ fn test_fun_calls() {
     impl<T> Equal for Point<T> where T: SomeOtherTrait {}
     fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Equal {
         let i1: i32 = (&shrd t).eq(&shrd t);
-        let i2: i32 = T::eq(&shrd t, &shrd t);
-        ()
+        let i2: i32 = T::eq(&shrd t, &shrd t)
     }
     fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t4: T) -[cpu.thread]-> () where T: SomeOtherTrait  {
         let p: Point<T> = Point::<T> { x: t1, y: t2 };
         fun_with_generics(p);
 
-        let p2: Point<T> = Point::<T> { x: t3, y: t4 };
+        let p2 = Point { x: t3, y: t4 };
         (&shrd p2).eq(&shrd p2);
         Point<_>::eq(&shrd p2, &shrd p2);
         ()
     }
     fn bar() -[cpu.thread]-> () {
-        fun_with_generics2(1, 2, 3, 4);
-        ()
+        fun_with_generics2(1, 2, 3, 4)
     }
     "#;
     assert_compile!(src);
@@ -256,8 +253,6 @@ fn test_fun_calls() {
             1
         }
     }
-    trait SomeOtherTrait {} //TODO why is this necassary to run the test sucessfully
-    impl SomeOtherTrait for i32 {} //TODO why is this necassary to run the test sucessfully
     struct Point<T> {
         x: T,
         y: T
@@ -265,8 +260,7 @@ fn test_fun_calls() {
     impl<T> Equal for Point<T> {} //here "T" has no constraints
     fn fun_with_generics<T>(t: T) -[cpu.thread]-> () where T: Equal {
         let i1: i32 = (&shrd t).eq(&shrd t);
-        let i2: i32 = T::eq(&shrd t, &shrd t);
-        ()
+        let i2: i32 = T::eq(&shrd t, &shrd t)
     }
     fn fun_with_generics2<T>(t1: T, t2: T, t3: T, t4: T) -[cpu.thread]-> () {
         let p: Point<T> = Point::<T> { x: t1, y: t2 };
@@ -278,8 +272,7 @@ fn test_fun_calls() {
         ()
     }
     fn bar() -[cpu.thread]-> () {
-        fun_with_generics2(1, 2, 3, 4);
-        ()
+        fun_with_generics2(1, 2, 3, 4)
     }
     "#;
     assert_compile!(src); //This generates other code because "T" is not monomorphised
@@ -300,8 +293,7 @@ fn test_moved_struct_attribute() {
         let x = Test::<'a> { x: &'a uniq test };
         let p = Point { x, y: 42 };
         let z = p.x;
-        let z2 = p.x; //Already moved
-        ()
+        let z2 = p.x //Already moved
     }
     "#;
     assert_err_compile!(src);
@@ -332,8 +324,7 @@ fn test_moved_struct_attribute() {
         let x = Test {};
         let p = Point { x, y: 42 };
         let z = p.x;
-        let z2 = p.x; //x is not copyable
-        ()
+        let z2 = p.x //x is not copyable
     }
     "#;
     assert_err_compile!(src);
@@ -349,8 +340,7 @@ fn test_moved_struct_attribute() {
         let x = Test {};
         let p = Point { x, y: 42 };
         let z = p.x;
-        let z2 = p.x; //x is copyable
-        ()
+        let z2 = p.x //x is copyable
     }
     "#;
     assert_compile!(src);
@@ -374,8 +364,7 @@ fn test_partitial_moved_struct() {
         let x = Test {};
         let p = Point { x, y: 42 };
         let px = p.x;
-        let p2 = p.foo();
-        ()
+        let p2 = p.foo()
     }
     "#;
     assert_compile!(src);
@@ -395,8 +384,7 @@ fn test_partitial_moved_struct() {
         let x = Test {};
         let p = Point { x, y: 42 };
         let px = p.x;
-        let p2 = p.foo();
-        ()
+        let p2 = p.foo()
     }
     "#;
     assert_err_compile!(src);
@@ -1000,19 +988,16 @@ fn test_unfullfilled_constraints2() {
 #[test]
 fn test_cylic_constraints() {
     let src = r#"
-    impl<T> MyTrait for T where T: MyTrait {
-        fn identity(t: T) -[cpu.thread]-> T {
-            t
-        }
-    }
+    trait MyTrait {}
+    impl<T> MyTrait for T where T: MyTrait {}
     struct Point<X> where X: MyTrait {
         x: X
     }
     fn foo() -[cpu.thread]-> () {
-        let x: Point<i32> = Point<i32> { x: 42 }
+        let x = Point { x: 42 }
     }
     "#;
-    assert_err_compile!(src);
+    assert_compile!(src);
 }
 
 #[test]
@@ -1059,6 +1044,23 @@ fn test_cyclic_struct_defs() {
     assert_err_compile!(src);
 }
 
+#[ignore] //How to represent this in the AST?
+#[test]
+fn test_cyclic_struct_defs2() {
+    let src = r#"
+    struct A<a: prv> {
+        b: &a uniq cpu.mem B
+    }
+    struct B<a: prv> {
+        c: &a uniq cpu.mem C
+    }
+    struct C<a: prv> {
+        a: &a uniq cpu.mem A
+    }
+    "#;
+    assert_compile!(src);
+}
+
 #[test]
 fn test_struct_with_lifetimes() {
     let src = r#"
@@ -1071,16 +1073,13 @@ fn test_struct_with_lifetimes() {
         }
     }
     fn test_double_reference(x: & uniq cpu.mem & uniq cpu.mem i32) -[cpu.thread]-> () {
-        *(*x) = 42;
-        ()
+        *(*x) = 42
     }
     fn test_double_reference2<a: prv>(x: &a uniq cpu.mem & uniq cpu.mem i32) -[cpu.thread]-> () {
-        *(*x) = 42;
-        ()
+        *(*x) = 42
     }
     fn test_double_reference3<a: prv, b: prv>(x: &a uniq cpu.mem &b uniq cpu.mem i32) -[cpu.thread]-> () {
-        *(*x) = 42;
-        ()
+        *(*x) = 42
     }
     fn foo<a: prv>(mut t: Test<a>) -[cpu.thread]-> i32 {
         *(t.x) = 42;
@@ -1097,8 +1096,7 @@ fn test_struct_with_lifetimes() {
         let mut test3 = 2;
         let mut test4 = &uniq test3;
         test_double_reference(&uniq test4);
-        test_double_reference2(&uniq test4);
-        ()
+        test_double_reference2(&uniq test4)
     }
     "#;
     assert_compile!(src);
@@ -1111,8 +1109,7 @@ fn test_bin_op() {
         let x = 42;
         let y = 43;
         let z = x + y;
-        let z2 = x;
-        ()
+        let z2 = x
     }
     "#;
     assert_compile!(src);
@@ -1120,8 +1117,14 @@ fn test_bin_op() {
     let src = r#"
     fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Number {
         let z = x + y;
-        let z2 = x;
-        ()
+        let z2 = x
+    }
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Add<T, T> {
+        let z = x + y
     }
     "#;
     assert_compile!(src);
@@ -1129,16 +1132,7 @@ fn test_bin_op() {
     let src = r#"
     fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Add<T, T> {
         let z = x + y;
-        ()
-    }
-    "#;
-    assert_compile!(src);
-
-    let src = r#"
-    fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Add<T, T> {
-        let z = x + y;
-        let z2 = x;
-        ()
+        let z2 = x
     }
     "#;
     assert_err_compile!(src);
@@ -1148,24 +1142,21 @@ fn test_bin_op() {
         let x = 42;
         let y = 43;
         let z = x == y;
-        let z2 = x;
-        ()
+        let z2 = x
     }
     "#;
     assert_compile!(src);
 
     let src = r#"
     fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Number {
-        let z = (x == y);
-        ()
+        let z = (x == y)
     }
     "#;
     assert_compile!(src);
 
     let src = r#"
     fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Eq {
-        let z = x == y;
-        ()
+        let z = x == y
     }
     "#;
     assert_compile!(src);
@@ -1173,8 +1164,7 @@ fn test_bin_op() {
     let src = r#"
     fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Eq {
         let z = x + y;
-        let z2 = x;
-        ()
+        let z2 = x
     }
     "#;
     assert_err_compile!(src);
@@ -1182,8 +1172,7 @@ fn test_bin_op() {
     let src = r#"
     fn foo<T>(x: T, y: T) -[gpu.thread]-> () where T : Eq + Copy {
         let z = x == y;
-        let z2 = x;
-        ()
+        let z2 = x
     }
     "#;
     assert_compile!(src);
@@ -1205,8 +1194,7 @@ fn test_std_lib() {
 
     let src = r#"
     fn foo<T>(t1: i32, t2: i32) -[gpu.thread]-> () {
-        let res = t1 == t2;
-        ()
+        let res = t1 == t2
     }
     "#;
     assert_compile!(src);
@@ -1214,8 +1202,7 @@ fn test_std_lib() {
     //References to types which implements Eq and Copy are also allowed
     let src = r#"
     fn foo(t1: &shrd gpu.global i32, t2: &shrd gpu.global i32) -[gpu.thread]-> () {
-        let res = t1 == t2;
-        ()
+        let res = t1 == t2
     }
     "#;
     assert_compile!(src);
@@ -1247,7 +1234,7 @@ fn test_tuple_copy() {
 fn test_lambda() {
     //Simple lambda fun for addition should not compile because
     //the types of x and y can not be inferred
-    //The let-statment itself should typecheck because we use implicit
+    //The let-statement itself should typecheck because we use implicit
     //type identifiers $Y and $Y for the types of x and y and infer
     //$X and $Y implements the "Add"-Trait
     let src = r#"
@@ -1328,7 +1315,7 @@ fn test_lambda() {
     "#;
     assert_compile!(src);
 
-    //We can also use custom datatstructs for addition
+    //We can also use structs for addition
     let src = r#"
     struct Point {
         x: i32,
@@ -1377,7 +1364,7 @@ fn test_lambda() {
 }
 
 #[test]
-#[ignore]
+#[ignore] // TODO Reassignment to dead types dont work
 fn test_struct_dead_types() {
     let src = r#"
     struct Test<a: prv, m: mem> {
@@ -1424,8 +1411,7 @@ fn test_lambda2() {
             vec.reduce(zero)
         };
         let array2 = Array<_, 2>::new_pair(16, 27);
-        let res = red(array_global, 0);
-        ()
+        let res = red(array_global, 0)
     }
     "#;
     assert_compile!(src);

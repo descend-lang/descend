@@ -244,11 +244,11 @@ impl TyCtx {
                     ..
                 }) => {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
-                    struct_ty.attributes.iter().for_each(|field| {
+                    struct_ty.struct_fields.iter().for_each(|field| {
                         let mut exploded_index = explode(
                             pl.clone()
                                 .push(&ProjEntry::StructAccess(field.name.clone())),
-                            Ty::new(TyKind::Data(field.ty.clone())),
+                            Ty::new(TyKind::Data(field.dty.clone())),
                         );
                         place_frame.append(&mut exploded_index);
                     });
@@ -321,9 +321,11 @@ impl TyCtx {
                     }),
                     ProjEntry::StructAccess(attr_name),
                 ) => {
-                    *struct_ty.get_ty_mut(attr_name).unwrap() = if let TyKind::Data(dty) =
+                    *struct_ty.attribute_dty_mut(attr_name).unwrap() = if let TyKind::Data(dty) =
                         set_ty_for_path_in_ty(
-                            Ty::new(TyKind::Data(struct_ty.get_ty(attr_name).unwrap().clone())),
+                            Ty::new(TyKind::Data(
+                                struct_ty.attribute_dty(attr_name).unwrap().clone(),
+                            )),
                             &path[1..],
                             part_ty,
                         )
@@ -533,7 +535,7 @@ pub(super) struct GlobalCtx {
     traits: HashMap<String, TraitDef>,
 }
 
-//Check if all passed names are pairwise different
+/// Check if all passed names are pairwise different
 fn check_unique_names<
     'a,
     T: 'a + std::hash::Hash + Eq + ToString,
@@ -559,26 +561,29 @@ impl GlobalCtx {
         }
     }
 
-    //Append (predefined) function declarations
-    pub fn append_fun_decls(mut self, fun_decls: &[(&str, TypeScheme)]) -> Self {
+    /// Append predefined function declarations
+    pub fn append_fun_decls<'a, I>(mut self, fun_decls: I) -> Self
+    where
+        I: Iterator<Item = (&'a str, TypeScheme)>,
+    {
         self.funs.extend(
-            fun_decls
-                .iter()
-                .map(|(name, ty)| (FunctionName::global_fun(name), ty.clone())),
+            fun_decls.map(|(name, fun_ty_scheme)| (FunctionName::global_fun(name), fun_ty_scheme)),
         );
         self
     }
 
-    pub fn append_from_item_def(
+    /// Append item definitions to context and append from item definitions
+    /// generated constraint-scheme to `constraint_env`
+    pub fn append_item_defs(
         &mut self,
         item_defs: &[Item],
         constraint_env: &mut ConstraintEnv,
     ) -> Vec<CtxError> {
-        //HashSet with all datatypes of an impl and corresponding name of implemented trait
-        //This is used to make sure there are no duplicate implementations of the same trait for the same datatype
+        // HashSet with all datatypes of an impl and corresponding name of implemented trait
+        // This is used to make sure there are no duplicate implementations of the same trait for the same datatype
         let mut impl_defs_names: HashSet<(DataTy, String)> = HashSet::new();
 
-        //Append every single item
+        // Append every single item
         item_defs
             .iter()
             .fold(Vec::<CtxError>::new(), |mut errs, item_def| {
@@ -590,41 +595,41 @@ impl GlobalCtx {
                         &mut errs,
                     ),
                     Item::StructDecl(struct_decl) => {
-                        //Insert this struct in context
+                        // Insert this struct in context
                         let old_val = self
                             .structs
                             .insert(struct_decl.name.clone(), struct_decl.clone());
-                        //Make sure there are not multiple structs with the same name
+                        // Make sure there are not multiple structs with the same name
                         if old_val.is_some() {
                             errs.push(CtxError::MultipleDefinedStructs(struct_decl.name.clone()));
                         }
-                        //Check also uniqueness of names of generic params and struct_fields
+                        // Check also uniqueness of names of generic params and struct_fields
                         check_unique_names(
                             struct_decl.generic_params.iter().map(|gen| &gen.ident.name),
                             &mut errs,
                         );
                         check_unique_names(
-                            struct_decl.decls.iter().map(|decl| &decl.name),
+                            struct_decl.struct_fields.iter().map(|decl| &decl.name),
                             &mut errs,
                         );
                     }
                     Item::ImplDef(impl_def) => {
-                        //Check uniqueness of names of generic params and associated items
+                        // Check uniqueness of names of generic params and associated items
                         check_unique_names(
                             impl_def.generic_params.iter().map(|gen| &gen.ident.name),
                             &mut errs,
                         );
                         check_unique_names(
-                            impl_def.decls.iter().map(|decl| match decl {
+                            impl_def.ass_items.iter().map(|decl| match decl {
                                 AssociatedItem::FunDef(fun_def) => &fun_def.name,
                                 AssociatedItem::ConstItem(name, _, _) => name,
                                 AssociatedItem::FunDecl(fun_decl) => &fun_decl.name,
                             }),
                             &mut errs,
                         );
-                        //If this impl implements a trait
-                        //Types of functions are not needed in the context because
-                        //the corresponding trait already adds relevant function types
+                        // If this impl implements a trait
+                        // Types of functions are not needed in the context because
+                        // the corresponding trait already adds relevant function types
                         if let Some(trait_impl) = &impl_def.trait_impl {
                             constraint_env.append_constraint_scheme(&ConstraintScheme {
                                 generics: impl_def.generic_params.clone(),
@@ -644,16 +649,16 @@ impl GlobalCtx {
                                 });
                             }
                         }
-                        //If this impl does not implement a trait
+                        // If this impl does not implement a trait
                         else {
-                            impl_def.decls.iter().for_each(|decl| match decl {
+                            impl_def.ass_items.iter().for_each(|decl| match decl {
                                 AssociatedItem::FunDef(fun_def) => {
                                     let TypeScheme {
                                         generic_params,
                                         constraints,
                                         mono_ty,
                                     } = fun_def.ty();
-                                    //Add generic params and constraints of the impl to the typescheme of the function
+                                    // Add generic params and constraints of the impl to the typescheme of the function
                                     let extended_fun_ty_scheme = TypeScheme {
                                         generic_params: impl_def
                                             .generic_params
@@ -670,7 +675,7 @@ impl GlobalCtx {
                                         mono_ty,
                                     };
 
-                                    //Insert this function in context
+                                    // Insert this function in context
                                     self.append_fun(
                                         FunctionName::from_impl(&fun_def.name, impl_def),
                                         extended_fun_ty_scheme,
@@ -679,7 +684,7 @@ impl GlobalCtx {
                                     )
                                 }
                                 AssociatedItem::ConstItem(_, _, _) => todo!("TODO"),
-                                //Function declarations are not allowed. Some error will be thrown in ty_check
+                                // Function declarations are not allowed. Some error will be thrown in ty_check
                                 AssociatedItem::FunDecl(_) => (),
                             });
                         }
@@ -692,6 +697,11 @@ impl GlobalCtx {
             })
     }
 
+    /// Append a function
+    /// * `fun_name` - FunctionName of the function
+    /// * `fun_ty_scheme` - type-scheme of the function
+    /// * `fun_params` - parameter declarations which are checked for name conflicts
+    /// * `errs` - vector where errors which occur are appended
     fn append_fun(
         &mut self,
         fun_name: FunctionName,
@@ -699,7 +709,7 @@ impl GlobalCtx {
         fun_params: &Vec<ParamDecl>,
         errs: &mut Vec<CtxError>,
     ) {
-        //Check uniqueness of names of generic params and function parameter
+        // Check uniqueness of names of generic params and function parameter
         check_unique_names(
             fun_ty_scheme
                 .generic_params
@@ -711,32 +721,33 @@ impl GlobalCtx {
             fun_params.iter().map(|fun_param| &fun_param.ident.name),
             errs,
         );
-        //Insert typescheme of function in context
+        // Insert typescheme of function in context
         let old_val = self.funs.insert(fun_name.clone(), fun_ty_scheme);
-        //Make sure there are not multiple functions with the same name
+        // Make sure there are not multiple functions with the same name
         if old_val.is_some() {
             errs.push(CtxError::MultipleDefinedFunctions(fun_name));
         }
     }
 
+    /// Append a trait definition
     fn append_trait_def(
         &mut self,
         t_def: &TraitDef,
         errs: &mut Vec<CtxError>,
         constraint_env: &mut ConstraintEnv,
     ) {
-        //Insert trait in context
+        // Insert trait in context
         let old_val = self.traits.insert(t_def.name.clone(), t_def.clone());
-        //Make sure there are not multiple traits with the same name
+        // Make sure there are not multiple traits with the same name
         if old_val.is_some() {
             errs.push(CtxError::MultipleDefinedTraits(t_def.name.clone()));
         }
-        //Add trait-functions to context
+        // Add trait-functions to context
         else {
-            //Check uniqueness of names of generic params and associated items
+            // Check uniqueness of names of generic params and associated items
             check_unique_names(t_def.generic_params.iter().map(|gen| &gen.ident.name), errs);
             check_unique_names(
-                t_def.decls.iter().map(|decl| match decl {
+                t_def.ass_items.iter().map(|decl| match decl {
                     AssociatedItem::FunDef(fun_def) => &fun_def.name,
                     AssociatedItem::ConstItem(name, _, _) => name,
                     AssociatedItem::FunDecl(fun_decl) => &fun_decl.name,
@@ -748,29 +759,29 @@ impl GlobalCtx {
             let self_generic = IdentKinded::new(&self_ident, Kind::DataTy);
             let self_ty = DataTy::new(DataTyKind::Ident(self_ident.clone()));
 
-            //Create a vector with all generics of the trait inclusive the implicit generic "Self"
+            // Create a vector with all generics of the trait inclusive the implicit generic "Self"
             let mut generics_tdef = Vec::with_capacity(t_def.generic_params.len() + 1);
             generics_tdef.push(self_generic.clone());
             generics_tdef.extend(t_def.generic_params.clone());
-            //Create a TraitMonoType with identifiers with same names as generic params as generic arguments
+            // Create a TraitMonoType with identifiers with same names as generic params as generic arguments
             let trait_mono_type = TraitMonoType {
                 name: t_def.name.clone(),
-                generics: t_def
+                generic_args: t_def
                     .generic_params
                     .iter()
-                    .map(|gen| gen.arg_kinded())
+                    .map(|gen| gen.arg_kinded_implicit())
                     .collect(),
             };
-            //This is the constraint "Self impls this trait"
+            // This is the constraint "Self impls this trait"
             let self_impl_trait = Constraint {
                 param: self_ty.clone(),
                 trait_bound: trait_mono_type,
             };
 
-            //Insert every associated item
-            t_def.decls.iter().for_each(|ass_item| match ass_item {
+            // Insert every associated item
+            t_def.ass_items.iter().for_each(|ass_item| match ass_item {
                 AssociatedItem::FunDef(_) | AssociatedItem::FunDecl(_) => {
-                    //Function type-scheme and name
+                    // Function type-scheme and name
                     let (ty, name) = match ass_item {
                         AssociatedItem::FunDef(fun_def) => (fun_def.ty(), fun_def.name.clone()),
                         AssociatedItem::FunDecl(fun_decl) => (fun_decl.ty(), fun_decl.name.clone()),
@@ -778,23 +789,23 @@ impl GlobalCtx {
                     };
 
                     if let TyKind::Fn(args, exec, ret_ty) = ty.mono_ty.ty {
-                        //Vector with all generics of trait_definition and all generics of the function
+                        // Vector with all generics of trait_definition and all generics of the function
                         let mut generic_params =
                             Vec::with_capacity(generics_tdef.len() + ty.generic_params.len());
                         generic_params.extend(generics_tdef.clone());
                         generic_params.extend(ty.generic_params.clone());
-                        //Vector with all constraints of trait_definition and all constraints of the function
+                        // Vector with all constraints of trait_definition and all constraints of the function
                         let mut constraints = Vec::with_capacity(ty.constraints.len() + 1);
                         constraints.push(self_impl_trait.clone());
                         constraints.extend(ty.constraints.clone());
 
-                        //Create extended typescheme of this function
+                        // Create extended typescheme of this function
                         let extended_ty_scheme = TypeScheme {
                             generic_params,
                             constraints,
                             mono_ty: Ty::new(TyKind::Fn(args, exec, ret_ty)),
                         };
-                        //Insert it in global context and make sure there are not multiple functions with the same name
+                        // Insert it in global context and make sure there are not multiple functions with the same name
                         if self
                             .funs
                             .insert(FunctionName::from_trait(&name, t_def), extended_ty_scheme)
@@ -811,24 +822,26 @@ impl GlobalCtx {
                 AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
             });
 
-            //Add constraint_schemes corresponding to the supertraits of this trait to the context
-            let implican = vec![self_impl_trait];
+            // Add constraint_schemes corresponding to the supertraits of this trait to the context
+            let self_impl_trait = vec![self_impl_trait];
             t_def
                 .supertraits_constraints()
                 .iter()
-                //for every supertrait constraint "Self implements supertrait X"
+                // for every supertrait constraint "Self implements supertrait X"
                 .for_each(|supertrait_cons| {
-                    //add a constraint-scheme of the form
-                    //"\forall generics_tdef: if Self implements this trait => Self also implements supertrait X"
+                    // add a constraint-scheme of the form:
+                    // \forall generics_tdef: if Self implements this trait => Self also implements supertrait X
                     constraint_env.append_constraint_scheme(&ConstraintScheme {
                         generics: generics_tdef.clone(),
-                        implican: implican.clone(),
+                        implican: self_impl_trait.clone(),
                         implied: supertrait_cons.clone(),
                     })
                 });
         }
     }
 
+    /// Get the typescheme of a function by FunctionName. <br>
+    /// Panics if the context does not contain this a function with this name
     pub fn fun_ty_by_name(&self, name: FunctionName) -> &TypeScheme {
         match self.funs.get(&name) {
             Some(ty) => ty,
@@ -836,6 +849,7 @@ impl GlobalCtx {
         }
     }
 
+    /// Get a typescheme of a function by a ident and a function kind
     pub fn fun_ty_by_ident(
         &self,
         ident: &Ident,
@@ -851,6 +865,7 @@ impl GlobalCtx {
         }
     }
 
+    /// Get a trait-definition by its name
     pub fn trait_ty_by_name(&self, name: &String) -> CtxResult<&TraitDef> {
         match self.traits.get(name) {
             Some(ty) => Ok(ty),
@@ -858,6 +873,7 @@ impl GlobalCtx {
         }
     }
 
+    /// Get a struct-declaration by its name
     pub fn struct_by_name(&self, name: &String) -> CtxResult<&StructDecl> {
         match self.structs.get(name) {
             Some(ty) => Ok(ty),
@@ -865,7 +881,7 @@ impl GlobalCtx {
         }
     }
 
-    //Get a FunctionName by the name and the datatype of corresponding impl
+    // Get a FunctionName by the name of the function and the datatype of corresponding impl
     pub fn fun_name_by_dty(
         &self,
         constraint_env: &ConstraintEnv,
@@ -873,75 +889,89 @@ impl GlobalCtx {
         fun_name: &String,
         dty: &DataTy,
     ) -> CtxResult<&FunctionName> {
-        //Ty of impl of the searched function
+        // Ty of impl of the searched function
         let ty = Ty::new(TyKind::Data(dty.clone()));
 
-        let mut implicit_ident_cons_new = None;
+        // Save result (if found) in this two variables
+        let mut res_function_name = None;
+        let mut res_implicit_ident_cons = None;
+        // Work on a copy of "implicit_ident_cons" to avoid side effects
+        let mut implicit_ident_cons_clone = implicit_ident_cons.clone();
 
-        //Serach in all functions in context
-        let mut result =
-            self.funs
-                .keys()
-                .fold(Vec::with_capacity(1), |mut res, fun_name_canidate| {
-                    //Make sure the canidate-function have the same name like the searched function
-                    if fun_name_canidate.name == *fun_name {
-                        match &fun_name_canidate.fun_kind {
-                            //if the function_kind of the canidate-function references an impl
-                            FunctionKind::ImplFun(impl_dty_canidate, _) => {
-                                //if they can be unified, this is the searched function
-                                if constrain(&ty, &impl_dty_canidate.mono_ty).is_ok() {
-                                    res.push(fun_name_canidate)
-                                }
+        // Search in all suitable functions in context
+        let number_found = self
+            .funs
+            .keys()
+            .fold(0, |mut number_found, fun_name_candidate| {
+                // Make sure the candidate-function have the same name like the searched function
+                if fun_name_candidate.name == *fun_name && number_found < 2 {
+                    match &fun_name_candidate.fun_kind {
+                        // if the function_kind of the candidate-function references an impl
+                        FunctionKind::ImplFun(impl_dty_candidate, _) => {
+                            // if they can be unified, this is the searched function
+                            if constrain(&ty, &impl_dty_candidate.mono_ty).is_ok() {
+                                res_function_name = Some(fun_name_candidate);
+                                number_found = number_found + 1;
                             }
-                            //if the function_kind of the canidate-function references a trait
-                            FunctionKind::TraitFun(trait_name) => {
-                                //Check if the passed dty impls the trait
-                                if let Some(ident_constraints) =
-                                    self.dty_impls_trait(constraint_env, dty.clone(), trait_name)
-                                {
-                                    implicit_ident_cons_new = Some(ident_constraints);
-                                    res.push(fun_name_canidate);
-                                }
-                            }
-                            //if this is not a impl- or trait-function, its not the serached function
-                            _ => (),
                         }
+                        // if the function_kind of the candidate-function references a trait
+                        FunctionKind::TraitFun(trait_name) => {
+                            // Check if the passed dty implements the trait
+                            if self.dty_impls_trait(
+                                constraint_env,
+                                &mut implicit_ident_cons_clone,
+                                dty.clone(),
+                                trait_name,
+                            ) {
+                                if number_found == 0 {
+                                    res_function_name = Some(fun_name_candidate);
+                                    res_implicit_ident_cons =
+                                        Some(implicit_ident_cons_clone.clone());
+                                    implicit_ident_cons_clone = implicit_ident_cons.clone();
+                                }
+                                number_found = number_found + 1;
+                            }
+                        }
+                        // if this is not a impl- or trait-function, its not the searched function
+                        _ => (),
                     }
-                    res
-                });
-        //if there are multiple possible functions that meets the search criteria
-        if result.len() > 1 {
+                }
+                number_found
+            });
+        // if there are multiple possible functions that meets the search criteria
+        if number_found > 1 {
             Err(CtxError::AmbiguousFunctionCall {
                 function_name: fun_name.clone(),
                 impl_dty: dty.clone(),
             })
         }
-        //if there if no function that meets the search criteria
-        else if result.is_empty() {
+        // if there if no function that meets the search criteria
+        else if number_found == 0 {
             Err(CtxError::IdentNotFound(Ident::new(fun_name)))
         }
-        //if there is exactly one function that meets the search criteria
+        // if there is exactly one function that meets the search criteria
         else {
-            //Add new implicit ident_constraints to "implicit_ident_cons"
-            if let Some(implicit_ident_cons_new) = implicit_ident_cons_new {
-                implicit_ident_cons.add_ident_constraints(implicit_ident_cons_new.into_iter());
+            // Update constraints on implicit identifiers
+            if let Some(updated_implicit_ident_cons) = res_implicit_ident_cons {
+                *implicit_ident_cons = updated_implicit_ident_cons;
             }
 
-            Ok(result.remove(0))
+            Ok(res_function_name.unwrap())
         }
     }
 
-    //Check if a datatype impls a trait
+    /// Check if a datatype implements a trait
     fn dty_impls_trait(
         &self,
         constraint_env: &ConstraintEnv,
+        implicit_ident_cons: &mut IdentConstraints,
         dty: DataTy,
         trait_name: &String,
-    ) -> Option<IdentConstraints> {
-        //Get the trait_definition from the context
+    ) -> bool {
+        // Get the trait_definition from the context
         let trait_def = self.trait_ty_by_name(trait_name).unwrap();
 
-        //ArgKinded-Identifier for every generic param of the trait
+        // ArgKinded-Identifier for every kinded identifier of the trait
         let trait_def_generic_args = trait_def
             .generic_params
             .iter()
@@ -952,25 +982,19 @@ impl GlobalCtx {
             })
             .collect::<Vec<_>>();
 
-        //Constraint: "constraint_ident" implements the trait
+        // Constraint: 'dty' implements the `trait_name` with `trait_def_generic_args` as trait-arguments
         let c_ident_constraint = Constraint {
             param: dty,
             trait_bound: TraitMonoType {
                 name: trait_name.clone(),
-                generics: trait_def_generic_args,
+                generic_args: trait_def_generic_args,
             },
         };
 
-        //Check if the constraint if fulfilled
-        let mut implicit_ident_cons = IdentConstraints::new();
-        if constraint_env
-            .check_constraint(&c_ident_constraint, &mut implicit_ident_cons)
+        // Check if the constraint if fulfilled
+        constraint_env
+            .check_constraint(&c_ident_constraint, implicit_ident_cons)
             .is_ok()
-        {
-            Some(implicit_ident_cons)
-        } else {
-            None
-        }
     }
 }
 

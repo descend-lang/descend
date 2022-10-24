@@ -6,7 +6,7 @@ pub(super) type CuProgram = Vec<Item>;
 pub(super) enum Item {
     EmptyLine,
     Include(String),
-    FunDecl {
+    FunForwardDecl {
         name: String,
         templ_params: Vec<TemplParam>,
         params: Vec<ParamDecl>,
@@ -21,11 +21,11 @@ pub(super) enum Item {
         body: Stmt,
         is_dev_fun: bool,
     },
-    StructDecl {
+    StructForwardDecl {
         name: String,
         templ_params: Vec<TemplParam>,
     },
-    StructDef {
+    StructDecl {
         name: String,
         templ_params: Vec<TemplParam>,
         attributes: Vec<(String, Ty)>,

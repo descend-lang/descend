@@ -5,84 +5,9 @@ use crate::ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::TyError;
 use crate::ty_check::subty::multiple_outlives;
-use crate::ty_check::ConstraintEnv;
 use crate::ty_check::TyResult;
 use core::fmt;
 use std::collections::{HashMap, HashSet};
-
-use super::constraint_check::IdentConstraints;
-
-pub(crate) fn substitute_multiple<'a, I, T: 'a>(
-    constraint_env: &ConstraintEnv,
-    implicit_ident_constraints: &mut IdentConstraints,
-    constr_map: &mut ConstrainMap,
-    types: I,
-) -> TyResult<()>
-where
-    T: Constrainable,
-    I: Iterator<Item = &'a mut T>,
-{
-    loop {
-        let mut constr_map_new = ConstrainMap::new();
-
-        //Check if this substitution fullfills all implicit_ident_constraints
-        for (name, dty) in &constr_map.dty_unifier {
-            //Check if all constraints of implicit identifier which is substituted are fulfilled
-            let mut constraints_to_check: Vec<_> = implicit_ident_constraints
-                .consume_constraints(name)
-                .collect();
-
-            //if the substituted type is an implicit ident: add constraints of this ident to other ident
-            if let DataTyKind::Ident(ident) = &dty.dty {
-                if ident.is_implicit {
-                    implicit_ident_constraints.add_ident_constraints(
-                        constraints_to_check.into_iter().map(|con| {
-                            con.subst_ident_kinded(
-                                &IdentKinded::new(&Ident::new(name), Kind::DataTy),
-                                &ArgKinded::DataTy((*dty).clone()),
-                            );
-                            (ident.name.clone(), con)
-                        }),
-                    );
-                    break;
-                }
-            }
-
-            //Check every constraint
-            for con in &mut constraints_to_check {
-                //Replace implicit identifier by concrete type
-                *con = con.subst_ident_kinded(
-                    &IdentKinded::new(&Ident::new(name), Kind::DataTy),
-                    &ArgKinded::DataTy((*dty).clone()),
-                );
-
-                if !constr_map_new.is_empty() {
-                    con.substitute(&constr_map_new);
-                }
-
-                //Check if constraint is fulfilled
-                if let Ok(constr_map) =
-                    constraint_env.check_constraint(con, implicit_ident_constraints)
-                {
-                    if !constr_map.is_empty() {
-                        constr_map_new.union(constr_map);
-                    }
-                } else {
-                    Err(TyError::UnfullfilledConstraint(con.clone()))?
-                }
-            }
-        }
-
-        if constr_map_new.is_empty() {
-            break;
-        } else {
-            constr_map.union(constr_map_new);
-        }
-    }
-
-    types.for_each(|ty| ty.substitute(constr_map));
-    Ok(())
-}
 
 pub(super) fn sub_unify<C: Constrainable>(
     kind_ctx: &KindCtx,
@@ -114,7 +39,7 @@ pub(crate) fn constrain<S: Constrainable>(
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct PrvConstr(pub Provenance, pub Provenance);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConstrainMap {
     pub ty_unifier: HashMap<String, Ty>,
     pub dty_unifier: HashMap<String, DataTy>,
@@ -146,7 +71,8 @@ impl ConstrainMap {
             && self.mem_unifier.is_empty()
     }
 
-    pub fn union(&mut self, other: ConstrainMap) {
+    /// Compose two substitutions `other` \circ `self`
+    pub fn composition(&mut self, other: ConstrainMap) {
         self.ty_unifier
             .iter()
             .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
@@ -315,10 +241,10 @@ impl Constrainable for TraitMonoType {
             return Err(TyError::CannotUnify);
         }
 
-        assert!(self.generics.len() == other.generics.len());
-        self.generics
+        assert!(self.generic_args.len() == other.generic_args.len());
+        self.generic_args
             .iter()
-            .zip(other.generics.iter())
+            .zip(other.generic_args.iter())
             .try_for_each(|(arg_ty1, arg_ty2)| arg_ty1.constrain(arg_ty2, constr_map, prv_rels))
     }
 
@@ -433,20 +359,20 @@ impl Constrainable for DataTy {
                     return Err(TyError::CannotUnify);
                 }
                 assert!(struct_1.generic_args.len() == struct_2.generic_args.len());
-                assert!(struct_1.attributes.len() == struct_2.attributes.len());
+                assert!(struct_1.struct_fields.len() == struct_2.struct_fields.len());
                 struct_1
                     .generic_args
                     .iter()
                     .zip(struct_2.generic_args.iter())
                     .try_for_each(|(gen1, gen2)| gen1.constrain(gen2, constr_map, prv_rels))?;
-                struct_1.attributes.iter().try_for_each(|attr1| {
-                    attr1.ty.constrain(
+                struct_1.struct_fields.iter().try_for_each(|attr1| {
+                    attr1.dty.constrain(
                         &struct_2
-                            .attributes
+                            .struct_fields
                             .iter()
                             .find(|attr2| attr1.name == attr2.name)
                             .unwrap()
-                            .ty,
+                            .dty,
                         constr_map,
                         prv_rels,
                     )

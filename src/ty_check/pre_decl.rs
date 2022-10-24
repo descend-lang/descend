@@ -42,18 +42,23 @@ pub const NUMBERS_ADD: &str = "__add_internal";
 pub const NUMBERS_SUB: &str = "__sub_internal";
 pub const NUMBERS_MUL: &str = "__mul_internal";
 pub const NUMBERS_DIV: &str = "__div_internal";
+pub const NUMBERS_REM_I32: &str = "__rem_internal_i32";
+pub const NUMBERS_REM_U32: &str = "__rem_internal_u32";
 pub const NUMBERS_EQ: &str = "__eq_internal";
+
+const NUMBER_TRAIT_NAME: &str = "Number";
+const COPY_TRAIT_NAME: &str = "Copy";
 
 pub fn number_trait() -> TraitMonoType {
     TraitMonoType {
-        name: "Number".to_string(),
-        generics: vec![],
+        name: String::from(NUMBER_TRAIT_NAME),
+        generic_args: vec![],
     }
 }
 pub fn copy_trait() -> TraitMonoType {
     TraitMonoType {
-        name: "Copy".to_string(),
-        generics: vec![],
+        name: String::from(COPY_TRAIT_NAME),
+        generic_args: vec![],
     }
 }
 
@@ -61,6 +66,10 @@ pub fn bin_op_to_fun(binop: &BinOp, lhs: Expr, rhs: Expr) -> ExprKind {
     let fun_name = Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
         Ident::new(match binop {
             BinOp::Add => "add",
+            BinOp::Sub => "sub",
+            BinOp::Mul => "mul",
+            BinOp::Div => "div",
+            BinOp::Mod => "rem",
             BinOp::Eq => "eq",
             _ => todo!(),
         }),
@@ -70,6 +79,10 @@ pub fn bin_op_to_fun(binop: &BinOp, lhs: Expr, rhs: Expr) -> ExprKind {
         Some(FunctionKind::TraitFun(
             match binop {
                 BinOp::Add => "Add",
+                BinOp::Sub => "Sub",
+                BinOp::Mul => "Mul",
+                BinOp::Div => "Div",
+                BinOp::Mod => "Rem",
                 BinOp::Eq => "Eq",
                 _ => todo!(),
             }
@@ -118,6 +131,30 @@ pub fn fun_decls() -> Vec<(&'static str, TypeScheme)> {
         (NUMBERS_SUB, number_bin_op_ty()),
         (NUMBERS_MUL, number_bin_op_ty()),
         (NUMBERS_DIV, number_bin_op_ty()),
+        (NUMBERS_REM_I32, {
+            let i32_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))));
+            TypeScheme {
+                generic_params: vec![],
+                constraints: vec![],
+                mono_ty: Ty::new(TyKind::Fn(
+                    vec![i32_ty.clone(), i32_ty.clone()],
+                    Exec::GpuThread,
+                    Box::new(i32_ty),
+                )),
+            }
+        }),
+        (NUMBERS_REM_U32, {
+            let u32_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::U32))));
+            TypeScheme {
+                generic_params: vec![],
+                constraints: vec![],
+                mono_ty: Ty::new(TyKind::Fn(
+                    vec![u32_ty.clone(), u32_ty.clone()],
+                    Exec::GpuThread,
+                    Box::new(u32_ty),
+                )),
+            }
+        }),
         (NUMBERS_EQ, number_eq_ty()),
     ];
 
