@@ -2374,10 +2374,7 @@ impl TyChecker {
             ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, first_arg)?;
 
             if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
-                *path = Path::DataTy(match &dty.dty {
-                    DataTyKind::Ref(_, _, _, dty) => (**dty).clone(),
-                    _ => dty.clone(),
-                })
+                *path = Path::DataTy(dty.clone())
             } else {
                 Err(TyError::UnexpectedTypeKind {
                     expected_name: String::from("TyKind::Data"),
@@ -2404,12 +2401,6 @@ impl TyChecker {
                 }
                 // Binop-functions have already a function_kind
                 else {
-                    // Avoid problems with InferFromFirstArgPath auto dereferencing
-                    let first_arg = args.first_mut().unwrap();
-                    if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
-                        *path = Path::DataTy(dty.clone());
-                    }
-
                     fun_kind.as_ref().unwrap().clone()
                 }
             }

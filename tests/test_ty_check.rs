@@ -1390,6 +1390,7 @@ fn test_lambda2() {
     struct Array<T, N: nat> {
         data: [T; N]
     }
+    impl<T, N: nat> Copy for Array<T, N> {}
     impl<T, N: nat> Array<T, N> {
         fn new_pair(t1: T, t2: T) -[gpu.thread]-> Array<T, 2> {
             Array {
@@ -1415,6 +1416,40 @@ fn test_lambda2() {
     }
     "#;
     assert_compile!(src);
+
+    let src = r#"
+    struct Array<T, N: nat> {
+        data: [T; N]
+    }
+    impl<T, N: nat> Array<T, N> {
+        fn new_pair(t1: T, t2: T) -[gpu.thread]-> Array<T, 2> {
+            Array {
+                data: [t1, t2]
+            }
+        }
+    }
+    impl<T, N: nat, m: mem> Array<T, N> where T: Number {
+        fn reduce(&shrd m self, zero: T) -[gpu.thread]-> T {
+            let mut result = zero;
+            for_nat i in range(0, N) {
+                result = result + (*self).data[i]
+            };
+            result
+        }
+    }
+    fn main(array_global: &shrd gpu.global Array<i32, 2>) -[gpu.thread]-> () {
+        let red = |vec, zero| -[gpu.thread]-> _ {
+            vec.reduce(zero)
+        };
+        let array2 = Array<_, 2>::new_pair(16, 27);
+        let res = red(array_global, 0)
+    }
+    "#;
+    // Should this compile?
+    // It throws an error while typechecking `vec.reduce(zero)`
+    // First we typecheck `vec`. This adds the constraint that type of vec must implement Copy.
+    // So the is no suitable function with name `reduce` for a type which implements Copy
+    assert_err_compile!(src);
 }
 
 #[test]
