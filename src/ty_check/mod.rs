@@ -1401,6 +1401,7 @@ impl TyChecker {
 
     // FIXME currently assumes that binary operators exist only for f32 and i32 and that both
     //  arguments have to be of the same type
+    // FIXME also applies to new operators shl, shr and bitor
     fn ty_check_binary_op(
         &mut self,
         kind_ctx: &KindCtx,

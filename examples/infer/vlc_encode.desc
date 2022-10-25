@@ -53,12 +53,15 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                                             // the current thread starts
 
                 // cache the codewords and their lengths (in bits) in shared memory
-                parfor _ in block
+                let (active_threads, _) = split_thread_grp::<num_symbols>(block);
+                parfor _ in active_threads
                 with cw_item, cwl_item, sm_cw_item, sm_cwl_item
                 from cw_group, cwl_group, sm_cw_view, sm_cwl_view {
-                    let sm_cw_item = cw_item;
-                    let sm_cwl_item = cwl_item
+                    *sm_cw_item = *cw_item;
+                    *sm_cwl_item = *cwl_item
                 };
+
+                // syncthreads
 
                 // encode four input symbols per thread
                 // and save the total bit-length of the encoded symbols per thread in shared memory
@@ -74,24 +77,24 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                     let mut tmpcw: u32 = 0;
 
                     for_nat i in range(0, 4) {
-                        tmp_d_item_i = d_item.i;
+                        tmp_d_item_i = *d_item.i;
                         tmpcw = sm_cw[tmp_d_item_i];
                         tmpcwl = sm_cwl[tmp_d_item_i];
                         codeword = (codeword<<tmpcwl) | tmpcw;
                         codewordlen = codewordlen + tmpcwl
                     };
 
-                    let sm_as_item = codewordlen
+                    *sm_as_item = codewordlen
                 };
 
                 // calculate prefix sum (scan) of codeword lengths
                 // (required for position of encoded symbols in output)
                 // work-efficient shared memory implementation (optimization possible when using shuffle instructions!)
                 // step 1: up-sweep phase
-                for_nat offset in doubled_range(bs/2) {
+                for_nat offset in doubled_range(1, bs/2) {
                     let sm_as_tmp_view_1 = group_mut::<offset>(sm_as_view);
                     let sm_as_tmp_view_2 = transpose_mut(sm_as_tmp_view_1);
-                    let sm_as_tmp_view_3 = sm_as_tmp_view_2.(offset-1);
+                    let sm_as_tmp_view_3 = sm_as_tmp_view_2[offset-1];
                     let sm_as_scan_tuples = group_mut::<2>(sm_as_tmp_view_3);
                     let (active_threads, _) = split_thread_grp::<(bs/2)/offset>(block);
                     parfor _ in active_threads
@@ -113,7 +116,7 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                 for_nat offset in halved_range(bs/2) {
                     let sm_as_tmp_view_1 = group_mut::<offset>(sm_as_view);
                     let sm_as_tmp_view_2 = transpose_mut(sm_as_tmp_view_1);
-                    let sm_as_tmp_view_3 = sm_as_tmp_view_2.(offset-1);
+                    let sm_as_tmp_view_3 = sm_as_tmp_view_2[offset-1];
                     let sm_as_scan_tuples = group_mut::<2>(sm_as_tmp_view_3);
                     let (active_threads, _) = split_thread_grp::<(bs/2)/offset>(block);
                     parfor _ in active_threads
