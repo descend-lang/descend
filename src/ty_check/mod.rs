@@ -16,13 +16,11 @@ use crate::ast::*;
 use crate::error::ErrorReported;
 use crate::ty_check::pre_decl::copy_trait;
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
-use crate::SourceCode;
 use core::panic;
 use ctxs::{GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
 use std::ops::Deref;
-use std::sync::Once;
 
 use self::constraint_check::{ConstraintEnv, ConstraintScheme, IdentConstraints};
 use self::pre_decl::bin_op_to_fun;
@@ -51,39 +49,17 @@ macro_rules! iter_TyResult_to_TyResult {
     }};
 }
 
-/// Return the CompilUnit for the standard library
-fn get_stdlib_compil_unit() -> CompilUnit<'static> {
-    //Use the singleton-pattern
-    static STD_LIB_PATH: &'static str = "src/stdlib.desc";
-    static mut STD_LIB_SRC: Option<SourceCode> = None;
-    static mut STD_LIB_COMPIL: Option<CompilUnit> = None;
-    static ONCE: Once = Once::new();
-
-    unsafe {
-        ONCE.call_once(|| {
-            STD_LIB_SRC = Some(match SourceCode::from_file(STD_LIB_PATH) {
-                Ok(s) => s,
-                Err(err) => panic!("Reading stdlib failed\n{:#?}", err),
-            });
-            STD_LIB_COMPIL = Some(match crate::parser::parse(STD_LIB_SRC.as_ref().unwrap()) {
-                Ok(c) => c,
-                Err(err) => panic!("Parsing stdlib failed!\n{:#?}", err),
-            });
-        });
-
-        STD_LIB_COMPIL.clone().unwrap()
-    }
-}
-
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------
 // ⊢ Σ
-pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
+pub fn ty_check(
+    compil_unit: &mut CompilUnit,
+    std_compil_unit: &mut CompilUnit,
+) -> Result<(), ErrorReported> {
     let mut ty_checker = TyChecker::new();
 
-    // Add std-lib to the ty_checker-environment
-    let mut std_compil_unit = get_stdlib_compil_unit();
-    ty_checker.ty_check(&mut std_compil_unit).map_err(|err| {
+    // Check std-lib
+    ty_checker.ty_check(std_compil_unit).map_err(|err| {
         err.emit(&std_compil_unit.source);
         ErrorReported
     })?;
@@ -93,10 +69,6 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
         err.emit(compil_unit.source);
         ErrorReported
     })?;
-
-    // Add items of std-lib to passed argument
-    // This is necessary to make sure codegeneration (including monomorphisation) works as expected
-    compil_unit.item_defs.extend(std_compil_unit.item_defs);
 
     Ok(())
 }

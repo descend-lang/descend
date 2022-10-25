@@ -1,7 +1,7 @@
 use crate::ast::{
-    BinOp, BinOpNat, Constraint, DataTy, DataTyKind, Exec, ExprKind, FunctionKind, Ident,
-    IdentKinded, Kind, Memory, Nat, Ownership, Path, Provenance, ScalarTy, ThreadHierchyTy,
-    TraitMonoType, Ty, TyKind, TypeScheme,
+    BinOp, BinOpNat, DataTy, DataTyKind, Exec, ExprKind, FunctionKind, Ident, IdentKinded, Kind,
+    Memory, Nat, Ownership, Path, Provenance, ScalarTy, ThreadHierchyTy, TraitMonoType, Ty, TyKind,
+    TypeScheme,
 };
 use crate::ty_check::{Expr, PlaceExpr, PlaceExprKind};
 
@@ -38,26 +38,17 @@ pub const SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub const SPLIT_WARP: &str = "split_warp";
 pub const SPLIT_WARP_GRP: &str = "split_warp_grp";
 
-pub const NUMBERS_ADD: &str = "__add_internal";
-pub const NUMBERS_SUB: &str = "__sub_internal";
-pub const NUMBERS_MUL: &str = "__mul_internal";
-pub const NUMBERS_DIV: &str = "__div_internal";
-pub const NUMBERS_REM_I32: &str = "__rem_internal_i32";
-pub const NUMBERS_REM_U32: &str = "__rem_internal_u32";
-pub const NUMBERS_EQ: &str = "__eq_internal";
+pub const TRAIT_ADD_NAME: &str = "Add";
+pub const TRAIT_SUB_NAME: &str = "Sub";
+pub const TRAIT_MUL_NAME: &str = "Mul";
+pub const TRAIT_DIV_NAME: &str = "Div";
+pub const TRAIT_REM_NAME: &str = "Rem";
+pub const TRAIT_EQ_NAME: &str = "Eq";
+pub const TRAIT_COPY_NAME: &str = "Copy";
 
-const NUMBER_TRAIT_NAME: &str = "Number";
-const COPY_TRAIT_NAME: &str = "Copy";
-
-pub fn number_trait() -> TraitMonoType {
-    TraitMonoType {
-        name: String::from(NUMBER_TRAIT_NAME),
-        generic_args: vec![],
-    }
-}
 pub fn copy_trait() -> TraitMonoType {
     TraitMonoType {
-        name: String::from(COPY_TRAIT_NAME),
+        name: String::from(TRAIT_COPY_NAME),
         generic_args: vec![],
     }
 }
@@ -78,12 +69,12 @@ pub fn bin_op_to_fun(binop: &BinOp, lhs: Expr, rhs: Expr) -> ExprKind {
         Path::InferFromFirstArg,
         Some(FunctionKind::TraitFun(
             match binop {
-                BinOp::Add => "Add",
-                BinOp::Sub => "Sub",
-                BinOp::Mul => "Mul",
-                BinOp::Div => "Div",
-                BinOp::Mod => "Rem",
-                BinOp::Eq => "Eq",
+                BinOp::Add => TRAIT_ADD_NAME,
+                BinOp::Sub => TRAIT_SUB_NAME,
+                BinOp::Mul => TRAIT_MUL_NAME,
+                BinOp::Div => TRAIT_DIV_NAME,
+                BinOp::Mod => TRAIT_REM_NAME,
+                BinOp::Eq => TRAIT_EQ_NAME,
                 _ => todo!(),
             }
             .to_string(),
@@ -92,6 +83,19 @@ pub fn bin_op_to_fun(binop: &BinOp, lhs: Expr, rhs: Expr) -> ExprKind {
         vec![],
         vec![lhs, rhs],
     )
+}
+
+pub fn fun_to_bin_op(trait_name: &str, lhs: Expr, rhs: Expr) -> ExprKind {
+    let bin_op = match trait_name {
+        TRAIT_ADD_NAME => BinOp::Add,
+        TRAIT_SUB_NAME => BinOp::Sub,
+        TRAIT_MUL_NAME => BinOp::Mul,
+        TRAIT_DIV_NAME => BinOp::Div,
+        TRAIT_REM_NAME => BinOp::Mod,
+        TRAIT_EQ_NAME => BinOp::Eq,
+        _ => todo!(),
+    };
+    ExprKind::BinOp(bin_op, Box::new(lhs), Box::new(rhs))
 }
 
 pub fn fun_decls() -> Vec<(&'static str, TypeScheme)> {
@@ -127,84 +131,9 @@ pub fn fun_decls() -> Vec<(&'static str, TypeScheme)> {
         (SPLIT_WARP_GRP, split_warp_grp_ty()),
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
-        (NUMBERS_ADD, number_bin_op_ty()),
-        (NUMBERS_SUB, number_bin_op_ty()),
-        (NUMBERS_MUL, number_bin_op_ty()),
-        (NUMBERS_DIV, number_bin_op_ty()),
-        (NUMBERS_REM_I32, {
-            let i32_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))));
-            TypeScheme {
-                generic_params: vec![],
-                constraints: vec![],
-                mono_ty: Ty::new(TyKind::Fn(
-                    vec![i32_ty.clone(), i32_ty.clone()],
-                    Exec::GpuThread,
-                    Box::new(i32_ty),
-                )),
-            }
-        }),
-        (NUMBERS_REM_U32, {
-            let u32_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::U32))));
-            TypeScheme {
-                generic_params: vec![],
-                constraints: vec![],
-                mono_ty: Ty::new(TyKind::Fn(
-                    vec![u32_ty.clone(), u32_ty.clone()],
-                    Exec::GpuThread,
-                    Box::new(u32_ty),
-                )),
-            }
-        }),
-        (NUMBERS_EQ, number_eq_ty()),
     ];
 
     decls.to_vec()
-}
-
-fn number_bin_op_ty() -> TypeScheme {
-    let t = Ident::new("T");
-    let t_kinded = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::DataTy,
-    };
-    let t_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t.clone()))));
-    let number_constraint = Constraint {
-        param: DataTy::new(DataTyKind::Ident(t)),
-        trait_bound: number_trait(),
-    };
-    TypeScheme {
-        generic_params: vec![t_kinded],
-        constraints: vec![number_constraint],
-        mono_ty: Ty::new(TyKind::Fn(
-            vec![t_ty.clone(), t_ty.clone()],
-            Exec::GpuThread,
-            Box::new(t_ty),
-        )),
-    }
-}
-
-fn number_eq_ty() -> TypeScheme {
-    let t = Ident::new("T");
-    let t_kinded = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::DataTy,
-    };
-    let t_ty = Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t.clone()))));
-    let number_constraint = Constraint {
-        param: DataTy::new(DataTyKind::Ident(t)),
-        trait_bound: number_trait(),
-    };
-    TypeScheme {
-        generic_params: vec![t_kinded],
-        constraints: vec![number_constraint],
-        mono_ty: Ty::new(TyKind::Fn(
-            vec![t_ty.clone(), t_ty.clone()],
-            Exec::GpuThread,
-            Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::Bool,
-            ))))),
-        )),
-    }
 }
 
 // to_raw_ptr:

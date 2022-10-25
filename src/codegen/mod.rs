@@ -15,11 +15,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
-pub fn gen(compil_unit: &desc::CompilUnit, idx_checks: bool) -> String {
+pub fn gen(compil_unit: desc::CompilUnit, std_lib: desc::CompilUnit, idx_checks: bool) -> String {
     // Transform all impls and traits to global functions with unique names
     // and resolves all constraints from the functions
     let (structs, funs) =
-        monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs.clone());
+        monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs, std_lib.item_defs);
     let compil_unit = CompilUnit { structs, funs };
 
     // Vector of struct forward declarations / struct declarations
@@ -1565,67 +1565,36 @@ fn gen_expr(
                 .iter()
                 .any(|(name, _)| &ident.name == name) =>
             {
-                match ident.name.as_str() {
-                    crate::ty_check::pre_decl::NUMBERS_ADD
-                    | crate::ty_check::pre_decl::NUMBERS_SUB
-                    | crate::ty_check::pre_decl::NUMBERS_MUL
-                    | crate::ty_check::pre_decl::NUMBERS_DIV
-                    | crate::ty_check::pre_decl::NUMBERS_REM_I32
-                    | crate::ty_check::pre_decl::NUMBERS_REM_U32
-                    | crate::ty_check::pre_decl::NUMBERS_EQ => {
-                        let op = match ident.name.as_str() {
-                            crate::ty_check::pre_decl::NUMBERS_ADD => desc::BinOp::Add,
-                            crate::ty_check::pre_decl::NUMBERS_SUB => desc::BinOp::Sub,
-                            crate::ty_check::pre_decl::NUMBERS_MUL => desc::BinOp::Mul,
-                            crate::ty_check::pre_decl::NUMBERS_DIV => desc::BinOp::Div,
-                            crate::ty_check::pre_decl::NUMBERS_REM_I32 => desc::BinOp::Mod,
-                            crate::ty_check::pre_decl::NUMBERS_REM_U32 => desc::BinOp::Mod,
-                            crate::ty_check::pre_decl::NUMBERS_EQ => desc::BinOp::Eq,
-                            _ => panic!("This can not happen"),
-                        };
-                        gen_bin_op_expr(
-                            &op,
-                            &args[0],
-                            &args[1],
+                let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
+                CheckedExpr::Expr(cu::Expr::FunCall {
+                    fun: Box::new(
+                        match gen_expr(
+                            &desc::Expr::with_type(
+                                PlaceExpr(desc::PlaceExpr::new(desc::PlaceExprKind::Ident(
+                                    pre_decl_ident,
+                                ))),
+                                fun.ty.as_ref().unwrap().clone(),
+                            ),
                             codegen_ctx,
                             comp_unit,
                             dev_fun,
                             idx_checks,
+                        ) {
+                            CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => expr,
+                        },
+                    ),
+                    template_args: gen_args_kinded(kinded_args),
+                    args: args
+                        .iter()
+                        .map(
+                            |e| match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
+                                CheckedExpr::Expr(expr) | CheckedExpr::ExprIdxCheck(_, expr) => {
+                                    expr
+                                }
+                            },
                         )
-                    }
-                    _ => {
-                        let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
-                        CheckedExpr::Expr(cu::Expr::FunCall {
-                            fun: Box::new(
-                                match gen_expr(
-                                    &desc::Expr::with_type(
-                                        PlaceExpr(desc::PlaceExpr::new(
-                                            desc::PlaceExprKind::Ident(pre_decl_ident),
-                                        )),
-                                        fun.ty.as_ref().unwrap().clone(),
-                                    ),
-                                    codegen_ctx,
-                                    comp_unit,
-                                    dev_fun,
-                                    idx_checks,
-                                ) {
-                                    CheckedExpr::Expr(expr)
-                                    | CheckedExpr::ExprIdxCheck(_, expr) => expr,
-                                },
-                            ),
-                            template_args: gen_args_kinded(kinded_args),
-                            args: args
-                                .iter()
-                                .map(|e| {
-                                    match gen_expr(e, codegen_ctx, comp_unit, dev_fun, idx_checks) {
-                                        CheckedExpr::Expr(expr)
-                                        | CheckedExpr::ExprIdxCheck(_, expr) => expr,
-                                    }
-                                })
-                                .collect::<Vec<_>>(),
-                        })
-                    }
-                }
+                        .collect::<Vec<_>>(),
+                })
             }
             _ => {
                 let (reduced_fun, data_args, red_kinded_args) = match create_lambda_no_shape_args(

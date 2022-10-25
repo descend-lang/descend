@@ -8,22 +8,31 @@ use crate::{
         visit_mut::{walk_expr, VisitMut},
         *,
     },
-    ty_check::unify::{constrain, ConstrainMap, Constrainable},
+    ty_check::{
+        pre_decl,
+        unify::{constrain, ConstrainMap, Constrainable},
+    },
 };
 
 /// Convert all non-struct items to global functions and monomorphise all constraint generic parameters. <br>
-/// The global functions will have new unique non-C++-keywords names.
+/// The global functions will have new unique non-C++-keywords names. <br>
+/// std-lib functions for +, -, etc. will be replaced by BinOp-expressions.
 ///
 /// Input:
-///  * Well typed items (structs, traits, global functions, impls)
+///  * `items` - Well typed program-items (structs, traits, global functions, impls)
+///  * `std_lib_items` Well typed items of std-lib
 ///
 /// Output:
 ///  * list of all structs without constraints
 ///  * global functions which have no constraint generic parameters anymore
-pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDecl>, Vec<FunDef>) {
+pub fn monomorphise_constraint_generics(
+    mut items: Vec<Item>,
+    mut std_lib_items: Vec<Item>,
+) -> (Vec<StructDecl>, Vec<FunDef>) {
     // Copy all trait_defs to prevent borrowing errors in next statement
     let trait_defs = items
         .iter()
+        .chain(std_lib_items.iter())
         .filter_map(|item| {
             if let Item::TraitDef(trait_def) = item {
                 Some(trait_def.clone())
@@ -33,19 +42,23 @@ pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDecl
         })
         .collect::<Vec<TraitDef>>();
     // Add all default function implementations from traits to impls which does not override this function
-    items.iter_mut().for_each(|item| match item {
-        Item::ImplDef(impl_def) => {
-            add_inherited_fun_defs(impl_def, &trait_defs);
-        }
-        _ => (),
-    });
+    items
+        .iter_mut()
+        .chain(std_lib_items.iter_mut())
+        .for_each(|item| match item {
+            Item::ImplDef(impl_def) => {
+                add_inherited_fun_defs(impl_def, &trait_defs);
+            }
+            _ => (),
+        });
 
     // Monomorphise global functions, traits, impls to multiple global functions
-    let fun_defs = Monomorphiser::monomorphise(&items);
+    let fun_defs = Monomorphiser::monomorphise(&items, &std_lib_items);
 
     // Collect struct defs
     let struct_decls = items
         .into_iter()
+        .chain(std_lib_items.into_iter())
         .filter_map(|item| {
             if let Item::StructDecl(mut struct_decl) = item {
                 // Constraints of structs are checked while Typechecking are not needed anymore
@@ -66,10 +79,11 @@ pub fn monomorphise_constraint_generics(mut items: Vec<Item>) -> (Vec<StructDecl
 /// application and replace it if necessary
 struct Monomorphiser<'a> {
     /// Reference to items (to search impls or traits)
-    items: &'a Vec<Item>,
+    items: Vec<&'a Item>,
     /// List of all function definitions in the input-program (global functions, impl-Methods, trait-funs). <br>
-    /// The "String"-value describes the new unique global function-name of the function
-    funs: Vec<(FunctionName, FunDef, String)>,
+    /// The "String"-value describes the new unique global function-name of the function <br>
+    /// The bool describes if its a predefined function or not
+    funs: Vec<(FunctionName, FunDef, String, bool)>,
     /// * `FunctionName` - uniqly describes a function in input-program
     /// * `Vec<ArgKinded>` - consists of the arguments for the constraint-parameter
     /// of the function corresponding to `FunctionName`
@@ -86,57 +100,69 @@ struct Monomorphiser<'a> {
 }
 
 impl<'a> Monomorphiser<'a> {
-    /// Convert all non-struct items to global functions and monomorphise all constraint generic parameters.
+    /// Convert all non-struct items to global functions and monomorphise all constraint generic parameters. <br>
+    /// std-lib functions for +, -, etc. will be inlined.
     ///
     /// Input:
-    ///  * Well typed items (structs, traits, global functions, impls
-    /// where trait-impls override all function-definitions of the trait)
+    ///  * Well typed program- and std-lib-items (structs, traits, global functions, impls)
+    /// where trait-impls override all function-definitions of the trait
     ///
     /// Output:
     ///  * global functions which have no constraint generic parameters anymore
-    pub fn monomorphise(items: &Vec<Item>) -> Vec<FunDef> {
+    pub fn monomorphise(items: &Vec<Item>, std_lib_items: &Vec<Item>) -> Vec<FunDef> {
         // Create a vector of all functions including global functions, methods in impls and trait functions
-        let (mut funs, name_generator) = items.iter().fold(
-            (Vec::new(), NameGenerator::new()),
-            |(mut funs, mut name_generator), item| {
-                match item {
-                    Item::ImplDef(impl_def) => {
-                        funs.extend(impl_to_global_funs(impl_def).map(|(fun_name, fun_def)| {
-                            (
-                                fun_name.clone(),
-                                fun_def,
-                                name_generator.generate_name(&fun_name, None),
-                            )
-                        }))
-                    }
-                    Item::FunDef(fun_def) => {
-                        let fun_name = FunctionName::global_fun(&fun_def.name);
-                        funs.push((
-                            fun_name.clone(),
-                            fun_def.clone(),
-                            name_generator.generate_name(&fun_name, None),
-                        ));
-                    }
-                    Item::TraitDef(trait_def) => {
-                        funs.extend(trait_to_global_funs(trait_def).map(|(fun_name, fun_def)| {
-                            (
-                                fun_name.clone(),
-                                fun_def,
-                                name_generator.generate_name(&fun_name, None),
-                            )
-                        }))
-                    }
-                    Item::StructDecl(_) => (),
-                };
-                (funs, name_generator)
-            },
-        );
+        let (mut funs, mut name_generator) = (Vec::new(), NameGenerator::new());
+        let mut item_to_funs = |item: &Item, is_predefined| match item {
+            Item::ImplDef(impl_def) => {
+                funs.extend(impl_to_global_funs(impl_def).map(|(fun_name, fun_def)| {
+                    (
+                        fun_name.clone(),
+                        fun_def,
+                        name_generator.generate_name(&fun_name, None),
+                        is_predefined,
+                    )
+                }))
+            }
+            Item::FunDef(fun_def) => {
+                let fun_name = FunctionName::global_fun(&fun_def.name);
+                funs.push((
+                    fun_name.clone(),
+                    fun_def.clone(),
+                    name_generator.generate_name(&fun_name, None),
+                    is_predefined,
+                ));
+            }
+            Item::TraitDef(trait_def) => {
+                funs.extend(trait_to_global_funs(trait_def).map(|(fun_name, fun_def)| {
+                    (
+                        fun_name.clone(),
+                        fun_def,
+                        name_generator.generate_name(&fun_name, None),
+                        is_predefined,
+                    )
+                }))
+            }
+            Item::StructDecl(_) => (),
+        };
+        items.iter().for_each(|item| item_to_funs(item, false));
+        std_lib_items.iter().for_each(|item| {
+            // Ignore both implementations of rem-trait to avoid codegeneration for them
+            // Function applications using these methods are replaced by bin-op expressions
+            if let Item::ImplDef(impl_def) = item {
+                if impl_def.trait_impl.is_some()
+                    && impl_def.trait_impl.as_ref().unwrap().name == pre_decl::TRAIT_REM_NAME
+                {
+                    return ();
+                }
+            }
+            item_to_funs(item, true)
+        });
 
         // List of all new generated monomorphised functions
         let mut mono_funs: HashMap<FunctionName, Vec<FunDef>, RandomState> = HashMap::new();
         // Monomorphiser to visit all function applications
         let mut monomorphiser = Monomorphiser {
-            items: items,
+            items: items.iter().chain(std_lib_items.iter()).collect(),
             funs: funs.clone(),
             generated: HashMap::new(),
             generated_funs: Vec::new(),
@@ -144,21 +170,23 @@ impl<'a> Monomorphiser<'a> {
         };
 
         // Visit original functions to monomorphise function calls
-        funs.iter_mut().for_each(|(_, fun_def, _)| {
+        funs.iter_mut().for_each(|(_, fun_def, _, is_predefined)| {
             // Visit only functions without constraint generic params
-            if fun_def.generic_params.iter().fold(true, |res, gen| {
-                res && !fun_def
-                    .constraints
-                    .iter()
-                    .find(|con| {
-                        if let DataTyKind::Ident(ident) = &con.param.dty {
-                            ident.name == gen.ident.name
-                        } else {
-                            false
-                        }
-                    })
-                    .is_some()
-            }) {
+            if !*is_predefined
+                && fun_def.generic_params.iter().fold(true, |res, gen| {
+                    res && !fun_def
+                        .constraints
+                        .iter()
+                        .find(|con| {
+                            if let DataTyKind::Ident(ident) = &con.param.dty {
+                                ident.name == gen.ident.name
+                            } else {
+                                false
+                            }
+                        })
+                        .is_some()
+                })
+            {
                 monomorphiser.visit_fun_def(fun_def)
             }
         });
@@ -183,7 +211,7 @@ impl<'a> Monomorphiser<'a> {
         // Create a result vector of all monomorphised functions and all original functions which did not need to be monomorphised
         // Keep the original order of functions
         funs.into_iter().fold(
-            Vec::<FunDef>::new(), |mut funs, (fun_name, mut fun_def, global_fun_name)| {
+            Vec::<FunDef>::new(), |mut funs, (fun_name, mut fun_def, global_fun_name, is_predefined)| {
                 match fun_name.fun_kind {
                     FunctionKind::GlobalFun |
                     FunctionKind::ImplFun(_, _) =>
@@ -215,15 +243,17 @@ impl<'a> Monomorphiser<'a> {
                                             }
                                         ).is_some()
                                     }).is_some() {
-                                    eprintln!("function \"{}\" of kind {:?} is never used. Because this function has constraint \
-                                        generic params, which needs to be monomoprhised, no code can be generated \
-                                        for this function.",
-                                        fun_name.name,
-                                        match fun_name.fun_kind {
-                                            FunctionKind::GlobalFun => "GlobalFun".to_string(),
-                                            FunctionKind::TraitFun(name) => format!("TraitFun({})", name),
-                                            FunctionKind::ImplFun(_, _) => "ImplFun".to_string()
-                                        })
+                                    if !is_predefined {
+                                        eprintln!("function \"{}\" of kind {:?} is never used. Because this function has constraint \
+                                            generic params, which needs to be monomoprhised, no code can be generated \
+                                            for this function.",
+                                            fun_name.name,
+                                            match fun_name.fun_kind {
+                                                FunctionKind::GlobalFun => "GlobalFun".to_string(),
+                                                FunctionKind::TraitFun(name) => format!("TraitFun({})", name),
+                                                FunctionKind::ImplFun(_, _) => "ImplFun".to_string()
+                                            })
+                                    }
                                 }
                                 // Because the original functions did not need to be monomorphised
                                 else {
@@ -288,8 +318,8 @@ impl<'a> Monomorphiser<'a> {
                 fun_kind: fun_kind.as_ref().unwrap().clone(),
             };
             // Search function definition
-            let (_, fun_def, global_fun_name) =
-                match self.funs.iter().find(|(name, _, _)| *name == fun_name) {
+            let (_, fun_def, global_fun_name, _) =
+                match self.funs.iter().find(|(name, _, _, _)| *name == fun_name) {
                     Some(res) => res,
                     //If we dont find function definition of this function this must
                     //be a predeclared or already monomorphised function
@@ -302,8 +332,8 @@ impl<'a> Monomorphiser<'a> {
         if let FunctionKind::TraitFun(_) = fun_kind.as_ref().unwrap() {
             self.replace_trait_fun_app(&mut fun_name, fun_kind, generic_args);
             // Refresh reference to FunDef and the unique global function name of this application
-            match self.funs.iter().find(|(name, _, _)| *name == fun_name) {
-                Some((_, new_fun_name, new_global_fun_name)) => {
+            match self.funs.iter().find(|(name, _, _, _)| *name == fun_name) {
+                Some((_, new_fun_name, new_global_fun_name, _)) => {
                     fun_def = new_fun_name;
                     global_fun_name = new_global_fun_name;
                 }
@@ -539,22 +569,75 @@ impl<'a> Monomorphiser<'a> {
             .chain(fun_generic_args.into_iter())
             .collect();
     }
+
+    /// Returns if an expression is an function call of an function defined in std-lib
+    /// which should be replaced by an binary operation expression to make the generated
+    /// code better readable (e.g. replace a trait-function call of `add` with
+    /// numbers as arguments by an binary expression with `+`)
+    fn inline_std_bin_op_function(fun_app: &Expr) -> bool {
+        if let ExprKind::App(_, fun_kind, _, _, exprs) = &fun_app.expr {
+            if let Some(FunctionKind::TraitFun(trait_name)) = fun_kind {
+                match trait_name.as_str() {
+                    pre_decl::TRAIT_ADD_NAME
+                    | pre_decl::TRAIT_SUB_NAME
+                    | pre_decl::TRAIT_MUL_NAME
+                    | pre_decl::TRAIT_DIV_NAME
+                    | pre_decl::TRAIT_REM_NAME
+                    | pre_decl::TRAIT_EQ_NAME
+                        if exprs.len() == 2 && exprs[0].ty == exprs[1].ty =>
+                    {
+                        if let TyKind::Data(dty) = &exprs[0].ty.as_ref().unwrap().ty {
+                            if let DataTyKind::Scalar(s) = &dty.dty {
+                                return *s == ScalarTy::I32
+                                    || *s == ScalarTy::U32
+                                    || *s == ScalarTy::F32
+                                    || *s == ScalarTy::F64;
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+        false
+    }
+
+    /// Replace an expression by an binary operation expression <br>
+    /// Precondition `inline_std_bin_op_function` must return true
+    fn replace_fun_app_by_binop(fun_app: &mut Expr) {
+        assert!(Self::inline_std_bin_op_function(fun_app));
+        if let ExprKind::App(_, fun_kind, _, _, exprs) = &mut fun_app.expr {
+            if let Some(FunctionKind::TraitFun(trait_name)) = fun_kind {
+                let (rhs, lhs) = (exprs.pop().unwrap(), exprs.pop().unwrap());
+                fun_app.expr = pre_decl::fun_to_bin_op(trait_name, lhs, rhs)
+            }
+        }
+    }
 }
 
 // Visit-Implementation for Monomorphiser
 // Visit all function applications and call "monomorphise_fun_app"
 impl<'a> VisitMut for Monomorphiser<'a> {
     fn visit_expr(&mut self, expr: &mut Expr) {
-        match &mut expr.expr {
-            ExprKind::App(path, fun_kind, fun, generic_args, exprs) => {
-                // Path is not longer needed
-                *path = Path::Empty;
+        // Replace function calls of binary operations with numbers
+        // by descend-expressions for binary operations to make generated
+        // code better readable
+        if Self::inline_std_bin_op_function(&expr) {
+            Self::replace_fun_app_by_binop(expr)
+        }
+        // Else monomorphise all function calls
+        else {
+            match &mut expr.expr {
+                ExprKind::App(path, fun_kind, fun, generic_args, exprs) => {
+                    // Path is not longer needed
+                    *path = Path::Empty;
 
-                self.monomorphise_fun_app(fun_kind, fun, generic_args);
-                exprs.iter_mut().for_each(|expr| self.visit_expr(expr))
+                    self.monomorphise_fun_app(fun_kind, fun, generic_args);
+                    exprs.iter_mut().for_each(|expr| self.visit_expr(expr))
+                }
+                ExprKind::DepApp(_, _) => panic!("Does this happen? What to do now?"),
+                _ => walk_expr(self, expr),
             }
-            ExprKind::DepApp(_, _) => panic!("Does this happen? What to do now?"),
-            _ => walk_expr(self, expr),
         }
     }
 }

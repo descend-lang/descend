@@ -29,41 +29,29 @@ impl Number for f64 {}
 impl Number for i32 {}
 impl Number for u32 {}
 
+// The implementations for this predefined operators are replaced by builtin binary
+// C++-operations anyway.
 impl<T> Add<T, T> for T where T: Number {
-    fn add(t1: T, t2: T) -[gpu.thread]-> T {
-        __add_internal(t1, t2)
-    }
+    fn add(t1: T, t2: T) -[gpu.thread]-> T { t1 }
 }
 impl<T> Sub<T, T> for T where T: Number {
-    fn sub(t1: T, t2: T) -[gpu.thread]-> T {
-        __sub_internal(t1, t2)
-    }
+    fn sub(t1: T, t2: T) -[gpu.thread]-> T { t1 }
 }
 impl<T> Mul<T, T> for T where T: Number {
-    fn mul(t1: T, t2: T) -[gpu.thread]-> T {
-        __mul_internal(t1, t2)
-    }
+    fn mul(t1: T, t2: T) -[gpu.thread]-> T { t1 }
 }
 impl<T> Div<T, T> for T where T: Number {
-    fn div(t1: T, t2: T) -[gpu.thread]-> T {
-        __div_internal(t1, t2)
-    }
+    fn div(t1: T, t2: T) -[gpu.thread]-> T { t1 }
 }
 impl Rem<i32, i32> for i32 {
-    fn rem(t1: i32, t2: i32) -[gpu.thread]-> i32 {
-        __rem_internal_i32(t1, t2)
-    }
+    fn rem(t1: i32, t2: i32) -[gpu.thread]-> i32 { t1 }
 }
 impl Rem<u32, u32> for u32 {
-    fn rem(t1: u32, t2: u32) -[gpu.thread]-> u32 {
-        __rem_internal_u32(t1, t2)
-    }
+    fn rem(t1: u32, t2: u32) -[gpu.thread]-> u32 { t1 }
 }
 
 impl<T> Eq for T where T: Number {
-    fn eq(t1: T, t2: T) -[gpu.thread]-> bool {
-        __eq_internal(t1, t2)
-    }
+    fn eq(t1: T, t2: T) -[gpu.thread]-> bool { true }
 }
 
 impl<T, a: prv, m: mem> Eq for &a shrd m T where T: Eq + Copy {
