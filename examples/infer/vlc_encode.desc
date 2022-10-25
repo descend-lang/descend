@@ -1,41 +1,48 @@
-fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: prv, codewordlens: prv, out_data: prv, out_idx: prv>(
-    h_source_data: &source_data shrd cpu.mem [(u8, u8, u8, u8); gs*bs],
-    h_codewords: &codewords shrd cpu.mem [u32; num_symbols],
-    h_codewordlens: &codewordlens shrd cpu.mem [u32; num_symbols],
-    h_out_data: &out_data uniq cpu.mem [i32; gs*bs],
-    h_out_idx: &out_idx uniq cpu.mem [i32; gs]
+fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
+    h_source_data: &s shrd cpu.mem [(u8, u8, u8, u8); 4*256],
+    h_codewords: &c shrd cpu.mem [u32; 256],
+    h_codewordlens: &cl shrd cpu.mem [u32; 256],
+    h_out_data: &o uniq cpu.mem [i32; 4*256],
+    h_out_idx: &oi uniq cpu.mem [i32; 4]
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
-    let source_data = gpu_alloc_copy(&uniq gpu, h_source_data);
-    let codewords = gpu_alloc_copy(&uniq gpu, h_codewords);
-    let codewordlens = gpu_alloc_copy(&uniq gpu, h_codewordlens);
-
+    let source_data = gpu_alloc_copy(&uniq gpu, &shrd *h_source_data);
+    let codewords = gpu_alloc_copy(&uniq gpu, &shrd *h_codewords);
+    let codewordlens = gpu_alloc_copy(&uniq gpu, &shrd *h_codewordlens);
     let mut out_data = gpu_alloc_copy(&uniq gpu, &uniq *h_out_data);
     let mut out_idx = gpu_alloc_copy(&uniq gpu, &uniq *h_out_idx);
-    exec::<gs, bs>(
+    exec::<4, 256>(
         &uniq gpu,
-        (&shrd a_array, &uniq out_array),
-        | grid: BlockGrp<gs, ThreadGrp<bs>>,
-          inputs: (&shrd gpu.global [(u8, u8, u8, u8); gs*bs],
-                   &shrd gpu.global [u32; num_symbols],
-                   &shrd gpu.global [u32; num_symbols],
-                   &uniq gpu.global [i32; gs*bs],
-                   &uniq gpu.global [i32; gs])| -[gpu.grid]-> ()
-          {
-            let d_groups = group::<bs>(to_view(inputs.0));
+        (
+          &shrd source_data,
+          &shrd codewords,
+          &shrd codewordlens,
+          &uniq out_data,
+          &uniq out_idx
+        ),
+        | grid: BlockGrp<4, ThreadGrp<256>>,
+          inputs: (&shrd gpu.global [(u8, u8, u8, u8); 4*256],
+                   &shrd gpu.global [u32; 256],
+                   &shrd gpu.global [u32; 256],
+                   &uniq gpu.global [i32; 4*256],
+                   &uniq gpu.global [i32; 4])
+        | -[gpu.grid]-> () {
+            let d_groups = group::<256>(to_view(inputs.0));
             let cw_input = inputs.1;
             let cwl_input = inputs.2;
 
-            let out_data_groups = group_mut::<bs>(to_view_mut(inputs.3));
+            let out_data_groups = group_mut::<256>(to_view_mut(inputs.3));
             let out_idx_groups = group_mut::<1>(to_view_mut(inputs.4));
 
             decl {
-                let mut sm_cw: [u32; num_symbols] @ gpu.shared;
-                let mut sm_cwl: [u32; num_symbols] @ gpu.shared;
-                let mut sm_as: [i32; bs] @ gpu.shared;
+                let mut sm_cw: [u32; 256] @ gpu.shared;
+                let mut sm_cwl: [u32; 256] @ gpu.shared;
+                let mut sm_as: [i32; 256] @ gpu.shared;
                 let mut sm_kcmax: [i32; 1] @ gpu.shared
-            } parfor block in grid with d_group, cw_group, cwl_group, out_data_group, out_idx_group from d_groups, cw_input, cwl_input, out_data_groups, out_idx_groups {
+            } parfor block in grid
+              with d_group, cw_group, cwl_group, out_data_group, out_idx_group
+              from d_groups, cw_input, cwl_input, out_data_groups, out_idx_groups {
                 // create shared memory views
                 let sm_cw_view = to_view_mut(&uniq sm_cw);
                 let sm_cwl_view = to_view_mut(&uniq sm_cwl);
@@ -91,12 +98,12 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                 // (required for position of encoded symbols in output)
                 // work-efficient shared memory implementation (optimization possible when using shuffle instructions!)
                 // step 1: up-sweep phase
-                for_nat offset in doubled_range(1, bs/2) {
+                for_nat offset in doubled_range(1, 128) {
                     let sm_as_tmp_view_1 = group_mut::<offset>(sm_as_view);
                     let sm_as_tmp_view_2 = transpose_mut(sm_as_tmp_view_1);
                     let sm_as_tmp_view_3 = sm_as_tmp_view_2[offset-1];
                     let sm_as_scan_tuples = group_mut::<2>(sm_as_tmp_view_3);
-                    let (active_threads, _) = split_thread_grp::<(bs/2)/offset>(block);
+                    let (active_threads, _) = split_thread_grp::<(128)/offset>(block);
                     parfor _ in active_threads
                     with sm_as_scan_tuple
                     from sm_as_scan_tuples {
@@ -108,17 +115,17 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                 let split_sm_as = split uniq 1 sm_as_view;
                 parfor _ in split_thread_grp::<1>(block).0
                 with sm_as_last
-                from split_sm_as.(gs-1) {
+                from split_sm_as[3] {
                     sm_as_last = 0
                 };
 
                 // step 3: down-sweep phase
-                for_nat offset in halved_range(bs/2) {
+                for_nat offset in halved_range(128) {
                     let sm_as_tmp_view_1 = group_mut::<offset>(sm_as_view);
                     let sm_as_tmp_view_2 = transpose_mut(sm_as_tmp_view_1);
                     let sm_as_tmp_view_3 = sm_as_tmp_view_2[offset-1];
                     let sm_as_scan_tuples = group_mut::<2>(sm_as_tmp_view_3);
-                    let (active_threads, _) = split_thread_grp::<(bs/2)/offset>(block);
+                    let (active_threads, _) = split_thread_grp::<(128)/offset>(block);
                     parfor _ in active_threads
                     with sm_as_scan_tuple
                     from sm_as_scan_tuples {
@@ -129,7 +136,7 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                 // output the bit-index after the last codeword of the block for every block (out_idx_item)
                 // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)
                 let split_sm_kcmax = group_mut::<1>(sm_kcmax_view);
-                parfor _ in split_thread_grp::<1>(block).(gs-1)
+                parfor _ in split_thread_grp::<1>(block).3
                 with sm_as_item, out_idx_item, sm_kcmax_item
                 from sm_as_view, out_idx_group, split_sm_kcmax.0 {
                     out_idx_item = sm_as_item + codewordlen;
@@ -146,7 +153,7 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                 from sm_as_view {
                     kc = sm_as_item / 32;
                     startbit = sm_as_item % 32;
-                    sm_as_item = 0U
+                    sm_as_item = 0 as u32
                 };
 
                 // combine the encoded symbols of every thread in a block inside shared memory
@@ -158,7 +165,11 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                     let raw_ptr_sm_as = to_raw_ptr(&uniq *sm_as_ptr);
 
                     // Part 1 (first value in shared memory)
-                    let mut wrbits: u32 = codewordlen > (32-startbit)? (32-startbit): codewordlen;
+                    if codewordlen > (32-startbit) {
+                        let mut wrbits: u32 = (32-startbit)
+                    } else {
+                        let mut wrbits: u32 = codewordlen
+                    };
                     let mut tmpcw: u32 = (codeword>>(codewordlen - wrbits)) as u32;
                     //todo raw pointer location should not be affected by thread id!
                     let raw_ptr_sm_as_offset_p1 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc);
@@ -168,7 +179,11 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                     codewordlen = codewordlen - wrbits;
 
                     // Part 2 (second value in shared memory)
-                    wrbits = codewordlen > 32 ? 32: codewordlen;
+                    if codewordlen > 32 {
+                        wrbits = 32
+                    } else {
+                        wrbits = codewordlen
+                    };
                     tmpcw = (codeword>>(codewordlen - wrbits)) & ((1<<wrbits)-1) as u32;
                     //todo raw pointer location should not be affected by thread id!
                     let raw_ptr_sm_as_offset_p2 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 1);
@@ -195,4 +210,7 @@ fn vlc_encode<gs: nat, bs: nat, num_symbols: nat, source_data: prv, codewords: p
                 }
             }
           }
+        );
+        copy_to_host(&shrd out_data, h_out_data);
+        copy_to_host(&shrd out_idx, h_out_idx)
 }

@@ -1445,6 +1445,14 @@ impl TyChecker {
                     DataTyKind::Scalar(ScalarTy::F32),
                     DataTyKind::Scalar(ScalarTy::F32),
                 ) |
+                (
+                    DataTyKind::Scalar(ScalarTy::U32),
+                    DataTyKind::Scalar(ScalarTy::U32),
+                ) |
+                (
+                    DataTyKind::Scalar(ScalarTy::U8),
+                    DataTyKind::Scalar(ScalarTy::U8),
+                ) |
                 ( DataTyKind::Scalar(ScalarTy::F64), DataTyKind::Scalar(ScalarTy::F64)) |
                 (   DataTyKind::Scalar(ScalarTy::I32),
                     DataTyKind::Scalar(ScalarTy::I32),
@@ -1714,6 +1722,7 @@ impl TyChecker {
         let scalar_data = match l {
             Lit::Unit => ScalarTy::Unit,
             Lit::Bool(_) => ScalarTy::Bool,
+            Lit::U8(_) => ScalarTy::U8,
             Lit::I32(_) => ScalarTy::I32,
             Lit::U32(_) => ScalarTy::U32,
             Lit::F32(_) => ScalarTy::F32,
