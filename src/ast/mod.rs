@@ -1111,7 +1111,7 @@ impl TypeScheme {
         }
     }
 
-    //
+    /// Replace all kinded identifiers which are bound in this TypeScheme by implicit kinded identifiers
     pub fn make_generic_params_implicit(&self) -> Self {
         let implicit_args: Vec<_> = self
             .generic_params

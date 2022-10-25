@@ -332,6 +332,10 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Deref(expr) => visitor.visit_expr(expr),
         ExprKind::Range(_, _) => (),
     }
+
+    if let Some(ty) = &mut expr.ty {
+        visitor.visit_ty(ty);
+    }
 }
 
 pub fn walk_constraint<V: VisitMut>(visitor: &mut V, constraint: &mut Constraint) {
