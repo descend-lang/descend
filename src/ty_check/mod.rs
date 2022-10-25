@@ -3759,7 +3759,6 @@ fn is_dty_copyable(
 
     match &dty.dty {
         // FIXME thread hierarchies and their splits should be non-copyable!
-        ThreadHierchy(_) => true,
         SplitThreadHierchy(_, _) => true,
         Dead(_) => panic!(
             "This case is not expected to mean anything.\
