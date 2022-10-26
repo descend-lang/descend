@@ -1,4 +1,4 @@
-#include "descend.cuh"
+    #include "descend.cuh"
 
 template<std::size_t n>
 auto inplace_vector_add(
@@ -8,9 +8,7 @@ auto inplace_vector_add(
     const auto gpu = descend::gpu_device(0);
     auto a_array = descend::gpu_alloc<descend::array<descend::i32, n>>(&gpu, &*ha_array);
     const auto b_array = descend::gpu_alloc<descend::array<descend::i32, n>>(&gpu, &*hb_array);
-    descend::exec<64, 1024>(&gpu, [] __device__ (
-            descend::i32 * const p0,
-            const descend::i32 * const p1) -> void {
+    descend::exec<64, 1024>(&gpu, [] __device__ (descend::i32 * const p0, const descend::i32 * const p1) -> void {
         p0[blockIdx.x * 1024 + threadIdx.x] = p0[blockIdx.x * 1024 + threadIdx.x] + p1[blockIdx.x * 1024 + threadIdx.x];
         __syncthreads();
     }, &a_array, &b_array);

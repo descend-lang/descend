@@ -1,0 +1,30 @@
+#include "descend.cuh"
+template <std::size_t n>
+auto vec_add(descend::f64 *const vec_1, descend::f64 *const vec_2) -> void {
+  {
+    auto gpu = descend::gpu_device(0);
+    auto vec_1_arr = descend::gpu_alloc_copy<descend::array<descend::f64, n>>(
+        (&gpu), (&(*vec_1)));
+    const auto vec_2_arr =
+        descend::gpu_alloc_copy<descend::array<descend::f64, n>>((&gpu),
+                                                                 (&(*vec_2)));
+    descend::exec<32, 32>((&gpu),
+                          [] __device__(descend::f64 *const p0,
+                                        const descend::f64 *const p1,
+                                        std::size_t n) -> void {
+                            {
+
+                              {
+
+                                {
+                                  p0[((blockIdx.x * 32) + threadIdx.x)] =
+                                      p0[((blockIdx.x * 32) + threadIdx.x)] +
+                                      p1[((blockIdx.x * 32) + threadIdx.x)];
+                                }
+                              }
+                            }
+                          },
+                          (&vec_1_arr), (&vec_2_arr), n);
+    descend::copy_to_host<descend::array<descend::f64, n>>((&vec_1_arr), vec_1);
+  }
+}
