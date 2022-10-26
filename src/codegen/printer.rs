@@ -2,8 +2,8 @@ use super::cu_ast::{
     BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
 use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
-use std::fmt::Formatter;
 use std::env;
+use std::fmt::Formatter;
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
@@ -27,7 +27,7 @@ fn clang_format(code: &str) -> String {
     //If clang-format is not available for user, it's path can be set in this env Variable (e.g. in .cargo/config.toml)
     let clang_format_path = match env::var("CLANG_FORMAT_PATH") {
         Ok(path) => path,
-        Err(_) => String::from("clang-format")
+        Err(_) => String::from("clang-format"),
     };
 
     use std::io::Write;

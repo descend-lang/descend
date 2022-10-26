@@ -2363,7 +2363,9 @@ fn gen_templ_params(ty_idents: &[desc::IdentKinded]) -> Vec<cu::TemplParam> {
     ty_idents
         .iter()
         .filter_map(|ty_ident| {
-            if !matches!(ty_ident.kind, desc::Kind::Provenance) {
+            if !matches!(ty_ident.kind, desc::Kind::Provenance)
+                && !matches!(ty_ident.kind, desc::Kind::Memory)
+            {
                 Some(gen_templ_param(ty_ident))
             } else {
                 None

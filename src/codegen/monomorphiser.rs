@@ -651,23 +651,67 @@ fn monomorphise_fun(
     cons_generics: &Vec<IdentKinded>,
     cons_generic_args: &Vec<ArgKinded>,
 ) -> FunDef {
+    // Kinded identifier of the function
+    let mut generic_params_fun = fun_def
+        .generic_params
+        .iter()
+        .filter_map(|generic| {
+            if cons_generics
+                .iter()
+                .find(|cons_generic| cons_generic.ident.name == generic.ident.name)
+                .is_none()
+            {
+                Some(generic.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Substitution which substitutes constraint kinded identifier of the function by ArgKinded
+    let subs_constraint_generics = cons_generics.iter().zip(cons_generic_args.iter()).fold(
+        Vec::with_capacity(cons_generics.len()),
+        |mut subs_constraint_generics, (con_ident_kinded, arg)| {
+            // Special case: if the kinded arguments for the kinded identifiers contain kinded identifier
+            // These kinded identifier must added to the kinded args of the monomorphised function
+
+            // Avoid name clashes with free variables in `cons_generic_args`
+            let arg_rename_subs = arg.free_idents().into_iter().fold(
+                ConstrainMap::new(),
+                |res_subs, mut new_ident_kinded| {
+                    // Counter for fresh_name generation
+                    let mut counter = 2;
+                    let new_ident_kinded_name = new_ident_kinded.ident.name.clone();
+
+                    while generic_params_fun
+                        .iter()
+                        .find(|ident_kinded| ident_kinded.ident.name == new_ident_kinded.ident.name)
+                        .is_some()
+                    {
+                        new_ident_kinded.ident.name =
+                            format!("{}_{}", new_ident_kinded_name, counter);
+                        counter = counter + 1;
+                    }
+
+                    generic_params_fun.push(new_ident_kinded);
+
+                    res_subs
+                },
+            );
+
+            let mut arg = arg.clone();
+            if !arg_rename_subs.is_empty() {
+                arg.substitute(&arg_rename_subs);
+            }
+            subs_constraint_generics.push((&*con_ident_kinded.ident.name, arg));
+
+            subs_constraint_generics
+        },
+    );
+
     FunDef {
         name: fun_def.name.clone(),
-        generic_params: fun_def
-            .generic_params
-            .iter()
-            .filter_map(|generic| {
-                if cons_generics
-                    .iter()
-                    .find(|cons_generic| cons_generic.ident.name == generic.ident.name)
-                    .is_none()
-                {
-                    Some(generic.clone())
-                } else {
-                    None
-                }
-            })
-            .collect(),
+        generic_params: generic_params_fun,
         constraints: vec![],
         param_decls: fun_def
             .param_decls
@@ -692,10 +736,9 @@ fn monomorphise_fun(
         body_expr: {
             let mut body = fun_def.body_expr.clone();
             body.subst_kinded_idents(HashMap::from_iter(
-                cons_generics
+                subs_constraint_generics
                     .iter()
-                    .zip(cons_generic_args.iter())
-                    .map(|(generic, generic_arg)| (&*generic.ident.name, generic_arg)),
+                    .map(|(name, arg)| (*name, arg)),
             ));
             body
         },
@@ -1067,7 +1110,13 @@ impl NameGenerator {
         match arg {
             ArgKinded::Ident(_) => panic!("There should be no idents without kinds"),
             ArgKinded::Nat(nat) => format!("{}", nat),
-            ArgKinded::Memory(mem) => format!("{}", mem),
+            ArgKinded::Memory(mem) => String::from(match mem {
+                Memory::GpuGlobal => "GpuGlobal",
+                Memory::CpuMem => "CpuMem",
+                Memory::GpuShared => "GpuShared",
+                Memory::GpuLocal => "GpuLocal",
+                Memory::Ident(_) => todo!("This should not happen"),
+            }),
             ArgKinded::Ty(ty) => NameGenerator::ty_to_string(ty),
             ArgKinded::DataTy(dty) => NameGenerator::dty_to_string(dty),
             ArgKinded::Provenance(prov) => format!("{}", prov),
