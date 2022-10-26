@@ -4,7 +4,7 @@ mod printer;
 
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{self as desc, ProjEntry};
+use crate::ast::{self as desc, ProjEntry, StructDecl};
 use crate::ast::{utils, Mutability};
 use crate::codegen::cu_ast::Item;
 use core::panic;
@@ -18,8 +18,13 @@ use std::sync::atomic::{AtomicI32, Ordering};
 pub fn gen(compil_unit: desc::CompilUnit, std_lib: desc::CompilUnit, idx_checks: bool) -> String {
     // Transform all impls and traits to global functions with unique names
     // and resolves all constraints from the functions
-    let (structs, funs) =
+    let (mut structs, funs) =
         monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs, std_lib.item_defs);
+
+    // Order structs to make sure every struct is declared before it is used as attribute in an other struct
+    order_structs(&mut structs);
+
+    // Create compile_unit
     let compil_unit = CompilUnit { structs, funs };
 
     // Vector of struct forward declarations / struct declarations
@@ -72,6 +77,40 @@ pub fn gen(compil_unit: desc::CompilUnit, std_lib: desc::CompilUnit, idx_checks:
         .collect::<cu::CuProgram>();
     // Print generated cuda-program
     printer::print(&cu_program)
+}
+
+/// Order structs to make sure every struct is declared before it is used as attribute in an other struct
+fn order_structs(structs: &mut Vec<StructDecl>) {
+    // Do a topological sorting
+    for i in 0..structs.len() {
+        // Search a struct with the property that no structs except structs[0..i] must be declared before
+        let struct_without_predecessor_pos = structs[i..]
+            .iter()
+            .position(|struct_decl| {
+                let mut no_predecessor = true;
+
+                struct_decl.struct_fields.iter().for_each(|field| {
+                    if let desc::DataTyKind::Struct(sdt) = &field.dty.dty {
+                        no_predecessor = no_predecessor
+                            & structs[i..]
+                                .iter()
+                                .find(|struct_decl| struct_decl.name == sdt.name)
+                                .is_none()
+                    }
+                });
+
+                no_predecessor
+            })
+            .expect(
+                "Found a cyclic struct definitions. This should have been caught by the parser!",
+            )
+            + i;
+
+        // Perform a swap-operation if necessary
+        if struct_without_predecessor_pos != i {
+            structs.swap(struct_without_predecessor_pos, i)
+        }
+    }
 }
 
 // TODO extract into own module, hide ScopeCtx, and ParallCtx and provide wrapper functions in CodegenCtx

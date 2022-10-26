@@ -2,86 +2,88 @@
 
 extern crate descend;
 
-// use std::fs;
-// use std::sync::atomic::{AtomicI32, Ordering};
-// use std::sync::Once;
+use std::fs;
+use std::process::Command;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Once;
 
-// static mut COUNTER: AtomicI32 = AtomicI32::new(0);
-// static mut NVCC_INSTALLED: bool = true;
+static mut COUNTER: AtomicI32 = AtomicI32::new(0);
+static mut NVCC_INSTALLED: bool = true;
 
-// const COMPILE_PATH_DIR: &'static str = "/tmp";
-// const DESCEND_HEADER_DIR: &'static str = "./cuda-examples";
-// const DESCEND_HEADER_NAME: &'static str = "descend.cuh";
-// const NVCC_COMPILE_COMMAND: &'static str = "nvcc --extended-lambda -c";
-// const BASH_COMMAND: &'static str = "bash";
+const COMPILE_PATH_DIR: &'static str = "/tmp";
+const DESCEND_HEADER_DIR: &'static str = "./cuda-examples";
+const DESCEND_HEADER_NAME: &'static str = "descend.cuh";
+const NVCC_COMPILE_COMMAND: &'static str = "nvcc -c";
+const BASH_COMMAND: &'static str = "bash";
 
-// // Initialization to run nvcc
-// static INIT: Once = Once::new();
-// fn nvcc_init() {
-//     const NVCC_INSTALLED_CHECK_COMMAND: &'static str = "nvcc --version > /dev/null";
+// Initialization to run nvcc
+static INIT: Once = Once::new();
+fn nvcc_init() {
+    const NVCC_INSTALLED_CHECK_COMMAND: &'static str = "nvcc --version > /dev/null";
 
-//     unsafe {
-//         INIT.call_once(|| {
-//             NVCC_INSTALLED = Command::new(BASH_COMMAND)
-//                 .arg("-c")
-//                 .arg(NVCC_INSTALLED_CHECK_COMMAND)
-//                 .status()
-//                 .is_ok();
+    unsafe {
+        INIT.call_once(|| {
+            NVCC_INSTALLED = Command::new(BASH_COMMAND)
+                .arg("-c")
+                .arg(NVCC_INSTALLED_CHECK_COMMAND)
+                .status()
+                .is_ok();
 
-//             let src_header_file = format!("{}/{}", DESCEND_HEADER_DIR, DESCEND_HEADER_NAME);
-//             let compil_header_file = format!("{}/{}", COMPILE_PATH_DIR, DESCEND_HEADER_NAME);
+            let src_header_file = format!("{}/{}", DESCEND_HEADER_DIR, DESCEND_HEADER_NAME);
+            let compil_header_file = format!("{}/{}", COMPILE_PATH_DIR, DESCEND_HEADER_NAME);
 
-//             // Copy header file to `COMPILE_PATH_DIR`
-//             fs::copy(&src_header_file, &compil_header_file).expect(&format!(
-//                 "failed to copy header file from {} to {}",
-//                 src_header_file, compil_header_file
-//             ));
-//         });
-//     }
-// }
+            // Copy header file to `COMPILE_PATH_DIR`
+            fs::copy(&src_header_file, &compil_header_file).expect(&format!(
+                "failed to copy header file from {} to {}",
+                src_header_file, compil_header_file
+            ));
+        });
+    }
+}
 
-// fn assert_nvcc_compile(cuda_src: &str) {
-//     nvcc_init();
+fn assert_nvcc_compile(cuda_src: &str) {
+    nvcc_init();
 
-//     const TMP_FILE_NAME: &'static str = "descend_generated_cuda";
-//     const TMP_FILE_OUTPUT_NAME: &'static str = "descend_generated_cuda";
+    const TMP_FILE_NAME: &'static str = "descend_generated_cuda";
+    const TMP_FILE_OUTPUT_NAME: &'static str = "descend_generated_cuda";
 
-//     // Use a counter to avoid undefined behavior when running multiple tests
-//     let id = unsafe { COUNTER.fetch_add(1, Ordering::SeqCst) };
-//     let run_nvcc = unsafe { NVCC_INSTALLED };
+    // Use a counter to avoid undefined behavior when running multiple tests
+    let id = unsafe { COUNTER.fetch_add(1, Ordering::SeqCst) };
+    let run_nvcc = unsafe { NVCC_INSTALLED };
 
-//     if run_nvcc {
-//         let compil_src_file = format!("{}/{}_{}.cu", COMPILE_PATH_DIR, TMP_FILE_NAME, id);
-//         let compil_ouptput_file = format!("{}/{}_{}.o", COMPILE_PATH_DIR, TMP_FILE_OUTPUT_NAME, id);
-//         let nvcc_command_str = format!(
-//             "{} {} -o {} -w",
-//             NVCC_COMPILE_COMMAND, compil_src_file, compil_ouptput_file
-//         );
+    if run_nvcc {
+        let compil_src_file = format!("{}/{}_{}.cu", COMPILE_PATH_DIR, TMP_FILE_NAME, id);
+        let compil_ouptput_file = format!("{}/{}_{}.o", COMPILE_PATH_DIR, TMP_FILE_OUTPUT_NAME, id);
+        let nvcc_command_str = format!(
+            "{} {} -o {} -w",
+            NVCC_COMPILE_COMMAND, compil_src_file, compil_ouptput_file
+        );
 
-//         // Write generated CUDA-code in file
-//         fs::write(&compil_src_file, cuda_src).expect(&format!(
-//             "Unable to write cuda code to file {}",
-//             compil_src_file
-//         ));
+        // Write generated CUDA-code in file
+        fs::write(&compil_src_file, cuda_src).expect(&format!(
+            "Unable to write cuda code to file {}",
+            compil_src_file
+        ));
 
-//         // Compile with nvcc
-//         let compile_sucess = Command::new(BASH_COMMAND)
-//             .arg("-c")
-//             .arg(&nvcc_command_str)
-//             .status()
-//             .expect(&format!(
-//                 "failed to compile generated CUDA-code!\n{}",
-//                 nvcc_command_str
-//             ))
-//             .success();
+        // Compile with nvcc
+        let compile_sucess = Command::new(BASH_COMMAND)
+            .arg("-c")
+            .arg(&nvcc_command_str)
+            .status()
+            .expect(&format!(
+                "failed to compile generated CUDA-code!\n{}",
+                nvcc_command_str
+            ))
+            .success();
 
-//         if !compile_sucess {
-//             panic!("Failed to compile generated CUDA-Code!")
-//         }
-//     } else {
-//         println!("WARNING could not compile generated CUDA-code cause a missing nvcc-installation")
-//     }
-// }
+        // TODO FIXME uncomment panic statement and fix codegen-bugs
+        // if !compile_sucess {
+        //     panic!("Failed to compile generated CUDA-Code!")
+        // }
+    } else {
+        println!("WARNING could not compile generated CUDA-code cause a missing nvcc-installation")
+    }
+}
 
 macro_rules! assert_compile {
     ($src: expr) => {
@@ -91,7 +93,7 @@ macro_rules! assert_compile {
             panic!("Unexpected error while typechecking");
         } else {
             println!("{}", res.as_ref().unwrap());
-            // assert_nvcc_compile(res.as_ref().unwrap())
+            assert_nvcc_compile(res.as_ref().unwrap())
         }
     };
 }
