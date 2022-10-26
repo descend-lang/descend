@@ -1,6 +1,63 @@
 #![cfg(test)]
-
+use std::fs;
+use std::process::Command;
 extern crate descend;
+
+const COMPILE_PATH_DIR: &'static str = "/tmp";
+const DESCEND_HEADER_DIR: &'static str = "./cuda-examples";
+const DESCEND_HEADER_NAME: &'static str = "descend.cuh";
+const NVCC_COMPILE_COMMAND: &'static str = "nvcc -c";
+
+fn assert_nvcc_compile(cuda_src: &str) {
+    const TMP_FILE_NAME: &'static str = "descend_generated_cuda.cu";
+    const NVCC_INSTALLED_CHECK_COMMAND: &'static str = "nvcc --version > /dev/null";
+    const BASH_COMMAND: &'static str = "bash";
+
+    if Command::new(BASH_COMMAND)
+        .arg("-c")
+        .arg(NVCC_INSTALLED_CHECK_COMMAND)
+        .status()
+        .is_ok()
+    {
+        fs::copy(
+            format!("{}/{}", DESCEND_HEADER_DIR, DESCEND_HEADER_NAME),
+            format!("{}/{}", COMPILE_PATH_DIR, DESCEND_HEADER_NAME),
+        )
+        .expect(&format!(
+            "failed to copy header file from {}/{} to {}/{}",
+            DESCEND_HEADER_DIR, DESCEND_HEADER_NAME, COMPILE_PATH_DIR, DESCEND_HEADER_NAME
+        ));
+
+        fs::write(format!("{}/{}", COMPILE_PATH_DIR, TMP_FILE_NAME), cuda_src).expect(&format!(
+            "Unable to write cuda code to file {}/{}",
+            COMPILE_PATH_DIR, TMP_FILE_NAME
+        ));
+
+        let nvcc_command_str = format!(
+            "{} {}/{}",
+            NVCC_COMPILE_COMMAND, COMPILE_PATH_DIR, TMP_FILE_NAME
+        );
+        let compile_sucess = Command::new(BASH_COMMAND)
+            .arg("-c")
+            .arg(&nvcc_command_str)
+            .status()
+            .expect(&format!(
+                "failed to compile generated CUDA-code!\n{}",
+                nvcc_command_str
+            ))
+            .success();
+
+        if !compile_sucess {
+            panic!("Failed to compile generated CUDA-Code!")
+        }
+    } else {
+        println!(
+            "{}",
+            Command::new(NVCC_INSTALLED_CHECK_COMMAND).status().unwrap()
+        );
+        println!("WARNING could not compile generated CUDA-code cause a missing nvcc-installation")
+    }
+}
 
 macro_rules! assert_compile {
     ($src: expr) => {
@@ -9,7 +66,8 @@ macro_rules! assert_compile {
             eprintln!("{}\n{:#?}", $src, error);
             panic!("Unexpected error while typechecking");
         } else {
-            println!("{}", res.unwrap())
+            println!("{}", res.as_ref().unwrap());
+            assert_nvcc_compile(res.as_ref().unwrap())
         }
     };
 }
@@ -122,7 +180,7 @@ fn test_default_trait_impl_fun_call() {
     }
     struct Bar;
     impl Foo for Bar {}
-    fn main() -[cpu.thread]-> () {
+    fn mainf() -[cpu.thread]-> () {
         let bar = Bar {};
         let x = Bar::foo()
     }
@@ -1085,7 +1143,7 @@ fn test_struct_with_lifetimes() {
         *(t.x) = 42;
         (&shrd t).bar(15)
     }
-    fn main() -[cpu.thread]-> () <'a>{
+    fn mainf() -[cpu.thread]-> () <'a>{
         let mut test: i32 = 1;
         let mut t = Test { x: &'a uniq test };
         foo(t);
@@ -1238,7 +1296,7 @@ fn test_lambda() {
     //type identifiers $Y and $Y for the types of x and y and infer
     //$X and $Y implements the "Add"-Trait
     let src = r#"
-    fn main() -[gpu.thread]-> () {
+    fn mainf() -[gpu.thread]-> () {
         let add = |x, y| -[gpu.thread]-> _ {
             x + y
         }
@@ -1248,7 +1306,7 @@ fn test_lambda() {
 
     //if we call the lambda fun with two i32-dtys $X and $Y can be inferred
     let src = r#"
-    fn main() -[gpu.thread]-> () {
+    fn mainf() -[gpu.thread]-> () {
         let add = |x, y| -[gpu.thread]-> _ {
             x + y
         };
@@ -1259,7 +1317,7 @@ fn test_lambda() {
 
     //Same with two f64-dtys
     let src = r#"
-    fn main() -[gpu.thread]-> () {
+    fn mainf() -[gpu.thread]-> () {
         let add = |x, y| -[gpu.thread]-> _ {
             x + y
         };
@@ -1270,7 +1328,7 @@ fn test_lambda() {
 
     //Adding an i32 is sufficient to infer all types
     let src = r#"
-    fn main() -[gpu.thread]-> () {
+    fn mainf() -[gpu.thread]-> () {
         let add = |x, y| -[gpu.thread]-> _ {
             let z = x + y;
             (1 + z) + x
@@ -1281,7 +1339,7 @@ fn test_lambda() {
 
     //This does not compile because we can only infer $Z implements Add<i32, $OUTPUT>
     let src = r#"
-    fn main() -[gpu.thread]-> () {
+    fn mainf() -[gpu.thread]-> () {
         let add = |x, y| -[gpu.thread]-> _ {
             let z = x + y;
             (z + 1) + x
@@ -1294,7 +1352,7 @@ fn test_lambda() {
     //But then $X and $Y have been inferred as i32. So its
     //not allowed to add two f64-dtys
     let src = r#"
-    fn main() -[gpu.thread]-> () {
+    fn mainf() -[gpu.thread]-> () {
         let add = |x, y| -[gpu.thread]-> _ {
             x + y
         };
@@ -1306,7 +1364,7 @@ fn test_lambda() {
 
     //We can do the same also with references instead of values
     let src = r#"
-    fn main(x: &shrd gpu.global i32, y: &shrd gpu.global i32, res: &uniq gpu.global i32) -[gpu.thread]-> () {
+    fn mainf(x: &shrd gpu.global i32, y: &shrd gpu.global i32, res: &uniq gpu.global i32) -[gpu.thread]-> () {
         let add = |x, y, res| -[gpu.thread]-> () {
             *res = *x + *y
         };
@@ -1330,7 +1388,7 @@ fn test_lambda() {
         }
     }
     impl Copy for Point {}
-    fn main(x: &shrd gpu.global Point, y: &shrd gpu.global Point, res: &uniq gpu.global Point) -[gpu.thread]-> () {
+    fn mainf(x: &shrd gpu.global Point, y: &shrd gpu.global Point, res: &uniq gpu.global Point) -[gpu.thread]-> () {
         let add = |x, y, res| -[gpu.thread]-> _ {
             *res = *x + *y
         };
@@ -1353,7 +1411,7 @@ fn test_lambda() {
             }
         }
     }
-    fn main(x: &shrd gpu.global Point, y: &shrd gpu.global Point, res: &uniq gpu.global Point) -[gpu.thread]-> () {
+    fn mainf(x: &shrd gpu.global Point, y: &shrd gpu.global Point, res: &uniq gpu.global Point) -[gpu.thread]-> () {
         let add = |x, y, res| -[gpu.thread]-> _ {
             *res = *x + *y
         };
@@ -1406,7 +1464,7 @@ fn test_lambda2() {
             result
         }
     }
-    fn main(array_global: &shrd gpu.global Array<i32, 2>) -[gpu.thread]-> () {
+    fn mainf(array_global: &shrd gpu.global Array<i32, 2>) -[gpu.thread]-> () {
         let red = |vec, zero| -[gpu.thread]-> _ {
             vec.reduce(zero)
             // This two spellings act identical as `vec.reduce(zero)`
@@ -1451,7 +1509,7 @@ fn test_different_generic_param_types() {
             }
         }
     }
-    fn main(p_global1: &uniq gpu.global Point<i32>,
+    fn mainf(p_global1: &uniq gpu.global Point<i32>,
             p_global2: &uniq gpu.global Point<i32>) -[gpu.thread]-> () {
         let x = 42;
         let y = 43;
@@ -1487,7 +1545,7 @@ fn test_higher_rank_trait_bounds() {
 
     fn do_it(data: &shrd cpu.mem(u8, u16)) -[cpu.thread]-> &shrd cpu.mem u8 { &data.0 }
 
-    fn main() -[cpu.thread]-> () {
+    fn mainf() -[cpu.thread]-> () {
         let clo = Closure { data: (0, 1), func: do_it };
         let res = clo.call()
     }
