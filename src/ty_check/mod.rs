@@ -2368,43 +2368,113 @@ impl TyChecker {
         } else {
             panic!("function is not a place expr");
         };
-        // Replace InferFromFirstArg-path by dty of first arg
-        if let Path::InferFromFirstArg = path {
-            let first_arg = args.first_mut().unwrap();
-            ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, first_arg)?;
-
-            if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
-                *path = Path::DataTy(dty.clone())
-            } else {
-                Err(TyError::UnexpectedTypeKind {
-                    expected_name: String::from("TyKind::Data"),
-                    found: first_arg.ty.as_ref().unwrap().clone(),
-                })?;
-            }
-        }
 
         // Infer function_kind from path
         let function_kind = match path {
             Path::Empty => FunctionKind::GlobalFun,
             Path::DataTy(dty) => {
+                // Check well-formedness of dty in path
                 self.dty_well_formed(kind_ctx, &ty_ctx, Some(exec), dty)?;
 
-                if fun_kind.is_none() {
+                // Get a suitable function
+                let fun_name = self.gl_ctx.fun_name_by_dty(
+                    &self.constraint_env,
+                    &mut self.implicit_ident_cons,
+                    &fun_name.name,
+                    dty,
+                    None,
+                )?;
+
+                fun_name.fun_kind.clone()
+            }
+            Path::InferFromFirstArg => {
+                // Check first arg
+                let first_arg = args.first_mut().unwrap();
+                ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, first_arg)?;
+
+                // Get dty from first arg
+                let mut dty = if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
+                    dty.clone()
+                } else {
+                    Err(TyError::UnexpectedTypeKind {
+                        expected_name: String::from("TyKind::Data"),
+                        found: first_arg.ty.as_ref().unwrap().clone(),
+                    })?
+                };
+
+                let fun_kind = if fun_kind.is_none() {
+                    // Some kind of auto-dereferencing
+                    // This is very helpful is the first arg of the function is e.g. `&self`
+                    let (dty_alternative, fresh_ident_name) = {
+                        match &dty.dty {
+                            DataTyKind::Ref(_, _, _, dty) => (Some((**dty).clone()), None),
+                            DataTyKind::Ident(ident) if ident.is_implicit => {
+                                // Create a new fresh identifier
+                                let referenced_dty_name = fresh_name("$d");
+                                // A datatype with an implicit ident with this fresh name
+                                let referenced_dty = DataTy::new(DataTyKind::Ident(
+                                    Ident::new_impli(&referenced_dty_name),
+                                ));
+                                // `ident`-datatype could may also replaced by an reference
+                                // So if `ident` does not implement a suitable method we
+                                // also try to replace `ident`-datatype by a reference and
+                                // look if the dereferenced type implement a suitable method
+                                let mut subs_dty_ref_dty = ConstrainMap::new();
+                                subs_dty_ref_dty.dty_unifier.insert(
+                                    ident.name.clone(),
+                                    DataTy::new(DataTyKind::Ref(
+                                        Provenance::Ident(Ident::new_impli(&fresh_name("$r"))),
+                                        Ownership::Shrd,
+                                        Memory::Ident(Ident::new_impli(&fresh_name("$m"))),
+                                        Box::new(referenced_dty.clone()),
+                                    )),
+                                );
+                                if let Ok((_, mut implicit_ident_cons)) = self
+                                    .implicit_ident_cons
+                                    .constraint_subs(&self.constraint_env, &subs_dty_ref_dty)
+                                {
+                                    // Add temporary the constraints on `ref_dty_name` to `self.implicit_ident_cons`
+                                    self.implicit_ident_cons.add_ident_constraints(
+                                        implicit_ident_cons
+                                            .consume_constraints(&referenced_dty_name)
+                                            .map(|con| (referenced_dty_name.clone(), con)),
+                                    );
+                                    (Some(referenced_dty), Some(referenced_dty_name))
+                                } else {
+                                    (None, None)
+                                }
+                            }
+                            _ => (None, None),
+                        }
+                    };
+
+                    // Get function name
                     let fun_name = self.gl_ctx.fun_name_by_dty(
                         &self.constraint_env,
-                        &mut self.implicit_ident_cons,
+                        &self.implicit_ident_cons,
                         &fun_name.name,
-                        dty,
+                        &mut dty,
+                        dty_alternative,
                     )?;
+
+                    //Remove temporary added constraints
+                    if let Some(fresh_ident_name) = fresh_ident_name {
+                        self.implicit_ident_cons
+                            .consume_constraints(&fresh_ident_name);
+                    }
 
                     fun_name.fun_kind.clone()
                 }
                 // Binop-functions have already a function_kind
                 else {
                     fun_kind.as_ref().unwrap().clone()
-                }
+                };
+
+                // Replace InferFromFirstArg-path by Path::DataTy
+                *path = Path::DataTy(dty.clone());
+
+                fun_kind
             }
-            Path::InferFromFirstArg => panic!("This should be already replaced by Path::DataTy"),
         };
         *fun_kind = Some(function_kind);
 

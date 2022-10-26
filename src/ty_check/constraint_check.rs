@@ -113,7 +113,10 @@ impl IdentConstraints {
     }
 
     /// Returns and removes all constraints on the identifier with passed name
-    pub fn consume_constraints(&mut self, ident: &str) -> impl Iterator<Item = Constraint> + '_ {
+    pub fn consume_constraints(
+        &mut self,
+        ident: &str,
+    ) -> impl ExactSizeIterator<Item = Constraint> + '_ {
         let index_ident_constraints = self
             .ident_cons
             .iter_mut()

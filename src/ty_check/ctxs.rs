@@ -881,61 +881,61 @@ impl GlobalCtx {
         }
     }
 
-    /// Get a FunctionName by the name of the function and the datatype of corresponding impl <br>
-    /// This function also tries to search for the dereferenced `dty` if `dty` is a reference
-    /// and no function for `dty` can found. In this case `dty` is set to the referenced datatype. <br>
+    /// Get a FunctionName by the name of the function and the datatype of corresponding impl. <br>
+    /// If no suitable function for `dty` is found this method also tries to search a suitable
+    /// function for `dty_alternative`. If a function for `dty_alternative` is found, `dty`
+    /// is set to `dty_alternative`. <br>
     /// This function does not add constraints on implicit identifiers or return a substitution with
     /// inferred types. This happens in function application when unify types of arguments
-    /// and expected type of arguments
+    /// and expected type of arguments. <br>
     pub fn fun_name_by_dty(
         &self,
         constraint_env: &ConstraintEnv,
         implicit_ident_cons: &IdentConstraints,
         fun_name: &String,
         dty: &mut DataTy,
+        dty_alternative: Option<DataTy>,
     ) -> CtxResult<&FunctionName> {
         // Ty of impl of the searched function
         let ty = Ty::new(TyKind::Data(dty.clone()));
-        // Some kind of auto-dereferencing
-        let (dereferenced_dty, dereferenced_ty) = if let DataTyKind::Ref(_, _, _, dty) = &dty.dty {
-            (
-                Some(dty.as_ref()),
-                Some(Ty::new(TyKind::Data((**dty).clone()))),
-            )
+        let ty_alt = if dty_alternative.is_some() {
+            Some(Ty::new(TyKind::Data(
+                dty_alternative.as_ref().unwrap().clone(),
+            )))
         } else {
-            (None, None)
+            None
         };
 
         // Save result (if found) in this variable
         let mut result = None;
-        // Work on a copy of "implicit_ident_cons" to avoid side effects
+        // Work on a copy of "implicit_ident_cons" to avoid side effects when using constraint_check
         let mut implicit_ident_cons_clone = implicit_ident_cons.clone();
 
         // Search after a function suitable for `ty` or `dereferenced_ty` simultaneously
         enum Found {
             NotFound,
-            FoundDerefDty,
-            MultipleFoundDerefDty,
+            FoundDtyAlt,
+            MultipleFoundDtyAlt,
             FoundDty,
             MultipleFoundDty,
         }
         // Returns if we search for a function suitable for `dereferenced_dty`
         let search_deref_dty = |found: &Found| {
-            dereferenced_ty.is_some()
-                && (matches!(found, Found::NotFound) || matches!(found, Found::FoundDerefDty))
+            dty_alternative.is_some()
+                && (matches!(found, Found::NotFound) || matches!(found, Found::FoundDtyAlt))
         };
         // Return the new value for `found` after a suitable function for `dty` is found
         let found_dty = |found| match found {
             Found::NotFound => Found::FoundDty,
-            Found::FoundDerefDty => Found::FoundDty,
-            Found::MultipleFoundDerefDty => Found::FoundDty,
+            Found::FoundDtyAlt => Found::FoundDty,
+            Found::MultipleFoundDtyAlt => Found::FoundDty,
             Found::FoundDty => Found::MultipleFoundDty,
             Found::MultipleFoundDty => Found::MultipleFoundDty,
         };
         // Return the new value for `found` after a suitable function for `dereferenced_dty` is found
         let found_deref_dty = |found| match found {
-            Found::NotFound => Found::FoundDerefDty,
-            Found::FoundDerefDty => Found::MultipleFoundDerefDty,
+            Found::NotFound => Found::FoundDtyAlt,
+            Found::FoundDtyAlt => Found::MultipleFoundDtyAlt,
             f => f,
         };
 
@@ -962,10 +962,9 @@ impl GlobalCtx {
                             }
                             // For `dereferenced_ty`
                             if search_deref_dty(&found) {
-                                if let Ok(subs) = constrain(
-                                    dereferenced_ty.as_ref().unwrap(),
-                                    &impl_dty_candidate.mono_ty,
-                                ) {
+                                if let Ok(subs) =
+                                    constrain(ty_alt.as_ref().unwrap(), &impl_dty_candidate.mono_ty)
+                                {
                                     if implicit_ident_cons
                                         .constraint_subs(constraint_env, &subs.0)
                                         .is_ok()
@@ -1000,7 +999,7 @@ impl GlobalCtx {
                                     .dty_impls_trait(
                                         constraint_env,
                                         &mut implicit_ident_cons_clone,
-                                        (*dereferenced_dty.unwrap()).clone(),
+                                        dty_alternative.as_ref().unwrap().clone(),
                                         trait_name,
                                     )
                                     .is_ok()
@@ -1022,7 +1021,7 @@ impl GlobalCtx {
 
         match found {
             // if there are multiple possible functions that meets the search criteria
-            Found::MultipleFoundDty | Found::MultipleFoundDerefDty => {
+            Found::MultipleFoundDty | Found::MultipleFoundDtyAlt => {
                 Err(CtxError::AmbiguousFunctionCall {
                     function_name: fun_name.clone(),
                     impl_dty: dty.clone(),
@@ -1032,8 +1031,8 @@ impl GlobalCtx {
             Found::NotFound => Err(CtxError::IdentNotFound(Ident::new(fun_name))),
             // if there is exactly one function that meets the search criteria
             Found::FoundDty => Ok(result.unwrap()),
-            Found::FoundDerefDty => {
-                *dty = dereferenced_dty.unwrap().clone();
+            Found::FoundDtyAlt => {
+                *dty = dty_alternative.unwrap();
                 Ok(result.unwrap())
             }
         }
