@@ -526,8 +526,9 @@ peg::parser! {
             = "f32" { DataTyKind::Scalar(ScalarTy::F32) }
             / "f64" { DataTyKind::Scalar(ScalarTy::F64) }
             / "i32" { DataTyKind::Scalar(ScalarTy::I32) }
-            / "u32" { DataTyKind::Scalar(ScalarTy::U32) }
             / "u8" { DataTyKind::Scalar(ScalarTy::U8) }
+            / "u32" { DataTyKind::Scalar(ScalarTy::U32) }
+            / "u64" { DataTyKind::Scalar(ScalarTy::U64) }
             / "bool" { DataTyKind::Scalar(ScalarTy::Bool) }
             / "()" { DataTyKind::Scalar(ScalarTy::Unit) }
             / "Gpu" { DataTyKind::Scalar(ScalarTy::Gpu) }
@@ -626,7 +627,7 @@ peg::parser! {
 
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
-                / "f32" / "f64" / "i32" / "u32" / "u8" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
+                / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
                 / "Block" / "Warp" / "Thread" / "with")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
@@ -634,7 +635,7 @@ peg::parser! {
             / "cpu.mem" / "gpu.global" / "gpu.shared"
             / "cpu.thread" / "gpu.group" / "gpu.thread"
 
-        // Literal may be one of Unit, bool, i32, u32, u8, f32, f64
+        // Literal may be one of Unit, bool, i32, u8, u32, u64, f32, f64
         pub(crate) rule literal() -> Lit
             = "()" {
                 Lit::Unit
@@ -659,21 +660,26 @@ peg::parser! {
                 }
             }
             / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") ("i32" / "u32" / "f32")?  ) { ?
-                let literal = if (l.ends_with("i32") || l.ends_with("u32") || l.ends_with("u8") || l.ends_with("f32")) {&l[0..l.len()-3]} else {l};
+                let literal = if (l.ends_with("i32") || l.ends_with("u8") || l.ends_with("u32") || l.ends_with("u64") || l.ends_with("f32")) {&l[0..l.len()-3]} else {l};
                 if (l.ends_with("f32")) {
                     match literal.parse::<f32>() {
                         Ok(val) => Ok(Lit::F32(val)),
                         Err(_) => Err("Error while parsing f32 literal")
+                    }
+                } else if (l.ends_with("u8")) {
+                    match literal.parse::<u8>() {
+                        Ok(val) => Ok(Lit::U8(val)),
+                        Err(_) => Err("Error while paring u8 literal")
                     }
                 } else if (l.ends_with("u32")) {
                     match literal.parse::<u32>() {
                         Ok(val) => Ok(Lit::U32(val)),
                         Err(_) => Err("Error while paring u32 literal")
                     }
-                } else if (l.ends_with("u8")) {
-                    match literal.parse::<u8>() {
-                        Ok(val) => Ok(Lit::U8(val)),
-                        Err(_) => Err("Error while paring u8 literal")
+                } else if (l.ends_with("u64")) {
+                    match literal.parse::<u64>() {
+                        Ok(val) => Ok(Lit::U64(val)),
+                        Err(_) => Err("Error while paring u64 literal")
                     }
                 } else {
                     match literal.parse::<i32>() {
@@ -814,6 +820,13 @@ mod tests {
             "does not recognize i32 type"
         );
         assert_eq!(
+            descend::ty("u8"),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::U8
+            ))))),
+            "does not recognize u8 type"
+        );
+        assert_eq!(
             descend::ty("u32"),
             Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::U32
@@ -821,11 +834,11 @@ mod tests {
             "does not recognize u32 type"
         );
         assert_eq!(
-            descend::ty("u8"),
+            descend::ty("u64"),
             Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::U8
+                ScalarTy::U64
             ))))),
-            "does not recognize u8 type"
+            "does not recognize u64 type"
         );
         assert_eq!(
             descend::ty("()"),
@@ -858,8 +871,9 @@ mod tests {
     fn dty_tuple() {
         let ty_f32 = DataTy::new(DataTyKind::Scalar(ScalarTy::F32));
         let ty_i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
-        let ty_u32 = DataTy::new(DataTyKind::Scalar(ScalarTy::U32));
         let ty_u8 = DataTy::new(DataTyKind::Scalar(ScalarTy::U8));
+        let ty_u32 = DataTy::new(DataTyKind::Scalar(ScalarTy::U32));
+        let ty_u64 = DataTy::new(DataTyKind::Scalar(ScalarTy::U64));
         let ty_unit = DataTy::new(DataTyKind::Scalar(ScalarTy::Unit));
         assert_eq!(
             descend::dty("(f32)"),
@@ -872,14 +886,19 @@ mod tests {
             "does not recognize (i32) tuple type"
         );
         assert_eq!(
+            descend::dty("(u8,u8)"),
+            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u8.clone(), ty_u8]))),
+            "does not recognize (u8, u8) tuple type"
+        );
+        assert_eq!(
             descend::dty("(u32,u32)"),
             Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u32.clone(), ty_u32]))),
             "does not recognize (u32, u32) tuple type"
         );
         assert_eq!(
-            descend::dty("(u8,u8)"),
-            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u8.clone(), ty_u8]))),
-            "does not recognize (u8, u8) tuple type"
+            descend::dty("(u64,u64)"),
+            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u64.clone(), ty_u64]))),
+            "does not recognize (u64, u64) tuple type"
         );
         assert_eq!(
             descend::dty("((),(),())"),
@@ -917,6 +936,14 @@ mod tests {
                 Nat::Lit(44)
             ))),)),
             "does not recognize [u8;44] type"
+        );
+        assert_eq!(
+            descend::ty("[u64;45]"),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U64))),
+                Nat::Lit(45)
+            ))),)),
+            "does not recognize [u64;45] type"
         );
         // TODO: Implement identifer parsing in nat
         // assert_eq!(descend::ty("[();N]"), Ok(Ty::Array(Box::new(

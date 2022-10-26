@@ -378,6 +378,7 @@ pub enum Lit {
     I32(i32),
     U8(u8),
     U32(u32),
+    U64(u64),
     F32(f32),
     F64(f64),
 }
@@ -401,8 +402,9 @@ impl fmt::Display for Lit {
             Self::Unit => write!(f, "()"),
             Self::Bool(b) => write!(f, "{}", b),
             Self::I32(i) => write!(f, "{}", i),
-            Self::U32(u) => write!(f, "{}", u),
             Self::U8(uc) => write!(f, "{}", uc),
+            Self::U32(u) => write!(f, "{}", u),
+            Self::U64(ul) => write!(f, "{}", ul),
             Self::F32(fl) => write!(f, "{}f", fl),
             Self::F64(d) => write!(f, "{}", d),
         }
@@ -1088,8 +1090,9 @@ impl DataTy {
 pub enum ScalarTy {
     Unit,
     I32,
-    U32,
     U8,
+    U32,
+    U64,
     F32,
     F64,
     Bool,

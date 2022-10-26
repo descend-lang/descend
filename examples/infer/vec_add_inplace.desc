@@ -1,6 +1,6 @@
 fn vec_add_inplace<n: nat>(
-    h_vec_a: &uniq cpu.mem [i32; n],
-    h_vec_b: &shrd cpu.mem [i32; n]
+    h_vec_a: &uniq cpu.mem [u64; n],
+    h_vec_b: &shrd cpu.mem [u64; n]
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec_a);
@@ -8,7 +8,7 @@ fn vec_add_inplace<n: nat>(
     exec::<64, 1024>(
         &uniq gpu,
         (&uniq a_array, &shrd b_array),
-        | grid: BlockGrp<64, ThreadGrp<1024>>, vec: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n]) | -[gpu.grid]-> () {
+        | grid: BlockGrp<64, ThreadGrp<1024>>, vec: (&uniq gpu.global [u64; n], &shrd gpu.global [u64; n]) | -[gpu.grid]-> () {
             let groups_a = group_mut::<1024>(to_view_mut(vec.0));
             let groups_b = group::<1024>(to_view(vec.1));
             parfor block in grid with g_a, g_b from groups_a, groups_b {
