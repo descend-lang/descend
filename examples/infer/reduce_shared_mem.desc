@@ -14,8 +14,9 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
             let block_group = group::<1024>(to_view(inputs.0));
             let view_out = group_mut::<1>(to_view_mut(inputs.1));
             // TODO remove decl and move out tmp declaration
-            let mut tmp: [i32; bs] @ gpu.shared;
-            sched ib, out_elem in block_group, view_out to block in grid {
+            decl {
+                let mut tmp: [i32; bs] @ gpu.shared
+            } sched ib, out_elem in block_group, view_out to block in grid {
                  let tmp_view = to_view_mut(&uniq tmp);
                  sched inp, tmp_in in ib, tmp_view to _ in block { *tmp_in = *inp };
 
