@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Once;
 
 static mut COUNTER: AtomicI32 = AtomicI32::new(0);
-static mut NVCC_INSTALLED: bool = true;
+static mut RUN_NVCC: bool = true;
 
 const COMPILE_PATH_DIR: &'static str = "/tmp";
 const DESCEND_HEADER_DIR: &'static str = "./cuda-examples";
@@ -23,20 +23,22 @@ fn nvcc_init() {
 
     unsafe {
         INIT.call_once(|| {
-            NVCC_INSTALLED = Command::new(BASH_COMMAND)
-                .arg("-c")
-                .arg(NVCC_INSTALLED_CHECK_COMMAND)
-                .status()
-                .is_ok();
+            if RUN_NVCC {
+                RUN_NVCC = Command::new(BASH_COMMAND)
+                    .arg("-c")
+                    .arg(NVCC_INSTALLED_CHECK_COMMAND)
+                    .status()
+                    .is_ok();
 
-            let src_header_file = format!("{}/{}", DESCEND_HEADER_DIR, DESCEND_HEADER_NAME);
-            let compil_header_file = format!("{}/{}", COMPILE_PATH_DIR, DESCEND_HEADER_NAME);
+                let src_header_file = format!("{}/{}", DESCEND_HEADER_DIR, DESCEND_HEADER_NAME);
+                let compil_header_file = format!("{}/{}", COMPILE_PATH_DIR, DESCEND_HEADER_NAME);
 
-            // Copy header file to `COMPILE_PATH_DIR`
-            fs::copy(&src_header_file, &compil_header_file).expect(&format!(
-                "failed to copy header file from {} to {}",
-                src_header_file, compil_header_file
-            ));
+                // Copy header file to `COMPILE_PATH_DIR`
+                fs::copy(&src_header_file, &compil_header_file).expect(&format!(
+                    "failed to copy header file from {} to {}",
+                    src_header_file, compil_header_file
+                ));
+            }
         });
     }
 }
@@ -49,7 +51,7 @@ fn assert_nvcc_compile(cuda_src: &str) {
 
     // Use a counter to avoid undefined behavior when running multiple tests
     let id = unsafe { COUNTER.fetch_add(1, Ordering::SeqCst) };
-    let run_nvcc = unsafe { NVCC_INSTALLED };
+    let run_nvcc = unsafe { RUN_NVCC };
 
     if run_nvcc {
         let compil_src_file = format!("{}/{}_{}.cu", COMPILE_PATH_DIR, TMP_FILE_NAME, id);
@@ -1548,6 +1550,42 @@ fn test_different_generic_param_types() {
         let points1 = Points { points: [p1, p2, p3], special_point: p_global2 };
         let p5 = points1.newPoint(38)
     }
+    "#;
+    assert_compile!(src);
+}
+
+#[test]
+#[ignore] // FIXME Recognize and prohibit overlapping impls
+fn test_overlapping_impls() {
+    let src = r#"
+    trait Test {
+        fn foo(x: i32, y: f32) -[cpu.thread]-> () {
+            ()
+        }
+    }
+    impl<T> Test for T {}
+    "#;
+    assert_compile!(src);
+
+    let src = r#"
+    trait Test {
+        fn foo(x: i32, y: f32) -[cpu.thread]-> () {
+            ()
+        }
+    }
+    impl<T> Test for T {}
+    impl Test for bool {}
+    "#;
+    assert_err_compile!(src);
+
+    let src = r#"
+    trait Test {
+        fn foo(x: i32, y: f32) -[cpu.thread]-> () {
+            ()
+        }
+    }
+    impl<T> Test for T where T: Number {}
+    impl Test for bool {}
     "#;
     assert_compile!(src);
 }

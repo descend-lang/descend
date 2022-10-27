@@ -394,10 +394,6 @@ impl TyChecker {
                 })
                 .collect::<Vec<ConstraintScheme>>();
 
-            // We must not assume the supertrait constraints, because we didnt check if
-            // our impl really fullfills this supertrait constraints
-            self.constraint_env
-                .remove_constraint_schemes(&supertraits_constraints);
             // While typechecking the constraints specified in the where-clause of the impl can be assumed
             self.constraint_env
                 .append_constraints(&impl_def.constraints);
@@ -408,28 +404,49 @@ impl TyChecker {
             // Collect all errors in this vector
             let mut errors = Vec::new();
 
+            // We must not assume the supertrait constraint-schemes, because we didnt check if
+            // our impl really fulfills this supertrait constraints
+            self.constraint_env
+                .remove_constraint_schemes(&supertraits_constraints);
+
             // Check every supertrait constraint
             trait_def
                 .supertraits_constraints()
                 .iter()
-                // and every constraint specified in the where-clause of the trait
-                .chain(trait_def.constraints.iter())
                 .for_each(|constraint| {
-                    let constraint_sub = generics_trait.iter().zip(generic_args_trait.iter()).fold(
-                        constraint.clone(),
-                        |cons, (generic, generic_arg)| {
-                            cons.subst_ident_kinded(generic, generic_arg)
-                        },
-                    );
-
                     if self
                         .constraint_env
-                        .check_constraint(&constraint_sub, &mut self.implicit_ident_cons)
+                        .check_constraint(
+                            &constraint.subst_idents_kinded(
+                                generics_trait.iter(),
+                                generic_args_trait.iter(),
+                            ),
+                            &mut self.implicit_ident_cons,
+                        )
                         .is_err()
                     {
                         errors.push(TyError::UnfulfilledConstraint(constraint.clone()))
                     }
                 });
+
+            // Append removed constraint-schemes
+            self.constraint_env
+                .append_constraint_schemes(&supertraits_constraints);
+
+            // Check every constraint specified in the where-clause of the trait
+            trait_def.constraints.iter().for_each(|constraint| {
+                if self
+                    .constraint_env
+                    .check_constraint(
+                        &constraint
+                            .subst_idents_kinded(generics_trait.iter(), generic_args_trait.iter()),
+                        &mut self.implicit_ident_cons,
+                    )
+                    .is_err()
+                {
+                    errors.push(TyError::UnfulfilledConstraint(constraint.clone()))
+                }
+            });
             assert!(self.implicit_ident_cons.is_empty());
 
             // Check if all fun_decls from the trait are implemented here
@@ -529,8 +546,6 @@ impl TyChecker {
             // Remove constraints added to the global context
             self.constraint_env
                 .remove_constraints(&impl_def.constraints);
-            self.constraint_env
-                .append_constraint_schemes(&supertraits_constraints);
 
             // Return Ok or collected errors
             if errors.is_empty() {
@@ -2392,15 +2407,14 @@ impl TyChecker {
                 self.dty_well_formed(kind_ctx, &ty_ctx, Some(exec), dty)?;
 
                 // Get a suitable function
-                let fun_name = self.gl_ctx.fun_name_by_dty(
+                let fun_kind = self.gl_ctx.fun_kind_by_dty(
                     &self.constraint_env,
                     &mut self.implicit_ident_cons,
                     &fun_name.name,
                     dty,
-                    None,
                 )?;
 
-                fun_name.fun_kind.clone()
+                fun_kind.clone()
             }
             Path::InferFromFirstArg => {
                 // Check first arg
@@ -2418,11 +2432,30 @@ impl TyChecker {
                 };
 
                 let fun_kind = if fun_kind.is_none() {
-                    // Some kind of auto-dereferencing
+                    // Get function name
+                    let fun_kind = self.gl_ctx.fun_kind_by_dty(
+                        &self.constraint_env,
+                        &self.implicit_ident_cons,
+                        &fun_name.name,
+                        &mut dty,
+                    );
+
+                    if let Ok(fun_kind) = fun_kind {
+                        fun_kind.clone()
+                    }
+                    // Try some kind of auto-dereferencing
                     // This is very helpful is the first arg of the function is e.g. `&self`
-                    let (dty_alternative, fresh_ident_name) = {
+                    else {
                         match &dty.dty {
-                            DataTyKind::Ref(_, _, _, dty) => (Some((**dty).clone()), None),
+                            DataTyKind::Ref(_, _, _, r_dty) => {
+                                dty = (**r_dty).clone();
+                                self.gl_ctx.fun_kind_by_dty(
+                                    &self.constraint_env,
+                                    &self.implicit_ident_cons,
+                                    &fun_name.name,
+                                    &dty,
+                                )?
+                            }
                             DataTyKind::Ident(ident) if ident.is_implicit => {
                                 // Create a new fresh identifier
                                 let referenced_dty_name = fresh_name("$d");
@@ -2431,8 +2464,7 @@ impl TyChecker {
                                     Ident::new_impli(&referenced_dty_name),
                                 ));
                                 // `ident`-datatype could may also replaced by an reference
-                                // So if `ident` does not implement a suitable method we
-                                // also try to replace `ident`-datatype by a reference and
+                                // So we try to replace `ident`-datatype by a reference and
                                 // look if the dereferenced type implement a suitable method
                                 let mut subs_dty_ref_dty = ConstrainMap::new();
                                 subs_dty_ref_dty.dty_unifier.insert(
@@ -2444,6 +2476,7 @@ impl TyChecker {
                                         Box::new(referenced_dty.clone()),
                                     )),
                                 );
+                                // Check is this substitution is valid
                                 if let Ok((_, mut implicit_ident_cons)) = self
                                     .implicit_ident_cons
                                     .constraint_subs(&self.constraint_env, &subs_dty_ref_dty)
@@ -2454,31 +2487,28 @@ impl TyChecker {
                                             .consume_constraints(&referenced_dty_name)
                                             .map(|con| (referenced_dty_name.clone(), con)),
                                     );
-                                    (Some(referenced_dty), Some(referenced_dty_name))
+
+                                    dty = referenced_dty;
+                                    let fun_kind = self.gl_ctx.fun_kind_by_dty(
+                                        &self.constraint_env,
+                                        &self.implicit_ident_cons,
+                                        &fun_name.name,
+                                        &dty,
+                                    );
+
+                                    //Remove temporary added constraints
+                                    self.implicit_ident_cons
+                                        .consume_constraints(&referenced_dty_name);
+
+                                    fun_kind?
                                 } else {
-                                    (None, None)
+                                    fun_kind?
                                 }
                             }
-                            _ => (None, None),
+                            _ => fun_kind?,
                         }
-                    };
-
-                    // Get function name
-                    let fun_name = self.gl_ctx.fun_name_by_dty(
-                        &self.constraint_env,
-                        &self.implicit_ident_cons,
-                        &fun_name.name,
-                        &mut dty,
-                        dty_alternative,
-                    )?;
-
-                    //Remove temporary added constraints
-                    if let Some(fresh_ident_name) = fresh_ident_name {
-                        self.implicit_ident_cons
-                            .consume_constraints(&fresh_ident_name);
+                        .clone()
                     }
-
-                    fun_name.fun_kind.clone()
                 }
                 // Binop-functions have already a function_kind
                 else {
@@ -2486,7 +2516,7 @@ impl TyChecker {
                 };
 
                 // Replace InferFromFirstArg-path by Path::DataTy
-                *path = Path::DataTy(dty.clone());
+                *path = Path::DataTy(dty);
 
                 fun_kind
             }
@@ -2594,14 +2624,22 @@ impl TyChecker {
                     } else {
                         panic!("Found a trait-function with an invalid path")
                     };
-                    let (constr_map, _) =
+                    let (mut constr_map, _) =
                         unify::constrain(impl_mono_dty, path_dty).expect(&format!(
                         "Tryied to unify {:#?} with {:#?} but it doesnt work. How is this possible?\
                          They should be already constraint while determinating function_name!",
                         impl_mono_dty, path_dty));
-                    k_args[0..impl_ty_scheme.generic_params.len()]
-                        .iter_mut()
-                        .for_each(|arg| arg.substitute(&constr_map));
+                    if !constr_map.is_empty() {
+                        (constr_map, self.implicit_ident_cons) = self
+                            .implicit_ident_cons
+                            .constraint_subs(&self.constraint_env, &constr_map)?;
+
+                        k_args[0..impl_ty_scheme.generic_params.len()]
+                            .iter_mut()
+                            .for_each(|arg| arg.substitute(&constr_map));
+                        ty_ctx.substitute(&constr_map);
+                        self.implicit_ident_substitution.composition(constr_map);
+                    }
 
                     (fun_ty, impl_ty_scheme.generic_params.len())
                 }
@@ -2718,7 +2756,7 @@ impl TyChecker {
         let mut qualified_type = ty_scheme.partial_apply(k_args);
 
         // Check if there are some unfulfilled constraints
-        // And add constraints on implicit identifier, which are necessary to fulfills the constraints, to theta
+        // And add constraints on implicit identifier, which are necessary to fulfills the constraints, to `constraint_env`
         // The constraints for implicit identifier are checked in unfication when they are replaces by other types
         let constraints_len = qualified_type.constraints.len();
         for i in 0..constraints_len {

@@ -531,6 +531,7 @@ impl KindCtx {
 #[derive(Debug)]
 pub(super) struct GlobalCtx {
     funs: HashMap<FunctionName, TypeScheme>,
+    fun_names: HashMap<String, Vec<FunctionKind>>,
     structs: HashMap<String, StructDecl>,
     traits: HashMap<String, TraitDef>,
 }
@@ -556,6 +557,7 @@ impl GlobalCtx {
     pub fn new() -> Self {
         GlobalCtx {
             funs: HashMap::new(),
+            fun_names: HashMap::new(),
             structs: HashMap::new(),
             traits: HashMap::new(),
         }
@@ -566,9 +568,13 @@ impl GlobalCtx {
     where
         I: Iterator<Item = (&'a str, TypeScheme)>,
     {
-        self.funs.extend(
-            fun_decls.map(|(name, fun_ty_scheme)| (FunctionName::global_fun(name), fun_ty_scheme)),
-        );
+        fun_decls.for_each(|(name, fun_ty_scheme)| {
+            let fun_name = FunctionName::global_fun(name);
+            self.fun_names
+                .insert(String::from(name), vec![fun_name.fun_kind.clone()]);
+            let res = self.funs.insert(fun_name, fun_ty_scheme);
+            assert!(res.is_none());
+        });
         self
     }
 
@@ -579,10 +585,6 @@ impl GlobalCtx {
         item_defs: &[Item],
         constraint_env: &mut ConstraintEnv,
     ) -> Vec<CtxError> {
-        // HashSet with all datatypes of an impl and corresponding name of implemented trait
-        // This is used to make sure there are no duplicate implementations of the same trait for the same datatype
-        let mut impl_defs_names: HashSet<(DataTy, String)> = HashSet::new();
-
         // Append every single item
         item_defs
             .iter()
@@ -639,15 +641,6 @@ impl GlobalCtx {
                                     trait_bound: trait_impl.clone(),
                                 },
                             });
-
-                            if !impl_defs_names
-                                .insert((impl_def.dty.clone(), trait_impl.name.clone()))
-                            {
-                                errs.push(CtxError::MultipleDefinedImplsForTrait {
-                                    trait_name: trait_impl.name.clone(),
-                                    impl_dty: impl_def.ty(),
-                                });
-                            }
                         }
                         // If this impl does not implement a trait
                         else {
@@ -722,6 +715,10 @@ impl GlobalCtx {
             errs,
         );
         // Insert typescheme of function in context
+        self.fun_names
+            .entry(fun_name.name.clone())
+            .or_insert_with(|| Vec::new())
+            .push(fun_name.fun_kind.clone());
         let old_val = self.funs.insert(fun_name.clone(), fun_ty_scheme);
         // Make sure there are not multiple functions with the same name
         if old_val.is_some() {
@@ -806,14 +803,17 @@ impl GlobalCtx {
                             mono_ty: Ty::new(TyKind::Fn(args, exec, ret_ty)),
                         };
                         // Insert it in global context and make sure there are not multiple functions with the same name
+                        let fun_name = FunctionName::from_trait(&name, t_def);
+                        self.fun_names
+                            .entry(name)
+                            .or_insert_with(|| Vec::new())
+                            .push(fun_name.fun_kind.clone());
                         if self
                             .funs
-                            .insert(FunctionName::from_trait(&name, t_def), extended_ty_scheme)
+                            .insert(fun_name.clone(), extended_ty_scheme)
                             .is_some()
                         {
-                            errs.push(CtxError::MultipleDefinedFunctions(
-                                FunctionName::from_trait(&name, t_def),
-                            ))
+                            errs.push(CtxError::MultipleDefinedFunctions(fun_name))
                         }
                     } else {
                         panic!("FunDef without FunType!");
@@ -882,72 +882,38 @@ impl GlobalCtx {
     }
 
     /// Get a FunctionName by the name of the function and the datatype of corresponding impl. <br>
-    /// If no suitable function for `dty` is found this method also tries to search a suitable
-    /// function for `dty_alternative`. If a function for `dty_alternative` is found, `dty`
-    /// is set to `dty_alternative`. <br>
     /// This function does not add constraints on implicit identifiers or return a substitution with
     /// inferred types. This happens in function application when unify types of arguments
-    /// and expected type of arguments. <br>
-    pub fn fun_name_by_dty(
+    /// and expected type of arguments
+    pub fn fun_kind_by_dty(
         &self,
         constraint_env: &ConstraintEnv,
         implicit_ident_cons: &IdentConstraints,
         fun_name: &String,
-        dty: &mut DataTy,
-        dty_alternative: Option<DataTy>,
-    ) -> CtxResult<&FunctionName> {
+        dty: &DataTy,
+    ) -> CtxResult<&FunctionKind> {
         // Ty of impl of the searched function
         let ty = Ty::new(TyKind::Data(dty.clone()));
-        let ty_alt = if dty_alternative.is_some() {
-            Some(Ty::new(TyKind::Data(
-                dty_alternative.as_ref().unwrap().clone(),
-            )))
-        } else {
-            None
-        };
+
+        // Possible function candidates
+        let fun_candidates = self.fun_names.get(fun_name);
+        if fun_candidates.is_none() || fun_candidates.unwrap().len() == 0 {
+            return Err(CtxError::IdentNotFound(Ident::new(fun_name)));
+        }
 
         // Save result (if found) in this variable
         let mut result = None;
         // Work on a copy of "implicit_ident_cons" to avoid side effects when using constraint_check
         let mut implicit_ident_cons_clone = implicit_ident_cons.clone();
 
-        // Search after a function suitable for `ty` or `dereferenced_ty` simultaneously
-        enum Found {
-            NotFound,
-            FoundDtyAlt,
-            MultipleFoundDtyAlt,
-            FoundDty,
-            MultipleFoundDty,
-        }
-        // Returns if we search for a function suitable for `dereferenced_dty`
-        let search_deref_dty = |found: &Found| {
-            dty_alternative.is_some()
-                && (matches!(found, Found::NotFound) || matches!(found, Found::FoundDtyAlt))
-        };
-        // Return the new value for `found` after a suitable function for `dty` is found
-        let found_dty = |found| match found {
-            Found::NotFound => Found::FoundDty,
-            Found::FoundDtyAlt => Found::FoundDty,
-            Found::MultipleFoundDtyAlt => Found::FoundDty,
-            Found::FoundDty => Found::MultipleFoundDty,
-            Found::MultipleFoundDty => Found::MultipleFoundDty,
-        };
-        // Return the new value for `found` after a suitable function for `dereferenced_dty` is found
-        let found_deref_dty = |found| match found {
-            Found::NotFound => Found::FoundDtyAlt,
-            Found::FoundDtyAlt => Found::MultipleFoundDtyAlt,
-            f => f,
-        };
-
         // Search in all suitable functions in context
-        let found = self
-            .funs
-            .keys()
-            .fold(Found::NotFound, |mut found, fun_name_candidate| {
+        let number_found = fun_candidates
+            .unwrap()
+            .iter()
+            .fold(0, |mut number_found, fun_kind| {
                 // Make sure the candidate-function have the same name like the searched function
-                if fun_name_candidate.name == *fun_name && !matches!(found, Found::MultipleFoundDty)
-                {
-                    match &fun_name_candidate.fun_kind {
+                if number_found <= 1 {
+                    match fun_kind {
                         // if the function_kind of the candidate-function references an impl
                         FunctionKind::ImplFun(impl_dty_candidate, _) => {
                             // if `impl_dty_candidate` and `ty` can be unified, this is the searched function
@@ -956,22 +922,8 @@ impl GlobalCtx {
                                     .constraint_subs(constraint_env, &subs.0)
                                     .is_ok()
                                 {
-                                    result = Some(fun_name_candidate);
-                                    found = found_dty(found);
-                                }
-                            }
-                            // For `dereferenced_ty`
-                            if search_deref_dty(&found) {
-                                if let Ok(subs) =
-                                    constrain(ty_alt.as_ref().unwrap(), &impl_dty_candidate.mono_ty)
-                                {
-                                    if implicit_ident_cons
-                                        .constraint_subs(constraint_env, &subs.0)
-                                        .is_ok()
-                                    {
-                                        result = Some(fun_name_candidate);
-                                        found = found_deref_dty(found);
-                                    }
+                                    result = Some(fun_kind);
+                                    number_found = number_found + 1;
                                 }
                             }
                         }
@@ -987,54 +939,30 @@ impl GlobalCtx {
                                 )
                                 .is_ok()
                             {
-                                result = Some(fun_name_candidate);
+                                result = Some(fun_kind);
                                 // Reset `implicit_ident_cons_clone` to avoid side effects
                                 implicit_ident_cons_clone = implicit_ident_cons.clone();
 
-                                found = found_dty(found);
-                            }
-                            // For `dereferenced_ty`
-                            if search_deref_dty(&found) {
-                                if self
-                                    .dty_impls_trait(
-                                        constraint_env,
-                                        &mut implicit_ident_cons_clone,
-                                        dty_alternative.as_ref().unwrap().clone(),
-                                        trait_name,
-                                    )
-                                    .is_ok()
-                                {
-                                    result = Some(fun_name_candidate);
-                                    // Reset `implicit_ident_cons_clone` to avoid side effects
-                                    implicit_ident_cons_clone = implicit_ident_cons.clone();
-
-                                    found = found_deref_dty(found);
-                                }
+                                number_found = number_found + 1;
                             }
                         }
                         // if this is not a impl- or trait-function, its not the searched function
                         _ => (),
                     }
                 }
-                found
+                number_found
             });
 
-        match found {
-            // if there are multiple possible functions that meets the search criteria
-            Found::MultipleFoundDty | Found::MultipleFoundDtyAlt => {
-                Err(CtxError::AmbiguousFunctionCall {
-                    function_name: fun_name.clone(),
-                    impl_dty: dty.clone(),
-                })
-            }
+        match number_found {
             // if there if no function that meets the search criteria
-            Found::NotFound => Err(CtxError::IdentNotFound(Ident::new(fun_name))),
+            0 => Err(CtxError::IdentNotFound(Ident::new(fun_name))),
             // if there is exactly one function that meets the search criteria
-            Found::FoundDty => Ok(result.unwrap()),
-            Found::FoundDtyAlt => {
-                *dty = dty_alternative.unwrap();
-                Ok(result.unwrap())
-            }
+            1 => Ok(result.unwrap()),
+            // if there are multiple possible functions that meets the search criteria
+            _ => Err(CtxError::AmbiguousFunctionCall {
+                function_name: fun_name.clone(),
+                impl_dty: dty.clone(),
+            }),
         }
     }
 
