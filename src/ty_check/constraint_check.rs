@@ -182,9 +182,7 @@ impl IdentConstraints {
                     if let Ok(constr_map) =
                         constraint_env.check_constraint(&con, &mut res_ident_constraints)
                     {
-                        if !constr_map.is_empty() {
-                            subs_new.composition(constr_map);
-                        }
+                        subs_new.composition(constr_map);
                     } else {
                         Err(TyError::UnfulfilledConstraint(con.clone()))?
                     }

@@ -73,36 +73,38 @@ impl ConstrainMap {
 
     /// Compose two substitutions `other` \circ `self`
     pub fn composition(&mut self, other: ConstrainMap) {
-        self.ty_unifier
-            .iter()
-            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
-        self.dty_unifier
-            .iter()
-            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
-        self.nat_unifier
-            .iter()
-            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
-        self.mem_unifier
-            .iter()
-            .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+        if !other.is_empty() {
+            self.ty_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+            self.dty_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+            self.nat_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+            self.mem_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
 
-        self.ty_unifier
-            .iter_mut()
-            .for_each(|(_, bound)| bound.substitute(&other));
-        self.dty_unifier
-            .iter_mut()
-            .for_each(|(_, bound)| bound.substitute(&other));
-        self.nat_unifier
-            .iter_mut()
-            .for_each(|(_, bound)| bound.substitute(&other));
-        self.mem_unifier
-            .iter_mut()
-            .for_each(|(_, bound)| bound.substitute(&other));
+            self.ty_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
+            self.dty_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
+            self.nat_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
+            self.mem_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
 
-        self.ty_unifier.extend(other.ty_unifier.into_iter());
-        self.dty_unifier.extend(other.dty_unifier.into_iter());
-        self.nat_unifier.extend(other.nat_unifier.into_iter());
-        self.mem_unifier.extend(other.mem_unifier.into_iter());
+            self.ty_unifier.extend(other.ty_unifier.into_iter());
+            self.dty_unifier.extend(other.dty_unifier.into_iter());
+            self.nat_unifier.extend(other.nat_unifier.into_iter());
+            self.mem_unifier.extend(other.mem_unifier.into_iter());
+        }
     }
 }
 

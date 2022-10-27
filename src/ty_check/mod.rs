@@ -688,13 +688,6 @@ impl TyChecker {
             // Check body-expression
             self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
 
-            // Make sure the body does not contain any implicit kinded identifier
-            TyChecker::apply_substitution_exprs(
-                std::iter::once(&mut gf.body_expr),
-                &self.implicit_ident_substitution,
-            )?;
-            self.implicit_ident_substitution.clear();
-
             // t <= t_f
             // unify::constrain(
             //     gf.body_expr.ty.as_ref().unwrap(),
@@ -702,7 +695,7 @@ impl TyChecker {
             // )?;
 
             //coalesce::coalesce_ty(&mut self.term_constr.constr_map, &mut body_ctx, )
-            let empty_ty_ctx = subty::check(
+            let (empty_ty_ctx, mut subs) = subty::check(
                 &kind_ctx,
                 TyCtx::new(),
                 gf.body_expr.ty.as_ref().unwrap().dty(),
@@ -714,6 +707,21 @@ impl TyChecker {
                 "Expected typing context to be empty. But TyCtx:\n {:?}",
                 empty_ty_ctx
             );
+
+            if !subs.is_empty() {
+                (subs, self.implicit_ident_cons) = self
+                    .implicit_ident_cons
+                    .constraint_subs(&self.constraint_env, &subs)?;
+                self.implicit_ident_substitution.composition(subs);
+            }
+
+            // Make sure the body does not contain any implicit kinded identifier
+            TyChecker::apply_substitution_exprs(
+                std::iter::once(&mut gf.body_expr),
+                &self.implicit_ident_substitution,
+            )?;
+            self.implicit_ident_substitution.clear();
+
             Ok(())
         };
 
@@ -1846,31 +1854,20 @@ impl TyChecker {
 
         // Check if the type of the body is a subtype of return_dty of lambda_fun
         // t <= t_f
-        let ret_ty_is_implicit_ident = if let DataTyKind::Ident(ident) = &ret_dty.dty {
-            ident.is_implicit
-        } else {
-            false
-        };
-        if !ret_ty_is_implicit_ident {
-            let empty_ty_ctx = subty::check(
-                kind_ctx,
-                TyCtx::new(),
-                body.ty.as_ref().unwrap().dty(),
-                ret_dty,
-            )?;
+        let (empty_ty_ctx, mut subs) = subty::check(
+            kind_ctx,
+            TyCtx::new(),
+            body.ty.as_ref().unwrap().dty(),
+            ret_dty,
+        )?;
 
-            assert!(
-                empty_ty_ctx.is_empty(),
-                "Expected typing context to be empty. But TyCtx:\n {:?}",
-                empty_ty_ctx
-            );
-        }
-        // if the return_dty is an implicit identifier: replace it by the type of the body
-        else {
-            ret_dty.dty = body.ty.as_ref().unwrap().dty().dty.clone();
-        }
+        assert!(
+            empty_ty_ctx.is_empty(),
+            "Expected typing context to be empty. But TyCtx:\n {:?}",
+            empty_ty_ctx
+        );
 
-        let fun_ty = Ty::new(TyKind::Fn(
+        let mut fun_ty = Ty::new(TyKind::Fn(
             params
                 .iter()
                 .map(|decl| decl.ty.as_ref().unwrap().clone())
@@ -1878,6 +1875,15 @@ impl TyChecker {
             exec,
             Box::new(Ty::new(TyKind::Data(ret_dty.clone()))),
         ));
+
+        if !subs.is_empty() {
+            (subs, self.implicit_ident_cons) = self
+                .implicit_ident_cons
+                .constraint_subs(&self.constraint_env, &subs)?;
+
+            fun_ty.substitute(&subs);
+            self.implicit_ident_substitution.composition(subs);
+        }
 
         Ok((ty_ctx, fun_ty))
     }
@@ -2164,12 +2170,21 @@ impl TyChecker {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
 
-        let after_subty_ctx = subty::check(
+        let (mut after_subty_ctx, mut subs) = subty::check(
             kind_ctx,
             assigned_val_ty_ctx,
             e.ty.as_ref().unwrap().dty(),
             &dty,
         )?;
+
+        if !subs.is_empty() {
+            (subs, self.implicit_ident_cons) = self
+                .implicit_ident_cons
+                .constraint_subs(&self.constraint_env, &subs)?;
+
+            after_subty_ctx.substitute(&subs);
+            self.implicit_ident_substitution.composition(subs);
+        }
 
         Ok((
             after_subty_ctx,
