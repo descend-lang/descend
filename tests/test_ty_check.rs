@@ -46,14 +46,13 @@ fn nvcc_init() {
 fn assert_nvcc_compile(cuda_src: &str) {
     nvcc_init();
 
-    const TMP_FILE_NAME: &'static str = "descend_generated_cuda";
-    const TMP_FILE_OUTPUT_NAME: &'static str = "descend_generated_cuda";
+    if unsafe { RUN_NVCC } {
+        const TMP_FILE_NAME: &'static str = "descend_generated_cuda";
+        const TMP_FILE_OUTPUT_NAME: &'static str = "descend_generated_cuda";
 
-    // Use a counter to avoid undefined behavior when running multiple tests
-    let id = unsafe { COUNTER.fetch_add(1, Ordering::SeqCst) };
-    let run_nvcc = unsafe { RUN_NVCC };
+        // Use a counter to avoid undefined behavior when running multiple tests
+        let id = unsafe { COUNTER.fetch_add(1, Ordering::SeqCst) };
 
-    if run_nvcc {
         let compil_src_file = format!("{}/{}_{}.cu", COMPILE_PATH_DIR, TMP_FILE_NAME, id);
         let compil_ouptput_file = format!("{}/{}_{}.o", COMPILE_PATH_DIR, TMP_FILE_OUTPUT_NAME, id);
         let nvcc_command_str = format!(
@@ -1005,17 +1004,17 @@ fn test_unfullfilled_constraints2() {
             false
         }
     }
-    trait Ord: Equal {
+    trait Ordering: Equal {
         fn foo2(x: i32) -[cpu.thread]-> bool;
     }
-    trait SOrd: Ord {
+    trait SOrd: Ordering {
         fn foo3(x: i32) -[cpu.thread]-> bool;
     }
     struct Point<X, Y> where X: Equal, Y:Equal {
         x: X,
         y: Y
     }
-    struct Point2<X, Y> where X: SOrd, Y: Ord {
+    struct Point2<X, Y> where X: SOrd, Y: Ordering {
         p: Point<X, Y>
     }
     "#;
@@ -1028,17 +1027,17 @@ fn test_unfullfilled_constraints2() {
     //         false
     //     }
     // }
-    // trait Ord: Equal {
+    // trait Ordering: Equal {
     //     fn foo2(x: i32) -[cpu.thread]-> bool {false}
     // }
-    // trait SOrd: Ord {
+    // trait SOrd: Ordering {
     //     fn foo3(x: i32) -[cpu.thread]-> bool {false}
     // }
     // struct Point<X, Y> where X: Equal, Y:Equal {
     //     x: X,
     //     y: Y
     // }
-    // struct T<X> where X: Ord {}
+    // struct T<X> where X: Ordering {}
     // struct Point2<Y> where Y: SOrd {
     //     p: Point<T<Y>, Y>
     // }
@@ -1052,18 +1051,18 @@ fn test_unfullfilled_constraints2() {
     //         false
     //     }
     // }
-    // trait Ord: Equal {
+    // trait Ordering: Equal {
     //     fn foo2(x: i32) -[cpu.thread]-> bool {false}
     // }
-    // trait SOrd: Ord {
+    // trait SOrd: Ordering {
     //     fn foo3(x: i32) -[cpu.thread]-> bool {false}
     // }
     // struct Point<X, Y> where X: Equal, Y:Equal {
     //     x: X,
     //     y: Y
     // }
-    // struct T<X> where X: Ord {}
-    // struct Point2<Y> where Y: Ord {
+    // struct T<X> where X: Ordering {}
+    // struct Point2<Y> where Y: Ordering {
     //     p: Point<T<Y>, Y>
     // }
     // impl SOrd for T<X> where X: SOrd {}

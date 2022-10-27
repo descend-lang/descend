@@ -38,64 +38,60 @@ pub const SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub const SPLIT_WARP: &str = "split_warp";
 pub const SPLIT_WARP_GRP: &str = "split_warp_grp";
 
-pub const TRAIT_ADD_NAME: &str = "Add";
-pub const TRAIT_SUB_NAME: &str = "Sub";
-pub const TRAIT_MUL_NAME: &str = "Mul";
-pub const TRAIT_DIV_NAME: &str = "Div";
-pub const TRAIT_REM_NAME: &str = "Rem";
-pub const TRAIT_EQ_NAME: &str = "Eq";
-pub const TRAIT_COPY_NAME: &str = "Copy";
+pub const BINOPS: [(BinOp, &str, &str); 11] = [
+    (BinOp::Add, "Add", "add"),
+    (BinOp::Sub, "Sub", "sub"),
+    (BinOp::Mul, "Mul", "mul"),
+    (BinOp::Div, "Div", "div"),
+    (BinOp::Mod, "Rem", "rem"),
+    (BinOp::Lt, "Ord", "lt"),
+    (BinOp::Le, "Ord", "le"),
+    (BinOp::Eq, "Eq", "eq"),
+    (BinOp::Ge, "Ord", "ge"),
+    (BinOp::Gt, "Ord", "gt"),
+    (BinOp::Neq, "Eq", "ne"),
+];
 
 pub fn copy_trait() -> TraitMonoType {
     TraitMonoType {
-        name: String::from(TRAIT_COPY_NAME),
+        name: String::from("Copy"),
         generic_args: vec![],
     }
 }
 
-pub fn bin_op_to_fun(binop: &BinOp, lhs: Expr, rhs: Expr) -> ExprKind {
-    let fun_name = Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(
-        Ident::new(match binop {
-            BinOp::Add => "add",
-            BinOp::Sub => "sub",
-            BinOp::Mul => "mul",
-            BinOp::Div => "div",
-            BinOp::Mod => "rem",
-            BinOp::Eq => "eq",
-            _ => todo!(),
-        }),
-    ))));
-    ExprKind::App(
-        Path::InferFromFirstArg,
-        Some(FunctionKind::TraitFun(
-            match binop {
-                BinOp::Add => TRAIT_ADD_NAME,
-                BinOp::Sub => TRAIT_SUB_NAME,
-                BinOp::Mul => TRAIT_MUL_NAME,
-                BinOp::Div => TRAIT_DIV_NAME,
-                BinOp::Mod => TRAIT_REM_NAME,
-                BinOp::Eq => TRAIT_EQ_NAME,
-                _ => todo!(),
-            }
-            .to_string(),
-        )),
-        Box::new(fun_name),
-        vec![],
-        vec![lhs, rhs],
-    )
+pub fn bin_op_to_fun(binop: &BinOp, lhs: &Expr, rhs: &Expr) -> Option<ExprKind> {
+    if let Some((_, trait_name, trait_fun_name)) = BINOPS.into_iter().find(|(b, _, _)| b == binop) {
+        println!(
+            "Translate {:#?} to {}, {}",
+            binop, trait_name, trait_fun_name,
+        );
+        Some(ExprKind::App(
+            Path::InferFromFirstArg,
+            Some(FunctionKind::TraitFun(trait_name.to_string())),
+            Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
+                PlaceExprKind::Ident(Ident::new(trait_fun_name)),
+            )))),
+            vec![],
+            vec![lhs.clone(), rhs.clone()],
+        ))
+    } else {
+        None
+    }
 }
 
-pub fn fun_to_bin_op(trait_name: &str, lhs: Expr, rhs: Expr) -> ExprKind {
-    let bin_op = match trait_name {
-        TRAIT_ADD_NAME => BinOp::Add,
-        TRAIT_SUB_NAME => BinOp::Sub,
-        TRAIT_MUL_NAME => BinOp::Mul,
-        TRAIT_DIV_NAME => BinOp::Div,
-        TRAIT_REM_NAME => BinOp::Mod,
-        TRAIT_EQ_NAME => BinOp::Eq,
-        _ => todo!(),
-    };
-    ExprKind::BinOp(bin_op, Box::new(lhs), Box::new(rhs))
+pub fn fun_to_bin_op(trait_name: &str, fun_name: &str, lhs: &Expr, rhs: &Expr) -> Option<ExprKind> {
+    if let Some((bin_op, _, _)) = BINOPS
+        .into_iter()
+        .find(|(_, t, f)| *t == trait_name && *f == fun_name)
+    {
+        Some(ExprKind::BinOp(
+            bin_op,
+            Box::new(lhs.clone()),
+            Box::new(rhs.clone()),
+        ))
+    } else {
+        None
+    }
 }
 
 pub fn fun_decls() -> Vec<(&'static str, TypeScheme)> {

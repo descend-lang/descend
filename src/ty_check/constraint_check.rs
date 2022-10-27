@@ -238,14 +238,20 @@ impl ConstraintEnv {
 
     /// Append a constraint (which is transformed into a constraint-scheme without
     /// kinded identifier and without constraints) to this environment
-    pub fn append_constraints(&mut self, cons: &Vec<Constraint>) {
+    pub fn append_constraints<'a, I>(&mut self, cons: I)
+    where
+        I: Iterator<Item = &'a Constraint>,
+    {
         self.constraint_schemes
-            .extend(cons.iter().map(|con| ConstraintScheme::new(con)));
+            .extend(cons.map(|con| ConstraintScheme::new(con)));
     }
 
     /// Remove multiple constraints from this environment
-    pub fn remove_constraints(&mut self, cons: &Vec<Constraint>) {
-        cons.iter().for_each(|con_remove| {
+    pub fn remove_constraints<'a, I>(&mut self, cons: I)
+    where
+        I: Iterator<Item = &'a Constraint>,
+    {
+        cons.for_each(|con_remove| {
             let con_remove = ConstraintScheme::new(con_remove);
             self.constraint_schemes.swap_remove(
                 (self.constraint_schemes.len() - 1)

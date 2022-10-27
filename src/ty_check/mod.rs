@@ -268,9 +268,24 @@ impl TyChecker {
             .iter()
             .map(|con| { self.constraint_well_formed(&kind_ctx_trait, &ty_ctx, None, &con) }))?;
 
+        // Constraint Self impls
+        let self_impls_trait = Constraint {
+            param: DataTy::new(DataTyKind::Ident(Ident::new("Self"))),
+            trait_bound: TraitMonoType {
+                name: trait_def.name.clone(),
+                generic_args: trait_def
+                    .generic_params
+                    .iter()
+                    .map(|ident_kinded| ident_kinded.arg_kinded())
+                    .collect(),
+            },
+        };
+
         // Assume all constraints of the trait (necessary to type_check function definitions)
         self.constraint_env
-            .append_constraints(&trait_def.constraints);
+            .append_constraints(trait_def.constraints.iter());
+        self.constraint_env
+            .append_constraints(std::iter::once(&self_impls_trait));
 
         let result =
             iter_TyResult_to_TyResult!(trait_def.ass_items.iter_mut().map(
@@ -298,7 +313,9 @@ impl TyChecker {
 
         // Remove all added constraints of the trait from global_context
         self.constraint_env
-            .remove_constraints(&trait_def.constraints);
+            .append_constraints(std::iter::once(&self_impls_trait));
+        self.constraint_env
+            .remove_constraints(trait_def.constraints.iter());
 
         result
     }
@@ -396,7 +413,7 @@ impl TyChecker {
 
             // While typechecking the constraints specified in the where-clause of the impl can be assumed
             self.constraint_env
-                .append_constraints(&impl_def.constraints);
+                .append_constraints(impl_def.constraints.iter());
 
             // Append generics from the impl to the kinding context
             let kind_ctx = kind_ctx.append_idents(impl_def.generic_params.clone());
@@ -545,7 +562,7 @@ impl TyChecker {
 
             // Remove constraints added to the global context
             self.constraint_env
-                .remove_constraints(&impl_def.constraints);
+                .remove_constraints(impl_def.constraints.iter());
 
             // Return Ok or collected errors
             if errors.is_empty() {
@@ -570,7 +587,7 @@ impl TyChecker {
 
             // Assume all constraints of the impl (necessary to type_check function definitions)
             self.constraint_env
-                .append_constraints(&impl_def.constraints);
+                .append_constraints(impl_def.constraints.iter());
 
             let result =
                 iter_TyResult_to_TyResult!(impl_def.ass_items.iter_mut().map(|decl| match decl {
@@ -586,7 +603,7 @@ impl TyChecker {
 
             // Remove all added constraints of the impl from global_context
             self.constraint_env
-                .remove_constraints(&impl_def.constraints);
+                .remove_constraints(impl_def.constraints.iter());
 
             result
         }
@@ -681,7 +698,8 @@ impl TyChecker {
         );
 
         // Assume the constraints of the function
-        self.constraint_env.append_constraints(&gf.constraints);
+        self.constraint_env
+            .append_constraints(gf.constraints.iter());
 
         let res: TyResult<()> = {
             // TODO check that every prv_rel only uses provenance variables bound in generic_params
@@ -741,7 +759,8 @@ impl TyChecker {
         };
 
         // Remove added constraints from the global context
-        self.constraint_env.remove_constraints(&gf.constraints);
+        self.constraint_env
+            .remove_constraints(gf.constraints.iter());
 
         res
     }
@@ -766,13 +785,8 @@ impl TyChecker {
         if let ExprKind::BinOp(bin_op, lhs, rhs) = &expr.expr {
             // TODO at the moment only implemented for GpuThread and not for all operators
             if exec == Exec::GpuThread {
-                match bin_op {
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Eq => {
-                        let fun_app =
-                            bin_op_to_fun(bin_op, lhs.as_ref().clone(), rhs.as_ref().clone());
-                        expr.expr = fun_app;
-                    }
-                    _ => (),
+                if let Some(bin_op_expr) = bin_op_to_fun(bin_op, lhs.as_ref(), rhs.as_ref()) {
+                    expr.expr = bin_op_expr;
                 }
             }
         }
@@ -2373,6 +2387,10 @@ impl TyChecker {
                 dty: DataTyKind::Scalar(ScalarTy::I32),
                 ..
             }) => Ok((res_ctx, e_ty.clone())),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::Bool),
+                ..
+            }) if matches!(un_op, UnOp::Not) => Ok((res_ctx, e_ty.clone())),
             _ => Err(TyError::String(format!(
                 "Exected a number type (i.e., f32 or i32), but found {:?}",
                 e_ty

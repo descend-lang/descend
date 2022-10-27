@@ -150,7 +150,7 @@ impl<'a> Monomorphiser<'a> {
             // Function applications using these methods are replaced by bin-op expressions
             if let Item::ImplDef(impl_def) = item {
                 if impl_def.trait_impl.is_some()
-                    && impl_def.trait_impl.as_ref().unwrap().name == pre_decl::TRAIT_REM_NAME
+                    && impl_def.trait_impl.as_ref().unwrap().name == "Rem"
                 {
                     return ();
                 }
@@ -279,40 +279,12 @@ impl<'a> Monomorphiser<'a> {
     fn monomorphise_fun_app(
         &mut self,
         fun_kind: &mut Option<FunctionKind>,
-        fun: &mut Box<Expr>,
+        fun_name_expr: &mut Box<Expr>,
         generic_args: &mut Vec<ArgKinded>,
     ) {
-        // Function to set the new global function name and kind of a function within an function application
-        fn set_gl_fun_name(
-            fun: &mut Box<Expr>,
-            fun_kind: &mut Option<FunctionKind>,
-            new_fun_name: String,
-        ) {
-            *fun_kind = Some(FunctionKind::GlobalFun);
-            match &mut fun.expr {
-                ExprKind::PlaceExpr(place_expr) => {
-                    if let PlaceExprKind::Ident(ident) = &mut place_expr.pl_expr {
-                        ident.name = new_fun_name;
-                    } else {
-                        panic!("Dont know how to set function name")
-                    }
-                }
-                _ => panic!("Dont know how to set function name"),
-            }
-        }
-
         // Find name, reference to FunDef and the unique global function name of this application
         let (mut fun_name, mut fun_def, mut global_fun_name) = {
-            let fun_name = match &fun.expr {
-                ExprKind::PlaceExpr(place_expr) => {
-                    if let PlaceExprKind::Ident(ident) = &place_expr.pl_expr {
-                        &ident.name
-                    } else {
-                        panic!("Dont know how to get function name")
-                    }
-                }
-                _ => panic!("Dont know how to get function name"),
-            };
+            let fun_name = get_fun_name_from_expr(fun_name_expr);
             let fun_name = FunctionName {
                 name: fun_name.clone(),
                 fun_kind: fun_kind.as_ref().unwrap().clone(),
@@ -344,7 +316,9 @@ impl<'a> Monomorphiser<'a> {
         // if the called function has no constraints, it is sufficient to adjust the name of the function
         // to refer the global function instead of e.g. an impl-method
         if fun_def.constraints.len() == 0 {
-            set_gl_fun_name(fun, fun_kind, global_fun_name.clone());
+            // Adjust function name and kind
+            *get_fun_name_from_expr_mut(fun_name_expr) = global_fun_name.clone();
+            *fun_kind = Some(FunctionKind::GlobalFun);
             return;
         }
 
@@ -417,8 +391,9 @@ impl<'a> Monomorphiser<'a> {
                 }
             })
             .collect();
-        // Adjust also function name
-        set_gl_fun_name(fun, fun_kind, new_fun_name);
+        // Adjust also function name and kind
+        *get_fun_name_from_expr_mut(fun_name_expr) = global_fun_name.clone();
+        *fun_kind = Some(FunctionKind::GlobalFun);
     }
 
     /// Replace a trait-function application by the application of the correct impl-fun
@@ -570,48 +545,36 @@ impl<'a> Monomorphiser<'a> {
             .collect();
     }
 
-    /// Returns if an expression is an function call of an function defined in std-lib
+    /// Checks if this is an function call of an function defined in std-lib
     /// which should be replaced by an binary operation expression to make the generated
     /// code better readable (e.g. replace a trait-function call of `add` with
     /// numbers as arguments by an binary expression with `+`)
-    fn inline_std_bin_op_function(fun_app: &Expr) -> bool {
-        if let ExprKind::App(_, fun_kind, _, _, exprs) = &fun_app.expr {
+    /// If so the expression is replaced by a binary operation expression
+    fn replace_fun_app_by_binop(fun_app: &mut Expr) -> bool {
+        if let ExprKind::App(_, fun_kind, fun_name_expr, _, exprs) = &mut fun_app.expr {
             if let Some(FunctionKind::TraitFun(trait_name)) = fun_kind {
-                match trait_name.as_str() {
-                    pre_decl::TRAIT_ADD_NAME
-                    | pre_decl::TRAIT_SUB_NAME
-                    | pre_decl::TRAIT_MUL_NAME
-                    | pre_decl::TRAIT_DIV_NAME
-                    | pre_decl::TRAIT_REM_NAME
-                    | pre_decl::TRAIT_EQ_NAME
-                        if exprs.len() == 2 && exprs[0].ty == exprs[1].ty =>
-                    {
-                        if let TyKind::Data(dty) = &exprs[0].ty.as_ref().unwrap().ty {
-                            if let DataTyKind::Scalar(s) = &dty.dty {
-                                return *s == ScalarTy::I32
-                                    || *s == ScalarTy::U32
-                                    || *s == ScalarTy::F32
-                                    || *s == ScalarTy::F64;
+                if exprs.len() == 2 && exprs[0].ty == exprs[1].ty {
+                    if let TyKind::Data(dty) = &exprs[0].ty.as_ref().unwrap().ty {
+                        if let DataTyKind::Scalar(s) = &dty.dty {
+                            match *s {
+                                ScalarTy::I32 | ScalarTy::U32 | ScalarTy::F32 | ScalarTy::F64 => {
+                                    let fun_name = get_fun_name_from_expr(fun_name_expr);
+
+                                    if let Some(bin_op_expr) = pre_decl::fun_to_bin_op(
+                                        trait_name, fun_name, &exprs[0], &exprs[1],
+                                    ) {
+                                        fun_app.expr = bin_op_expr;
+                                        return true;
+                                    }
+                                }
+                                _ => (),
                             }
                         }
                     }
-                    _ => (),
                 }
             }
         }
         false
-    }
-
-    /// Replace an expression by an binary operation expression <br>
-    /// Precondition `inline_std_bin_op_function` must return true
-    fn replace_fun_app_by_binop(fun_app: &mut Expr) {
-        assert!(Self::inline_std_bin_op_function(fun_app));
-        if let ExprKind::App(_, fun_kind, _, _, exprs) = &mut fun_app.expr {
-            if let Some(FunctionKind::TraitFun(trait_name)) = fun_kind {
-                let (rhs, lhs) = (exprs.pop().unwrap(), exprs.pop().unwrap());
-                fun_app.expr = pre_decl::fun_to_bin_op(trait_name, lhs, rhs)
-            }
-        }
     }
 }
 
@@ -619,14 +582,8 @@ impl<'a> Monomorphiser<'a> {
 // Visit all function applications and call "monomorphise_fun_app"
 impl<'a> VisitMut for Monomorphiser<'a> {
     fn visit_expr(&mut self, expr: &mut Expr) {
-        // Replace function calls of binary operations with numbers
-        // by descend-expressions for binary operations to make generated
-        // code better readable
-        if Self::inline_std_bin_op_function(&expr) {
-            Self::replace_fun_app_by_binop(expr)
-        }
-        // Else monomorphise all function calls
-        else {
+        if !Self::replace_fun_app_by_binop(expr) {
+            // Monomorphise all function calls
             match &mut expr.expr {
                 ExprKind::App(path, fun_kind, fun, generic_args, exprs) => {
                     // Path is not longer needed
@@ -915,6 +872,31 @@ fn trait_fun_to_impl_fun(fun_def: &FunDef, impl_def: &ImplDef, trait_def: &Trait
             ));
             body
         },
+    }
+}
+
+fn get_fun_name_from_expr(fun: &Box<Expr>) -> &String {
+    match &fun.expr {
+        ExprKind::PlaceExpr(place_expr) => {
+            if let PlaceExprKind::Ident(ident) = &place_expr.pl_expr {
+                &ident.name
+            } else {
+                panic!("Dont know how to get function name")
+            }
+        }
+        _ => panic!("Dont know how to get function name"),
+    }
+}
+fn get_fun_name_from_expr_mut(fun: &mut Box<Expr>) -> &mut String {
+    match &mut fun.expr {
+        ExprKind::PlaceExpr(place_expr) => {
+            if let PlaceExprKind::Ident(ident) = &mut place_expr.pl_expr {
+                &mut ident.name
+            } else {
+                panic!("Dont know how to get function name")
+            }
+        }
+        _ => panic!("Dont know how to get function name"),
     }
 }
 
