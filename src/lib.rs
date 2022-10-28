@@ -1,5 +1,3 @@
-#![feature(iter_partition_in_place)]
-
 use std::sync::Once;
 
 use ast::CompilUnit;

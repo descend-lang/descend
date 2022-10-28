@@ -199,7 +199,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                 if let Some(struct_decl) = visitor.structs.get(&struct_ty.name) {
                     let inst_struct_mono = struct_decl
                         .ty()
-                        .partial_apply(&struct_ty.generic_args)
+                        .inst_qualified_ty(&struct_ty.generic_args)
                         .mono_ty;
                     if let TyKind::Data(dataty) = inst_struct_mono.ty {
                         if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {

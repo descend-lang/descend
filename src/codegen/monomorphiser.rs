@@ -498,7 +498,7 @@ impl<'a> Monomorphiser<'a> {
                         impl_def
                             .generic_params
                             .iter()
-                            .map(|k_ident| k_ident.arg_kinded_implicit())
+                            .map(|k_ident| k_ident.as_arg_kinded_implicit())
                             .collect::<Vec<_>>()
                             .iter(),
                     );
@@ -531,7 +531,7 @@ impl<'a> Monomorphiser<'a> {
             .generic_params
             .iter()
             .map(|generic| {
-                let mut arg = generic.arg_kinded();
+                let mut arg = generic.as_arg_kinded();
                 arg.substitute(&substitute_impl_args);
                 arg
             })

@@ -2,39 +2,41 @@ use super::error::TyError;
 use super::TyResult;
 use crate::ast::SubstKindedIdents;
 use crate::ast::{Constraint, DataTyKind, Ident, IdentKinded};
+use crate::ty_check;
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
 use crate::ty_check::utils::fresh_name;
 use crate::ty_check::{pre_decl, unify};
 use std::collections::HashSet;
 
+// forall <A>. <D: T> => D: T
 #[derive(Debug, Clone)]
 pub struct ConstraintScheme {
-    pub generics: Vec<IdentKinded>,
-    pub implican: Vec<Constraint>,
-    pub implied: Constraint,
+    pub generic_params: Vec<IdentKinded>,
+    pub premis: Vec<Constraint>,
+    pub consequence: Constraint,
 }
 
 /// Used to collect constraint on implicit identifiers which cannot checked until the
 /// identifier is replaced by a concrete type
 #[derive(Debug, Clone)]
-pub struct IdentConstraints {
+pub struct IdentsConstrained {
     /// Vector of pairs consisting of a name of an implicit identifier
     /// and a constraint on this identifier
-    ident_cons: Vec<(String, Constraint)>,
+    pub idents_constr: Vec<(String, Constraint)>,
 }
 
 /// Environment with all constraint-schemes
 #[derive(Debug)]
-pub struct ConstraintEnv {
+pub struct ConstraintCtx {
     constraint_schemes: Vec<ConstraintScheme>,
 }
 
 impl ConstraintScheme {
-    pub fn new(implied: &Constraint) -> Self {
+    pub fn consequence_from_constr(consequence: &Constraint) -> Self {
         ConstraintScheme {
-            generics: vec![],
-            implican: vec![],
-            implied: implied.clone(),
+            generic_params: vec![],
+            premis: vec![],
+            consequence: consequence.clone(),
         }
     }
 
@@ -42,7 +44,7 @@ impl ConstraintScheme {
     /// new fresh identifiers
     pub fn generic_param_fresh_implicit_names(&self) -> Self {
         let new_generics = self
-            .generics
+            .generic_params
             .iter()
             .map(|generic| {
                 IdentKinded::new(
@@ -53,19 +55,21 @@ impl ConstraintScheme {
             .collect::<Vec<_>>();
         let new_generic_args = new_generics
             .iter()
-            .map(|gen| gen.arg_kinded())
+            .map(|gen| gen.as_arg_kinded())
             .collect::<Vec<_>>();
 
         ConstraintScheme {
-            generics: new_generics,
-            implican: self
-                .implican
+            generic_params: new_generics,
+            premis: self
+                .premis
                 .iter()
-                .map(|con| con.subst_idents_kinded(self.generics.iter(), new_generic_args.iter()))
+                .map(|con| {
+                    con.subst_idents_kinded(self.generic_params.iter(), new_generic_args.iter())
+                })
                 .collect(),
-            implied: self
-                .implied
-                .subst_idents_kinded(self.generics.iter(), new_generic_args.iter()),
+            consequence: self
+                .consequence
+                .subst_idents_kinded(self.generic_params.iter(), new_generic_args.iter()),
         }
     }
 }
@@ -73,8 +77,8 @@ impl ConstraintScheme {
 impl Eq for ConstraintScheme {}
 impl PartialEq for ConstraintScheme {
     fn eq(&self, other: &Self) -> bool {
-        if self.generics.len() != other.generics.len()
-            || self.implican.len() != other.implican.len()
+        if self.generic_params.len() != other.generic_params.len()
+            || self.premis.len() != other.premis.len()
         {
             return false;
         }
@@ -82,140 +86,58 @@ impl PartialEq for ConstraintScheme {
         // Substitute names of kinded identifiers of "other" with names of kinded identifiers of "self"
         // and check if every constraint is identical
         let generic_args = self
-            .generics
+            .generic_params
             .iter()
-            .map(|generic| generic.arg_kinded())
+            .map(|generic| generic.as_arg_kinded())
             .collect::<Vec<_>>();
 
-        self.implican
+        self.premis
             .iter()
-            .zip(other.implican.iter())
-            .chain(std::iter::once(&self.implied).zip(std::iter::once(&other.implied)))
+            .zip(other.premis.iter())
+            .chain(std::iter::once(&self.consequence).zip(std::iter::once(&other.consequence)))
             .fold(true, |res, (con1, con2)| {
-                res && *con1 == con2.subst_idents_kinded(other.generics.iter(), generic_args.iter())
+                res && *con1
+                    == con2.subst_idents_kinded(other.generic_params.iter(), generic_args.iter())
             })
     }
 }
 
-impl IdentConstraints {
+impl IdentsConstrained {
     pub fn new() -> Self {
         Self {
-            ident_cons: Vec::new(),
+            idents_constr: Vec::new(),
         }
     }
 
     /// Add constraints on identifiers to this context
-    pub fn add_ident_constraints<I>(&mut self, ident_constraints: I)
+    pub fn add_idents_constrained<I>(&mut self, ident_constrained: I)
     where
         I: Iterator<Item = (String, Constraint)>,
     {
-        self.ident_cons.extend(ident_constraints)
+        self.idents_constr.extend(ident_constrained)
     }
 
     /// Returns and removes all constraints on the identifier with passed name
-    pub fn consume_constraints(
-        &mut self,
-        ident: &str,
-    ) -> impl ExactSizeIterator<Item = Constraint> + '_ {
+    pub fn drain_constr_for_ident(&mut self, ident: &str) -> impl Iterator<Item = Constraint> + '_ {
         let index_ident_constraints = self
-            .ident_cons
-            .iter_mut()
-            .partition_in_place(|(name, _)| *name != *ident);
-        self.ident_cons
-            .drain(index_ident_constraints..)
-            .map(|(_, con)| con)
+            .idents_constr
+            .iter()
+            .cloned()
+            .partition(|(name, _)| *name != *ident);
+        self.idents_constr = index_ident_constraints.0;
+        index_ident_constraints
+            .1
+            .into_iter()
+            .map(|(_, constr)| constr)
     }
 
     /// Returns true if this context is empty
     pub fn is_empty(&self) -> bool {
-        self.ident_cons.is_empty()
-    }
-
-    /// Check if a substitution respect all constraints on identifiers in `self`. <br>
-    /// For every substitution of an implicit identifier are all constraints on this identifier checked.
-    /// This can also infer new substitutions and constraints on identifiers. <br>
-    /// Returns a TyResult with a pair of a substitution extended with all types that are inferred while
-    /// checking this substitution and the modified list of constraints on identifiers without checked
-    /// constraints
-    pub(crate) fn constraint_subs(
-        &self,
-        constraint_env: &ConstraintEnv,
-        subs: &ConstrainMap,
-    ) -> TyResult<(ConstrainMap, Self)> {
-        // Result substitution with all substitutions of inferred types
-        let mut res_subs: ConstrainMap = ConstrainMap::new();
-        res_subs.composition(subs.clone());
-        // Result list of constraints on identifiers
-        let mut res_ident_constraints = self.clone();
-
-        let mut subs = subs.clone();
-
-        loop {
-            let mut subs_new = ConstrainMap::new();
-
-            // Check if this substitution fulfills all implicit_ident_constraints
-            for (name, dty) in subs.dty_unifier {
-                // Check if all constraints on the implicit identifier which is substituted are fulfilled
-
-                // Using a HashSet removes duplicates
-                let constraints_to_check: HashSet<_> =
-                    res_ident_constraints.consume_constraints(&name).collect();
-
-                // if the substituted type is an implicit ident: add constraints of this ident to other ident
-                if let DataTyKind::Ident(ident) = dty.dty {
-                    if ident.is_implicit {
-                        res_ident_constraints.add_ident_constraints(
-                            constraints_to_check
-                                .into_iter()
-                                .map(|con| (ident.name.clone(), con)),
-                        );
-                        continue;
-                    }
-                }
-
-                // Check every constraint
-                for mut con in &mut constraints_to_check.into_iter() {
-                    // Substitute inferred types
-                    con.substitute(&res_subs);
-
-                    // Check if constraint is fulfilled
-                    if let Ok(constr_map) =
-                        constraint_env.check_constraint(&con, &mut res_ident_constraints)
-                    {
-                        subs_new.composition(constr_map);
-                    } else {
-                        Err(TyError::UnfulfilledConstraint(con.clone()))?
-                    }
-                }
-            }
-
-            // If no new substitutions found: break loop
-            if subs_new.is_empty() {
-                break;
-            }
-            // Else check if new substitutions are valid
-            else {
-                // Add new substitutions to result substitutions
-                res_subs.composition(subs_new.clone());
-
-                // Check all new substitutions
-                subs = subs_new;
-            }
-        }
-
-        // Apply substitution to all constraints on implicit idents
-        res_ident_constraints
-            .ident_cons
-            .iter_mut()
-            .for_each(|(_, con)| {
-                con.substitute(&res_subs);
-            });
-
-        return Ok((res_subs, res_ident_constraints));
+        self.idents_constr.is_empty()
     }
 }
 
-impl ConstraintEnv {
+impl ConstraintCtx {
     pub fn new() -> Self {
         Self {
             constraint_schemes: Vec::new(),
@@ -243,7 +165,7 @@ impl ConstraintEnv {
         I: Iterator<Item = &'a Constraint>,
     {
         self.constraint_schemes
-            .extend(cons.map(|con| ConstraintScheme::new(con)));
+            .extend(cons.map(|con| ConstraintScheme::consequence_from_constr(con)));
     }
 
     /// Remove multiple constraints from this environment
@@ -252,7 +174,7 @@ impl ConstraintEnv {
         I: Iterator<Item = &'a Constraint>,
     {
         cons.for_each(|con_remove| {
-            let con_remove = ConstraintScheme::new(con_remove);
+            let con_remove = ConstraintScheme::consequence_from_constr(con_remove);
             self.constraint_schemes.swap_remove(
                 (self.constraint_schemes.len() - 1)
                     - self
@@ -290,7 +212,7 @@ impl ConstraintEnv {
     pub(crate) fn check_constraint(
         &self,
         constraint: &Constraint,
-        implicit_ident_cons: &mut IdentConstraints,
+        implicit_ident_cons: &mut IdentsConstrained,
     ) -> Result<ConstrainMap, ()> {
         // For the simple case that the param of "constraint" is an implicit identifier
         if let DataTyKind::Ident(ident) = &constraint.param.dty {
@@ -298,7 +220,7 @@ impl ConstraintEnv {
                 // Remember this constraint and assume its fulfilled
                 // The constraint is checked when the identifier is replaced by a concrete type
                 implicit_ident_cons
-                    .ident_cons
+                    .idents_constr
                     .push((ident.name.clone(), constraint.clone()));
                 return Ok(ConstrainMap::new());
             }
@@ -314,7 +236,7 @@ impl ConstraintEnv {
             /// the index of the constraint_scheme in theta that was tried to use to prove the goal
             current_index: usize,
             /// implicit_ident_constraints
-            implicit_ident_cons: IdentConstraints,
+            implicit_ident_cons: IdentsConstrained,
             /// substitution with inferred types
             inferred_types: ConstrainMap,
         }
@@ -390,7 +312,7 @@ impl ConstraintEnv {
             if let Some(ident_name) = constrait_param_ident {
                 // Remember this constraint and assume its fulfilled
                 // The constraint is checked when the identifier is replaced by a concrete type
-                implicit_ident_cons.ident_cons.push((ident_name, goal));
+                implicit_ident_cons.idents_constr.push((ident_name, goal));
 
                 // the last backtracking-entries can maybe be removed
                 while !backtracks.is_empty()
@@ -420,12 +342,16 @@ impl ConstraintEnv {
 
                     // Can implied from "current_con" and current goal be unified?
                     if goal
-                        .constrain(&current_con.implied, &mut constr_map, &mut prv_rels)
+                        .constrain(&current_con.consequence, &mut constr_map, &mut prv_rels)
                         .is_ok()
                     {
                         // Make sure the unification is allowed under context of constraints on implicit identifiers
                         let implicit_ident_cons_new;
-                        match implicit_ident_cons.constraint_subs(self, &constr_map) {
+                        match ty_check::expand_to_valid_subst(
+                            &constr_map,
+                            implicit_ident_cons,
+                            self,
+                        ) {
                             Ok((constr_map_ext, implicit_ident_cons_ext)) => {
                                 constr_map = constr_map_ext;
                                 implicit_ident_cons_new = implicit_ident_cons_ext;
@@ -443,9 +369,9 @@ impl ConstraintEnv {
                         let mut number_new_goals = 0;
 
                         // The constraint_scheme has some preconditions which must be checked
-                        if !current_con.implican.is_empty() {
+                        if !current_con.premis.is_empty() {
                             // Push all constraints which implies the current implied constraint to list of goals which must be proved
-                            goals.extend(current_con.implican.iter().filter_map(|sub_goal| {
+                            goals.extend(current_con.premis.iter().filter_map(|sub_goal| {
                                 let mut sub_goal = sub_goal.clone();
 
                                 // Substitute inferred types
@@ -540,8 +466,9 @@ impl ConstraintEnv {
         if !inferred_types.is_empty() {
             let mut c_inferred = constraint.clone();
             c_inferred.substitute(&inferred_types);
-            (inferred_types, _) =
-                unify::constrain(constraint, &c_inferred).expect("This can not happen");
+            inferred_types = unify::constrain(constraint, &c_inferred)
+                .expect("This can not happen")
+                .0;
         }
 
         Ok(inferred_types)

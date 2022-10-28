@@ -42,6 +42,7 @@ pub enum Item {
     ImplDef(ImplDef),
 }
 
+// Integrate FunDecl
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunDef {
     pub name: String,
@@ -92,18 +93,11 @@ impl StructDecl {
     pub fn ty(&self) -> TypeScheme {
         let struct_ty = StructDataType {
             name: self.name.clone(),
-            struct_fields: self
-                .struct_fields
-                .iter()
-                .map(|field| StructField {
-                    name: field.name.clone(),
-                    dty: field.dty.clone(),
-                })
-                .collect(),
+            struct_fields: self.struct_fields.clone(),
             generic_args: self
                 .generic_params
                 .iter()
-                .map(|gen| gen.arg_kinded())
+                .map(|gen| gen.as_arg_kinded())
                 .collect(),
         };
 
@@ -161,7 +155,6 @@ impl ImplDef {
 pub enum AssociatedItem {
     FunDef(FunDef),
     FunDecl(FunDecl),
-    ConstItem(String, DataTy, Option<Expr>),
 }
 
 /// Representation for a constraint on a datatype
@@ -194,7 +187,7 @@ pub struct StructDataType {
 }
 
 impl StructDataType {
-    /// Returns a reference to the datatype of an struct_field
+    /// Returns a reference to the datatype of a struct_field
     /// # Arguments
     /// * `name` - a string that holds the name of the attribute
     pub fn attribute_dty(&self, attribute_name: &String) -> Option<&DataTy> {
@@ -208,7 +201,7 @@ impl StructDataType {
         }
     }
 
-    /// Returns a mutable reference to the datatype of an struct_field
+    /// Returns a mutable reference to the datatype of a struct_field
     /// # Arguments
     /// * `name` - a string that holds the name of the attribute
     pub fn attribute_dty_mut(&mut self, attribute_name: &String) -> Option<&mut DataTy> {
@@ -1067,6 +1060,7 @@ impl fmt::Display for PlaceExpr {
 }
 
 /// Representation for a TypeScheme, a polymorphic type with constraints
+/// forall <A>.<D: T> => M
 #[derive(Debug, Hash, Clone)]
 pub struct TypeScheme {
     /// kinded identifier which are used in this TypeScheme
@@ -1077,29 +1071,29 @@ pub struct TypeScheme {
     pub mono_ty: Ty,
 }
 
-impl Eq for TypeScheme {}
-impl PartialEq for TypeScheme {
-    fn eq(&self, other: &Self) -> bool {
-        if self.generic_params.len() == other.generic_params.len()
-            && self
-                .generic_params
-                .iter()
-                .zip(other.generic_params.iter())
-                .fold(true, |res, (gen1, gen2)| res && gen1.kind == gen2.kind)
-        {
-            let args = self
-                .generic_params
-                .iter()
-                .map(|gen| gen.arg_kinded())
-                .collect::<Vec<ArgKinded>>();
-            self.partial_apply(args.as_slice())
-                .mono_ty
-                .eq_structure(&other.partial_apply(args.as_slice()).mono_ty)
-        } else {
-            false
-        }
-    }
-}
+// impl Eq for TypeScheme {}
+// impl PartialEq for TypeScheme {
+//     fn eq(&self, other: &Self) -> bool {
+//         if self.generic_params.len() == other.generic_params.len()
+//             && self
+//                 .generic_params
+//                 .iter()
+//                 .zip(other.generic_params.iter())
+//                 .fold(true, |res, (gen1, gen2)| res && gen1.kind == gen2.kind)
+//         {
+//             let args = self
+//                 .generic_params
+//                 .iter()
+//                 .map(|gen| gen.as_arg_kinded())
+//                 .collect::<Vec<ArgKinded>>();
+//             self.instantiate_qualified_ty(args.as_slice())
+//                 .mono_ty
+//                 .eq_structure(&other.instantiate_qualified_ty(args.as_slice()).mono_ty)
+//         } else {
+//             false
+//         }
+//     }
+// }
 
 impl TypeScheme {
     /// Create a new TypeScheme without kinded identifier and without constraints
@@ -1116,16 +1110,22 @@ impl TypeScheme {
         let implicit_args: Vec<_> = self
             .generic_params
             .iter()
-            .map(|arg| arg.arg_kinded_implicit())
+            .map(|arg| arg.as_arg_kinded_implicit())
             .collect();
         TypeScheme {
             generic_params: self.generic_params.clone(),
             constraints: self
                 .constraints
                 .iter()
-                .map(|con| self.partial_apply_single_arg(con, implicit_args.as_slice()))
+                .map(|con| {
+                    subst_generic_params(&self.generic_params, con, implicit_args.as_slice())
+                })
                 .collect(),
-            mono_ty: self.partial_apply_single_arg(&self.mono_ty, implicit_args.as_slice()),
+            mono_ty: subst_generic_params(
+                &self.generic_params,
+                &self.mono_ty,
+                implicit_args.as_slice(),
+            ),
         }
     }
 
@@ -1144,41 +1144,41 @@ impl TypeScheme {
         //Kinded arguments to replace the old kinded identifier by the fresh kinded identifier
         let new_generic_args = new_generics
             .iter()
-            .map(|gen| gen.arg_kinded())
+            .map(|gen| gen.as_arg_kinded())
             .collect::<Vec<_>>();
         //Apply "new_generic_args" to replace old kinded identifier
-        let mut result = self.partial_apply(&new_generic_args);
+        let mut result = self.inst_qualified_ty(&new_generic_args);
         result.generic_params = new_generics;
         result
     }
 
-    /// Substitute kinded identifier by given arguments on passed param `x`
-    fn partial_apply_single_arg<T: SubstKindedIdents + Clone>(
-        &self,
-        x: &T,
-        with: &[ArgKinded],
-    ) -> T {
-        self.generic_params[0..with.len()]
-            .iter()
-            .zip(with.iter())
-            .fold(x.clone(), |x, (ident_kinded, with)| {
-                x.subst_ident_kinded(ident_kinded, with)
-            })
-    }
-
     /// Substitute kinded identifier by given arguments on this type scheme
-    pub fn partial_apply(&self, with: &[ArgKinded]) -> Self {
-        assert!(self.generic_params.len() >= with.len());
+    pub fn inst_qualified_ty(&self, with: &[ArgKinded]) -> Self {
+        assert_eq!(self.generic_params.len(), with.len());
         TypeScheme {
             generic_params: self.generic_params[with.len()..].to_vec(),
             constraints: self
                 .constraints
                 .iter()
-                .map(|con| self.partial_apply_single_arg(con, with))
+                .map(|con| subst_generic_params(&self.generic_params, con, with))
                 .collect(),
-            mono_ty: self.partial_apply_single_arg(&self.mono_ty, with),
+            mono_ty: subst_generic_params(&self.generic_params, &self.mono_ty, with),
         }
     }
+}
+
+/// Substitute kinded identifier by given arguments on passed param `x`
+fn subst_generic_params<T: SubstKindedIdents + Clone>(
+    generic_params: &[IdentKinded],
+    x: &T,
+    with: &[ArgKinded],
+) -> T {
+    generic_params[0..with.len()]
+        .iter()
+        .zip(with.iter())
+        .fold(x.clone(), |x, (ident_kinded, with)| {
+            x.subst_ident_kinded(ident_kinded, with)
+        })
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -1763,18 +1763,18 @@ impl IdentKinded {
     }
 
     /// Create an ArgKinded consisting of this identifier
-    pub fn arg_kinded(&self) -> ArgKinded {
-        self.arg_kinded_with_implicit(self.ident.is_implicit)
+    pub fn as_arg_kinded(&self) -> ArgKinded {
+        self.as_arg_kinded_with_implicit(self.ident.is_implicit)
     }
 
     /// Create an ArgKinded consisting of this identifier which is made implicit
-    pub fn arg_kinded_implicit(&self) -> ArgKinded {
-        self.arg_kinded_with_implicit(true)
+    pub fn as_arg_kinded_implicit(&self) -> ArgKinded {
+        self.as_arg_kinded_with_implicit(true)
     }
 
     /// Create an ArgKinded consisting of this identifier
     /// * `implicit` - true iff this should be an implicit-identifier ArgKinded
-    fn arg_kinded_with_implicit(&self, implicit: bool) -> ArgKinded {
+    fn as_arg_kinded_with_implicit(&self, implicit: bool) -> ArgKinded {
         let mut ident = self.ident.clone();
         ident.is_implicit = implicit;
         match self.kind {

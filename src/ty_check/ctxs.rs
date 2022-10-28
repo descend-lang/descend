@@ -583,7 +583,7 @@ impl GlobalCtx {
     pub fn append_item_defs(
         &mut self,
         item_defs: &[Item],
-        constraint_env: &mut ConstraintEnv,
+        constraint_env: &mut ConstraintCtx,
     ) -> Vec<CtxError> {
         // Append every single item
         item_defs
@@ -634,9 +634,9 @@ impl GlobalCtx {
                         // the corresponding trait already adds relevant function types
                         if let Some(trait_impl) = &impl_def.trait_impl {
                             constraint_env.append_constraint_scheme(&ConstraintScheme {
-                                generics: impl_def.generic_params.clone(),
-                                implican: impl_def.constraints.clone(),
-                                implied: Constraint {
+                                generic_params: impl_def.generic_params.clone(),
+                                premis: impl_def.constraints.clone(),
+                                consequence: Constraint {
                                     param: impl_def.dty.clone(),
                                     trait_bound: trait_impl.clone(),
                                 },
@@ -731,7 +731,7 @@ impl GlobalCtx {
         &mut self,
         t_def: &TraitDef,
         errs: &mut Vec<CtxError>,
-        constraint_env: &mut ConstraintEnv,
+        constraint_env: &mut ConstraintCtx,
     ) {
         // Insert trait in context
         let old_val = self.traits.insert(t_def.name.clone(), t_def.clone());
@@ -766,7 +766,7 @@ impl GlobalCtx {
                 generic_args: t_def
                     .generic_params
                     .iter()
-                    .map(|gen| gen.arg_kinded_implicit())
+                    .map(|gen| gen.as_arg_kinded_implicit())
                     .collect(),
             };
             // This is the constraint "Self impls this trait"
@@ -832,9 +832,9 @@ impl GlobalCtx {
                     // add a constraint-scheme of the form:
                     // \forall generics_tdef: if Self implements this trait => Self also implements supertrait X
                     constraint_env.append_constraint_scheme(&ConstraintScheme {
-                        generics: generics_tdef.clone(),
-                        implican: self_impl_trait.clone(),
-                        implied: supertrait_cons.clone(),
+                        generic_params: generics_tdef.clone(),
+                        premis: self_impl_trait.clone(),
+                        consequence: supertrait_cons.clone(),
                     })
                 });
         }
@@ -887,8 +887,8 @@ impl GlobalCtx {
     /// and expected type of arguments
     pub fn fun_kind_by_dty(
         &self,
-        constraint_env: &ConstraintEnv,
-        implicit_ident_cons: &IdentConstraints,
+        constraint_env: &ConstraintCtx,
+        implicit_ident_cons: &IdentsConstrained,
         fun_name: &String,
         dty: &DataTy,
     ) -> CtxResult<&FunctionKind> {
@@ -969,8 +969,8 @@ impl GlobalCtx {
     /// Check if a datatype implements a trait
     fn dty_impls_trait(
         &self,
-        constraint_env: &ConstraintEnv,
-        implicit_ident_cons: &mut IdentConstraints,
+        constraint_env: &ConstraintCtx,
+        implicit_ident_cons: &mut IdentsConstrained,
         dty: DataTy,
         trait_name: &String,
     ) -> Result<ConstrainMap, ()> {
@@ -984,7 +984,7 @@ impl GlobalCtx {
             .map(|k_ident| {
                 let mut k_ident = k_ident.clone();
                 k_ident.ident.name = fresh_name(&k_ident.ident.name);
-                k_ident.arg_kinded_implicit()
+                k_ident.as_arg_kinded_implicit()
             })
             .collect::<Vec<_>>();
 

@@ -22,16 +22,15 @@ use error::*;
 use std::collections::HashSet;
 use std::ops::Deref;
 
-use self::constraint_check::{ConstraintEnv, ConstraintScheme, IdentConstraints};
+use self::constraint_check::{ConstraintCtx, ConstraintScheme, IdentsConstrained};
 use self::pre_decl::bin_op_to_fun;
 
 type TyResult<T> = Result<T, TyError>;
 
 /// Transform an iterator of TyResults to a single TyResult
 macro_rules! iter_TyResult_to_TyResult {
-    ($err_iter: expr) => {{
-        let mut err_vec: Vec<TyError> = $err_iter
-            .into_iter()
+    ($result_iter: expr) => {{
+        let mut err_vec: Vec<TyError> = $result_iter
             .filter_map(|res| -> Option<TyError> {
                 match res {
                     Ok(_) => None,
@@ -78,10 +77,10 @@ struct TyChecker {
     // and trait definitions
     gl_ctx: GlobalCtx,
     // Environment with constraint_schemes
-    constraint_env: ConstraintEnv,
+    constraint_env: ConstraintCtx,
     // A List of constraints of implicit identifiers which are checked when a
     // implicit identifier is substituted by a concrete type
-    implicit_ident_cons: IdentConstraints,
+    implicit_ident_cons: IdentsConstrained,
     // A Map with substitutions for implicit identifiers which should be applied to all typechecked types
     // e.g. we infer for "let x = Vec::new()" the type Vec<$T> where $T is an implicit identifier
     // Somewhere later in the code we may infer $T is f32. Then we must adjust the typing context
@@ -93,8 +92,8 @@ impl TyChecker {
     pub fn new() -> Self {
         TyChecker {
             gl_ctx: GlobalCtx::new().append_fun_decls(pre_decl::fun_decls().into_iter()),
-            constraint_env: ConstraintEnv::new(),
-            implicit_ident_cons: IdentConstraints::new(),
+            constraint_env: ConstraintCtx::new(),
+            implicit_ident_cons: IdentsConstrained::new(),
             implicit_ident_substitution: ConstrainMap::new(),
         }
     }
@@ -276,7 +275,7 @@ impl TyChecker {
                 generic_args: trait_def
                     .generic_params
                     .iter()
-                    .map(|ident_kinded| ident_kinded.arg_kinded())
+                    .map(|ident_kinded| ident_kinded.as_arg_kinded())
                     .collect(),
             },
         };
@@ -381,9 +380,9 @@ impl TyChecker {
                 &ty_ctx,
                 None,
                 &ConstraintScheme {
-                    generics: impl_def.generic_params.clone(),
-                    implican: impl_def.constraints.clone(),
-                    implied: Constraint {
+                    generic_params: impl_def.generic_params.clone(),
+                    premis: impl_def.constraints.clone(),
+                    consequence: Constraint {
                         param: impl_def.dty.clone(),
                         trait_bound: trait_impl.clone(),
                     },
@@ -395,19 +394,19 @@ impl TyChecker {
                 .supertraits_constraints()
                 .into_iter()
                 .map(|supertrait_cons| ConstraintScheme {
-                    generics: generics_trait.clone(),
-                    implican: vec![Constraint {
+                    generic_params: generics_trait.clone(),
+                    premis: vec![Constraint {
                         param: DataTy::new(DataTyKind::Ident(Ident::new("Self"))),
                         trait_bound: TraitMonoType {
                             name: trait_def.name.clone(),
                             generic_args: trait_def
                                 .generic_params
                                 .iter()
-                                .map(|gen| gen.arg_kinded())
+                                .map(|gen| gen.as_arg_kinded())
                                 .collect(),
                         },
                     }],
-                    implied: supertrait_cons,
+                    consequence: supertrait_cons,
                 })
                 .collect::<Vec<ConstraintScheme>>();
 
@@ -512,7 +511,7 @@ impl TyChecker {
                                 mono_ty: fun_decl_ty.mono_ty.clone(),
                             }
                             // Instantiate the generic_params of the trait-definition with "generic_args_trait"
-                            .partial_apply(generic_args_trait.as_slice());
+                            .inst_qualified_ty(generic_args_trait.as_slice());
                             // This is the found type-scheme of the impl-function
                             let fun_impl_ty = fun_impl.ty();
 
@@ -2500,9 +2499,9 @@ impl TyChecker {
                                     .constraint_subs(&self.constraint_env, &subs_dty_ref_dty)
                                 {
                                     // Add temporary the constraints on `ref_dty_name` to `self.implicit_ident_cons`
-                                    self.implicit_ident_cons.add_ident_constraints(
+                                    self.implicit_ident_cons.add_idents_constrained(
                                         implicit_ident_cons
-                                            .consume_constraints(&referenced_dty_name)
+                                            .drain_constr_for_ident(&referenced_dty_name)
                                             .map(|con| (referenced_dty_name.clone(), con)),
                                     );
 
@@ -2516,7 +2515,7 @@ impl TyChecker {
 
                                     //Remove temporary added constraints
                                     self.implicit_ident_cons
-                                        .consume_constraints(&referenced_dty_name);
+                                        .drain_constr_for_ident(&referenced_dty_name);
 
                                     fun_kind?
                                 } else {
@@ -2597,7 +2596,7 @@ impl TyChecker {
                         let trait_args = trait_def.generic_params.iter().map(|gen| {
                             let mut gen = gen.clone();
                             gen.ident.name = fresh_name(&gen.ident.name);
-                            gen.arg_kinded_implicit()
+                            gen.as_arg_kinded_implicit()
                         });
 
                         // Push self_arg and trait_args in front of k_args
@@ -2623,7 +2622,7 @@ impl TyChecker {
                     let impl_args = impl_ty_scheme
                         .generic_params
                         .iter()
-                        .map(|gen| gen.arg_kinded_implicit());
+                        .map(|gen| gen.as_arg_kinded_implicit());
 
                     // Push impl_args in front of k_args
                     let mut new_kargs = Vec::with_capacity(fun_ty.generic_params.len());
@@ -2767,11 +2766,11 @@ impl TyChecker {
         k_args.extend(
             ty_scheme.generic_params[k_args.len()..]
                 .iter()
-                .map(|i| i.arg_kinded_implicit()),
+                .map(|i| i.as_arg_kinded_implicit()),
         );
 
         // Instantiate type_scheme
-        let mut qualified_type = ty_scheme.partial_apply(k_args);
+        let mut qualified_type = ty_scheme.inst_qualified_ty(k_args);
 
         // Check if there are some unfulfilled constraints
         // And add constraints on implicit identifier, which are necessary to fulfills the constraints, to `constraint_env`
@@ -3795,14 +3794,16 @@ impl TyChecker {
         exec: Option<Exec>,
         cscheme: &ConstraintScheme,
     ) -> TyResult<()> {
-        let kind_ctx = kind_ctx.clone().append_idents(cscheme.generics.clone());
+        let kind_ctx = kind_ctx
+            .clone()
+            .append_idents(cscheme.generic_params.clone());
 
         iter_TyResult_to_TyResult!(cscheme
-            .implican
+            .premis
             .iter()
             .map(|implied| self.constraint_well_formed(&kind_ctx, ty_ctx, exec, implied)))?;
 
-        self.constraint_well_formed(&kind_ctx, ty_ctx, exec, &cscheme.implied)
+        self.constraint_well_formed(&kind_ctx, ty_ctx, exec, &cscheme.consequence)
     }
 
     fn constraint_well_formed(
@@ -3823,6 +3824,90 @@ impl TyChecker {
             .iter()
             .map(|gen| self.arg_kinded_well_formed(kind_ctx, ty_ctx, exec, gen)))
     }
+}
+
+/// Check if a substitution respect all constraints on identifiers in `self`. <br>
+/// For every substitution of an implicit identifier are all constraints on this identifier checked.
+/// This can also infer new substitutions and constraints on identifiers. <br>
+/// Returns a TyResult with a pair of a substitution extended with all types that are inferred while
+/// checking this substitution and the modified list of constraints on identifiers without checked
+/// constraints
+pub(crate) fn expand_to_valid_subst(
+    subst: &ConstrainMap,
+    idents_constr: &IdentsConstrained,
+    constraint_env: &ConstraintCtx,
+) -> TyResult<(ConstrainMap, IdentsConstrained)> {
+    // Result substitution with all substitutions of inferred types
+    let mut res_subs: ConstrainMap = ConstrainMap::new();
+    res_subs.composition(subst.clone());
+    // Result list of constraints on identifiers
+    let mut res_ident_constraints = idents_constr.clone();
+
+    let mut subs = subst.clone();
+
+    loop {
+        let mut subs_new = ConstrainMap::new();
+
+        // Check if this substitution fulfills all implicit_ident_constraints
+        for (name, dty) in subs.dty_unifier {
+            // Check if all constraints on the implicit identifier which is substituted are fulfilled
+
+            // Using a HashSet removes duplicates
+            let constraints_to_check: HashSet<_> = res_ident_constraints
+                .drain_constr_for_ident(&name)
+                .collect();
+
+            // if the substituted type is an implicit ident: add constraints of this ident to other ident
+            if let DataTyKind::Ident(ident) = dty.dty {
+                if ident.is_implicit {
+                    res_ident_constraints.add_idents_constrained(
+                        constraints_to_check
+                            .into_iter()
+                            .map(|con| (ident.name.clone(), con)),
+                    );
+                    continue;
+                }
+            }
+
+            // Check every constraint
+            for mut con in &mut constraints_to_check.into_iter() {
+                // Substitute inferred types
+                con.substitute(&res_subs);
+
+                // Check if constraint is fulfilled
+                if let Ok(constr_map) =
+                    constraint_env.check_constraint(&con, &mut res_ident_constraints)
+                {
+                    subs_new.composition(constr_map);
+                } else {
+                    Err(TyError::UnfulfilledConstraint(con.clone()))?
+                }
+            }
+        }
+
+        // If no new substitutions found: break loop
+        if subs_new.is_empty() {
+            break;
+        }
+        // Else check if new substitutions are valid
+        else {
+            // Add new substitutions to result substitutions
+            res_subs.composition(subs_new.clone());
+
+            // Check all new substitutions
+            subs = subs_new;
+        }
+    }
+
+    // Apply substitution to all constraints on implicit idents
+    res_ident_constraints
+        .idents_constr
+        .iter_mut()
+        .for_each(|(_, con)| {
+            con.substitute(&res_subs);
+        });
+
+    return Ok((res_subs, res_ident_constraints));
 }
 
 pub fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
@@ -3863,8 +3948,8 @@ pub fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
 
 fn is_ty_copyable(
     ty: &Ty,
-    constraint_env: &ConstraintEnv,
-    implicit_ident_cons: &mut IdentConstraints,
+    constraint_env: &ConstraintCtx,
+    implicit_ident_cons: &mut IdentsConstrained,
 ) -> bool {
     match &ty.ty {
         TyKind::Data(dty) => is_dty_copyable(dty, constraint_env, implicit_ident_cons),
@@ -3879,8 +3964,8 @@ fn is_ty_copyable(
 
 fn is_dty_copyable(
     dty: &DataTy,
-    constraint_env: &ConstraintEnv,
-    implicit_ident_cons: &mut IdentConstraints,
+    constraint_env: &ConstraintCtx,
+    implicit_ident_cons: &mut IdentsConstrained,
 ) -> bool {
     use DataTyKind::*;
 
