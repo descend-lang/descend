@@ -1071,29 +1071,29 @@ pub struct TypeScheme {
     pub mono_ty: Ty,
 }
 
-// impl Eq for TypeScheme {}
-// impl PartialEq for TypeScheme {
-//     fn eq(&self, other: &Self) -> bool {
-//         if self.generic_params.len() == other.generic_params.len()
-//             && self
-//                 .generic_params
-//                 .iter()
-//                 .zip(other.generic_params.iter())
-//                 .fold(true, |res, (gen1, gen2)| res && gen1.kind == gen2.kind)
-//         {
-//             let args = self
-//                 .generic_params
-//                 .iter()
-//                 .map(|gen| gen.as_arg_kinded())
-//                 .collect::<Vec<ArgKinded>>();
-//             self.instantiate_qualified_ty(args.as_slice())
-//                 .mono_ty
-//                 .eq_structure(&other.instantiate_qualified_ty(args.as_slice()).mono_ty)
-//         } else {
-//             false
-//         }
-//     }
-// }
+impl Eq for TypeScheme {}
+impl PartialEq for TypeScheme {
+    fn eq(&self, other: &Self) -> bool {
+        if self.generic_params.len() == other.generic_params.len()
+            && self
+                .generic_params
+                .iter()
+                .zip(other.generic_params.iter())
+                .fold(true, |res, (gen1, gen2)| res && gen1.kind == gen2.kind)
+        {
+            let args = self
+                .generic_params
+                .iter()
+                .map(|gen| gen.as_arg_kinded())
+                .collect::<Vec<ArgKinded>>();
+            subst_generic_params(&self.generic_params, &self.mono_ty, args.as_slice()).eq_structure(
+                &subst_generic_params(&other.generic_params, &other.mono_ty, args.as_slice()),
+            )
+        } else {
+            false
+        }
+    }
+}
 
 impl TypeScheme {
     /// Create a new TypeScheme without kinded identifier and without constraints
@@ -1154,7 +1154,7 @@ impl TypeScheme {
 
     /// Substitute kinded identifier by given arguments on this type scheme
     pub fn inst_qualified_ty(&self, with: &[ArgKinded]) -> Self {
-        assert_eq!(self.generic_params.len(), with.len());
+        assert!(self.generic_params.len() >= with.len());
         TypeScheme {
             generic_params: self.generic_params[with.len()..].to_vec(),
             constraints: self

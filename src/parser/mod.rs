@@ -471,11 +471,8 @@ peg::parser! {
 
         rule associated_item() -> AssociatedItem
             = ass_item:(f:fun_def() {AssociatedItem::FunDef(f)}
-            / f:fun_decl() {AssociatedItem::FunDecl(f)}
-            / const_item:("const" __ name:identifier() _ ":"
-                _ dty:dty() expr:(_ "=" _ e:expression() {e})? _
-                ";" {AssociatedItem::ConstItem(name, dty, expr)})) {
-                    ass_item
+            / f:fun_decl() {AssociatedItem::FunDecl(f)}) {
+                ass_item
         }
 
         rule trait_mono_ty() -> TraitMonoType

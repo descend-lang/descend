@@ -392,7 +392,7 @@ impl<'a> Monomorphiser<'a> {
             })
             .collect();
         // Adjust also function name and kind
-        *get_fun_name_from_expr_mut(fun_name_expr) = global_fun_name.clone();
+        *get_fun_name_from_expr_mut(fun_name_expr) = new_fun_name;
         *fun_kind = Some(FunctionKind::GlobalFun);
     }
 
@@ -723,7 +723,6 @@ fn add_inherited_fun_defs(impl_def: &mut ImplDef, trait_defs: &Vec<TraitDef>) {
                         AssociatedItem::FunDecl(_) => {
                             panic!("ImplDef should not contain fun_decls")
                         }
-                        AssociatedItem::ConstItem(_, _, _) => false,
                     })
                     .is_none()
                 {
@@ -735,7 +734,6 @@ fn add_inherited_fun_defs(impl_def: &mut ImplDef, trait_defs: &Vec<TraitDef>) {
                 }
             }
             AssociatedItem::FunDecl(_) => (),
-            AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
         });
     }
 }
@@ -751,7 +749,6 @@ fn impl_to_global_funs(impl_def: &ImplDef) -> impl Iterator<Item = (FunctionName
                 polymorhpise_fun(fun_def, &impl_def.generic_params, &impl_def.constraints),
             )),
             AssociatedItem::FunDecl(_) => panic!("impls should not conatain fun_decls"),
-            AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
         })
 }
 
@@ -794,7 +791,6 @@ fn trait_to_global_funs(trait_def: &TraitDef) -> impl Iterator<Item = (FunctionN
                     &trait_def.constraints,
                 ),
             )),
-            AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
         })
 }
 

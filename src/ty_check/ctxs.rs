@@ -7,7 +7,7 @@ use crate::ty_check::proj_elem_ty;
 use std::collections::{HashMap, HashSet};
 
 use super::unify::{constrain, ConstrainMap, Constrainable};
-use super::TyResult;
+use super::{expand_to_valid_subst, TyResult};
 
 // TODO introduce proper struct
 pub(super) type TypedPlace = (internal::Place, Ty);
@@ -624,7 +624,6 @@ impl GlobalCtx {
                         check_unique_names(
                             impl_def.ass_items.iter().map(|decl| match decl {
                                 AssociatedItem::FunDef(fun_def) => &fun_def.name,
-                                AssociatedItem::ConstItem(name, _, _) => name,
                                 AssociatedItem::FunDecl(fun_decl) => &fun_decl.name,
                             }),
                             &mut errs,
@@ -676,7 +675,6 @@ impl GlobalCtx {
                                         &mut errs,
                                     )
                                 }
-                                AssociatedItem::ConstItem(_, _, _) => todo!("TODO"),
                                 // Function declarations are not allowed. Some error will be thrown in ty_check
                                 AssociatedItem::FunDecl(_) => (),
                             });
@@ -746,7 +744,6 @@ impl GlobalCtx {
             check_unique_names(
                 t_def.ass_items.iter().map(|decl| match decl {
                     AssociatedItem::FunDef(fun_def) => &fun_def.name,
-                    AssociatedItem::ConstItem(name, _, _) => name,
                     AssociatedItem::FunDecl(fun_decl) => &fun_decl.name,
                 }),
                 errs,
@@ -782,7 +779,6 @@ impl GlobalCtx {
                     let (ty, name) = match ass_item {
                         AssociatedItem::FunDef(fun_def) => (fun_def.ty(), fun_def.name.clone()),
                         AssociatedItem::FunDecl(fun_decl) => (fun_decl.ty(), fun_decl.name.clone()),
-                        _ => panic!("This cannot happen"),
                     };
 
                     if let TyKind::Fn(args, exec, ret_ty) = ty.mono_ty.ty {
@@ -819,7 +815,6 @@ impl GlobalCtx {
                         panic!("FunDef without FunType!");
                     }
                 }
-                AssociatedItem::ConstItem(_, _, _) => unimplemented!("TODO"),
             });
 
             // Add constraint_schemes corresponding to the supertraits of this trait to the context
@@ -918,9 +913,12 @@ impl GlobalCtx {
                         FunctionKind::ImplFun(impl_dty_candidate, _) => {
                             // if `impl_dty_candidate` and `ty` can be unified, this is the searched function
                             if let Ok(subs) = constrain(&ty, &impl_dty_candidate.mono_ty) {
-                                if implicit_ident_cons
-                                    .constraint_subs(constraint_env, &subs.0)
-                                    .is_ok()
+                                if expand_to_valid_subst(
+                                    &subs.0,
+                                    implicit_ident_cons,
+                                    constraint_env,
+                                )
+                                .is_ok()
                                 {
                                     result = Some(fun_kind);
                                     number_found = number_found + 1;

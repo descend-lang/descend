@@ -365,12 +365,6 @@ pub fn walk_ass_item<V: Visit>(visitor: &mut V, ass_item: &AssociatedItem) {
     match ass_item {
         AssociatedItem::FunDef(fun_def) => visitor.visit_fun_def(fun_def),
         AssociatedItem::FunDecl(fun_decl) => visitor.visit_fun_decl(fun_decl),
-        AssociatedItem::ConstItem(_, ty, expr_op) => {
-            visitor.visit_dty(ty);
-            if let Some(expr) = expr_op {
-                visitor.visit_expr(expr);
-            }
-        }
     }
 }
 

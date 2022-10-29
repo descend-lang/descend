@@ -1,5 +1,3 @@
-use super::error::TyError;
-use super::TyResult;
 use crate::ast::SubstKindedIdents;
 use crate::ast::{Constraint, DataTyKind, Ident, IdentKinded};
 use crate::ty_check;
@@ -118,17 +116,23 @@ impl IdentsConstrained {
     }
 
     /// Returns and removes all constraints on the identifier with passed name
-    pub fn drain_constr_for_ident(&mut self, ident: &str) -> impl Iterator<Item = Constraint> + '_ {
-        let index_ident_constraints = self
-            .idents_constr
-            .iter()
-            .cloned()
-            .partition(|(name, _)| *name != *ident);
-        self.idents_constr = index_ident_constraints.0;
-        index_ident_constraints
-            .1
-            .into_iter()
-            .map(|(_, constr)| constr)
+    pub fn drain_constr_for_ident(
+        &mut self,
+        ident: &str,
+    ) -> impl ExactSizeIterator<Item = Constraint> + 'static {
+        // Using a HashSet removes duplicates
+        let mut drained = HashSet::new();
+
+        self.idents_constr.retain(|(name, constr)| {
+            if name == ident {
+                drained.insert(constr.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        drained.into_iter()
     }
 
     /// Returns true if this context is empty
