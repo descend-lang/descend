@@ -250,10 +250,6 @@ impl ConstraintCtx {
         // Check the copy trait is a special case
         let copy_trait = pre_decl::copy_trait();
 
-        // For the unify::constrain-method
-        let mut constr_map = ConstrainMap::new();
-        let mut prv_rels = Vec::new();
-
         // List with all constraints which must be proved
         let mut goals: Vec<Constraint> = Vec::new();
         // List of backtrack-objects for backtracking
@@ -341,14 +337,8 @@ impl ConstraintCtx {
                         &fresh_cscheme
                     };
 
-                    constr_map.clear();
-                    prv_rels.clear();
-
                     // Can implied from "current_con" and current goal be unified?
-                    if goal
-                        .constrain(&current_con.consequence, &mut constr_map, &mut prv_rels)
-                        .is_ok()
-                    {
+                    if let Ok(mut constr_map) = unify::unify(&goal, &current_con.consequence) {
                         // Make sure the unification is allowed under context of constraints on implicit identifiers
                         let implicit_ident_cons_new;
                         match ty_check::expand_to_valid_subst(
@@ -420,7 +410,6 @@ impl ConstraintCtx {
                         // Add substitution to inferred types
                         if !constr_map.is_empty() {
                             inferred_types.composition(constr_map);
-                            constr_map = ConstrainMap::new();
                         }
 
                         *implicit_ident_cons = implicit_ident_cons_new;
@@ -470,9 +459,7 @@ impl ConstraintCtx {
         if !inferred_types.is_empty() {
             let mut c_inferred = constraint.clone();
             c_inferred.substitute(&inferred_types);
-            inferred_types = unify::constrain(constraint, &c_inferred)
-                .expect("This can not happen")
-                .0;
+            inferred_types = unify::unify(constraint, &c_inferred).expect("This can not happen");
         }
 
         Ok(inferred_types)

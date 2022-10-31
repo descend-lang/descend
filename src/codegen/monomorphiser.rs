@@ -10,7 +10,7 @@ use crate::{
     },
     ty_check::{
         pre_decl,
-        unify::{constrain, ConstrainMap, Constrainable},
+        unify::{unify, ConstrainMap, Constrainable},
     },
 };
 
@@ -445,9 +445,7 @@ impl<'a> Monomorphiser<'a> {
                                 };
 
                             // Try to unify "impl_dty" with current datatype-candidate for the impl
-                            if let Ok((dty_unfication, _)) =
-                                constrain(&impl_dty_canidate, &impl_dty)
-                            {
+                            if let Ok(dty_unfication) = unify(&impl_dty_canidate, &impl_dty) {
                                 result = Some((impl_def, dty_unfication));
                                 true
                             } else {
@@ -511,15 +509,14 @@ impl<'a> Monomorphiser<'a> {
             name: trait_def.name.clone(),
             generic_args: trait_mono_args,
         };
-        let dty_unfication2 =
-            if let Ok((dty_unfication, _)) = constrain(&impl_trait_mono, &trait_mono) {
-                dty_unfication
-            } else {
-                panic!(
+        let dty_unfication2 = if let Ok(dty_unfication) = unify(&impl_trait_mono, &trait_mono) {
+            dty_unfication
+        } else {
+            panic!(
                 "Cannot unify trait_mono with trait_mono_ty of impl\nconstrain {:#?}\nwith {:#?}",
                 impl_trait_mono, trait_mono
-                )
-            };
+            )
+        };
 
         // Collect inferred generic args by apply substitutions to the generic params of the impl
         let substitute_impl_args = {
@@ -593,9 +590,10 @@ impl<'a> VisitMut for Monomorphiser<'a> {
                     exprs.iter_mut().for_each(|expr| self.visit_expr(expr))
                 }
                 ExprKind::DepApp(_, _) => panic!("Does this happen? What to do now?"),
-                _ => walk_expr(self, expr),
+                _ => (),
             }
         }
+        walk_expr(self, expr)
     }
 }
 

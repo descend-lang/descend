@@ -995,7 +995,7 @@ impl TyChecker {
             };
 
             // Make sure the type of the expr has the expected type
-            let (mut constr_map, _) = unify::constrain(&ith_field.dty, &ith_expr_dty)?;
+            let mut constr_map = unify::unify(&ith_field.dty, &ith_expr_dty)?;
 
             if !constr_map.is_empty() {
                 (constr_map, self.implicit_ident_cons) = expand_to_valid_subst(
@@ -2636,8 +2636,7 @@ impl TyChecker {
                     } else {
                         panic!("Found a trait-function with an invalid path")
                     };
-                    let (mut constr_map, _) =
-                        unify::constrain(impl_mono_dty, path_dty).expect(&format!(
+                    let mut constr_map = unify::unify(impl_mono_dty, path_dty).expect(&format!(
                         "Tryied to unify {:#?} with {:#?} but it doesnt work. How is this possible?\
                          They should be already constraint while determinating function_name!",
                         impl_mono_dty, path_dty));
@@ -2703,7 +2702,7 @@ impl TyChecker {
             }
 
             // Make sure the type of the arg has the expected type
-            let (mut constr_map, _) = unify::constrain(ith_arg.ty.as_ref().unwrap(), ith_mono)?;
+            let mut constr_map = unify::unify(ith_arg.ty.as_ref().unwrap(), ith_mono)?;
 
             if !constr_map.is_empty() {
                 (constr_map, self.implicit_ident_cons) = expand_to_valid_subst(

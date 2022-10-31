@@ -61,10 +61,6 @@ pub fn copy_trait() -> TraitMonoType {
 
 pub fn bin_op_to_fun(binop: &BinOp, lhs: &Expr, rhs: &Expr) -> Option<ExprKind> {
     if let Some((_, trait_name, trait_fun_name)) = BINOPS.into_iter().find(|(b, _, _)| b == binop) {
-        println!(
-            "Translate {:#?} to {}, {}",
-            binop, trait_name, trait_fun_name,
-        );
         Some(ExprKind::App(
             Path::InferFromFirstArg,
             Some(FunctionKind::TraitFun(trait_name.to_string())),

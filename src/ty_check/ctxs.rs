@@ -6,7 +6,7 @@ use crate::ty_check::error::CtxError;
 use crate::ty_check::proj_elem_ty;
 use std::collections::{HashMap, HashSet};
 
-use super::unify::{constrain, ConstrainMap, Constrainable};
+use super::unify::{unify, ConstrainMap, Constrainable};
 use super::{expand_to_valid_subst, TyResult};
 
 // TODO introduce proper struct
@@ -912,13 +912,9 @@ impl GlobalCtx {
                         // if the function_kind of the candidate-function references an impl
                         FunctionKind::ImplFun(impl_dty_candidate, _) => {
                             // if `impl_dty_candidate` and `ty` can be unified, this is the searched function
-                            if let Ok(subs) = constrain(&ty, &impl_dty_candidate.mono_ty) {
-                                if expand_to_valid_subst(
-                                    &subs.0,
-                                    implicit_ident_cons,
-                                    constraint_env,
-                                )
-                                .is_ok()
+                            if let Ok(subs) = unify(&ty, &impl_dty_candidate.mono_ty) {
+                                if expand_to_valid_subst(&subs, implicit_ident_cons, constraint_env)
+                                    .is_ok()
                                 {
                                     result = Some(fun_kind);
                                     number_found = number_found + 1;

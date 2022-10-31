@@ -2,7 +2,8 @@ use super::{
     ctxs::{KindCtx, TyCtx},
     unify::ConstrainMap,
 };
-use crate::{ast::internal::Loan, ty_check::unify::Constrainable};
+use crate::ast::internal::Loan;
+use crate::ty_check::unify::unify;
 
 //
 // Subtyping and Provenance Subtyping from Oxide
@@ -44,10 +45,9 @@ pub(super) fn check(
             let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
             let (res_forw, subs_forw) = check(kind_ctx, res_outl_ty_ctx.clone(), sub_ty, sup_ty)?;
             let (res_back, subs_back) = check(kind_ctx, res_outl_ty_ctx, sup_ty, sub_ty)?;
-            if sub_mem
-                .constrain(sup_mem, &mut res_subs, &mut Vec::new())
-                .is_err()
-            {
+            if let Ok(subs) = unify(sub_mem, sup_mem) {
+                res_subs = subs;
+            } else {
                 return Err(SubTyError::MemoryKindsNoMatch);
             }
             // TODO find out why this is important (technically),

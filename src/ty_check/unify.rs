@@ -9,6 +9,11 @@ use crate::ty_check::TyResult;
 use core::fmt;
 use std::collections::{HashMap, HashSet};
 
+pub(crate) fn unify<S: Constrainable + Clone>(t1: &S, t2: &S) -> TyResult<ConstrainMap> {
+    let (constr_map, _) = constrain(&mut t1.clone(), &mut t2.clone())?;
+    Ok(constr_map)
+}
+
 pub(super) fn sub_unify<C: Constrainable>(
     kind_ctx: &KindCtx,
     ty_ctx: TyCtx,
@@ -26,10 +31,7 @@ pub(super) fn sub_unify<C: Constrainable>(
     Ok(outlives_ctx)
 }
 
-pub(crate) fn constrain<S: Constrainable>(
-    t1: &S,
-    t2: &S,
-) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
+fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
     let mut constr_map = ConstrainMap::new();
     let mut prv_rels = Vec::new();
     t1.constrain(t2, &mut constr_map, &mut prv_rels)?;
@@ -79,13 +81,13 @@ impl ConstrainMap {
                 .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
             self.dty_unifier
                 .iter()
-                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+                .for_each(|(name, _)| assert!(other.dty_unifier.get(name).is_none()));
             self.nat_unifier
                 .iter()
-                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+                .for_each(|(name, _)| assert!(other.nat_unifier.get(name).is_none()));
             self.mem_unifier
                 .iter()
-                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+                .for_each(|(name, _)| assert!(other.mem_unifier.get(name).is_none()));
 
             self.ty_unifier
                 .iter_mut()
@@ -118,9 +120,22 @@ impl Ty {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::Ty), self) {
             return Err(TyError::InfiniteType);
         }
-        let mut self_ty = self.clone();
-        self_ty.substitute(&constr_map);
-        constr_map.ty_unifier.insert(ident.name.clone(), self_ty);
+        if let Some(old) = constr_map
+            .ty_unifier
+            .insert(ident.name.clone(), self.clone())
+        {
+            if &old != self {
+                panic!(
+                    "Rebinding bound type variable.\n\
+                Old: {:?}\n\
+                New: {:?}",
+                    old, self
+                );
+            }
+        }
+        constr_map
+            .ty_unifier
+            .insert(ident.name.clone(), self.clone());
         constr_map
             .ty_unifier
             .values_mut()
@@ -139,10 +154,22 @@ impl DataTy {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::DataTy), self) {
             return Err(TyError::InfiniteType);
         }
-
-        let mut self_dty = self.clone();
-        self_dty.substitute(&constr_map);
-        constr_map.dty_unifier.insert(ident.name.clone(), self_dty);
+        if let Some(old) = constr_map
+            .dty_unifier
+            .insert(ident.name.clone(), self.clone())
+        {
+            if &old != self {
+                panic!(
+                    "Rebinding bound type variable.\n\
+                Old: {:?}\n\
+                New: {:?}",
+                    old, self
+                );
+            }
+        }
+        constr_map
+            .dty_unifier
+            .insert(ident.name.clone(), self.clone());
         constr_map
             .dty_unifier
             .values_mut()
@@ -153,8 +180,8 @@ impl DataTy {
 
 pub(crate) trait Constrainable: fmt::Debug {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()>;
@@ -164,12 +191,43 @@ pub(crate) trait Constrainable: fmt::Debug {
     fn occurs_check<S: Constrainable>(ident_kinded: &IdentKinded, s: &S) -> bool {
         s.free_idents().contains(ident_kinded)
     }
+
+    fn constrain_vec<S: Constrainable>(
+        vec1: &mut Vec<S>,
+        vec2: &mut Vec<S>,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        // substitute result of unification for every following unification
+        // TODO Refactor: create iterator over Some((next_lhs, tail_lhs), (next_rhs, tail_rhs))?
+        //  move into function
+        let mut i = 0;
+        let mut remain_lhs = &mut vec1[i..];
+        let mut remain_rhs = &mut vec2[i..];
+        while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
+            (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
+        {
+            next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
+            tail_lhs
+                .iter_mut()
+                .for_each(|ty| substitute(constr_map, ty));
+            tail_rhs
+                .iter_mut()
+                .for_each(|ty| substitute(constr_map, ty));
+
+            i += 1;
+            remain_lhs = &mut vec1[i..];
+            remain_rhs = &mut vec2[i..];
+        }
+
+        Ok(())
+    }
 }
 
 impl Constrainable for ArgKinded {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
@@ -206,8 +264,8 @@ impl Constrainable for ArgKinded {
 
 impl Constrainable for Constraint {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
@@ -215,9 +273,12 @@ impl Constrainable for Constraint {
             return Err(TyError::CannotUnify);
         }
 
-        self.param.constrain(&other.param, constr_map, prv_rels)?;
+        self.param
+            .constrain(&mut other.param, constr_map, prv_rels)?;
+        self.trait_bound.substitute(constr_map);
+        other.trait_bound.substitute(constr_map);
         self.trait_bound
-            .constrain(&other.trait_bound, constr_map, prv_rels)
+            .constrain(&mut other.trait_bound, constr_map, prv_rels)
     }
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
@@ -234,8 +295,8 @@ impl Constrainable for Constraint {
 
 impl Constrainable for TraitMonoType {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
@@ -244,10 +305,12 @@ impl Constrainable for TraitMonoType {
         }
 
         assert!(self.generic_args.len() == other.generic_args.len());
-        self.generic_args
-            .iter()
-            .zip(other.generic_args.iter())
-            .try_for_each(|(arg_ty1, arg_ty2)| arg_ty1.constrain(arg_ty2, constr_map, prv_rels))
+        Self::constrain_vec(
+            &mut self.generic_args,
+            &mut other.generic_args,
+            constr_map,
+            prv_rels,
+        )
     }
 
     fn free_idents(&self) -> HashSet<IdentKinded> {
@@ -264,12 +327,12 @@ impl Constrainable for TraitMonoType {
 
 impl Constrainable for Ty {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        match (&self.ty, &other.ty) {
+        match (&mut self.ty, &mut other.ty) {
             (TyKind::Ident(i), _) if i.is_implicit => other.bind_to_ident(i, constr_map),
             (_, TyKind::Ident(i)) if i.is_implicit => self.bind_to_ident(i, constr_map),
             (TyKind::Ident(i1), TyKind::Ident(i2)) if i1 == i2 => Ok(()),
@@ -280,30 +343,9 @@ impl Constrainable for Ty {
                 if param_tys1.len() != param_tys2.len() {
                     return Err(TyError::CannotUnify);
                 }
-                // substitute result of unification for every following unification
-                // TODO Refactor: create iterator over Some((next_lhs, tail_lhs), (next_rhs, tail_rhs))?
-                //  move into function
-                let mut param_tys1 = param_tys1.clone();
-                let mut param_tys2 = param_tys2.clone();
-                let mut i = 0;
-                let mut remain_lhs = &mut param_tys1[i..];
-                let mut remain_rhs = &mut param_tys2[i..];
-                while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
-                    (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
-                {
-                    next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
-                    tail_lhs
-                        .iter_mut()
-                        .for_each(|ty| substitute(constr_map, ty));
-                    tail_rhs
-                        .iter_mut()
-                        .for_each(|ty| substitute(constr_map, ty));
-
-                    i += 1;
-                    remain_lhs = &mut param_tys1[i..];
-                    remain_rhs = &mut param_tys2[i..];
-                }
-
+                Self::constrain_vec(param_tys1, param_tys2, constr_map, prv_rels)?;
+                ret_ty1.substitute(constr_map);
+                ret_ty2.substitute(constr_map);
                 ret_ty1.constrain(ret_ty2, constr_map, prv_rels)
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
@@ -328,12 +370,12 @@ impl Constrainable for Ty {
 
 impl Constrainable for DataTy {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        match (&self.dty, &other.dty) {
+        match (&mut self.dty, &mut other.dty) {
             (DataTyKind::Ident(i), _) if i.is_implicit => other.bind_to_ident(i, constr_map),
             (_, DataTyKind::Ident(i)) if i.is_implicit => self.bind_to_ident(i, constr_map),
             (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) if i1 == i2 => Ok(()),
@@ -350,46 +392,42 @@ impl Constrainable for DataTy {
                 }
                 prv1.constrain(prv2, constr_map, prv_rels)?;
                 mem1.constrain(mem2, constr_map, prv_rels)?;
+                dty1.substitute(&constr_map);
+                dty2.substitute(&constr_map);
                 dty1.constrain(dty2, constr_map, prv_rels)
             }
-            (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => elem_dtys1
-                .iter()
-                .zip(elem_dtys2)
-                .try_for_each(|(dty1, dty2)| dty1.constrain(dty2, constr_map, prv_rels)),
+            (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
+                Self::constrain_vec(elem_dtys1, elem_dtys2, constr_map, prv_rels)
+            }
             (DataTyKind::Struct(struct_1), DataTyKind::Struct(struct_2)) => {
                 if struct_1.name != struct_2.name {
                     return Err(TyError::CannotUnify);
                 }
                 assert!(struct_1.generic_args.len() == struct_2.generic_args.len());
                 assert!(struct_1.struct_fields.len() == struct_2.struct_fields.len());
-                struct_1
-                    .generic_args
-                    .iter()
-                    .zip(struct_2.generic_args.iter())
-                    .try_for_each(|(gen1, gen2)| gen1.constrain(gen2, constr_map, prv_rels))?;
-                struct_1.struct_fields.iter().try_for_each(|attr1| {
-                    attr1.dty.constrain(
-                        &struct_2
-                            .struct_fields
-                            .iter()
-                            .find(|attr2| attr1.name == attr2.name)
-                            .unwrap()
-                            .dty,
-                        constr_map,
-                        prv_rels,
-                    )
-                })
+                Self::constrain_vec(
+                    &mut struct_1.generic_args,
+                    &mut struct_2.generic_args,
+                    constr_map,
+                    prv_rels,
+                )
             }
             (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
+                n1.substitute(&constr_map);
+                n2.substitute(&constr_map);
                 n1.constrain(n2, constr_map, prv_rels)
             }
             (DataTyKind::ArrayShape(dty1, n1), DataTyKind::ArrayShape(dty2, n2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
+                n1.substitute(&constr_map);
+                n2.substitute(&constr_map);
                 n1.constrain(n2, constr_map, prv_rels)
             }
             (DataTyKind::At(dty1, mem1), DataTyKind::At(dty2, mem2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
+                mem1.substitute(&constr_map);
+                mem2.substitute(&constr_map);
                 mem1.constrain(mem2, constr_map, prv_rels)
             }
             (DataTyKind::Atomic(sty1), DataTyKind::Atomic(sty2)) => {
@@ -400,16 +438,26 @@ impl Constrainable for DataTy {
                 }
             }
             (DataTyKind::ThreadHierchy(th1), DataTyKind::ThreadHierchy(th2)) => {
-                match (th1.as_ref(), th2.as_ref()) {
+                match (th1.as_mut(), th2.as_mut()) {
                     (
                         ThreadHierchyTy::BlockGrp(n1, n2, n3, n4, n5, n6),
                         ThreadHierchyTy::BlockGrp(m1, m2, m3, m4, m5, m6),
                     ) => {
                         n1.constrain(m1, constr_map, prv_rels)?;
+                        n2.substitute(&constr_map);
+                        m2.substitute(&constr_map);
                         n2.constrain(m2, constr_map, prv_rels)?;
+                        n3.substitute(&constr_map);
+                        m3.substitute(&constr_map);
                         n3.constrain(m3, constr_map, prv_rels)?;
+                        n4.substitute(&constr_map);
+                        m4.substitute(&constr_map);
                         n4.constrain(m4, constr_map, prv_rels)?;
+                        n5.substitute(&constr_map);
+                        m5.substitute(&constr_map);
                         n5.constrain(m5, constr_map, prv_rels)?;
+                        n6.substitute(&constr_map);
+                        m6.substitute(&constr_map);
                         n6.constrain(m6, constr_map, prv_rels)
                     }
                     (
@@ -417,7 +465,11 @@ impl Constrainable for DataTy {
                         ThreadHierchyTy::ThreadGrp(m1, m2, m3),
                     ) => {
                         n1.constrain(m1, constr_map, prv_rels)?;
+                        n2.substitute(&constr_map);
+                        m2.substitute(&constr_map);
                         n2.constrain(m2, constr_map, prv_rels)?;
+                        n3.substitute(&constr_map);
+                        m3.substitute(&constr_map);
                         n3.constrain(m3, constr_map, prv_rels)
                     }
                     (ThreadHierchyTy::WarpGrp(n), ThreadHierchyTy::WarpGrp(m)) => {
@@ -460,6 +512,12 @@ impl Nat {
         constr_map: &mut ConstrainMap,
         _: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
+        if let Nat::Ident(nat_id) = &self {
+            if nat_id == ident {
+                return Ok(());
+            }
+        }
+
         // Nats can be equal to an expression in which the nat appears again. E.g., a = a * 1
         // match &self {
         //     _ if Self::occurs_check(&IdentKinded::new(ident, Kind::Nat), self) => {
@@ -500,8 +558,8 @@ impl Nat {
 
 impl Constrainable for Nat {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
@@ -564,8 +622,8 @@ impl Memory {
 
 impl Constrainable for Memory {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         _: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
@@ -618,8 +676,8 @@ impl Provenance {
 
 impl Constrainable for Provenance {
     fn constrain(
-        &self,
-        other: &Self,
+        &mut self,
+        other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
@@ -762,7 +820,7 @@ impl<'a> VisitMut for SubstIdent<'a, DataTy> {
 fn scalar() -> TyResult<()> {
     let mut i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
     let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
-    let (subst, _) = constrain(&i32, &t)?;
+    let (subst, _) = constrain(&mut i32, &mut t)?;
     substitute(&subst, &mut i32);
     substitute(&subst, &mut t);
     assert_eq!(i32, t);
@@ -781,7 +839,7 @@ fn shrd_ref() -> TyResult<()> {
         ))),
     ));
     let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
-    let (subst, _) = constrain(&shrd_ref, &t)?;
+    let (subst, _) = constrain(&mut shrd_ref, &mut t)?;
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut t);
     assert_eq!(shrd_ref, t);
@@ -805,7 +863,7 @@ fn shrd_ref_inner_var() -> TyResult<()> {
         Memory::GpuGlobal,
         Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli("t")))),
     ));
-    let (subst, _) = constrain(&shrd_ref, &shrd_ref_t)?;
+    let (subst, _) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut shrd_ref_t);
     assert_eq!(shrd_ref, shrd_ref_t);
@@ -829,7 +887,7 @@ fn prv_val_ident() -> TyResult<()> {
         Memory::GpuGlobal,
         Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli("t")))),
     ));
-    let (subst, prv_rels) = constrain(&shrd_ref, &shrd_ref_t)?;
+    let (subst, prv_rels) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut shrd_ref_t);
     assert_eq!(
@@ -839,5 +897,41 @@ fn prv_val_ident() -> TyResult<()> {
             Provenance::Ident(Ident::new("a"))
         )
     );
+    Ok(())
+}
+
+#[test]
+fn test_unify_traits() -> TyResult<()> {
+    let ix = DataTy::new(utils::fresh_ident("x", DataTyKind::Ident));
+    let it = DataTy::new(utils::fresh_ident("t", DataTyKind::Ident));
+    let i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
+
+    let ix_a = ArgKinded::DataTy(ix.clone());
+    let it_a = ArgKinded::DataTy(it.clone());
+    let i32_a = ArgKinded::DataTy(i32.clone());
+
+    let t1 = TraitMonoType {
+        name: String::from("Add"),
+        generic_args: vec![it_a.clone(), it_a.clone()],
+    };
+    let t2 = TraitMonoType {
+        name: String::from("Add"),
+        generic_args: vec![ix_a.clone(), i32_a.clone()],
+    };
+
+    let mut res_subs = ConstrainMap::new();
+    res_subs
+        .dty_unifier
+        .insert(String::from("$x_0"), i32.clone());
+    res_subs
+        .dty_unifier
+        .insert(String::from("$t_1"), i32.clone());
+
+    let subs = unify(&t1, &t2)?;
+    assert_eq!(subs.dty_unifier, res_subs.dty_unifier);
+
+    let subs = unify(&t2, &t1)?;
+    assert_eq!(subs.dty_unifier, res_subs.dty_unifier);
+
     Ok(())
 }
