@@ -12,6 +12,7 @@ fn scale_vec() -> Res {
     ))
 }
 
+#[ignore]
 #[test]
 fn bitonic_sort() -> Res {
     Ok(println!(
@@ -54,15 +55,6 @@ fn vector_add() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/vec_add.desc")?
-    ))
-}
-
-#[ignore]
-#[test]
-fn warp_reduce() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/warp_reduce.desc")?
     ))
 }
 

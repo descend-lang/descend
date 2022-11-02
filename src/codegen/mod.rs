@@ -726,7 +726,7 @@ fn gen_exec(
     };
 
     // FIXME only allows Lambdas
-    let (dev_fun, free_kinded_idents) =
+    let (dev_fun, free_kinded_idents): (cu::Expr, Vec<desc::IdentKinded>) =
         if let desc::ExprKind::Lambda(params, ident_exec, _, body) = &fun.expr {
             codegen_ctx.shape_ctx.push_scope();
             let (gdim, bdim) = if let desc::ExecTyKind::GpuGrid(gdim, bdim) = &ident_exec.ty.ty {
@@ -762,30 +762,33 @@ fn gen_exec(
                 }),
             ];
 
-            let free_kinded_idents = {
-                let mut free_kinded_idents = desc::utils::FreeKindedIdents::new();
-                free_kinded_idents.visit_expr(&body.clone());
-                free_kinded_idents
-                    .set
-                    .iter()
-                    .filter(|ki| ki.kind != desc::Kind::Provenance)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
-            let nat_param_decls = free_kinded_idents
-                .iter()
-                .map(|ki| match &ki.kind {
-                    desc::Kind::Nat => cu::ParamDecl {
-                        name: ki.ident.name.to_string(),
-                        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                    },
-                    desc::Kind::Provenance | desc::Kind::Memory | desc::Kind::DataTy => {
-                        panic!("Unexpected found {:?}.", ki.ident.name)
-                    }
-                })
-                .collect::<Vec<_>>();
+            // FIXME reintroduce, but differentiate between statically computed and runtime computed
+            //  values, especially for array sizes
+            // let free_kinded_idents = {
+            //     let mut free_kinded_idents = desc::utils::FreeKindedIdents::new();
+            //     free_kinded_idents.visit_expr(&body.clone());
+            //     free_kinded_idents
+            //         .set
+            //         .iter()
+            //         .filter(|ki| ki.kind != desc::Kind::Provenance)
+            //         .cloned()
+            //         .collect::<Vec<_>>()
+            // };
+            // let nat_param_decls = free_kinded_idents
+            //     .iter()
+            //     .map(|ki| match &ki.kind {
+            //         desc::Kind::Nat => cu::ParamDecl {
+            //             name: ki.ident.name.to_string(),
+            //             ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+            //         },
+            //         desc::Kind::Provenance | desc::Kind::Memory | desc::Kind::DataTy => {
+            //             panic!("Unexpected found {:?}.", ki.ident.name)
+            //         }
+            //     })
+            //     .collect::<Vec<_>>();
             let mut all_param_decls = param_decls;
-            all_param_decls.extend(nat_param_decls);
+            // FIXME see above
+            // all_param_decls.extend(nat_param_decls);
 
             codegen_ctx.drop_scope();
             (
@@ -801,7 +804,9 @@ fn gen_exec(
                     ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
                     is_dev_fun: true,
                 },
-                free_kinded_idents,
+                vec![]
+                // FIXME see above
+                // free_kinded_idents,
             )
         } else {
             panic!("Currently only lambdas can be passed.")
@@ -978,18 +983,26 @@ fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::
 fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     let par_section = gen_parall_section(sched, codegen_ctx);
 
-    // TODO reintroduce or find alternative to decl
-    //    let cu_decls = match decls {
-    //        Some(decls) => cu::Stmt::Seq(
-    //            decls
-    //                .iter()
-    //                .map(|d| gen_stmt(d, false, &mut CodegenCtx::new()))
-    //                .collect(),
-    //        ),
-    //        None => cu::Stmt::Skip,
-    //    };
-    // cu::Stmt::Seq(vec![cu_decls, par_section])
-    cu::Stmt::Seq(vec![par_section])
+    let cu_decls = match &sched.decls {
+        Some(decls) => cu::Stmt::Seq(
+            decls
+                .iter()
+                .map(|d| {
+                    let inner_exec = desc::ExecExpr::new(desc::ExecKind::Distrib(
+                        sched.dim,
+                        Box::new(codegen_ctx.exec.clone()),
+                    ));
+                    gen_stmt(
+                        d,
+                        false,
+                        &mut CodegenCtx::new(inner_exec, codegen_ctx.comp_unit),
+                    )
+                })
+                .collect(),
+        ),
+        None => cu::Stmt::Skip,
+    };
+    cu::Stmt::Seq(vec![cu_decls, par_section])
 }
 
 fn gen_check_idx_stmt(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
@@ -999,7 +1012,7 @@ fn gen_check_idx_stmt(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::St
             let n = match &pl_expr
                 .ty
                 .as_ref()
-                .expect(&format!("{:?}", pl_expr))
+                .unwrap_or_else(|| panic!("{:?}", pl_expr))
                 .dty()
                 .dty
             {

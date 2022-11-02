@@ -38,15 +38,6 @@ fn vector_add() -> Res {
 
 #[ignore]
 #[test]
-fn warp_reduce() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/with_tys/warp_reduce.desc")?
-    ))
-}
-
-#[ignore]
-#[test]
 fn bfs() -> Res {
     Ok(println!(
         "{}",

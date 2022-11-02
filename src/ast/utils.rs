@@ -1,10 +1,9 @@
 use crate::ast::visit::walk_list;
 use crate::ast::visit::Visit;
+
 use crate::ast::{
-    visit, ArgKinded, BinOp, BinOpNat, DataTy, Dim, Dim1d, Dim2d, Dim3d, DimCompo, ExecExpr,
-    ExecSplit, ExecTy, Expr, ExprKind, ExprSplit, FnTy, FunDef, Ident, IdentExec, IdentKinded,
-    Indep, Kind, Lit, Memory, Mutability, Nat, Ownership, ParamDecl, Pattern, PlaceExpr,
-    Provenance, PrvRel, RefDty, ScalarTy, Sched, Ty, TyKind, UnOp,
+    visit, DataTy, DataTyKind, Expr, ExprKind, FunDef, Ident, IdentKinded, Kind, Memory, Nat,
+    Provenance, Ty, TyKind,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -40,13 +39,10 @@ impl FreeKindedIdents {
         }
     }
 
-    pub fn with_bound_idents<I>(idents: I) -> Self
-    where
-        I: Iterator<Item = IdentKinded>,
-    {
+    pub fn with_bound_idents(idents: HashSet<IdentKinded>) -> Self {
         FreeKindedIdents {
             set: HashSet::new(),
-            bound_idents: HashSet::from_iter(idents),
+            bound_idents: idents,
         }
     }
 }
@@ -54,29 +50,49 @@ impl FreeKindedIdents {
 impl Visit for FreeKindedIdents {
     fn visit_nat(&mut self, nat: &Nat) {
         match nat {
-            Nat::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Nat))),
-            //Nat::App(ident, args) =>
+            Nat::Ident(ident) => {
+                let ident_kinded = IdentKinded::new(ident, Kind::Nat);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set.extend(std::iter::once(ident_kinded))
+                }
+            }
             _ => visit::walk_nat(self, nat),
         }
     }
 
     fn visit_mem(&mut self, mem: &Memory) {
         match mem {
-            Memory::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Memory))),
+            Memory::Ident(ident) => {
+                let ident_kinded = IdentKinded::new(ident, Kind::Memory);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set.extend(std::iter::once(ident_kinded))
+                }
+            }
             _ => visit::walk_mem(self, mem),
         }
     }
 
     fn visit_prv(&mut self, prv: &Provenance) {
         match prv {
-            Provenance::Ident(ident) => self
-                .set
-                .extend(std::iter::once(IdentKinded::new(ident, Kind::Provenance))),
+            Provenance::Ident(ident) => {
+                let ident_kinded = IdentKinded::new(ident, Kind::Provenance);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set.extend(std::iter::once(ident_kinded))
+                }
+            }
             _ => visit::walk_prv(self, prv),
+        }
+    }
+
+    fn visit_dty(&mut self, dty: &DataTy) {
+        match &dty.dty {
+            DataTyKind::Ident(ident) => {
+                let ident_kinded = IdentKinded::new(ident, Kind::DataTy);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set.extend(std::iter::once(ident_kinded))
+                }
+            }
+            _ => visit::walk_dty(self, dty),
         }
     }
 
@@ -98,9 +114,10 @@ impl Visit for FreeKindedIdents {
         match &expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
                 self.visit_nat(collec);
-                let mut inner_free_idents = FreeKindedIdents::with_bound_idents(std::iter::once(
-                    IdentKinded::new(ident, Kind::Nat),
-                ));
+                let mut scoped_bound_idents = self.bound_idents.clone();
+                scoped_bound_idents.extend(std::iter::once(IdentKinded::new(ident, Kind::Nat)));
+                let mut inner_free_idents =
+                    FreeKindedIdents::with_bound_idents(scoped_bound_idents);
                 inner_free_idents.visit_expr(body);
                 self.set.extend(inner_free_idents.set)
             }
