@@ -1439,41 +1439,74 @@ impl TyChecker {
         //     .constrain(&mut rhs_ty_ctx, lhs_ty, &operand_ty)?;
         // self.term_constr
         //     .constrain(&mut rhs_ty_ctx, rhs_ty, &operand_ty)?;
-        match (&lhs_ty.ty, &rhs_ty.ty) {
-            (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
-                (
-                    DataTyKind::Scalar(ScalarTy::F32),
-                    DataTyKind::Scalar(ScalarTy::F32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U8),
-                    DataTyKind::Scalar(ScalarTy::U8),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U32),
-                    DataTyKind::Scalar(ScalarTy::U32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U64),
-                    DataTyKind::Scalar(ScalarTy::U64),
-                ) |
-                ( DataTyKind::Scalar(ScalarTy::F64), DataTyKind::Scalar(ScalarTy::F64)) |
-                (   DataTyKind::Scalar(ScalarTy::I32),
-                    DataTyKind::Scalar(ScalarTy::I32),
-                ) |
-                (    DataTyKind::Scalar(ScalarTy::Bool),
-                    DataTyKind::Scalar(ScalarTy::Bool),
-                ) => Ok((rhs_ty_ctx, ret)),
-                _ =>  Err(TyError::String(format!(
-                    "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+        match bin_op {
+            // Shift operators only allow integer values (lhs_ty and rhs_ty can differ!)
+            BinOp::Shl
+            | BinOp::Shr => match (&lhs_ty.ty, &rhs_ty.ty) {
+                (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
+                    (
+                        DataTyKind::Scalar(ScalarTy::U8)
+                        | DataTyKind::Scalar(ScalarTy::U32)
+                        | DataTyKind::Scalar(ScalarTy::U64)
+                        | DataTyKind::Scalar(ScalarTy::I32)
+                        ,
+                        DataTyKind::Scalar(ScalarTy::U8)
+                        | DataTyKind::Scalar(ScalarTy::U32)
+                        | DataTyKind::Scalar(ScalarTy::U64)
+                        | DataTyKind::Scalar(ScalarTy::I32),
+                    ) => Ok((rhs_ty_ctx, ret)),
+                    _ =>  Err(TyError::String(format!(
+                        "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                        bin_op, lhs, rhs
+                    )))
+                }
+                _ => Err(TyError::String(format!(
+                    "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
                     bin_op, lhs, rhs
-                )))
+                    ))),
             }
-            _ => Err(TyError::String(format!(
-            "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-            bin_op, lhs, rhs
-        ))),
+            _ => match (&lhs_ty.ty, &rhs_ty.ty) {
+                  (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
+                      (
+                          DataTyKind::Scalar(ScalarTy::F32),
+                          DataTyKind::Scalar(ScalarTy::F32),
+                      ) |
+                      (
+                          DataTyKind::Scalar(ScalarTy::U8),
+                          DataTyKind::Scalar(ScalarTy::U8),
+                      ) |
+                      (
+                          DataTyKind::Scalar(ScalarTy::U32),
+                          DataTyKind::Scalar(ScalarTy::U32),
+                      ) |
+                      (
+                          DataTyKind::Scalar(ScalarTy::U64),
+                          DataTyKind::Scalar(ScalarTy::U64),
+                      ) |
+                      (
+                          DataTyKind::Scalar(ScalarTy::F64),
+                          DataTyKind::Scalar(ScalarTy::F64)
+                      ) |
+                      (
+                          DataTyKind::Scalar(ScalarTy::I32),
+                          DataTyKind::Scalar(ScalarTy::I32),
+                      ) |
+                      (
+                          DataTyKind::Scalar(ScalarTy::Bool),
+                          DataTyKind::Scalar(ScalarTy::Bool),
+                      ) => Ok((rhs_ty_ctx, ret)),
+                      _ =>  Err(TyError::String(format!(
+                          "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                          bin_op, lhs, rhs
+                      )))
+                  }
+                  _ => Err(TyError::String(format!(
+                      "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                      bin_op, lhs, rhs
+                  ))),
+              }
         }
+
         // Ok((rhs_ty_ctx, operand_ty))
     }
 

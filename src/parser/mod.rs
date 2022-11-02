@@ -659,8 +659,11 @@ peg::parser! {
                     }
                 }
             }
-            / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") ("i32" / "u32" / "f32")?  ) { ?
-                let literal = if (l.ends_with("i32") || l.ends_with("u8") || l.ends_with("u32") || l.ends_with("u64") || l.ends_with("f32")) {&l[0..l.len()-3]} else {l};
+            / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") ("i32" / "u8" / "u32" / "u64" / "f32")?  ) { ?
+                let literal =
+                    if (l.ends_with("i32") || l.ends_with("u32") || l.ends_with("u64") || l.ends_with("f32")) {&l[0..l.len()-3]}
+                    else if (l.ends_with("u8")) {&l[0..l.len()-2]}
+                    else {l};
                 if (l.ends_with("f32")) {
                     match literal.parse::<f32>() {
                         Ok(val) => Ok(Lit::F32(val)),
