@@ -244,7 +244,7 @@ impl<'a> Monomorphiser<'a> {
                                         ).is_some()
                                     }).is_some() {
                                     if !is_predefined {
-                                        eprintln!("function \"{}\" of kind {:?} is never used. Because this function has constraint \
+                                        eprintln!("WARNING function \"{}\" of kind {:?} is never used. Because this function has constraint \
                                             generic params, which needs to be monomoprhised, no code can be generated \
                                             for this function.",
                                             fun_name.name,

@@ -37,13 +37,10 @@ impl FreeKindedIdents {
         }
     }
 
-    pub fn with_bound_idents<I>(idents: I) -> Self
-    where
-        I: Iterator<Item = IdentKinded>,
-    {
+    pub fn with_bound_idents(idents: HashSet<IdentKinded>) -> Self {
         FreeKindedIdents {
             set: HashSet::new(),
-            bound_idents: HashSet::from_iter(idents),
+            bound_idents: idents,
         }
     }
 }
@@ -52,14 +49,12 @@ impl Visit for FreeKindedIdents {
     fn visit_nat(&mut self, nat: &Nat) {
         match nat {
             Nat::Ident(ident) => {
-                if !self
-                    .bound_idents
-                    .contains(&IdentKinded::new(ident, Kind::Nat))
-                {
-                    self.set.insert(IdentKinded::new(ident, Kind::Nat));
+                let ident_kinded = IdentKinded::new(ident, Kind::Nat);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set
+                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Nat)))
                 }
             }
-            //Nat::App(ident, args) =>
             _ => visit::walk_nat(self, nat),
         }
     }
@@ -67,7 +62,11 @@ impl Visit for FreeKindedIdents {
     fn visit_mem(&mut self, mem: &Memory) {
         match mem {
             Memory::Ident(ident) => {
-                self.set.insert(IdentKinded::new(ident, Kind::Memory));
+                let ident_kinded = IdentKinded::new(ident, Kind::Memory);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set
+                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Memory)))
+                }
             }
             _ => visit::walk_mem(self, mem),
         }
@@ -76,7 +75,11 @@ impl Visit for FreeKindedIdents {
     fn visit_prv(&mut self, prv: &Provenance) {
         match prv {
             Provenance::Ident(ident) => {
-                self.set.insert(IdentKinded::new(ident, Kind::Provenance));
+                let ident_kinded = IdentKinded::new(ident, Kind::Provenance);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set
+                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Provenance)))
+                }
             }
             _ => visit::walk_prv(self, prv),
         }
@@ -85,7 +88,11 @@ impl Visit for FreeKindedIdents {
     fn visit_ty(&mut self, ty: &Ty) {
         match &ty.ty {
             TyKind::Ident(ident) => {
-                self.set.insert(IdentKinded::new(ident, Kind::Ty));
+                let ident_kinded = IdentKinded::new(ident, Kind::Ty);
+                if !self.bound_idents.contains(&ident_kinded) {
+                    self.set
+                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty)))
+                }
             }
             _ => visit::walk_ty(self, ty),
         }
@@ -104,13 +111,12 @@ impl Visit for FreeKindedIdents {
         match &expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
                 self.visit_nat(collec);
-
-                let ident_kinded = IdentKinded::new(ident, Kind::Nat);
-                let not_already_contains = self.bound_idents.insert(ident_kinded.clone());
-                self.visit_expr(body);
-                if not_already_contains {
-                    self.bound_idents.remove(&ident_kinded);
-                }
+                let mut scoped_bound_idents = self.bound_idents.clone();
+                scoped_bound_idents.extend(std::iter::once(IdentKinded::new(ident, Kind::Nat)));
+                let mut inner_free_idents =
+                    FreeKindedIdents::with_bound_idents(scoped_bound_idents);
+                inner_free_idents.visit_expr(body);
+                self.set.extend(inner_free_idents.set)
             }
             _ => visit::walk_expr(self, expr),
         }
