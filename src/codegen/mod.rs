@@ -1710,95 +1710,16 @@ fn gen_indep_branch_cond(exec_split: &desc::ExecSplit) -> cu::Expr {
         op: cu::BinOp::Lt,
         lhs: Box::new(cu::Expr::Nat(parall_idx(
             exec_split.split_dim,
-            &exec_split.exec,
+            // The condition must range over the elements within the execution resource.
+            // Use Distrib to indicate this.
+            &desc::ExecExpr::new(desc::ExecKind::Distrib(
+                exec_split.split_dim,
+                exec_split.exec.clone(),
+            )),
         ))),
         rhs: Box::new(cu::Expr::Nat(exec_split.pos.clone())),
     }
 }
-
-// TODO remove?
-// fn gen_parall_cond(
-//     pid: &desc::Nat,
-//     parall_collec: &ParallelityCollec,
-// ) -> Option<(Option<cu::Expr>, ParallRange)> {
-//     match parall_collec {
-//         ParallelityCollec::Proj { parall_expr, i } => {
-//             if let Some((cond, ParallRange::SplitRange(l, m, u))) =
-//                 gen_parall_cond(pid, parall_expr)
-//             {
-//                 let (cond_stmt, range) = if *i == 0 {
-//                     (
-//                         cu::Expr::BinOp {
-//                             op: cu::BinOp::Lt,
-//                             lhs: Box::new(cu::Expr::Nat(pid.clone())),
-//                             rhs: Box::new(cu::Expr::Nat(m.clone())),
-//                         },
-//                         ParallRange::Range(l, m),
-//                     )
-//                 } else if *i == 1 {
-//                     (
-//                         cu::Expr::BinOp {
-//                             op: cu::BinOp::Ge,
-//                             lhs: Box::new(cu::Expr::Nat(pid.clone())),
-//                             rhs: Box::new(cu::Expr::Nat(m.clone())),
-//                         },
-//                         ParallRange::Range(m, u),
-//                     )
-//                 } else {
-//                     panic!("Split can only create a 2-tuple.")
-//                 };
-//
-//                 if let Some(c) = cond {
-//                     Some((
-//                         Some(cu::Expr::BinOp {
-//                             op: cu::BinOp::And,
-//                             lhs: Box::new(cond_stmt),
-//                             rhs: Box::new(c),
-//                         }),
-//                         range,
-//                     ))
-//                 } else {
-//                     Some((Some(cond_stmt), range))
-//                 }
-//             } else {
-//                 panic!()
-//             }
-//         }
-//         ParallelityCollec::Split {
-//             dim,
-//             pos,
-//             coll_size,
-//             parall_collec: parall_expr,
-//         } => {
-//             if let Some((cond, ParallRange::Range(l, u))) = gen_parall_cond(pid, parall_expr) {
-//                 Some((
-//                     cond,
-//                     ParallRange::SplitRange(
-//                         l.clone(),
-//                         desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(l), Box::new(pos.clone())),
-//                         u,
-//                     ),
-//                 ))
-//             } else {
-//                 Some((
-//                     Some(cu::Expr::BinOp {
-//                         op: cu::BinOp::Lt,
-//                         lhs: Box::new(cu::Expr::Nat(pid.clone())),
-//                         rhs: Box::new(cu::Expr::Nat(pos.clone())),
-//                     }),
-//                     ParallRange::SplitRange(desc::Nat::Lit(0), pos.clone(), coll_size.clone()),
-//                 ))
-//             }
-//         }
-//         ParallelityCollec::ToThreadGrp(parall_expr) => gen_parall_cond(
-//             &desc::Nat::Ident(desc::Ident::new("blockIdx.x")),
-//             parall_expr,
-//         ),
-//         ParallelityCollec::Grid(_, _) | ParallelityCollec::Block(_) | ParallelityCollec::Thread => {
-//             panic!("")
-//         }
-//     }
-// }
 
 fn gen_shape(
     shape_expr: &ShapeExpr,
