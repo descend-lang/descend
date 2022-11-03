@@ -902,8 +902,8 @@ fn prv_val_ident() -> TyResult<()> {
 
 #[test]
 fn test_unify_traits() -> TyResult<()> {
-    let ix = DataTy::new(utils::fresh_ident("x", DataTyKind::Ident));
-    let it = DataTy::new(utils::fresh_ident("t", DataTyKind::Ident));
+    let ix = DataTy::new(DataTyKind::Ident(Ident::new_impli("$x_0")));
+    let it = DataTy::new(DataTyKind::Ident(Ident::new_impli("$t_1")));
     let i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
 
     let ix_a = ArgKinded::DataTy(ix.clone());

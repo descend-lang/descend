@@ -199,7 +199,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
                 if let Some(struct_decl) = visitor.structs.get(&struct_ty.name) {
                     let inst_struct_mono = struct_decl
                         .ty()
-                        .inst_qualified_ty(&struct_ty.generic_args)
+                        .part_inst_qual_ty(&struct_ty.generic_args)
                         .mono_ty;
                     if let TyKind::Data(dataty) = inst_struct_mono.ty {
                         if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
@@ -2654,8 +2654,8 @@ mod tests {
             y: i32
         }
         trait Eq {
-            const important_const: f32;
-            const magic_number: i32 = 42;
+            // const important_const: f32;
+            // const magic_number: i32 = 42;
             fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
         }
         impl Eq for Point {

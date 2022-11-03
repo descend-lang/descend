@@ -501,7 +501,7 @@ impl TyChecker {
                                 .fun_ty_by_name(FunctionName::from_trait(&fun_name, &trait_def));
 
                             // This is the expected type scheme
-                            let expected_impl_fun_ty = TypeScheme {
+                            let expected_impl_fun_tys = TypeScheme {
                                 generic_params: fun_decl_ty.generic_params.clone(),
                                 // The first constraint is the "Self impl the trait"-constraint
                                 // which should not part of the impl-type-scheme
@@ -509,12 +509,12 @@ impl TyChecker {
                                 mono_ty: fun_decl_ty.mono_ty.clone(),
                             }
                             // Instantiate the generic_params of the trait-definition with "generic_args_trait"
-                            .inst_qualified_ty(generic_args_trait.as_slice());
+                            .part_inst_qual_ty(generic_args_trait.as_slice());
                             // This is the found type-scheme of the impl-function
-                            let fun_impl_ty = fun_impl.ty();
+                            let fun_impl_tys = fun_impl.ty();
 
                             // The both typeschemes are equal
-                            if expected_impl_fun_ty == fun_impl_ty {
+                            if expected_impl_fun_tys == fun_impl_tys {
                                 // Typecheck the function definition
                                 if let Err(err) = self.ty_check_fun_def(kind_ctx.clone(), fun_impl)
                                 {
@@ -524,8 +524,8 @@ impl TyChecker {
                             // if they are not equal, its an error
                             else {
                                 errors.push(TyError::UnexpectedType {
-                                    expected: expected_impl_fun_ty.mono_ty,
-                                    found: fun_impl_ty.mono_ty,
+                                    expected: expected_impl_fun_tys.mono_ty,
+                                    found: fun_impl_tys.mono_ty,
                                 })
                             }
                         }
@@ -2768,7 +2768,7 @@ impl TyChecker {
         );
 
         // Instantiate type_scheme
-        let mut qualified_type = ty_scheme.inst_qualified_ty(k_args);
+        let mut qualified_type = ty_scheme.part_inst_qual_ty(k_args);
 
         // Check if there are some unfulfilled constraints
         // And add constraints on implicit identifier, which are necessary to fulfills the constraints, to `constraint_env`

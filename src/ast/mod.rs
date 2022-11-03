@@ -1147,13 +1147,13 @@ impl TypeScheme {
             .map(|gen| gen.as_arg_kinded())
             .collect::<Vec<_>>();
         //Apply "new_generic_args" to replace old kinded identifier
-        let mut result = self.inst_qualified_ty(&new_generic_args);
+        let mut result = self.part_inst_qual_ty(&new_generic_args);
         result.generic_params = new_generics;
         result
     }
 
     /// Substitute kinded identifier by given arguments on this type scheme
-    pub fn inst_qualified_ty(&self, with: &[ArgKinded]) -> Self {
+    pub fn part_inst_qual_ty(&self, with: &[ArgKinded]) -> Self {
         assert!(self.generic_params.len() >= with.len());
         TypeScheme {
             generic_params: self.generic_params[with.len()..].to_vec(),
