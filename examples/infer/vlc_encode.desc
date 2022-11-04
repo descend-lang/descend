@@ -2,8 +2,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
     h_source_data: &s shrd cpu.mem [(u8, u8, u8, u8); 4*256],
     h_codewords: &c shrd cpu.mem [u32; 256],
     h_codewordlens: &cl shrd cpu.mem [u32; 256],
-    h_out_data: &o uniq cpu.mem [i32; 4*256],
-    h_out_idx: &oi uniq cpu.mem [i32; 4]
+    h_out_data: &o uniq cpu.mem [u32; 4*256],
+    h_out_idx: &oi uniq cpu.mem [u32; 4]
 ) -[cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
@@ -25,8 +25,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
           inputs: (&shrd gpu.global [(u8, u8, u8, u8); 4*256],
                    &shrd gpu.global [u32; 256],
                    &shrd gpu.global [u32; 256],
-                   &uniq gpu.global [i32; 4*256],
-                   &uniq gpu.global [i32; 4])
+                   &uniq gpu.global [u32; 4*256],
+                   &uniq gpu.global [u32; 4])
         | -[gpu.grid]-> () {
             let d_groups = group::<256>(to_view(inputs.0));
             let cw_view = to_view(inputs.1);
@@ -72,22 +72,26 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
 
                 // encode four input symbols per thread
                 // and save the total bit-length of the encoded symbols per thread in shared memory
-                // todo raw pointer needed for access to shared memory?
-                parfor _ in block
-                with d_item, sm_as_item
-                from d_group, sm_as_view {
-                    codeword = 0u64/*;
-                    codewordlen = 0u32;
+                {
+                    let foo = &uniq sm_as;
+                    let tmp_sm_as_view = to_view_mut(&uniq *foo);
+                    parfor _ in block
+                    with d_item , sm_as_item
+                    from d_group , tmp_sm_as_view {
+                        codeword = 0u64;
+                        codewordlen = 0u32;
 
-                    for_nat i in range(0, 4) {
-                        let tmp_d_item_i = (*d_item).i;
-                        let tmpcw = sm_cw[tmp_d_item_i];
-                        let tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw;
-                        codewordlen = codewordlen + tmpcwl
-                    };
+                        for_nat i in range(0, 4) {
+                            let tmp_d_item_i = (*d_item).0;
+                            let tmpcw = sm_cw[tmp_d_item_i];
+                            let tmpcwl = sm_cwl[tmp_d_item_i];
+                            //todo cast tmpcw as u64 for | operator
+                            //codeword = (codeword<<tmpcwl) | tmpcw;
+                            codewordlen = codewordlen + tmpcwl
+                        };
 
-                    *sm_as_item = codewordlen*/
+                        *sm_as_item = codewordlen
+                    }
                 };
 
                 // calculate prefix sum (scan) of codeword lengths
@@ -142,41 +146,47 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                             rest => { () }
                         }
                     }
-                }/*;
+                };
 
                 // output the bit-index after the last codeword of the block for every block (out_idx_item)
                 // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)
-
-                let split_sm_kcmax = group_mut::<1>(sm_kcmax_view);
-                par_branch split_thread_grp::<255>(block) {
-                    inactive_threads => { () },
-                    active_thread => {
-                        parfor _ in active_thread
-                        with sm_as_item, out_idx_item, sm_kcmax_item
-                        from sm_as_view, out_idx_group, split_sm_kcmax {
-                            *out_idx_item = *sm_as_item + codewordlen;
-                            *sm_kcmax_item = (*sm_as_item + codewordlen) / 32
+                {
+                    par_branch split_thread_grp::<255>(block) {
+                        inactive_threads => { () },
+                        active_thread => {
+                            parfor _ in active_thread
+                            with out_idx_item, sm_kcmax_item
+                            from out_idx_group, sm_kcmax_view {
+                                //todo access to codewordlen
+                                *out_idx_item = sm_as[255] /* + codewordlen */;
+                                *sm_kcmax_item = (sm_as[255] /* + codewordlen */) / 32u32
+                            }
                         }
                     }
                 };
+
 
                 // kc =       index of the value in the output array (32 bits per value) where the codeword of the
                 //            current thread starts
                 // startbit = bit-index inside of the value in the output array where the codeword of the current thread
                 //            starts
                 // set all values in sm_as to 0 to use it for storing the encoded symbols for every block
-                parfor _ in block
-                with sm_as_item
-                from sm_as_view {
-                    kc = sm_as_item / 32;
-                    startbit = sm_as_item % 32;
-                    sm_as_item = 0u32
+                {
+                    let foo = &uniq sm_as;
+                    let tmp_sm_as_view = to_view_mut(&uniq *foo);
+                    parfor _ in block
+                    with sm_as_item
+                    from tmp_sm_as_view {
+                        kc = *sm_as_item / 32u32;
+                        startbit = *sm_as_item % 32u32;
+                        *sm_as_item = 0u32
+                    }
                 };
 
                 // combine the encoded symbols of every thread in a block inside shared memory
                 // encoded symbols of a thread can span across 3 32-bit values in shared memory!
                 // todo atomics are required since multiple threads need access to single values in shared memory!
-                parfor _ in block
+                /*parfor _ in block
                 with sm_as_ptr
                 from &uniq *sm_as_view {
                     let raw_ptr_sm_as = to_raw_ptr(&uniq *sm_as_ptr);
@@ -216,15 +226,15 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     unsafe {
                         atomic_or(raw_ptr_sm_as_offset_p3, tmpcw<<(32-codewordlen))
                     }
-                };
+                };*/
 
                 // write block solution to global memory output
                 // todo use sm_kcmax for threadfence!
                 parfor _ in block
                 with out_data_item, sm_as_item
                 from out_data_group, sm_as_view {
-                    out_data_item = sm_as_item
-                }*/
+                    *out_data_item = *sm_as_item
+                }
             }
           }
         );

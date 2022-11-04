@@ -323,6 +323,9 @@ impl Constrainable for DataTy {
             (DataTyKind::Dead(_), _) => {
                 panic!()
             }
+            (dty1, DataTyKind::Dead(dty2)) if !matches! (dty1, DataTyKind::Dead(_)) => {
+                self.constrain(dty2, constr_map, prv_rels)
+            }
             _ => Err(TyError::CannotUnify),
         }
     }
