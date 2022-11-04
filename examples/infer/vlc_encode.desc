@@ -82,6 +82,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         codewordlen = 0u32;
 
                         for_nat i in range(0, 4) {
+                            //todo unroll loop for tuple access
                             let tmp_d_item_i = (*d_item).0;
                             let tmpcw = sm_cw[tmp_d_item_i];
                             let tmpcwl = sm_cwl[tmp_d_item_i];
@@ -93,6 +94,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         *sm_as_item = codewordlen
                     }
                 };
+
+                // syncthreads
 
                 // calculate prefix sum (scan) of codeword lengths
                 // (required for position of encoded symbols in output)
@@ -111,6 +114,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                             },
                             rest => { () }
                         }
+                        // syncthreads
                     }
                 };
 
@@ -127,6 +131,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     rest => { () }
                 };
 
+                // syncthreads
 
                 // step 3: down-sweep phase
                 {
@@ -145,26 +150,26 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                             },
                             rest => { () }
                         }
+                        // syncthreads
                     }
                 };
 
                 // output the bit-index after the last codeword of the block for every block (out_idx_item)
                 // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)
-                {
-                    par_branch split_thread_grp::<255>(block) {
-                        inactive_threads => { () },
-                        active_thread => {
-                            parfor _ in active_thread
-                            with out_idx_item, sm_kcmax_item
-                            from out_idx_group, sm_kcmax_view {
-                                //todo access to codewordlen
-                                *out_idx_item = sm_as[255] /* + codewordlen */;
-                                *sm_kcmax_item = (sm_as[255] /* + codewordlen */) / 32u32
-                            }
+                par_branch split_thread_grp::<255>(block) {
+                    inactive_threads => { () },
+                    active_thread => {
+                        parfor _ in active_thread
+                        with out_idx_item, sm_kcmax_item
+                        from out_idx_group, sm_kcmax_view {
+                            //todo access to codewordlen
+                            *out_idx_item = sm_as[255] /* + codewordlen */;
+                            *sm_kcmax_item = (sm_as[255] /* + codewordlen */) / 32u32
                         }
                     }
                 };
 
+                // syncthreads
 
                 // kc =       index of the value in the output array (32 bits per value) where the codeword of the
                 //            current thread starts
@@ -182,6 +187,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         *sm_as_item = 0u32
                     }
                 };
+
+                // syncthreads
 
                 // combine the encoded symbols of every thread in a block inside shared memory
                 // encoded symbols of a thread can span across 3 32-bit values in shared memory!
@@ -228,8 +235,10 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     }
                 };*/
 
+                // syncthreads
+
                 // write block solution to global memory output
-                // todo use sm_kcmax for threadfence!
+                // todo only threads with tid < sm_kcmax need to copy
                 parfor _ in block
                 with out_data_item, sm_as_item
                 from out_data_group, sm_as_view {
