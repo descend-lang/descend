@@ -1054,9 +1054,8 @@ fn gen_exec(
                     ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
                     is_dev_fun: true,
                 },
-                vec![]
-                // FIXME see above
-                // free_kinded_idents,
+                vec![], // FIXME see above
+                        // free_kinded_idents,
             )
         } else {
             panic!("Currently only lambdas can be passed.")
@@ -1565,7 +1564,17 @@ fn gen_expr(
             captures: {
                 let mut free_idents = utils::FreeKindedIdents::new();
                 free_idents.visit_expr(body);
-                free_idents.set.iter().map(|ki| ki.ident.clone()).collect()
+                free_idents
+                    .set
+                    .iter()
+                    .filter_map(|ki| {
+                        if !matches!(ki.kind, desc::Kind::Provenance) {
+                            Some(ki.ident.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             },
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(

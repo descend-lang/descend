@@ -13,7 +13,7 @@ static mut COUNTER: AtomicI32 = AtomicI32::new(0);
 const COMPILE_PATH_DIR: &'static str = "/tmp";
 const DESCEND_HEADER_DIR: &'static str = "./cuda-examples";
 const DESCEND_HEADER_NAME: &'static str = "descend.cuh";
-const NVCC_COMPILE_COMMAND: &'static str = "nvcc -c --extended-lambda";
+const NVCC_COMPILE_COMMAND: &'static str = "nvcc -c --extended-lambda --expt-relaxed-constexpr";
 const BASH_COMMAND: &'static str = "bash";
 
 // Initialization to run nvcc
@@ -1507,11 +1507,11 @@ fn test_lambda2() {
     }
     fn mainf(array_global: &shrd gpu.global Array<i32, 2>) -[gpu.thread]-> () {
         let red = |vec, zero| -[gpu.thread]-> _ {
-            vec.reduce(zero)
+            vec.reduce(zero);
             // This two spellings act identical as `vec.reduce(zero)`
-            // Array<_, 2>::reduce(vec, zero)
-            // Array<i32, 2>::reduce(vec, zero)
-            //
+            Array<_, 2>::reduce(vec, zero);
+            Array<i32, 2>::reduce(vec, zero)
+
             // `Array::reduce(vec, zero)` dont work in this case
             // because of the nat in the second component of `Array`
         };
@@ -1519,16 +1519,7 @@ fn test_lambda2() {
         let res = red(array_global, 0)
     }
     "#;
-    // FIXME generated code cannot be compiled => generated capture of lambda is wrong
-    // assert_compile!(src);
-
-    let res = descend::compile_src(src);
-    if let Err(error) = res {
-        eprintln!("{}\n{:#?}", src, error);
-        panic!("Unexpected error while typechecking");
-    } else {
-        println!("{}", res.as_ref().unwrap());
-    }
+    assert_compile!(src);
 }
 
 #[test]
