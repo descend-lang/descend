@@ -774,7 +774,6 @@ pub enum ExecKind {
     Proj(u8, Box<ExecExpr>),
     Distrib(DimCompo, Box<ExecExpr>),
     ToThreadGrp(Box<ExecExpr>),
-    View,
 }
 
 impl fmt::Display for ExecKind {
@@ -787,7 +786,6 @@ impl fmt::Display for ExecKind {
             ExecKind::Proj(i, exec) => write!(f, "proj{}<{}>", i, exec),
             ExecKind::Distrib(d, exec) => write!(f, "distr<{}, {}>", d, exec),
             ExecKind::ToThreadGrp(exec) => write!(f, "to_thread_grp<{}>", exec),
-            ExecKind::View => write!(f, "view"),
         }
     }
 }

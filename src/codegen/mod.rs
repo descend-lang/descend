@@ -48,7 +48,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let fn_decls = collect_fn_decls(&cu_fn_defs);
     let include = cu::Item::Include("descend.cuh".to_string());
     let decl_comment = cu::Item::MultiLineComment("function declarations".to_string());
-    let def_comment = cu::Item::MultiLineComment("function defintions".to_string());
+    let def_comment = cu::Item::MultiLineComment("function definitions".to_string());
     let cu_program = std::iter::once(&include)
         .chain(std::iter::once(&decl_comment))
         .chain(&fn_decls)
