@@ -213,25 +213,29 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     codewordlen = codewordlen - wrbits;
 
                     // Part 2 (second value in shared memory)
-                    if codewordlen > 32 {
-                        wrbits = 32
-                    } else {
-                        wrbits = codewordlen
+                    if codewordlen > 0 {
+                        if codewordlen > 32 {
+                            wrbits = 32
+                        } else {
+                            wrbits = codewordlen
+                        };
+                        tmpcw = (codeword>>(codewordlen - wrbits)) & ((1<<wrbits)-1) as u32;
+                        //todo raw pointer location should not be affected by thread id!
+                        let raw_ptr_sm_as_offset_p2 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 1);
+                        unsafe {
+                            atomic_or(raw_ptr_sm_as_offset_p2, tmpcw<<(32-wrbits))
+                        };
+                        codewordlen = codewordlen - wrbits
                     };
-                    tmpcw = (codeword>>(codewordlen - wrbits)) & ((1<<wrbits)-1) as u32;
-                    //todo raw pointer location should not be affected by thread id!
-                    let raw_ptr_sm_as_offset_p2 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 1);
-                    unsafe {
-                        atomic_or(raw_ptr_sm_as_offset_p2, tmpcw<<(32-wrbits))
-                    };
-                    codewordlen = codewordlen - wrbits;
 
                     // Part 3 (third value in shared memory)
-                    tmpcw = (codeword & ((1<<codewordlen)-1)) as u32;
-                    //todo raw pointer location should not be affected by thread id!
-                    let raw_ptr_sm_as_offset_p3 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 2);
-                    unsafe {
-                        atomic_or(raw_ptr_sm_as_offset_p3, tmpcw<<(32-codewordlen))
+                    if codewordlen > 0 {
+                        tmpcw = (codeword & ((1<<codewordlen)-1)) as u32;
+                        //todo raw pointer location should not be affected by thread id!
+                        let raw_ptr_sm_as_offset_p3 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 2);
+                        unsafe {
+                            atomic_or(raw_ptr_sm_as_offset_p3, tmpcw<<(32-codewordlen))
+                        }
                     }
                 };*/
 

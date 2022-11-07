@@ -53,7 +53,15 @@ fn reduce_shared_mem() -> Res {
 fn vlc_encode() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/vlc_encode.desc")?
+        descend::compile("examples/infer/huffman/vlc_encode.desc")?
+    ))
+}
+
+#[test]
+fn generate_cl() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/generate_cl.desc")?
     ))
 }
 
