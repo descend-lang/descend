@@ -58,14 +58,6 @@ fn vlc_encode() -> Res {
 }
 
 #[test]
-fn generate_cl() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/huffman/generate_cl.desc")?
-    ))
-}
-
-#[test]
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",

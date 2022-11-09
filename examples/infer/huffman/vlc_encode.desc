@@ -81,15 +81,35 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         codeword = 0u64;
                         codewordlen = 0u32;
 
-                        for_nat i in range(0, 4) {
-                            //todo unroll loop for tuple access
-                            let tmp_d_item_i = (*d_item).0;
-                            let tmpcw = sm_cw[tmp_d_item_i];
-                            let tmpcwl = sm_cwl[tmp_d_item_i];
-                            //todo cast tmpcw as u64 for | operator
-                            //codeword = (codeword<<tmpcwl) | tmpcw;
-                            codewordlen = codewordlen + tmpcwl
-                        };
+                        let tmp_d_item = *d_item;
+
+                        let mut tmp_d_item_i: u8 = tmp_d_item.0;
+                        let mut tmpcw = sm_cw[tmp_d_item_i];
+                        let mut tmpcwl = sm_cwl[tmp_d_item_i];
+                        //todo cast tmpcw as u64 for | operator
+                        //codeword = (codeword<<tmpcwl) | tmpcw;
+                        codewordlen = codewordlen + tmpcwl;
+
+                        tmp_d_item_i = tmp_d_item.1;
+                        tmpcw = sm_cw[tmp_d_item_i];
+                        tmpcwl = sm_cwl[tmp_d_item_i];
+                        //todo cast tmpcw as u64 for | operator
+                        //codeword = (codeword<<tmpcwl) | tmpcw;
+                        codewordlen = codewordlen + tmpcwl;
+
+                        tmp_d_item_i = tmp_d_item.2;
+                        tmpcw = sm_cw[tmp_d_item_i];
+                        tmpcwl = sm_cwl[tmp_d_item_i];
+                        //todo cast tmpcw as u64 for | operator
+                        //codeword = (codeword<<tmpcwl) | tmpcw;
+                        codewordlen = codewordlen + tmpcwl;
+
+                        tmp_d_item_i = tmp_d_item.3;
+                        tmpcw = sm_cw[tmp_d_item_i];
+                        tmpcwl = sm_cwl[tmp_d_item_i];
+                        //todo cast tmpcw as u64 for | operator
+                        //codeword = (codeword<<tmpcwl) | tmpcw;
+                        codewordlen = codewordlen + tmpcwl;
 
                         *sm_as_item = codewordlen
                     }
@@ -162,9 +182,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         parfor _ in active_thread
                         with out_idx_item, sm_kcmax_item
                         from out_idx_group, sm_kcmax_view {
-                            //todo access to codewordlen
-                            *out_idx_item = sm_as[255] /* + codewordlen */;
-                            *sm_kcmax_item = (sm_as[255] /* + codewordlen */) / 32u32
+                            *out_idx_item = sm_as[255] + codewordlen;
+                            *sm_kcmax_item = (sm_as[255] + codewordlen) / 32u32
                         }
                     }
                 };

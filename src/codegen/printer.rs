@@ -191,8 +191,8 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, args, ", ")?;
                 write!(f, ")")
             }
-            UnOp { op, arg } => write!(f, "{}{}", op, arg),
-            BinOp { op, lhs, rhs } => write!(f, "{} {} {}", lhs, op, rhs),
+            UnOp { op, arg } => write!(f, "({}{})", op, arg),
+            BinOp { op, lhs, rhs } => write!(f, "({} {} {})", lhs, op, rhs),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
             Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
             InitializerList { elems } => {

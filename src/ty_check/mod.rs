@@ -871,14 +871,15 @@ impl TyChecker {
         if parall_ident_typed.is_some() {
             frm_ty.push(FrameEntry::Var(parall_ident_typed.unwrap()));
         }
-        let ty_ctx_with_idents = input_ty_ctx.clone().append_frame(frm_ty);
+        let ty_ctx_with_idents = input_ty_ctx.append_frame(frm_ty);
 
         // Dismiss the resulting typing context. A par_for always synchronizes. Therefore everything
         // that is used for the par_for can safely be reused.
-        let _body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_idents, body_exec, body)?;
+        let body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_idents, body_exec, body)?;
+        let result_ty_ctx = body_ty_ctx.drop_last_frame();
 
         Ok((
-            input_ty_ctx,
+            result_ty_ctx,
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::Unit,
             )))),
