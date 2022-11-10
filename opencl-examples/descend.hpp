@@ -23,17 +23,17 @@ namespace descend {
 
     class Gpu {
     public:
-        cl::device device;
-        cl::context context;
-        cl::commandQueue queue;
+        cl::Device *device;
+        cl::Context *context;
+        cl::CommandQueue *queue;
 
-        Gpu(cl::device device, cl::context context, cl::commandQueue queue){
-            this.device = device;
-            this.context = context;
-            this.queue = queue;
+        Gpu(cl::Device device, cl::Context context, cl::CommandQueue queue){
+            this->device = &device;
+            this->context = &context;
+            this->queue = &queue;
         }
         ~ Gpu () {
-            queue.finish();
+            this->queue->finish();
         }
     };
 
@@ -45,22 +45,26 @@ namespace descend {
     template<Memory mem, typename DescendType>
     class Buffer;
 
-    Gpu gpu_device(std::size_t device_id) { // add param cl_uint device_id
+    Gpu* gpu_device(std::size_t device_id) { // add param cl_uint device_id
         std::vector<cl::Platform> platforms;
         cl::Platform::get(&platforms);
         if(platforms.empty()){
-            std::cout << "panik" << std::endl;
-            return;
+            throw std::unexpected("No Platforms found on Computer!");
         }
         // TODO refactor
         cl_context_properties properties[] = {CL_CONTEXT_PLATFORM, (cl_context_properties) (platforms[0])(), 0};
-        cl::Context context(CL_DEVICE_TYPE_CPU);
+        cl::Context context(CL_DEVICE_TYPE_ALL);
         std::vector<cl::Device> devices = context.getInfo<CL_CONTEXT_DEVICES>();
 
-        cl::device device = devices[device_id];
+        cl::Device device = devices[device_id];
 
+        cl_int err;
         // Create command queue for first device
         cl::CommandQueue queue(context, device, CL_QUEUE_PROFILING_ENABLE, &err);
+
+        if(err != CL_SUCCESS) {
+            throw std::unexpected(getErrorString(&err));
+        }
 
         return Gpu (device, context, queue);
     };
@@ -106,7 +110,7 @@ namespace descend {
         cl::Buffer buffer;
 
     public:
-        static constexpr std::size_t size = n * sizeof(DescendType) // size_in_bytes<array<DescendType, n>>();
+        static constexpr std::size_t size = n * sizeof(DescendType);
 
         Buffer(const Gpu * const __restrict__ gpu, const DescendType default_value): gpu_{*gpu} {
             // CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
@@ -119,7 +123,7 @@ namespace descend {
             //TODO: Error Handling
             buffer = cl::Buffer(gpu_.context, CL_MEM_READ_WRITE, size);
             // Bind memory buffers
-            gpu_.queue.enqueueWriteBuffer(buffer, CL_TRUE, 0, size, init_ptr);
+            gpu_.queue->enqueueWriteBuffer(buffer, CL_TRUE, 0, size, init_ptr);
         }
 
         ~Buffer() {
@@ -127,12 +131,12 @@ namespace descend {
             CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
         }
 
-        auto operator&() -> DescendType * {
-            return dev_ptr_;
-        }
-        auto operator&() const -> const DescendType * {
-            return dev_ptr_;
-        }
+        //auto operator&() -> DescendType * {
+        //    return dev_ptr_;
+        //}
+        //auto operator&() const -> const DescendType * {
+        //    return dev_ptr_;
+        //}
     };
 
 
