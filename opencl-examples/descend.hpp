@@ -49,7 +49,7 @@ namespace descend {
         std::vector<cl::Platform> platforms;
         cl::Platform::get(&platforms);
         if(platforms.empty()){
-            throw std::unexpected("No Platforms found on Computer!");
+            throw std::runtime_error("No Platforms found on Computer!");
         }
         // TODO refactor
         cl_context_properties properties[] = {CL_CONTEXT_PLATFORM, (cl_context_properties) (platforms[0])(), 0};
@@ -63,10 +63,10 @@ namespace descend {
         cl::CommandQueue queue(context, device, CL_QUEUE_PROFILING_ENABLE, &err);
 
         if(err != CL_SUCCESS) {
-            throw std::unexpected(getErrorString(&err));
+            throw std::runtime_error(getErrorString(err));
         }
 
-        return Gpu (device, context, queue);
+        return new Gpu (device, context, queue);
     };
 
     template<typename DescendType, std::size_t n>
@@ -127,8 +127,8 @@ namespace descend {
         }
 
         ~Buffer() {
-            CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
-            CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
+            // CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
+            // CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
         }
 
         //auto operator&() -> DescendType * {
