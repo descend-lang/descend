@@ -106,24 +106,25 @@ namespace descend {
 
     template<typename DescendType, std::size_t n>
     class Buffer<Memory::GpuGlobal, descend::array<DescendType, n>> {
-        const Gpu gpu_;
+        const Gpu *gpu_;
         cl::Buffer buffer;
 
     public:
         static constexpr std::size_t size = n * sizeof(DescendType);
 
-        Buffer(const Gpu * const __restrict__ gpu, const DescendType default_value): gpu_{*gpu} {
+        Buffer(const Gpu * const __restrict__ gpu, const DescendType default_value): gpu_{gpu} {
             // CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
             // CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
             // CHECK_CUDA_ERR( cudaMemset(dev_ptr_, default_value, size));
             // TODO
         }
 
-        Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{*gpu} {
+        Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{gpu} {
             //TODO: Error Handling
-            buffer = cl::Buffer(gpu_.context, CL_MEM_READ_WRITE, size);
+            std::cout << "buf: " << gpu->context->getInfo() << std::endl;
+            buffer = cl::Buffer(*(gpu_->context), CL_MEM_READ_WRITE, size);
             // Bind memory buffers
-            gpu_.queue->enqueueWriteBuffer(buffer, CL_TRUE, 0, size, init_ptr);
+            gpu_->queue->enqueueWriteBuffer(buffer, CL_TRUE, 0, size, init_ptr);
         }
 
         ~Buffer() {
@@ -139,6 +140,16 @@ namespace descend {
         //}
     };
 
+    template<typename DescendType>
+    using HeapBuffer = Buffer<Memory::CpuHeap, DescendType>;
+
+    template<typename DescendType>
+    using GpuBuffer = Buffer<Memory::GpuGlobal, DescendType>;
+
+    template<typename DescendType, typename PtrType>
+    auto gpu_alloc_copy(const Gpu * const __restrict__ gpu, const PtrType * const __restrict__ init_ptr) -> GpuBuffer<DescendType>  {
+        return descend::GpuBuffer<DescendType>(gpu, init_ptr);
+    }
 
 
 

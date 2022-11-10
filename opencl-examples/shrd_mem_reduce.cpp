@@ -60,13 +60,14 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
     auto gpu = descend::gpu_device(0);
 
 
-
+    std::cout << "hi" << std::endl;
+    const auto ar_array = 
+        descend::gpu_alloc_copy<descend::array<descend::i32, (wg * wi)>>(
+          gpu, a_h);
 
     /*// allocate on GPU
-    //
-    // const auto a_array =
-    //   descend::gpu_alloc_copy<descend::array<descend::i32, (gs * bs)>>(
-    //       (&gpu), ha_array);
+    const auto a_array =
+      descend::gpu_alloc_copy<c
     
     //cl_mem a = clCreateBuffer(gpu.context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(cl_int) * (wg * wi), a_h, &res);
     //if (res != CL_SUCCESS) {
