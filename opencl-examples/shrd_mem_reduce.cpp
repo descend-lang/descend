@@ -57,18 +57,21 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
 
     //delete
     cl_int res = 0;
-    auto gpu = descend::gpu_device();
+    auto gpu = descend::gpu_device(0);
 
-    // allocate on GPU
+
+
+
+    /*// allocate on GPU
     //
     // const auto a_array =
     //   descend::gpu_alloc_copy<descend::array<descend::i32, (gs * bs)>>(
     //       (&gpu), ha_array);
     
-    cl_mem a = clCreateBuffer(gpu.context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(cl_int) * (wg * wi), a_h, &res);
-    if (res != CL_SUCCESS) {
-        std::cerr << getErrorString(res) << std::endl;
-    }
+    //cl_mem a = clCreateBuffer(gpu.context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, sizeof(cl_int) * (wg * wi), a_h, &res);
+    //if (res != CL_SUCCESS) {
+    //    std::cerr << getErrorString(res) << std::endl;
+    //}
     res = clEnqueueWriteBuffer(gpu.queue, a, true, 0, sizeof(cl_int) * (wg * wi), a_h, NULL, NULL, NULL);
     if (res != CL_SUCCESS) {
         std::cerr << getErrorString(res) << std::endl;
@@ -89,7 +92,7 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
     std::cout << "allocated data on Device" << std::endl;
 
 
-    // execute 
+    // execute
 
     // descend::exec<gs, bs>(
     //   (&gpu),
@@ -119,11 +122,11 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
     //   (&a_array), (&out_array));
 
 
-    // build program 
+    // build program
 
     const char *kernel_code;
     std::ifstream in("shrd_mem_reduce.cl");
-    std::string contents((std::istreambuf_iterator<char>(in)), 
+    std::string contents((std::istreambuf_iterator<char>(in)),
     std::istreambuf_iterator<char>());
     kernel_code = contents.c_str();
     std::cout << "read kernel\n" << kernel_code << std::endl;
@@ -164,7 +167,7 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
     if (res != CL_SUCCESS) {
         std::cerr << getErrorString(res) << std::endl;
     }
-    
+
     std::cout << "finished executing kernel" << std::endl;
 
 
@@ -188,6 +191,6 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
         sol = sol + out_h[i];
     }
 
-    std::cout << "computed result: " << sol << std::endl;
+    std::cout << "computed result: " << sol << std::endl;*/
 
 }

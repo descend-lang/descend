@@ -20,11 +20,22 @@ namespace descend {
     template<typename T, std::size_t n>
     using array = std::array<T, n>;
 
-    typedef struct {
+
+    class Gpu {
+    public:
         cl::device device;
         cl::context context;
         cl::commandQueue queue;
-    } Gpu;
+
+        Gpu(cl::device device, cl::context context, cl::commandQueue queue){
+            this.device = device;
+            this.context = context;
+            this.queue = queue;
+        }
+        ~ Gpu () {
+            queue.finish();
+        }
+    };
 
     enum Memory {
         CpuHeap,
@@ -34,30 +45,7 @@ namespace descend {
     template<Memory mem, typename DescendType>
     class Buffer;
 
-    Gpu gpu_device() { // add param cl_uint device_id
-        // cl_platform_id all_platforms;
-        // cl_uint num;
-
-        // cl_int res = clGetPlatformIDs(1, &all_platforms, &num);
-        // if (res != CL_SUCCESS) {
-        //     std::cerr << getErrorString(res) << std::endl;
-        // }
-        // cl_device_id device;
-        // clGetDeviceIDs(all_platforms, CL_DEVICE_TYPE_ALL, 1, &device, &num);
-        // if (res != CL_SUCCESS) {
-        //     std::cerr << getErrorString(res) << std::endl;
-        // }
-
-        // cl_context context = clCreateContext(NULL, 1, &device, NULL, NULL, &res);
-        // if (res != CL_SUCCESS) {
-        //     std::cerr << getErrorString(res) << std::endl;
-        // }
-
-        // cl_command_queue queue = clCreateCommandQueueWithProperties(context, device, NULL, &res);
-        // if (res != CL_SUCCESS) {
-        //     std::cerr << getErrorString(res) << std::endl;
-        // }
-
+    Gpu gpu_device(std::size_t device_id) { // add param cl_uint device_id
         std::vector<cl::Platform> platforms;
         cl::Platform::get(&platforms);
         if(platforms.empty()){
@@ -65,17 +53,17 @@ namespace descend {
             return;
         }
         // TODO refactor
-        cl_context_properties properties[] = {CL_CONTEXT} // ...
+        cl_context_properties properties[] = {CL_CONTEXT_PLATFORM, (cl_context_properties) (platforms[0])(), 0};
+        cl::Context context(CL_DEVICE_TYPE_CPU);
+        std::vector<cl::Device> devices = context.getInfo<CL_CONTEXT_DEVICES>();
 
-        return Gpu {
-            device,
-            context,
-            queue
-        };
+        cl::device device = devices[device_id];
 
+        // Create command queue for first device
+        cl::CommandQueue queue(context, device, CL_QUEUE_PROFILING_ENABLE, &err);
 
+        return Gpu (device, context, queue);
     };
-
 
     template<typename DescendType, std::size_t n>
     class Buffer<Memory::CpuHeap, descend::array<DescendType, n>> {
@@ -112,7 +100,6 @@ namespace descend {
         const DescendType& operator[](std::size_t idx) const { return (*ptr_)[idx]; }
     };
 
-
     template<typename DescendType, std::size_t n>
     class Buffer<Memory::GpuGlobal, descend::array<DescendType, n>> {
         const Gpu gpu_;
@@ -129,12 +116,10 @@ namespace descend {
         }
 
         Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{*gpu} {
-            // CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
-            // CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
-            // CHECK_CUDA_ERR( cudaMemcpy(dev_ptr_, init_ptr, size, cudaMemcpyHostToDevice) );
-            cl::Buffer(gpu_.context, CL_MEM_READ_WRITE, size);
-
-
+            //TODO: Error Handling
+            buffer = cl::Buffer(gpu_.context, CL_MEM_READ_WRITE, size);
+            // Bind memory buffers
+            gpu_.queue.enqueueWriteBuffer(buffer, CL_TRUE, 0, size, init_ptr);
         }
 
         ~Buffer() {
