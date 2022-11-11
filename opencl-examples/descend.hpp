@@ -17,7 +17,7 @@ inline void check_opencl_err(const cl_int err, const char * const file, const in
 
 namespace descend {
 
-    using i32 = std::int32_t;
+    using i32 = cl_int;
 
     template<typename T, std::size_t n>
     using array = std::array<T, n>;
@@ -118,8 +118,9 @@ namespace descend {
         device_buffer.read_to_host(host_ptr);
     }
 
-    template<std::size_t num_work_groups, std::size_t local_size, typename DescendTypeTwo>
-    void exec(const descend::Gpu * const gpu, const std::string file_name, cl::Buffer* one, GpuBuffer<DescendTypeTwo>* two) {
+    //cl:Buffer aufruf als Pointer in Kernel als *pointer
+    template<std::size_t num_work_groups, std::size_t local_size, typename ...Args>
+    void exec(const descend::Gpu * const gpu, const std::string file_name, GpuBuffer<Args>*... args) {
         std::string kernel_source = load_program(file_name);
 
         //TODO: Build Program in own function
@@ -136,18 +137,13 @@ namespace descend {
             cl::Kernel kernel(program, "reduce_shared_mem", &err);
             std::cout << "Created Kernel" << std::endl;
 
-            //TODO: Kann mir mal einer erklären warum zum F**k das hier funktioniert?
-            //TODO: TODO oben entfernen, das ist unprofessionell
-            /*cl_uint index = 0;
+            cl_uint index = 0;
             ([&]
             {
-                std::cout << "Set Arg " << index << "of size " << args.size << std::endl;
-                kernel.setArg(index, &args.buffer);
+                std::cout << "Set Arg " << index << "of size " << args->size << std::endl;
+                kernel.setArg(index, *(args->buffer));
                 index++;
-            } (), ...);*/
-
-            kernel.setArg(0, one);
-            kernel.setArg(1, &two->buffer);
+            } (), ...);
 
             // Number of work items in each local work group
             cl::NDRange localSize(local_size);
