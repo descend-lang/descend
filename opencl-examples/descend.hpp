@@ -1,3 +1,5 @@
+#define CL_HPP_ENABLE_EXCEPTIONS
+
 #include <CL/opencl.hpp>
 #include <iostream>
 #include <cstdlib>
@@ -5,7 +7,6 @@
 #include <sstream>
 #include <array>
 
-#define CHECK_OPENCL_ERR(err) { check_opencl_err((err), __FILE__, __LINE__); }
 const char *getErrorString(cl_int error);
 std::string load_program(const std::string &input);
 inline void check_opencl_err(const cl_int err, const char * const file, const int line) {
@@ -33,9 +34,9 @@ namespace descend {
             this->context = context;
             this->queue = queue;
         }
-        ~ Gpu () {
+        /*~ Gpu () {
             this->queue->finish();
-        }
+        }*/
     };
 
     enum Memory {
@@ -46,100 +47,59 @@ namespace descend {
     template<Memory mem, typename DescendType>
     class Buffer;
 
-    Gpu* gpu_device(std::size_t device_id) { // add param cl_uint device_id
+    Gpu* gpu_device(std::size_t device_id) {
+
         std::vector<cl::Platform> platforms;
         cl::Platform::get(&platforms);
         if(platforms.empty()){
             throw std::runtime_error("No Platforms found on Computer!");
         }
+
         // TODO refactor
         cl_context_properties properties[] = {CL_CONTEXT_PLATFORM, (cl_context_properties) (platforms[0])(), 0};
-        cl::Context* context = new cl::Context(CL_DEVICE_TYPE_ALL);
+        const auto context = new cl::Context(CL_DEVICE_TYPE_ALL);
         std::vector<cl::Device> devices = context->getInfo<CL_CONTEXT_DEVICES>();
 
-        cl::Device* device = new cl::Device(devices.at(device_id));
+        const auto device = new cl::Device(devices[device_id]);
 
         cl_int err;
         // Create command queue for first device
-        cl::CommandQueue* queue = new cl::CommandQueue(*context, *device, CL_QUEUE_PROFILING_ENABLE, &err);
+        const auto queue = new cl::CommandQueue(*context, *device, 0, &err);
 
         if(err != CL_SUCCESS) {
             throw std::runtime_error(getErrorString(err));
         }
 
+        std::cout << "Adresses (context, devices, queue)" << context <<  ", " << device << ", " << queue << std::endl;
+
         return new Gpu (device, context, queue);
-    };
-
-    template<typename DescendType, std::size_t n>
-    class Buffer<Memory::CpuHeap, descend::array<DescendType, n>> {
-        descend::array<DescendType, n> * const ptr_;
-
-    public:
-        // static constexpr std::size_t size = size_in_bytes<descend::array<DescendType, n>>();
-        static constexpr std::size_t size = n * sizeof(DescendType);
-
-        Buffer(const DescendType default_value): ptr_{new descend::array<DescendType, n>} {
-            std::fill(ptr_->begin(), ptr_->end(), default_value);
-        }
-
-        Buffer(const descend::array<DescendType, n> init) : ptr_{new descend::array<DescendType, n>} {
-            std::copy(init.begin(), init.end(), ptr_->data());
-        }
-
-        Buffer(const DescendType * const __restrict__ init_ptr) : ptr_{new descend::array<DescendType, n>} {
-            std::copy(init_ptr, init_ptr + size, ptr_->data());
-        }
-        ~Buffer() {
-            delete ptr_;
-        }
-
-        auto operator&() -> DescendType * {
-            return ptr_->data();
-        }
-
-        auto operator&() const -> const DescendType * {
-            return ptr_->data();
-        }
-
-        DescendType& operator[](std::size_t idx) { return (*ptr_)[idx]; }
-        const DescendType& operator[](std::size_t idx) const { return (*ptr_)[idx]; }
     };
 
     template<typename DescendType, std::size_t n>
     class Buffer<Memory::GpuGlobal, descend::array<DescendType, n>> {
         const Gpu *gpu_;
-        cl::Buffer buffer;
 
     public:
+        cl::Buffer* buffer;
         static constexpr std::size_t size = n * sizeof(DescendType);
 
-        Buffer(const Gpu * const __restrict__ gpu, const DescendType default_value): gpu_{gpu} {
-            // CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
-            // CHECK_CUDA_ERR( cudaMalloc(&dev_ptr_, size) );
-            // CHECK_CUDA_ERR( cudaMemset(dev_ptr_, default_value, size));
-            // TODO
+        Buffer(const Gpu* const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{gpu} {
+            buffer = new cl::Buffer(*gpu_->context, CL_MEM_WRITE_ONLY, size);
+            // Copy Data to device
+            std::cout << "size: " << size << std::endl;
+            gpu_->queue->enqueueWriteBuffer(*buffer, CL_TRUE, 0, size, init_ptr);
         }
 
-        Buffer(const Gpu * const __restrict__ gpu, const DescendType * const __restrict__ init_ptr) : gpu_{gpu} {
-            //TODO: Error Handling
-            cl_int err;
-            //std::cout << "buf: " << gpu_->context.getInfo(&err) << std::endl;
-            buffer = cl::Buffer(*(gpu_->context), CL_MEM_READ_WRITE, size);
-            // Bind memory buffers
-            gpu_->queue->enqueueWriteBuffer(buffer, CL_TRUE, 0, size, init_ptr);
+        template<typename PtrTypeHost>
+        void read_to_host(PtrTypeHost * const __restrict__ host_ptr) const {
+            gpu_->queue->enqueueReadBuffer(*buffer, CL_TRUE, 0, size, host_ptr);
         }
 
+        //TODO: Why is this called too early?
         ~Buffer() {
-            // CHECK_CUDA_ERR( cudaSetDevice(gpu_) );
-            // CHECK_CUDA_ERR( cudaFree(dev_ptr_) );
+            std:: cout << "Destroying Buffer of size " << size << std::endl;
+            //delete buffer;
         }
-
-        //auto operator&() -> DescendType * {
-        //    return dev_ptr_;
-        //}
-        //auto operator&() const -> const DescendType * {
-        //    return dev_ptr_;
-        //}
     };
 
     template<typename DescendType>
@@ -149,18 +109,78 @@ namespace descend {
     using GpuBuffer = Buffer<Memory::GpuGlobal, DescendType>;
 
     template<typename DescendType, typename PtrType>
-    auto gpu_alloc_copy(const Gpu * const __restrict__ gpu, const PtrType * const __restrict__ init_ptr) -> GpuBuffer<DescendType>  {
-        return descend::GpuBuffer<DescendType>(gpu, init_ptr);
+    GpuBuffer<DescendType>* gpu_alloc_copy(const Gpu * const __restrict__ gpu, const PtrType * const __restrict__ init_ptr) {
+        return new descend::GpuBuffer<DescendType>(gpu, init_ptr);
     }
 
-    template<std::size_t num_work_groups, std::size_t num_work_items_local, typename F, typename... Args>
-    auto exec(const descend::Gpu * const gpu, const std::string file_name, Args... args) -> void {
+    template<typename DescendType, typename PtrTypeHost>
+    auto copy_to_host(const GpuBuffer<DescendType> device_buffer, PtrTypeHost * const __restrict__ host_ptr) -> void {
+        device_buffer.read_to_host(host_ptr);
+    }
+
+    template<std::size_t num_work_groups, std::size_t local_size, typename DescendTypeTwo>
+    void exec(const descend::Gpu * const gpu, const std::string file_name, cl::Buffer* one, GpuBuffer<DescendTypeTwo>* two) {
         std::string kernel_source = load_program(file_name);
 
-        cl::Program program(gpu->context, kernelSource, false, &err);
+        //TODO: Build Program in own function
+        //TODO: Define Global Error-Handler for OpenCL (int-code handling and Exception Handling)
+        cl_int err;
+        cl::Program program(*gpu->context, kernel_source, false, &err);
+        if (err != CL_SUCCESS) {
+            throw std::runtime_error(getErrorString(err));
+        }
 
+        try {
+            program.build(*gpu->device);
+
+            cl::Kernel kernel(program, "reduce_shared_mem", &err);
+            std::cout << "Created Kernel" << std::endl;
+
+            //TODO: Kann mir mal einer erklären warum zum F**k das hier funktioniert?
+            //TODO: TODO oben entfernen, das ist unprofessionell
+            /*cl_uint index = 0;
+            ([&]
+            {
+                std::cout << "Set Arg " << index << "of size " << args.size << std::endl;
+                kernel.setArg(index, &args.buffer);
+                index++;
+            } (), ...);*/
+
+            kernel.setArg(0, one);
+            kernel.setArg(1, &two->buffer);
+
+            // Number of work items in each local work group
+            cl::NDRange localSize(local_size);
+            // Number of total work items - localSize must be devisor
+            cl::NDRange globalSize((int) num_work_groups*local_size);
+
+            std::cout << "local-size: " << local_size << " global-size: " << num_work_groups*local_size << "\n";
+
+            // Enqueue kernel
+            cl::Event event;
+            gpu->queue->enqueueNDRangeKernel(
+                    kernel,
+                    cl::NullRange,
+                    globalSize,
+                    localSize,
+                    NULL,
+                    &event);
+
+            // Block until kernel completion
+            event.wait();
+
+            std::cout << "Kernel Finished" << std::endl;
+        }
+        catch (cl::Error &e) {
+            if (e.err() == CL_BUILD_PROGRAM_FAILURE) {
+                // Check the build status
+                std::string build_log = program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(*gpu->device);
+                std::cerr << "Build Log: " << build_log << ":" << std::endl;
+            } else {
+                std::cerr << getErrorString(e.err()) << std::endl;
+            }
+        }
     }
-
 }
 
 const char *getErrorString(cl_int error)
