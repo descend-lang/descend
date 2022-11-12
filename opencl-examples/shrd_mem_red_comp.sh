@@ -1,0 +1,1 @@
+g++ -Wall -Wextra -D CL_TARGET_OPENCL_VERSION=300 shrd_mem_reduce.cpp -o shrd_mem_red.out -lOpenCL
