@@ -1316,7 +1316,6 @@ fn gen_expr(
                     desc::CastTy::F32 => cu::ScalarTy::F32,
                     desc::CastTy::F64 => cu::ScalarTy::F64,
                     desc::CastTy::I32 => cu::ScalarTy::I32,
-                    desc::CastTy::Bool => cu::ScalarTy::Bool,
                     desc::CastTy::U8 => cu::ScalarTy::U8,
                     desc::CastTy::U32 => cu::ScalarTy::U32,
                     desc::CastTy::U64 => cu::ScalarTy::U64,

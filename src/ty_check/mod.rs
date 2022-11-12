@@ -1549,13 +1549,12 @@ impl TyChecker {
         cty: &CastTy,
     ) -> TyResult<(TyCtx, Ty)> {
         let res_ty = match cty {
-            CastTy::I32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(I32))))}
-            CastTy::U8 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U8))))}
-            CastTy::U32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U32))))}
-            CastTy::U64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U64))))}
-            CastTy::F32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F32))))}
-            CastTy::F64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F64))))}
-            CastTy::Bool => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(Bool))))}
+            CastTy::I32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(I32))))},
+            CastTy::U8 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U8))))},
+            CastTy::U32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U32))))},
+            CastTy::U64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U64))))},
+            CastTy::F32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F32))))},
+            CastTy::F64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F64))))},
         };
         let res_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let e_ty = e.ty.as_ref().unwrap();
@@ -1583,11 +1582,20 @@ impl TyChecker {
             | TyKind::Data(DataTy {
                                dty: DataTyKind::Scalar(ScalarTy::U64),
                                ..
-                           })
-            | TyKind::Data(DataTy {
-                               dty: DataTyKind::Scalar(ScalarTy::Bool),
-                               ..
                            }) => Ok((res_ctx, res_ty.clone())),
+            TyKind::Data(DataTy {
+                             dty: DataTyKind::Scalar(ScalarTy::Bool),
+                             ..
+            }) => match cty {
+                CastTy::I32
+                | CastTy::U8
+                | CastTy::U32
+                | CastTy::U64 => Ok((res_ctx, res_ty.clone())),
+                _ => Err(TyError::String(format!(
+                    "Exected an integer type (i.e., i32 or u32) when casting a bool to another type, but found {:?}",
+                    cty
+                ))),
+            }
             _ => Err(TyError::String(format!(
                 "Exected a number type (i.e., f32 or i32) or bool when casting to another type, but found {:?}",
                 e_ty

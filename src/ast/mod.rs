@@ -1109,7 +1109,6 @@ pub enum CastTy {
     U64,
     F32,
     F64,
-    Bool,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]

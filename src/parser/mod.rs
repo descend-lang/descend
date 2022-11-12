@@ -531,7 +531,6 @@ peg::parser! {
             / "u8" { CastTy::U8 }
             / "u32" { CastTy::U32 }
             / "u64" { CastTy::U64 }
-            / "bool" { CastTy::Bool }
 
         /// Helper for "type @ memory" left-recursion
         rule dty_term() -> DataTyKind
