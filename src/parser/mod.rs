@@ -274,7 +274,7 @@ peg::parser! {
             "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
             "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
             --
-            x:(@) __ "as" __ cty:cty() {
+            x:(@) __ "as" __ cty:ty() {
                 Expr::new(ExprKind::Cast(Box::new(x), cty))
             }
             begin:position!() expr:@ end:position!() {
@@ -523,14 +523,6 @@ peg::parser! {
             = first:dty_term() _ mems:("@" _ mem:memory_kind() _ {mem})* {
                 mems.into_iter().fold(DataTy::new(first), |prev,mem| DataTy::new(DataTyKind::At(Box::new(prev), mem)))
             }
-
-        pub(crate) rule cty() -> CastTy
-            = "f32" { CastTy::F32 }
-            / "f64" { CastTy::F64 }
-            / "i32" { CastTy::I32 }
-            / "u8" { CastTy::U8 }
-            / "u32" { CastTy::U32 }
-            / "u64" { CastTy::U64 }
 
         /// Helper for "type @ memory" left-recursion
         rule dty_term() -> DataTyKind

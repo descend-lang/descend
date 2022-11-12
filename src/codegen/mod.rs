@@ -4,7 +4,7 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{utils, Mutability};
+use crate::ast::{Mutability, utils};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -1309,17 +1309,10 @@ fn gen_expr(
                 arg: Box::new(e),
             })
         }
-        Cast(expr, cty) => {
+        Cast(expr, ty) => {
             gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks).map(|e| cu::Expr::Cast {
                 expr: Box::new(e),
-                sty: match cty {
-                    desc::CastTy::F32 => cu::ScalarTy::F32,
-                    desc::CastTy::F64 => cu::ScalarTy::F64,
-                    desc::CastTy::I32 => cu::ScalarTy::I32,
-                    desc::CastTy::U8 => cu::ScalarTy::U8,
-                    desc::CastTy::U32 => cu::ScalarTy::U32,
-                    desc::CastTy::U64 => cu::ScalarTy::U64,
-                },
+                ty: gen_ty(&desc::TyKind::Data(ty.dty().clone()), desc::Mutability::Mut),
             })
         }
         Ref(_, _, pl_expr) => {

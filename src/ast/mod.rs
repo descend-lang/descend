@@ -301,7 +301,7 @@ pub enum ExprKind {
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
     // x as ty
-    Cast(Box<Expr>, CastTy),
+    Cast(Box<Expr>, Ty),
     ParBranch(Box<Expr>, Vec<Ident>, Vec<Expr>),
     ParForWith(
         Option<Vec<Expr>>,
@@ -1099,16 +1099,6 @@ pub enum ScalarTy {
     F64,
     Bool,
     Gpu,
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub enum CastTy {
-    I32,
-    U8,
-    U32,
-    U64,
-    F32,
-    F64,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]

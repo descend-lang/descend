@@ -12,7 +12,6 @@ pub trait Visit: Sized {
     fn visit_scalar_ty(&mut self, _sty: &ScalarTy) {}
     fn visit_th_hierchy(&mut self, th_hierchy: &ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
     fn visit_dty(&mut self, dty: &DataTy) { walk_dty(self, dty) }
-    fn visit_cty(&mut self, _cty: &CastTy) {}
     fn visit_ty(&mut self, ty: &Ty) { walk_ty(self, ty) }
     fn visit_pl_expr(&mut self, pl_expr: &PlaceExpr) { walk_pl_expr(self, pl_expr) }
     fn visit_arg_kinded(&mut self, arg_kinded: &ArgKinded) { walk_arg_kinded(self, arg_kinded) }
@@ -297,9 +296,9 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_unary_op(op);
             visitor.visit_expr(expr)
         }
-        ExprKind::Cast(expr, cty) => {
+        ExprKind::Cast(expr, ty) => {
             visitor.visit_expr(expr);
-            visitor.visit_cty(cty)
+            visitor.visit_ty(ty)
         }
         ExprKind::Split(_prv_val1, _prv_val2, own, s, view) => {
             visitor.visit_own(own);

@@ -8,7 +8,6 @@ mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::DataTyKind::Scalar;
-use crate::ast::ScalarTy::*;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
@@ -1546,58 +1545,42 @@ impl TyChecker {
         ty_ctx: TyCtx,
         exec: Exec,
         e: &mut Expr,
-        cty: &CastTy,
+        cty: &Ty,
     ) -> TyResult<(TyCtx, Ty)> {
-        let res_ty = match cty {
-            CastTy::I32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(I32))))},
-            CastTy::U8 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U8))))},
-            CastTy::U32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U32))))},
-            CastTy::U64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U64))))},
-            CastTy::F32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F32))))},
-            CastTy::F64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F64))))},
-        };
         let res_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let e_ty = e.ty.as_ref().unwrap();
         match &e_ty.ty {
-            TyKind::Data(DataTy {
-                             dty: DataTyKind::Scalar(ScalarTy::F32),
-                             ..
-                         })
-            | TyKind::Data(DataTy {
-                               dty: DataTyKind::Scalar(ScalarTy::F64),
-                               ..
-                           })
-            | TyKind::Data(DataTy {
-                               dty: DataTyKind::Scalar(ScalarTy::I32),
-                               ..
-                           })
-            | TyKind::Data(DataTy {
-                               dty: DataTyKind::Scalar(ScalarTy::U8),
-                               ..
-                           })
-            | TyKind::Data(DataTy {
-                               dty: DataTyKind::Scalar(ScalarTy::U32),
-                               ..
-                           })
-            | TyKind::Data(DataTy {
-                               dty: DataTyKind::Scalar(ScalarTy::U64),
-                               ..
-                           }) => Ok((res_ctx, res_ty.clone())),
-            TyKind::Data(DataTy {
-                             dty: DataTyKind::Scalar(ScalarTy::Bool),
-                             ..
-            }) => match cty {
-                CastTy::I32
-                | CastTy::U8
-                | CastTy::U32
-                | CastTy::U64 => Ok((res_ctx, res_ty.clone())),
+            TyKind::Data(DataTy{dty: Scalar(ScalarTy::F32), ..})
+            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::F64), ..})
+            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::I32), ..})
+            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::U8), ..})
+            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::U32), ..})
+            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::U64), ..})
+            => match cty.dty().dty {
+                Scalar(ScalarTy::I32)
+                | Scalar(ScalarTy::U8)
+                | Scalar(ScalarTy::U32)
+                | Scalar(ScalarTy::U64)
+                | Scalar(ScalarTy::F32)
+                | Scalar(ScalarTy::F64) => Ok((res_ctx, cty.clone())),
                 _ => Err(TyError::String(format!(
-                    "Exected an integer type (i.e., i32 or u32) when casting a bool to another type, but found {:?}",
+                    "Exected a number type (i.e. i32 or f32) to cast to from {:?}, but found {:?}",
+                    e_ty, cty
+                ))),
+            },
+            TyKind::Data(DataTy {dty: Scalar(ScalarTy::Bool), ..})
+            => match cty.dty().dty {
+                Scalar(ScalarTy::I32)
+                | Scalar(ScalarTy::U8)
+                | Scalar(ScalarTy::U32)
+                | Scalar(ScalarTy::U64) => Ok((res_ctx, cty.clone())),
+                _ => Err(TyError::String(format!(
+                    "Exected an integer type (i.e. i32 or u32) to cast to from a bool, but found {:?}",
                     cty
                 ))),
-            }
+            },
             _ => Err(TyError::String(format!(
-                "Exected a number type (i.e., f32 or i32) or bool when casting to another type, but found {:?}",
+                "Exected a number type (i.e. f32 or i32) or bool as a type to cast from, but found {:?}",
                 e_ty
             ))),
         }
