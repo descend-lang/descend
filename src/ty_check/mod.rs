@@ -8,6 +8,7 @@ mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::DataTyKind::Scalar;
+use crate::ast::ScalarTy::*;
 use crate::ast::ThreadHierchyTy;
 use crate::ast::*;
 use crate::error::ErrorReported;
@@ -212,6 +213,7 @@ impl TyChecker {
                 self.ty_check_binary_op(kind_ctx, ty_ctx, exec, bin_op, lhs, rhs)?
             }
             ExprKind::UnOp(un_op, e) => self.ty_check_unary_op(kind_ctx, ty_ctx, exec, un_op, e)?,
+            ExprKind::Cast(expr, cty) => self.ty_check_cast(kind_ctx, ty_ctx, exec, expr, cty)?,
             ExprKind::Split(r1, r2, own, s, view_ref) => {
                 self.ty_check_split(kind_ctx, ty_ctx, exec, r1, r2, *own, s, view_ref)?
             }
@@ -1533,6 +1535,61 @@ impl TyChecker {
             }) => Ok((res_ctx, e_ty.clone())),
             _ => Err(TyError::String(format!(
                 "Exected a number type (i.e., f32 or i32), but found {:?}",
+                e_ty
+            ))),
+        }
+    }
+
+    fn ty_check_cast(
+        &mut self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        e: &mut Expr,
+        cty: &CastTy,
+    ) -> TyResult<(TyCtx, Ty)> {
+        let res_ty = match cty {
+            CastTy::I32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(I32))))}
+            CastTy::U8 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U8))))}
+            CastTy::U32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U32))))}
+            CastTy::U64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(U64))))}
+            CastTy::F32 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F32))))}
+            CastTy::F64 => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(F64))))}
+            CastTy::Bool => {Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(Bool))))}
+        };
+        let res_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let e_ty = e.ty.as_ref().unwrap();
+        match &e_ty.ty {
+            TyKind::Data(DataTy {
+                             dty: DataTyKind::Scalar(ScalarTy::F32),
+                             ..
+                         })
+            | TyKind::Data(DataTy {
+                               dty: DataTyKind::Scalar(ScalarTy::F64),
+                               ..
+                           })
+            | TyKind::Data(DataTy {
+                               dty: DataTyKind::Scalar(ScalarTy::I32),
+                               ..
+                           })
+            | TyKind::Data(DataTy {
+                               dty: DataTyKind::Scalar(ScalarTy::U8),
+                               ..
+                           })
+            | TyKind::Data(DataTy {
+                               dty: DataTyKind::Scalar(ScalarTy::U32),
+                               ..
+                           })
+            | TyKind::Data(DataTy {
+                               dty: DataTyKind::Scalar(ScalarTy::U64),
+                               ..
+                           })
+            | TyKind::Data(DataTy {
+                               dty: DataTyKind::Scalar(ScalarTy::Bool),
+                               ..
+                           }) => Ok((res_ctx, res_ty.clone())),
+            _ => Err(TyError::String(format!(
+                "Exected a number type (i.e., f32 or i32) or bool when casting to another type, but found {:?}",
                 e_ty
             ))),
         }

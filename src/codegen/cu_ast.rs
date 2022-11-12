@@ -87,6 +87,10 @@ pub(super) enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Cast {
+        expr: Box<Expr>,
+        sty: ScalarTy,
+    },
     ArraySubscript {
         array: Box<Expr>,
         index: Nat,

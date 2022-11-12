@@ -193,6 +193,7 @@ impl std::fmt::Display for Expr {
             }
             UnOp { op, arg } => write!(f, "({}{})", op, arg),
             BinOp { op, lhs, rhs } => write!(f, "({} {} {})", lhs, op, rhs),
+            Cast { expr, sty} => write!(f, "({})({})", sty, expr),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
             Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
             InitializerList { elems } => {

@@ -1309,6 +1309,20 @@ fn gen_expr(
                 arg: Box::new(e),
             })
         }
+        Cast(expr, cty) => {
+            gen_expr(expr, codegen_ctx, comp_unit, dev_fun, idx_checks).map(|e| cu::Expr::Cast {
+                expr: Box::new(e),
+                sty: match cty {
+                    desc::CastTy::F32 => cu::ScalarTy::F32,
+                    desc::CastTy::F64 => cu::ScalarTy::F64,
+                    desc::CastTy::I32 => cu::ScalarTy::I32,
+                    desc::CastTy::Bool => cu::ScalarTy::Bool,
+                    desc::CastTy::U8 => cu::ScalarTy::U8,
+                    desc::CastTy::U32 => cu::ScalarTy::U32,
+                    desc::CastTy::U64 => cu::ScalarTy::U64,
+                },
+            })
+        }
         Ref(_, _, pl_expr) => {
             //match &expr.ty.as_ref().unwrap().ty {
             // desc::TyKind::Data(desc::DataTy {
