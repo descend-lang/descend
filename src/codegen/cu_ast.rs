@@ -145,6 +145,7 @@ pub(super) enum BinOp {
     Shl,
     Shr,
     BitOr,
+    BitAnd,
 }
 
 pub(super) enum TemplParam {

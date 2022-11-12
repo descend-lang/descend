@@ -1621,6 +1621,7 @@ fn gen_bin_op_expr(
             desc::BinOp::Shl => cu::BinOp::Shl,
             desc::BinOp::Shr => cu::BinOp::Shr,
             desc::BinOp::BitOr => cu::BinOp::BitOr,
+            desc::BinOp::BitAnd => cu::BinOp::BitAnd,
         };
         use CheckedExpr as ce;
         match (

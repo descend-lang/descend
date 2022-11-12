@@ -246,8 +246,13 @@ peg::parser! {
 
         /// Parse an expression
         pub(crate) rule expression() -> Expr = precedence!{
-            x:(@) _ "&&" _ y:@ { utils::make_binary(BinOp::And, x, y) }
+            x: (@) _ ".." _ y: @ {
+                Expr::new(ExprKind::Range(Box::new(x), Box::new(y)))
+            }
+            --
             x:(@) _ "||" _ y:@ { utils::make_binary(BinOp::Or, x, y) }
+            --
+            x:(@) _ "&&" _ y:@ { utils::make_binary(BinOp::And, x, y) }
             --
             x:(@) _ "==" _ y:@ { utils::make_binary(BinOp::Eq, x, y) }
             x:(@) _ "!=" _ y:@ { utils::make_binary(BinOp::Neq, x, y) }
@@ -257,6 +262,8 @@ peg::parser! {
             x:(@) _ ">=" _ y:@ { utils::make_binary(BinOp::Ge, x, y) }
             --
             x:(@) _ "|" _ y:@ { utils::make_binary(BinOp::BitOr, x, y) }
+            --
+            x:(@) _ "&" _ y:@ { utils::make_binary(BinOp::BitAnd, x, y) }
             --
             x:(@) _ "<<" _ y:@ { utils::make_binary(BinOp::Shl, x, y) }
             x:(@) _ ">>" _ y:@ { utils::make_binary(BinOp::Shr, x, y) }
@@ -268,15 +275,13 @@ peg::parser! {
             x:(@) _ "/" _ y:@ { utils::make_binary(BinOp::Div, x, y) }
             x:(@) _ "%" _ y:@ { utils::make_binary(BinOp::Mod, x, y) }
             --
-            x: (@) _ ".." _ y: @ {
-                Expr::new(ExprKind::Range(Box::new(x), Box::new(y)))
-            }
-            "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
-            "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
-            --
             x:(@) __ "as" __ cty:ty() {
                 Expr::new(ExprKind::Cast(Box::new(x), cty))
             }
+            --
+            "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
+            "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
+            --
             begin:position!() expr:@ end:position!() {
                 let expr: Expr = Expr {
                     span: Some(Span::new(begin, end)),

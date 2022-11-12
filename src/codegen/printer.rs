@@ -155,6 +155,7 @@ impl std::fmt::Display for Expr {
         match self {
             Empty => Ok(()),
             Ident(name) => write!(f, "{}", name),
+            //todo print type suffix
             Lit(l) => write!(f, "{}", l),
             Assign {
                 lhs: l_val,
@@ -292,6 +293,7 @@ impl std::fmt::Display for BinOp {
             Self::Shl => "<<",
             Self::Shr => ">>",
             Self::BitOr => "|",
+            Self::BitAnd => "&",
         };
         write!(f, "{}", str)
     }

@@ -1,5 +1,5 @@
 fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
-    h_source_data: &s shrd cpu.mem [(u8, u8, u8, u8); 4*256],
+    h_source_data: &s shrd cpu.mem [[u8; 4]; 4*256],
     h_codewords: &c shrd cpu.mem [u32; 256],
     h_codewordlens: &cl shrd cpu.mem [u32; 256],
     h_out_data: &o uniq cpu.mem [u32; 4*256],
@@ -22,7 +22,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
           &uniq out_idx
         ),
         | grid: BlockGrp<4, ThreadGrp<256>>,
-          inputs: (&shrd gpu.global [(u8, u8, u8, u8); 4*256],
+          inputs: (&shrd gpu.global [[u8; 4]; 4*256],
                    &shrd gpu.global [u32; 256],
                    &shrd gpu.global [u32; 256],
                    &uniq gpu.global [u32; 4*256],
@@ -83,25 +83,27 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
 
                         let tmp_d_item = *d_item;
 
-                        let mut tmp_d_item_i: u8 = tmp_d_item.0;
+                        let mut tmp_d_item_i: u8;
+
+                        tmp_d_item_i = tmp_d_item[0];
                         let mut tmpcw = sm_cw[tmp_d_item_i];
                         let mut tmpcwl = sm_cwl[tmp_d_item_i];
                         codeword = (codeword<<tmpcwl) | tmpcw as u64;
                         codewordlen = codewordlen + tmpcwl;
 
-                        tmp_d_item_i = tmp_d_item.1;
+                        tmp_d_item_i = tmp_d_item[1];
                         tmpcw = sm_cw[tmp_d_item_i];
                         tmpcwl = sm_cwl[tmp_d_item_i];
                         codeword = (codeword<<tmpcwl) | tmpcw as u64;
                         codewordlen = codewordlen + tmpcwl;
 
-                        tmp_d_item_i = tmp_d_item.2;
+                        tmp_d_item_i = tmp_d_item[2];
                         tmpcw = sm_cw[tmp_d_item_i];
                         tmpcwl = sm_cwl[tmp_d_item_i];
                         codeword = (codeword<<tmpcwl) | tmpcw as u64;
                         codewordlen = codewordlen + tmpcwl;
 
-                        tmp_d_item_i = tmp_d_item.3;
+                        tmp_d_item_i = tmp_d_item[3];
                         tmpcw = sm_cw[tmp_d_item_i];
                         tmpcwl = sm_cwl[tmp_d_item_i];
                         codeword = (codeword<<tmpcwl) | tmpcw as u64;
@@ -208,51 +210,59 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // combine the encoded symbols of every thread in a block inside shared memory
                 // encoded symbols of a thread can span across 3 32-bit values in shared memory!
                 // todo atomics are required since multiple threads need access to single values in shared memory!
-                /*parfor _ in block
+                parfor _ in block
                 with sm_as_ptr
                 from &uniq *sm_as_view {
-                    let raw_ptr_sm_as = to_raw_ptr(&uniq *sm_as_ptr);
-
+                    //todo raw pointer
+                    //let raw_ptr_sm_as = to_raw_ptr(&uniq *sm_as_ptr);
+                    let mut wrbits: u32;
                     // Part 1 (first value in shared memory)
-                    if codewordlen > (32-startbit) {
-                        let mut wrbits: u32 = (32-startbit)
+                    if codewordlen > (32u32 - startbit) {
+                        wrbits = (32u32 - startbit)
                     } else {
-                        let mut wrbits: u32 = codewordlen
+                        wrbits = codewordlen
                     };
-                    let mut tmpcw: u32 = (codeword>>(codewordlen - wrbits)) as u32;
+                    let mut tmpcw: u32 = ( codeword >> ( codewordlen - wrbits ) ) as u32;
                     //todo raw pointer location should not be affected by thread id!
-                    let raw_ptr_sm_as_offset_p1 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc);
+                    /*let raw_ptr_sm_as_offset_p1 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc);
                     unsafe {
                         atomic_or(raw_ptr_sm_as_offset_p1, tmpcw<<(32-startbit-wrbits))
-                    };
+                    };*/
                     codewordlen = codewordlen - wrbits;
 
                     // Part 2 (second value in shared memory)
-                    if codewordlen > 0 {
-                        if codewordlen > 32 {
-                            wrbits = 32
+                    if codewordlen > 0u32 {
+                        if codewordlen > 32u32 {
+                            wrbits = 32u32
                         } else {
                             wrbits = codewordlen
                         };
-                        tmpcw = (codeword>>(codewordlen - wrbits)) & ((1<<wrbits)-1) as u32;
+                        codewordlen = codewordlen - wrbits;
+                        //todo put in one expression instead of using tmp (currently causes stack overflow!)
+                        let mut tmp: u32;
+                        tmp = ( ( 1u32 << wrbits ) - 1u32 );
+                        tmpcw = ( codeword >> codewordlen ) as u32;
+                        tmpcw = tmpcw & tmp
                         //todo raw pointer location should not be affected by thread id!
-                        let raw_ptr_sm_as_offset_p2 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 1);
+                        /*let raw_ptr_sm_as_offset_p2 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 1);
                         unsafe {
                             atomic_or(raw_ptr_sm_as_offset_p2, tmpcw<<(32-wrbits))
-                        };
-                        codewordlen = codewordlen - wrbits
+                        };*/
                     };
 
                     // Part 3 (third value in shared memory)
-                    if codewordlen > 0 {
-                        tmpcw = (codeword & ((1<<codewordlen)-1)) as u32;
+                    if codewordlen > 0u32 {
+                        //todo put in one expression instead of using tmp (currently causes stack overflow!)
+                        let mut tmp: u64;
+                        tmp = ( 1u64 << codewordlen) - 1u64;
+                        tmpcw = (codeword & tmp) as u32 //;
                         //todo raw pointer location should not be affected by thread id!
-                        let raw_ptr_sm_as_offset_p3 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 2);
+                        /*let raw_ptr_sm_as_offset_p3 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 2);
                         unsafe {
                             atomic_or(raw_ptr_sm_as_offset_p3, tmpcw<<(32-codewordlen))
-                        }
+                        }*/
                     }
-                };*/
+                };
 
                 // syncthreads
 
