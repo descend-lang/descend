@@ -610,17 +610,17 @@ fn test_unimplmented_method_impl_def() {
 #[test]
 fn test_multiple_gl_fun_with_same_name() {
     let src = r#"
-    fn foo() -[cpu.thread]-> i32 {
+    fn get_global_id(t: u32) -[cpu.thread]-> i32 {
         42
     }
     "#;
     assert_compile!(src);
 
     let src = r#"
-    fn foo() -[cpu.thread]-> i32 {
+    fn get_global_id(t: u32) -[cpu.thread]-> i32 {
         42
     }
-    fn foo() -[cpu.thread]-> i32 {
+    fn get_global_id(t: u32) -[cpu.thread]-> i32 {
         42
     }
     "#;
