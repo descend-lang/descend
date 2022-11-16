@@ -33,8 +33,6 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
 
     auto gpu = descend::gpu_device(0);
 
-    auto gpu = descend::gpu_device(0);
-
     const auto a_d = descend::gpu_alloc_copy<descend::array<descend::i32, (wg * wi)>>( gpu, a_h);
     const auto out_d = descend::gpu_alloc_copy<descend::array<descend::i32, wg>>( gpu, out_h);
 
@@ -48,6 +46,6 @@ auto reduce_shared_mem(cl_int *const a_h, cl_int *const out_h) -> void {
         sol = sol + out_h[i];
     }
 
-    std::cout << "computed result: " << sol << std::endl;*/
+    std::cout << "computed result: " << sol << std::endl;
 
 }
