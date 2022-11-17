@@ -10,7 +10,7 @@ use crate::{
     },
     ty_check::{
         pre_decl,
-        unify::{unify, ConstrainMap, Constrainable},
+        unify::{unify_without_expand, ConstrainMap, Constrainable},
     },
 };
 
@@ -467,7 +467,9 @@ impl<'a> Monomorphiser<'a> {
                                 };
 
                             // Try to unify "impl_dty" with current datatype-candidate for the impl
-                            if let Ok(dty_unfication) = unify(&impl_dty_canidate, &impl_dty) {
+                            if let Ok(dty_unfication) =
+                                unify_without_expand(&impl_dty_canidate, &impl_dty)
+                            {
                                 result = Some((impl_def, dty_unfication));
                                 true
                             } else {
@@ -531,14 +533,15 @@ impl<'a> Monomorphiser<'a> {
             name: trait_def.name.clone(),
             generic_args: trait_mono_args,
         };
-        let dty_unfication2 = if let Ok(dty_unfication) = unify(&impl_trait_mono, &trait_mono) {
-            dty_unfication
-        } else {
-            panic!(
+        let dty_unfication2 =
+            if let Ok(dty_unfication) = unify_without_expand(&impl_trait_mono, &trait_mono) {
+                dty_unfication
+            } else {
+                panic!(
                 "Cannot unify trait_mono with trait_mono_ty of impl\nconstrain {:#?}\nwith {:#?}",
                 impl_trait_mono, trait_mono
             )
-        };
+            };
 
         // Collect inferred generic args by apply substitutions to the generic params of the impl
         let substitute_impl_args = {

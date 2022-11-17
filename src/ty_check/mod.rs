@@ -736,8 +736,11 @@ impl TyChecker {
             );
 
             if !subs.is_empty() {
-                (subs, self.implicit_ident_cons) =
-                    expand_to_valid_subst(&subs, &self.implicit_ident_cons, &self.constraint_env)?;
+                subs = expand_to_valid_subst(
+                    &subs,
+                    &mut self.implicit_ident_cons,
+                    &self.constraint_env,
+                )?;
                 self.implicit_ident_substitution.composition(subs);
             }
 
@@ -995,15 +998,14 @@ impl TyChecker {
             };
 
             // Make sure the type of the expr has the expected type
-            let mut constr_map = unify::unify(&ith_field.dty, &ith_expr_dty)?;
+            let constr_map = unify::unify(
+                &ith_field.dty,
+                &ith_expr_dty,
+                &mut self.implicit_ident_cons,
+                &self.constraint_env,
+            )?;
 
             if !constr_map.is_empty() {
-                (constr_map, self.implicit_ident_cons) = expand_to_valid_subst(
-                    &constr_map,
-                    &self.implicit_ident_cons,
-                    &self.constraint_env,
-                )?;
-
                 ith_expr_dty.substitute(&constr_map);
                 struct_dty.substitute(&constr_map);
                 ty_ctx.substitute(&constr_map);
@@ -1901,8 +1903,8 @@ impl TyChecker {
         ));
 
         if !subs.is_empty() {
-            (subs, self.implicit_ident_cons) =
-                expand_to_valid_subst(&subs, &self.implicit_ident_cons, &self.constraint_env)?;
+            subs =
+                expand_to_valid_subst(&subs, &mut self.implicit_ident_cons, &self.constraint_env)?;
 
             fun_ty.substitute(&subs);
             self.implicit_ident_substitution.composition(subs);
@@ -1996,6 +1998,9 @@ impl TyChecker {
             assigned_val_ty_ctx,
             e.ty.as_mut().unwrap(),
             &mut place_ty,
+            &mut self.implicit_ident_cons,
+            &self.constraint_env,
+            &mut self.implicit_ident_substitution,
         )?;
         let adjust_place_ty_ctx = after_subty_ctx.set_place_ty(&pl, e.ty.as_ref().unwrap().clone());
         Ok((
@@ -2069,6 +2074,9 @@ impl TyChecker {
             assigned_val_ty_ctx,
             e.ty.as_mut().unwrap(),
             deref_ty,
+            &mut self.implicit_ident_cons,
+            &self.constraint_env,
+            &mut self.implicit_ident_substitution,
         )?;
 
         if !deref_ty.is_fully_alive() {
@@ -2201,8 +2209,8 @@ impl TyChecker {
         )?;
 
         if !subs.is_empty() {
-            (subs, self.implicit_ident_cons) =
-                expand_to_valid_subst(&subs, &self.implicit_ident_cons, &self.constraint_env)?;
+            subs =
+                expand_to_valid_subst(&subs, &mut self.implicit_ident_cons, &self.constraint_env)?;
 
             after_subty_ctx.substitute(&subs);
             self.implicit_ident_substitution.composition(subs);
@@ -2488,9 +2496,10 @@ impl TyChecker {
                                     )),
                                 );
                                 // Check is this substitution is valid
-                                if let Ok((_, mut implicit_ident_cons)) = expand_to_valid_subst(
+                                let mut implicit_ident_cons = self.implicit_ident_cons.clone();
+                                if let Ok(_) = expand_to_valid_subst(
                                     &subs_dty_ref_dty,
-                                    &self.implicit_ident_cons,
+                                    &mut implicit_ident_cons,
                                     &self.constraint_env,
                                 ) {
                                     // Add temporary the constraints on `ref_dty_name` to `self.implicit_ident_cons`
@@ -2636,17 +2645,17 @@ impl TyChecker {
                     } else {
                         panic!("Found a trait-function with an invalid path")
                     };
-                    let mut constr_map = unify::unify(impl_mono_dty, path_dty).expect(&format!(
+                    let constr_map = unify::unify(
+                        impl_mono_dty,
+                        path_dty,
+                        &mut self.implicit_ident_cons,
+                        &self.constraint_env,
+                    )
+                    .expect(&format!(
                         "Tryied to unify {:#?} with {:#?} but it doesnt work. How is this possible?\
                          They should be already constraint while determinating function_name!",
                         impl_mono_dty, path_dty));
                     if !constr_map.is_empty() {
-                        (constr_map, self.implicit_ident_cons) = expand_to_valid_subst(
-                            &constr_map,
-                            &self.implicit_ident_cons,
-                            &self.constraint_env,
-                        )?;
-
                         k_args[0..impl_ty_scheme.generic_params.len()]
                             .iter_mut()
                             .for_each(|arg| arg.substitute(&constr_map));
@@ -2702,15 +2711,14 @@ impl TyChecker {
             }
 
             // Make sure the type of the arg has the expected type
-            let mut constr_map = unify::unify(ith_arg.ty.as_ref().unwrap(), ith_mono)?;
+            let constr_map = unify::unify(
+                ith_arg.ty.as_ref().unwrap(),
+                ith_mono,
+                &mut self.implicit_ident_cons,
+                &self.constraint_env,
+            )?;
 
             if !constr_map.is_empty() {
-                (constr_map, self.implicit_ident_cons) = expand_to_valid_subst(
-                    &constr_map,
-                    &self.implicit_ident_cons,
-                    &self.constraint_env,
-                )?;
-
                 f_mono_ty.substitute(&constr_map);
                 ty_ctx.substitute(&constr_map);
                 self.implicit_ident_substitution.composition(constr_map);
@@ -2975,6 +2983,7 @@ impl TyChecker {
     }
 
     fn infer_pattern_ty(
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         pattern: &Pattern,
@@ -2983,7 +2992,15 @@ impl TyChecker {
     ) -> TyResult<TyCtx> {
         let (ty_ctx_sub, pattern_ty) = if let Some(pty) = pattern_ty {
             (
-                unify::sub_unify(kind_ctx, ty_ctx, assign_ty, pty)?,
+                unify::sub_unify(
+                    kind_ctx,
+                    ty_ctx,
+                    assign_ty,
+                    pty,
+                    &mut self.implicit_ident_cons,
+                    &self.constraint_env,
+                    &mut self.implicit_ident_substitution,
+                )?,
                 pty.clone(),
             )
         } else {
@@ -3004,7 +3021,7 @@ impl TyChecker {
         let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, exec, expr)?;
         let e_ty = expr.ty.as_mut().unwrap();
         let ty_ctx_with_idents =
-            TyChecker::infer_pattern_ty(kind_ctx, ty_ctx_e, pattern, pattern_ty, e_ty)?;
+            self.infer_pattern_ty(kind_ctx, ty_ctx_e, pattern, pattern_ty, e_ty)?;
         Ok((
             ty_ctx_with_idents,
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
@@ -3828,18 +3845,17 @@ impl TyChecker {
 /// For every substitution of an implicit identifier are all constraints on this identifier checked.
 /// This can also infer new substitutions and constraints on identifiers. <br>
 /// Returns a TyResult with a pair of a substitution extended with all types that are inferred while
-/// checking this substitution and the modified list of constraints on identifiers without checked
-/// constraints
+/// checking this substitution
 pub(crate) fn expand_to_valid_subst(
     subst: &ConstrainMap,
-    idents_constr: &IdentsConstrained,
+    idents_constr: &mut IdentsConstrained,
     constraint_env: &ConstraintCtx,
-) -> TyResult<(ConstrainMap, IdentsConstrained)> {
+) -> TyResult<ConstrainMap> {
     // Result substitution with all substitutions of inferred types
     let mut res_subs: ConstrainMap = ConstrainMap::new();
     res_subs.composition(subst.clone());
     // Result list of constraints on identifiers
-    let mut res_ident_constraints = idents_constr.clone();
+    let idents_constr_clone = idents_constr.clone();
 
     let mut subs = subst.clone();
 
@@ -3849,12 +3865,12 @@ pub(crate) fn expand_to_valid_subst(
         // Check if this substitution fulfills all implicit_ident_constraints
         for (name, dty) in subs.dty_unifier {
             // Check if all constraints on the implicit identifier which is substituted are fulfilled
-            let constraints_to_check = res_ident_constraints.drain_constr_for_ident(&name);
+            let constraints_to_check = idents_constr.drain_constr_for_ident(&name);
 
             // if the substituted type is an implicit ident: add constraints of this ident to other ident
             if let DataTyKind::Ident(ident) = dty.dty {
                 if ident.is_implicit {
-                    res_ident_constraints.add_idents_constrained(
+                    idents_constr.add_idents_constrained(
                         constraints_to_check.map(|con| (ident.name.clone(), con)),
                     );
                     continue;
@@ -3867,12 +3883,12 @@ pub(crate) fn expand_to_valid_subst(
                 con.substitute(&res_subs);
 
                 // Check if constraint is fulfilled
-                if let Ok(constr_map) =
-                    constraint_env.check_constraint(&con, &mut res_ident_constraints)
-                {
-                    subs_new.composition(constr_map);
+                if let Ok(constr_map) = constraint_env.check_constraint(&con, idents_constr) {
+                    subs_new.composition(constr_map.clone());
+                    res_subs.composition(constr_map);
                 } else {
-                    Err(TyError::UnfulfilledConstraint(con.clone()))?
+                    *idents_constr = idents_constr_clone;
+                    return Err(TyError::UnfulfilledConstraint(con.clone()));
                 }
             }
         }
@@ -3883,23 +3899,16 @@ pub(crate) fn expand_to_valid_subst(
         }
         // Else check if new substitutions are valid
         else {
-            // Add new substitutions to result substitutions
-            res_subs.composition(subs_new.clone());
-
-            // Check all new substitutions
             subs = subs_new;
         }
     }
 
     // Apply substitution to all constraints on implicit idents
-    res_ident_constraints
-        .idents_constr
-        .iter_mut()
-        .for_each(|(_, con)| {
-            con.substitute(&res_subs);
-        });
+    idents_constr.idents_constr.iter_mut().for_each(|(_, con)| {
+        con.substitute(&res_subs);
+    });
 
-    return Ok((res_subs, res_ident_constraints));
+    return Ok(res_subs);
 }
 
 pub fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {

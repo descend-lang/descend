@@ -7,13 +7,13 @@ use crate::ty_check::proj_elem_ty;
 use std::collections::{HashMap, HashSet};
 
 use super::unify::{unify, ConstrainMap, Constrainable};
-use super::{expand_to_valid_subst, TyResult};
+use super::TyResult;
 
 // TODO introduce proper struct
 pub(super) type TypedPlace = (internal::Place, Ty);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub(super) struct TyCtx {
+pub(crate) struct TyCtx {
     frame: Vec<Frame>,
 }
 
@@ -912,13 +912,16 @@ impl GlobalCtx {
                         // if the function_kind of the candidate-function references an impl
                         FunctionKind::ImplFun(impl_dty_candidate, _) => {
                             // if `impl_dty_candidate` and `ty` can be unified, this is the searched function
-                            if let Ok(subs) = unify(&ty, &impl_dty_candidate.mono_ty) {
-                                if expand_to_valid_subst(&subs, implicit_ident_cons, constraint_env)
-                                    .is_ok()
-                                {
-                                    result = Some(fun_kind);
-                                    number_found = number_found + 1;
-                                }
+                            if unify(
+                                &ty,
+                                &impl_dty_candidate.mono_ty,
+                                &mut implicit_ident_cons_clone,
+                                constraint_env,
+                            )
+                            .is_ok()
+                            {
+                                result = Some(fun_kind);
+                                number_found = number_found + 1;
                             }
                         }
                         // if the function_kind of the candidate-function references a trait

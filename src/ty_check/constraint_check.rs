@@ -208,11 +208,11 @@ impl ConstraintCtx {
 
     /// Check if a constraint if fulfilled. <br>
     /// Returns a substitution with inferred types if the constraint is fulfilled.
-    /// `implicit_ident_cons` stays unchanged when the constraint is not fulfilled.
     /// * `constraint` - goal which should be proved
     /// * `implicit_ident_cons` - list of constraints on implicit identifiers which
     /// must be respected by all substitutions. This list is extended by all constraints
-    /// on implicit identifiers which must be fulfilled to prove this goal
+    /// on implicit identifiers which must be fulfilled to prove this goal and decreased by
+    /// constraints on implicit identifiers which could be inferred.
     pub(crate) fn check_constraint(
         &self,
         constraint: &Constraint,
@@ -323,6 +323,9 @@ impl ConstraintCtx {
             }
             // Else try to prove the goal
             else {
+                // state pf implicit_ident_cons before unification (necessary for backtracking to restore this state)
+                let implicit_ident_cons_before = implicit_ident_cons.clone();
+
                 // For every constraint-scheme in environment
                 while index < self.constraint_schemes.len() {
                     // Only exists to prevent borrowing errors
@@ -338,24 +341,9 @@ impl ConstraintCtx {
                     };
 
                     // Can implied from "current_con" and current goal be unified?
-                    if let Ok(mut constr_map) = unify::unify(&goal, &current_con.consequence) {
-                        // Make sure the unification is allowed under context of constraints on implicit identifiers
-                        let implicit_ident_cons_new;
-                        match ty_check::expand_to_valid_subst(
-                            &constr_map,
-                            implicit_ident_cons,
-                            self,
-                        ) {
-                            Ok((constr_map_ext, implicit_ident_cons_ext)) => {
-                                constr_map = constr_map_ext;
-                                implicit_ident_cons_new = implicit_ident_cons_ext;
-                            }
-                            Err(_) => {
-                                index = index + 1;
-                                continue;
-                            }
-                        }
-
+                    if let Ok(constr_map) =
+                        unify::unify(&goal, &current_con.consequence, implicit_ident_cons, self)
+                    {
                         // Use fresh names if this constraint-scheme is used again to avoid name clashes
                         applied_cscheme[index] = true;
 
@@ -394,7 +382,7 @@ impl ConstraintCtx {
                                 current_goal: goal.clone(),
                                 current_number_of_goals: goals.len() - number_new_goals,
                                 current_index: index,
-                                implicit_ident_cons: implicit_ident_cons.clone(),
+                                implicit_ident_cons: implicit_ident_cons_before,
                                 inferred_types: inferred_types.clone(),
                             });
                         }
@@ -412,7 +400,6 @@ impl ConstraintCtx {
                             inferred_types.composition(constr_map);
                         }
 
-                        *implicit_ident_cons = implicit_ident_cons_new;
                         index = 0;
                         break;
                     }
@@ -459,7 +446,8 @@ impl ConstraintCtx {
         if !inferred_types.is_empty() {
             let mut c_inferred = constraint.clone();
             c_inferred.substitute(&inferred_types);
-            inferred_types = unify::unify(constraint, &c_inferred).expect("This can not happen");
+            inferred_types = unify::unify(constraint, &c_inferred, implicit_ident_cons, self)
+                .expect("This can not happen");
         }
 
         Ok(inferred_types)

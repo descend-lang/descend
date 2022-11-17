@@ -9,20 +9,47 @@ use crate::ty_check::TyResult;
 use core::fmt;
 use std::collections::{HashMap, HashSet};
 
-pub(crate) fn unify<S: Constrainable + Clone>(t1: &S, t2: &S) -> TyResult<ConstrainMap> {
+use super::constraint_check::{ConstraintCtx, IdentsConstrained};
+use super::expand_to_valid_subst;
+
+pub(crate) fn unify<S: Constrainable + Clone>(
+    t1: &S,
+    t2: &S,
+    idents_constr: &mut IdentsConstrained,
+    constraint_env: &ConstraintCtx,
+) -> TyResult<ConstrainMap> {
+    let mut constr_map = unify_without_expand(&mut t1.clone(), &mut t2.clone())?;
+    if !constr_map.is_empty() {
+        constr_map = expand_to_valid_subst(&constr_map, idents_constr, constraint_env)?;
+    }
+    Ok(constr_map)
+}
+
+pub(crate) fn unify_without_expand<S: Constrainable + Clone>(
+    t1: &S,
+    t2: &S,
+) -> TyResult<ConstrainMap> {
     let (constr_map, _) = constrain(&mut t1.clone(), &mut t2.clone())?;
     Ok(constr_map)
 }
 
 pub(super) fn sub_unify<C: Constrainable>(
     kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
+    mut ty_ctx: TyCtx,
     sub: &mut C,
     sup: &mut C,
+    idents_constr: &mut IdentsConstrained,
+    constraint_env: &ConstraintCtx,
+    implicit_ident_substitution: &mut ConstrainMap,
 ) -> TyResult<TyCtx> {
-    let (subst, prv_rels) = constrain(sub, sup)?;
+    let (mut subst, prv_rels) = constrain(sub, sup)?;
+    if !subst.is_empty() {
+        subst = expand_to_valid_subst(&subst, idents_constr, constraint_env)?;
+        ty_ctx.substitute(&subst);
+    }
     substitute(&subst, sub);
     substitute(&subst, sup);
+    implicit_ident_substitution.composition(subst);
     let outlives_ctx = multiple_outlives(
         kind_ctx,
         ty_ctx,
@@ -926,10 +953,10 @@ fn test_unify_traits() -> TyResult<()> {
         .dty_unifier
         .insert(String::from("$t_1"), i32.clone());
 
-    let subs = unify(&t1, &t2)?;
+    let subs = unify_without_expand(&t1, &t2)?;
     assert_eq!(subs.dty_unifier, res_subs.dty_unifier);
 
-    let subs = unify(&t2, &t1)?;
+    let subs = unify_without_expand(&t2, &t1)?;
     assert_eq!(subs.dty_unifier, res_subs.dty_unifier);
 
     Ok(())
