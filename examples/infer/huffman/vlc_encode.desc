@@ -83,9 +83,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
 
                         let tmp_d_item = *d_item;
 
-                        let mut tmp_d_item_i: u8;
-
-                        tmp_d_item_i = tmp_d_item[0];
+                        let mut tmp_d_item_i = tmp_d_item[0];
                         let mut tmpcw = sm_cw[tmp_d_item_i];
                         let mut tmpcwl = sm_cwl[tmp_d_item_i];
                         codeword = (codeword<<tmpcwl) | tmpcw as u64;
@@ -238,11 +236,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                             wrbits = codewordlen
                         };
                         codewordlen = codewordlen - wrbits;
-                        //todo put in one expression instead of using tmp (currently causes stack overflow!)
-                        let mut tmp: u32;
-                        tmp = ( ( 1u32 << wrbits ) - 1u32 );
-                        tmpcw = ( codeword >> codewordlen ) as u32;
-                        tmpcw = tmpcw & tmp
+                        tmpcw = ( codeword >> codewordlen ) as u32 & ( ( 1u32 << wrbits ) - 1u32 ) //;
                         //todo raw pointer location should not be affected by thread id!
                         /*let raw_ptr_sm_as_offset_p2 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 1);
                         unsafe {
@@ -252,10 +246,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
 
                     // Part 3 (third value in shared memory)
                     if codewordlen > 0u32 {
-                        //todo put in one expression instead of using tmp (currently causes stack overflow!)
-                        let mut tmp: u64;
-                        tmp = ( 1u64 << codewordlen) - 1u64;
-                        tmpcw = (codeword & tmp) as u32 //;
+                        tmpcw = (codeword & ( ( 1u64 << codewordlen) - 1u64) ) as u32 //;
                         //todo raw pointer location should not be affected by thread id!
                         /*let raw_ptr_sm_as_offset_p3 = offset_raw_ptr::<i32>(raw_ptr_sm_as, kc + 2);
                         unsafe {

@@ -1,3 +1,5 @@
+// Generated from ../examples/infer/huffman/vlc_encode.desc
+
 #include "descend.cuh"
 auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                 const descend::u32 *const h_codewords,
@@ -5,28 +7,31 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                 descend::u32 *const h_out_data, descend::u32 *const h_out_idx)
 -> void {
     {
-        auto gpu = descend::gpu_device(0);
-        const auto source_data = descend::gpu_alloc_copy<
+        descend::Gpu gpu = descend::gpu_device(0);
+        const const GpuBuffer<
+                descend::array<descend::array<descend::u8, 4>, (4 * 256)>>
+                source_data = descend::gpu_alloc_copy<
                 descend::array<descend::array<descend::u8, 4>, (4 * 256)>>(
                 (&gpu), (&(*h_source_data)));
-        const auto codewords =
+        const const GpuBuffer<descend::array<descend::u32, 256>> codewords =
                 descend::gpu_alloc_copy<descend::array<descend::u32, 256>>(
                         (&gpu), (&(*h_codewords)));
-        const auto codewordlens =
+        const const GpuBuffer<descend::array<descend::u32, 256>> codewordlens =
                 descend::gpu_alloc_copy<descend::array<descend::u32, 256>>(
                         (&gpu), (&(*h_codewordlens)));
-        auto out_data =
+        GpuBuffer<descend::array<descend::u32, (4 * 256)>> out_data =
                 descend::gpu_alloc_copy<descend::array<descend::u32, (4 * 256)>>(
                         (&gpu), (&(*h_out_data)));
-        auto out_idx = descend::gpu_alloc_copy<descend::array<descend::u32, 4>>(
-                (&gpu), (&(*h_out_idx)));
+        GpuBuffer<descend::array<descend::u32, 4>> out_idx =
+                descend::gpu_alloc_copy<descend::array<descend::u32, 4>>(
+                        (&gpu), (&(*h_out_idx)));
         descend::exec<4, 256>(
                 (&gpu),
                 [] __device__(const descend::array<descend::u8, 4> *const p0,
                               const descend::u32 *const p1,
                               const descend::u32 *const p2, descend::u32 *const p3,
-                              descend::u32 *const p4, std::size_t d,
-                              std::size_t tmp_d_item_i) -> void {
+                              descend::u32 *const p4, std::size_t tmp_d_item_i,
+                              std::size_t d) -> void {
                     {
 
                         __shared__ descend::u32 sm_cw[256];
@@ -45,17 +50,16 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                                 sm_cwl[threadIdx.x] = p2[threadIdx.x];
                             }
                             {
-                                const auto foo = sm_as;
+                                const descend::u32 *const foo = sm_as;
 
                                 {
                                     codeword = 0;
                                     codewordlen = 0;
-                                    const auto tmp_d_item =
+                                    const const descend::array<descend::u8, 4> tmp_d_item =
                                             p0[((blockIdx.x * 256) + threadIdx.x)];
-                                    descend::u8 tmp_d_item_i;
-                                    tmp_d_item_i = tmp_d_item[0];
-                                    auto tmpcw = sm_cw[tmp_d_item_i];
-                                    auto tmpcwl = sm_cwl[tmp_d_item_i];
+                                    descend::u8 tmp_d_item_i = tmp_d_item[0];
+                                    descend::u32 tmpcw = sm_cw[tmp_d_item_i];
+                                    descend::u32 tmpcwl = sm_cwl[tmp_d_item_i];
                                     codeword = ((codeword << tmpcwl) | (descend::u64)(tmpcw));
                                     codewordlen = (codewordlen + tmpcwl);
                                     tmp_d_item_i = tmp_d_item[1];
@@ -77,7 +81,7 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                                 }
                             }
                             {
-                                const auto foo = sm_as;
+                                const descend::u32 *const foo = sm_as;
                                 for (std::size_t d = 128; (d > 0); d = (d / 2)) {
 
                                     if ((threadIdx.x < d)) {
@@ -99,12 +103,12 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                             }
                             __syncthreads();
                             {
-                                const auto foo = sm_as;
+                                const descend::u32 *const foo = sm_as;
                                 for (std::size_t d = 1; (d <= 128); d = (d * 2)) {
 
                                     if ((threadIdx.x < d)) {
-                                        const auto t = (&(*foo))[(((threadIdx.x - 0) * (256 / d)) +
-                                                                  ((128 / d) - 1))];
+                                        const const descend::u32 t = (&(*foo))[(
+                                                ((threadIdx.x - 0) * (256 / d)) + ((128 / d) - 1))];
                                         (&(*foo))[(((threadIdx.x - 0) * (256 / d)) +
                                                    ((128 / d) - 1))] =
                                                 (&(*foo))[(((threadIdx.x - 0) * (256 / d)) +
@@ -132,7 +136,7 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                             }
                             __syncthreads();
                             {
-                                const auto foo = sm_as;
+                                const descend::u32 *const foo = sm_as;
 
                                 {
                                     kc = ((&(*foo))[threadIdx.x] / 32);
@@ -148,7 +152,7 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                                 } else {
                                     wrbits = codewordlen;
                                 }
-                                auto tmpcw =
+                                descend::u32 tmpcw =
                                         (descend::u32)((codeword >> (codewordlen - wrbits)));
                                 codewordlen = (codewordlen - wrbits);
                                 if ((codewordlen > 0)) {
@@ -158,15 +162,11 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                                         wrbits = codewordlen;
                                     }
                                     codewordlen = (codewordlen - wrbits);
-                                    descend::u32 tmp;
-                                    tmp = ((1 << wrbits) - 1);
-                                    tmpcw = (descend::u32)((codeword >> codewordlen));
-                                    tmpcw = (tmpcw & tmp);
+                                    tmpcw = ((descend::u32)((codeword >> codewordlen)) &
+                                             ((1 << wrbits) - 1));
                                 }
                                 if ((codewordlen > 0)) {
-                                    descend::u64 tmp;
-                                    tmp = ((1 << codewordlen) - 1);
-                                    tmpcw = (descend::u32)((codeword & tmp));
+                                    tmpcw = (descend::u32)((codeword & ((1 << codewordlen) - 1)));
                                 }
                             }
 
@@ -175,7 +175,7 @@ auto vlc_encode(const descend::array<descend::u8, 4> *const h_source_data,
                     }
                 },
                 (&source_data), (&codewords), (&codewordlens), (&out_data), (&out_idx),
-                d, tmp_d_item_i);
+                tmp_d_item_i, d);
         descend::copy_to_host<descend::array<descend::u32, (4 * 256)>>((&out_data),
                                                                        h_out_data);
         descend::copy_to_host<descend::array<descend::u32, 4>>((&out_idx),

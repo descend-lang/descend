@@ -190,9 +190,9 @@ fn gen_stmt(
 ) -> cu::Stmt {
     use desc::ExprKind::*;
     match &expr.expr {
-        Let(pattern, _, e) => {
+        Let(pattern, ty, e) => {
             // Let View
-            gen_let(codegen_ctx, comp_unit, dev_fun, idx_checks, pattern, &e)
+            gen_let(codegen_ctx, comp_unit, dev_fun, idx_checks, pattern, e)
         }
         LetUninit(ident, ty) => {
             let (ty, addr_space) = match &ty.ty {
@@ -582,9 +582,9 @@ fn gen_decl_init(
                 (
                     ex,
                     if mutbl == desc::Mutability::Mut {
-                        cu::Ty::Scalar(cu::ScalarTy::Auto)
+                        gened_ty
                     } else {
-                        cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                        cu::Ty::Const(Box::new(gened_ty))
                     },
                     ch,
                 )

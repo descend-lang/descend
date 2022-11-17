@@ -1513,7 +1513,6 @@ impl TyChecker {
         // Ok((rhs_ty_ctx, operand_ty))
     }
 
-    // FIXME currently assumes that binary operators exist only for f32 and i32
     fn ty_check_unary_op(
         &mut self,
         kind_ctx: &KindCtx,
@@ -1530,7 +1529,23 @@ impl TyChecker {
                 ..
             })
             | TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::F64),
+                ..
+            })
+            | TyKind::Data(DataTy {
                 dty: DataTyKind::Scalar(ScalarTy::I32),
+                ..
+            })
+            | TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::U8),
+                ..
+            })
+            | TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::U32),
+                ..
+            })
+            | TyKind::Data(DataTy {
+                dty: DataTyKind::Scalar(ScalarTy::U64),
                 ..
             }) => Ok((res_ctx, e_ty.clone())),
             _ => Err(TyError::String(format!(
@@ -1551,19 +1566,19 @@ impl TyChecker {
         let res_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let e_ty = e.ty.as_ref().unwrap();
         match &e_ty.ty {
-            TyKind::Data(DataTy{dty: Scalar(ScalarTy::F32), ..})
-            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::F64), ..})
-            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::I32), ..})
-            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::U8), ..})
-            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::U32), ..})
-            | TyKind::Data(DataTy {dty: Scalar(ScalarTy::U64), ..})
+            TyKind::Data(DataTy{dty: DataTyKind::Scalar(ScalarTy::F32), ..})
+            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::F64), ..})
+            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::I32), ..})
+            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::U8), ..})
+            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::U32), ..})
+            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::U64), ..})
             => match cty.dty().dty {
-                Scalar(ScalarTy::I32)
-                | Scalar(ScalarTy::U8)
-                | Scalar(ScalarTy::U32)
-                | Scalar(ScalarTy::U64)
-                | Scalar(ScalarTy::F32)
-                | Scalar(ScalarTy::F64) => Ok((res_ctx, cty.clone())),
+                DataTyKind::Scalar(ScalarTy::I32)
+                | DataTyKind::Scalar(ScalarTy::U8)
+                | DataTyKind::Scalar(ScalarTy::U32)
+                | DataTyKind::Scalar(ScalarTy::U64)
+                | DataTyKind::Scalar(ScalarTy::F32)
+                | DataTyKind::Scalar(ScalarTy::F64) => Ok((res_ctx, cty.clone())),
                 _ => Err(TyError::String(format!(
                     "Exected a number type (i.e. i32 or f32) to cast to from {:?}, but found {:?}",
                     e_ty, cty
@@ -1571,10 +1586,10 @@ impl TyChecker {
             },
             TyKind::Data(DataTy {dty: Scalar(ScalarTy::Bool), ..})
             => match cty.dty().dty {
-                Scalar(ScalarTy::I32)
-                | Scalar(ScalarTy::U8)
-                | Scalar(ScalarTy::U32)
-                | Scalar(ScalarTy::U64) => Ok((res_ctx, cty.clone())),
+                DataTyKind::Scalar(ScalarTy::I32)
+                | DataTyKind::Scalar(ScalarTy::U8)
+                | DataTyKind::Scalar(ScalarTy::U32)
+                | DataTyKind::Scalar(ScalarTy::U64) => Ok((res_ctx, cty.clone())),
                 _ => Err(TyError::String(format!(
                     "Exected an integer type (i.e. i32 or u32) to cast to from a bool, but found {:?}",
                     cty
