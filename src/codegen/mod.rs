@@ -18,8 +18,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 pub fn gen(compil_unit: desc::CompilUnit, std_lib: desc::CompilUnit, idx_checks: bool) -> String {
     // Transform all impls and traits to global functions with unique names
     // and resolves all constraints from the functions
-    let (mut structs, funs) =
-        monomorphiser::monomorphise_constraint_generics(compil_unit.item_defs, std_lib.item_defs);
+    let (mut structs, funs) = monomorphiser::monomorphise_constraint_generics(
+        compil_unit.item_defs,
+        std_lib.item_defs,
+        false,
+    );
 
     // Order structs to make sure every struct is declared before it is used as attribute in an other struct
     order_structs(&mut structs);

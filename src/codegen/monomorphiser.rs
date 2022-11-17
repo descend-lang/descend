@@ -20,7 +20,8 @@ use crate::{
 ///
 /// Input:
 ///  * `items` - Well typed program-items (structs, traits, global functions, impls)
-///  * `std_lib_items` Well typed items of std-lib
+///  * `std_lib_items` - Well typed items of std-lib
+///  * `monomorphise_all` - if this flag is true: all generic parameters are monomorphised
 ///
 /// Output:
 ///  * list of all structs without constraints
@@ -28,6 +29,7 @@ use crate::{
 pub fn monomorphise_constraint_generics(
     mut items: Vec<Item>,
     mut std_lib_items: Vec<Item>,
+    monomorphise_all: bool,
 ) -> (Vec<StructDecl>, Vec<FunDef>) {
     // Copy all trait_defs to prevent borrowing errors in next statement
     let trait_defs = items
@@ -53,7 +55,7 @@ pub fn monomorphise_constraint_generics(
         });
 
     // Monomorphise global functions, traits, impls to multiple global functions
-    let fun_defs = Monomorphiser::monomorphise(&items, &std_lib_items);
+    let fun_defs = Monomorphiser::monomorphise(&items, &std_lib_items, monomorphise_all);
 
     // Collect struct defs
     let struct_decls = items
@@ -97,6 +99,8 @@ struct Monomorphiser<'a> {
     generated_funs: Vec<(FunctionName, FunDef)>,
     /// NameGenerator to generate unique names and prevents name conflicts
     name_generator: NameGenerator,
+    /// if this flag is true: all generic parameters are monomorphised
+    monomorphise_all: bool,
 }
 
 impl<'a> Monomorphiser<'a> {
@@ -106,10 +110,15 @@ impl<'a> Monomorphiser<'a> {
     /// Input:
     ///  * Well typed program- and std-lib-items (structs, traits, global functions, impls)
     /// where trait-impls override all function-definitions of the trait
+    ///  * `monomorphise_all` - if this flag is true: all generic parameters are monomorphised
     ///
     /// Output:
     ///  * global functions which have no constraint generic parameters anymore
-    pub fn monomorphise(items: &Vec<Item>, std_lib_items: &Vec<Item>) -> Vec<FunDef> {
+    pub fn monomorphise(
+        items: &Vec<Item>,
+        std_lib_items: &Vec<Item>,
+        monomorphise_all: bool,
+    ) -> Vec<FunDef> {
         // Create a vector of all functions including global functions, methods in impls and trait functions
         let (mut funs, mut name_generator) = (Vec::new(), NameGenerator::new());
         let mut item_to_funs = |item: &Item, is_predefined| match item {
@@ -167,26 +176,33 @@ impl<'a> Monomorphiser<'a> {
             generated: HashMap::new(),
             generated_funs: Vec::new(),
             name_generator,
+            monomorphise_all,
         };
 
         // Visit original functions to monomorphise function calls
         funs.iter_mut().for_each(|(_, fun_def, _, is_predefined)| {
-            // Visit only functions without constraint generic params
-            if !*is_predefined
-                && fun_def.generic_params.iter().fold(true, |res, gen| {
-                    res && !fun_def
-                        .constraints
-                        .iter()
-                        .find(|con| {
-                            if let DataTyKind::Ident(ident) = &con.param.dty {
-                                ident.name == gen.ident.name
-                            } else {
-                                false
-                            }
-                        })
-                        .is_some()
-                })
-            {
+            let visit_fun = !*is_predefined
+                && if !monomorphise_all {
+                    // Visit only functions without constraint generic params
+                    fun_def.generic_params.iter().fold(true, |res, gen| {
+                        res && !fun_def
+                            .constraints
+                            .iter()
+                            .find(|con| {
+                                if let DataTyKind::Ident(ident) = &con.dty.dty {
+                                    ident.name == gen.ident.name
+                                } else {
+                                    false
+                                }
+                            })
+                            .is_some()
+                    })
+                } else {
+                    // Visit only functions without generic params
+                    fun_def.generic_params.len() == 0
+                };
+
+            if visit_fun {
                 monomorphiser.visit_fun_def(fun_def)
             }
         });
@@ -236,7 +252,7 @@ impl<'a> Monomorphiser<'a> {
                                     .find(|gen|{
                                         fun_def.constraints.iter()
                                         .find(|con|
-                                            if let DataTyKind::Ident(ident) = &con.param.dty {
+                                            if let DataTyKind::Ident(ident) = &con.dty.dty {
                                                 ident.name == gen.ident.name
                                             } else {
                                                 false
@@ -244,15 +260,15 @@ impl<'a> Monomorphiser<'a> {
                                         ).is_some()
                                     }).is_some() {
                                     if !is_predefined {
-                                        eprintln!("WARNING function \"{}\" of kind {:?} is never used. Because this function has constraint \
-                                            generic params, which needs to be monomoprhised, no code can be generated \
-                                            for this function.",
-                                            fun_name.name,
-                                            match fun_name.fun_kind {
-                                                FunctionKind::GlobalFun => "GlobalFun".to_string(),
-                                                FunctionKind::TraitFun(name) => format!("TraitFun({})", name),
-                                                FunctionKind::ImplFun(_, _) => "ImplFun".to_string()
-                                            })
+                                        eprintln!("WARNING function \"{}\" of kind {:?} is never used. Because this function has \
+                                        generic params, which needs to be monomoprhised, no code can be generated \
+                                        for this function.",
+                                        fun_name.name,
+                                        match fun_name.fun_kind {
+                                            FunctionKind::GlobalFun => "GlobalFun".to_string(),
+                                            FunctionKind::TraitFun(name) => format!("TraitFun({})", name),
+                                            FunctionKind::ImplFun(_, _) => "ImplFun".to_string()
+                                        })
                                     }
                                 }
                                 // Because the original functions did not need to be monomorphised
@@ -276,11 +292,13 @@ impl<'a> Monomorphiser<'a> {
     /// * `fun_kind` - FunctionKind of the function which is applied
     /// * `fun` - expression containing the name of the function
     /// * `generic_args` - kinded arguments for the kinded identifier of the function
+    /// * `monomorphise_all` - if this flag is true: all generic parameters are monomorphised
     fn monomorphise_fun_app(
         &mut self,
         fun_kind: &mut Option<FunctionKind>,
         fun_name_expr: &mut Box<Expr>,
         generic_args: &mut Vec<ArgKinded>,
+        monomorphise_all: bool,
     ) {
         // Find name, reference to FunDef and the unique global function name of this application
         let (mut fun_name, mut fun_def, mut global_fun_name) = {
@@ -313,9 +331,12 @@ impl<'a> Monomorphiser<'a> {
             };
         }
 
-        // if the called function has no constraints, it is sufficient to adjust the name of the function
-        // to refer the global function instead of e.g. an impl-method
-        if fun_def.constraints.len() == 0 {
+        // if the called function has no generic_params, which needs to be monomorphised, it is
+        // sufficient to adjust the name of the function to refer the global function instead
+        // of e.g. an impl-method
+        if fun_def.generic_params.len() == 0
+            || (!monomorphise_all && fun_def.constraints.len() == 0)
+        {
             // Adjust function name and kind
             *get_fun_name_from_expr_mut(fun_name_expr) = global_fun_name.clone();
             *fun_kind = Some(FunctionKind::GlobalFun);
@@ -331,18 +352,19 @@ impl<'a> Monomorphiser<'a> {
             .zip(generic_args.iter())
             .filter_map(|(gen, gen_arg)| {
                 assert!(gen.kind == gen_arg.kind());
-                // Check if the generic param "gen" has constraint
-                if fun_def
-                    .constraints
-                    .iter()
-                    .find(|con| {
-                        if let DataTyKind::Ident(ident) = &con.param.dty {
-                            ident.name == gen.ident.name
-                        } else {
-                            false
-                        }
-                    })
-                    .is_some()
+                // Check if monomorphise_all or the generic param "gen" has constraint
+                if monomorphise_all
+                    || fun_def
+                        .constraints
+                        .iter()
+                        .find(|con| {
+                            if let DataTyKind::Ident(ident) = &con.dty.dty {
+                                ident.name == gen.ident.name
+                            } else {
+                                false
+                            }
+                        })
+                        .is_some()
                 {
                     //The arg must not be an identifier
                     assert!(match gen_arg {
@@ -586,7 +608,7 @@ impl<'a> VisitMut for Monomorphiser<'a> {
                     // Path is not longer needed
                     *path = Path::Empty;
 
-                    self.monomorphise_fun_app(fun_kind, fun, generic_args);
+                    self.monomorphise_fun_app(fun_kind, fun, generic_args, self.monomorphise_all);
                     exprs.iter_mut().for_each(|expr| self.visit_expr(expr))
                 }
                 ExprKind::DepApp(_, _) => panic!("Does this happen? What to do now?"),
