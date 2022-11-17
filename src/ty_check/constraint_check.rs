@@ -219,7 +219,7 @@ impl ConstraintCtx {
         implicit_ident_cons: &mut IdentsConstrained,
     ) -> Result<ConstrainMap, ()> {
         // For the simple case that the param of "constraint" is an implicit identifier
-        if let DataTyKind::Ident(ident) = &constraint.param.dty {
+        if let DataTyKind::Ident(ident) = &constraint.dty.dty {
             if ident.is_implicit {
                 // Remember this constraint and assume its fulfilled
                 // The constraint is checked when the identifier is replaced by a concrete type
@@ -274,13 +274,13 @@ impl ConstraintCtx {
 
                 // if the goal is to prove if a tuple is "Copy": check if every dty in tuple is "Copy"
                 while goal.trait_bound == copy_trait {
-                    if let DataTyKind::Tuple(dtys) = goal.param.dty {
+                    if let DataTyKind::Tuple(dtys) = goal.dty.dty {
                         if dtys.len() == 0 {
                             panic!("Found a tuple with zero length!")
                         }
 
                         goals.extend(dtys.into_iter().map(|dty| Constraint {
-                            param: dty,
+                            dty,
                             trait_bound: copy_trait.clone(),
                         }));
                         goal = goals.pop().unwrap()
@@ -298,7 +298,7 @@ impl ConstraintCtx {
             };
 
             // is this a constraint for an implicit identifier?
-            let constrait_param_ident = if let DataTyKind::Ident(ident) = &goal.param.dty {
+            let constrait_param_ident = if let DataTyKind::Ident(ident) = &goal.dty.dty {
                 if ident.is_implicit {
                     Some(ident.name.clone())
                 } else {

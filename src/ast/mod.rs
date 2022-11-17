@@ -161,7 +161,7 @@ pub enum AssociatedItem {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Constraint {
     /// datatype which must be implement `trait_bound`
-    pub param: DataTy,
+    pub dty: DataTy,
     /// trait with its arguments which must be implemented by `param`
     pub trait_bound: TraitMonoType,
 }
@@ -330,7 +330,7 @@ impl SubstKindedIdents for TraitMonoType {
 impl SubstKindedIdents for Constraint {
     fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         Constraint {
-            param: self.param.subst_ident_kinded(ident_kinded, with),
+            dty: self.dty.subst_ident_kinded(ident_kinded, with),
             trait_bound: self.trait_bound.subst_ident_kinded(ident_kinded, with),
         }
     }
@@ -345,7 +345,7 @@ impl TraitDef {
         self.supertraits
             .iter()
             .map(|supertrait| Constraint {
-                param: self_ty.clone(),
+                dty: self_ty.clone(),
                 trait_bound: supertrait.clone(),
             })
             .collect()

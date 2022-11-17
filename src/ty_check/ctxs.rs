@@ -636,7 +636,7 @@ impl GlobalCtx {
                                 generic_params: impl_def.generic_params.clone(),
                                 premis: impl_def.constraints.clone(),
                                 consequence: Constraint {
-                                    param: impl_def.dty.clone(),
+                                    dty: impl_def.dty.clone(),
                                     trait_bound: trait_impl.clone(),
                                 },
                             });
@@ -768,7 +768,7 @@ impl GlobalCtx {
             };
             // This is the constraint "Self impls this trait"
             let self_impl_trait = Constraint {
-                param: self_ty.clone(),
+                dty: self_ty.clone(),
                 trait_bound: trait_mono_type,
             };
 
@@ -984,7 +984,7 @@ impl GlobalCtx {
 
         // Constraint: 'dty' implements the `trait_name` with `trait_def_generic_args` as trait-arguments
         let c_ident_constraint = Constraint {
-            param: dty,
+            dty,
             trait_bound: TraitMonoType {
                 name: trait_name.clone(),
                 generic_args: trait_def_generic_args,

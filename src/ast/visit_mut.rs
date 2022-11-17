@@ -339,7 +339,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
 }
 
 pub fn walk_constraint<V: VisitMut>(visitor: &mut V, constraint: &mut Constraint) {
-    visitor.visit_dty(&mut constraint.param);
+    visitor.visit_dty(&mut constraint.dty);
     visitor.visit_trait_mono_ty(&mut constraint.trait_bound);
 }
 

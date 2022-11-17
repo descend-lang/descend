@@ -523,10 +523,10 @@ peg::parser! {
             }
 
         rule where_clause_item() -> Vec<Constraint>
-            = param:dty() _ ":" _ trait_bounds:(trait_mono_ty() **<1,> (_ "+" _)) {
+            = dty:dty() _ ":" _ trait_bounds:(trait_mono_ty() **<1,> (_ "+" _)) {
                 trait_bounds.into_iter().map(|trait_bound|
                     Constraint{
-                        param: param.clone(),
+                        dty: dty.clone(),
                         trait_bound
                     }
                 ).collect()
@@ -2532,7 +2532,7 @@ mod tests {
                     ),
                 ],
                 constraints: vec![Constraint {
-                    param: DataTy::with_span(
+                    dty: DataTy::with_span(
                         DataTyKind::Ident(Ident::with_span(String::from("Q"), Span::new(34, 35))),
                         Span::new(32, 33),
                     ),

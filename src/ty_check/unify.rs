@@ -273,8 +273,7 @@ impl Constrainable for Constraint {
             return Err(TyError::CannotUnify);
         }
 
-        self.param
-            .constrain(&mut other.param, constr_map, prv_rels)?;
+        self.dty.constrain(&mut other.dty, constr_map, prv_rels)?;
         self.trait_bound.substitute(constr_map);
         other.trait_bound.substitute(constr_map);
         self.trait_bound

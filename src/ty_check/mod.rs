@@ -269,7 +269,7 @@ impl TyChecker {
 
         // Constraint Self impls
         let self_impls_trait = Constraint {
-            param: DataTy::new(DataTyKind::Ident(Ident::new("Self"))),
+            dty: DataTy::new(DataTyKind::Ident(Ident::new("Self"))),
             trait_bound: TraitMonoType {
                 name: trait_def.name.clone(),
                 generic_args: trait_def
@@ -382,7 +382,7 @@ impl TyChecker {
                     generic_params: impl_def.generic_params.clone(),
                     premis: impl_def.constraints.clone(),
                     consequence: Constraint {
-                        param: impl_def.dty.clone(),
+                        dty: impl_def.dty.clone(),
                         trait_bound: trait_impl.clone(),
                     },
                 },
@@ -395,7 +395,7 @@ impl TyChecker {
                 .map(|supertrait_cons| ConstraintScheme {
                     generic_params: generics_trait.clone(),
                     premis: vec![Constraint {
-                        param: DataTy::new(DataTyKind::Ident(Ident::new("Self"))),
+                        dty: DataTy::new(DataTyKind::Ident(Ident::new("Self"))),
                         trait_bound: TraitMonoType {
                             name: trait_def.name.clone(),
                             generic_args: trait_def
@@ -3816,7 +3816,7 @@ impl TyChecker {
             generic_args: generics,
         } = &constraint.trait_bound;
         let trait_def = self.gl_ctx.trait_ty_by_name(name)?;
-        self.dty_well_formed(kind_ctx, ty_ctx, exec, &constraint.param)?;
+        self.dty_well_formed(kind_ctx, ty_ctx, exec, &constraint.dty)?;
         Self::check_args_have_correct_kinds(&trait_def.generic_params, generics)?;
         iter_TyResult_to_TyResult!(generics
             .iter()
@@ -3962,7 +3962,7 @@ fn is_dty_copyable(
     use DataTyKind::*;
 
     let is_dty_copy_constraint = Constraint {
-        param: dty.clone(),
+        dty: dty.clone(),
         trait_bound: copy_trait(),
     };
 
