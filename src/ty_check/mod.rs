@@ -84,6 +84,7 @@ impl TyChecker {
                     ident: ident.clone(),
                     ty: ty.as_ref().unwrap().clone(),
                     mutbl: *mutbl,
+                    exec: ExecExpr::new(Exec::new(BaseExec::Ident(gf.exec_decl.ident.clone()))),
                 })
                 .collect(),
         );
@@ -182,13 +183,15 @@ impl TyChecker {
             ExprKind::IdxAssign(pl_expr, idx, e) => {
                 self.ty_check_idx_assign(kind_ctx, ty_ctx, ident_exec, pl_expr, idx, e)?
             }
-            ExprKind::Indep(par_branch) => self.ty_check_par_branch(
+            ExprKind::Indep(indep) => self.ty_check_indep(
                 kind_ctx,
                 ty_ctx,
                 ident_exec,
-                &mut par_branch.split_exec,
-                &par_branch.branch_idents,
-                &mut par_branch.branch_bodies,
+                indep.dim_compo,
+                &indep.pos,
+                &indep.exec,
+                &indep.branch_idents,
+                &mut indep.branch_bodies,
             )?,
             ExprKind::Sched(sched) => self.ty_check_sched(kind_ctx, ty_ctx, ident_exec, sched)?,
             ExprKind::ForNat(var, range, body) => {
@@ -501,6 +504,7 @@ impl TyChecker {
                     ident.clone(),
                     Ty::new(TyKind::Data(Box::new(DataTy::new(ident_dty)))),
                     Mutability::Const,
+                    ExecExpr::new(Exec::new(BaseExec::Ident(ident_exec.ident.clone()))),
                 ))]);
         let iter_ty_ctx =
             self.ty_check_expr(kind_ctx, collec_ty_ctx_with_ident, ident_exec, body)?;
@@ -699,16 +703,19 @@ impl TyChecker {
         ))
     }
 
-    fn ty_check_par_branch(
+    fn ty_check_indep(
         &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
-        split_exec: &mut ExecExpr,
+        dim_compo: DimCompo,
+        pos: &Nat,
+        // TODO this holds the same information that ident_exec holds
+        _split_exec: &ExecExpr,
         branch_idents: &[Ident],
         branch_bodies: &mut [Expr],
     ) -> TyResult<(TyCtx, Ty)> {
-        ty_check_exec(kind_ctx, ident_exec, split_exec)?;
+        // ty_check_exec(kind_ctx, ident_exec, split_exec)?;
         if branch_idents.len() != branch_bodies.len() {
             panic!(
                 "Amount of branch identifiers and amount of branches do not match:\
@@ -723,10 +730,20 @@ impl TyChecker {
                 branch_idents.len()
             )));
         }
-        let mut fst_branch_exec_expr =
-            ExecExpr::new(ExecKind::Proj(0, Box::new(split_exec.clone())));
-        let mut snd_branch_exec_expr =
-            ExecExpr::new(ExecKind::Proj(1, Box::new(split_exec.clone())));
+        let mut fst_branch_exec_expr = ExecExpr::new(
+            Exec::new(BaseExec::Ident(ident_exec.ident.clone())).split_proj(
+                dim_compo,
+                pos.clone(),
+                0,
+            ),
+        );
+        let mut snd_branch_exec_expr = ExecExpr::new(
+            Exec::new(BaseExec::Ident(ident_exec.ident.clone())).split_proj(
+                dim_compo,
+                pos.clone(),
+                1,
+            ),
+        );
         ty_check_exec(kind_ctx, ident_exec, &mut fst_branch_exec_expr)?;
         ty_check_exec(kind_ctx, ident_exec, &mut snd_branch_exec_expr)?;
         let fst_ident_exec = IdentExec::new(
@@ -810,10 +827,7 @@ impl TyChecker {
             }
         }
 
-        let mut distrib_exec = ExecExpr::new(ExecKind::Distrib(
-            sched.dim.clone(),
-            Box::new(sched.exec.clone()),
-        ));
+        let mut distrib_exec = ExecExpr::new(sched.exec.exec.clone().distrib(sched.dim));
         ty_check_exec(kind_ctx, ident_exec, &mut distrib_exec)?;
         let body_exec = distrib_exec.ty.as_ref().unwrap().clone();
         let body_ident_exec = if let Some(body_exec_ident) = &sched.exec_ident {
@@ -824,20 +838,16 @@ impl TyChecker {
                 body_exec.as_ref().clone(),
             )
         };
-        // TODO do we need this check?
-        // let allowed_exec = to_exec(&parall_collec.ty.as_ref().unwrap().ty)?;
-        // if allowed_exec != exec {
-        //     return Err(TyError::String(format!(
-        //         "Trying to run a parallel for-loop over {:?} inside of {:?}",
-        //         parall_collec, exec
-        //     )));
-        // }
+
         let mut input_ty_ctx = decl_ty_ctx;
         for e in sched.input_views.iter_mut() {
             input_ty_ctx = self.ty_check_expr(kind_ctx, input_ty_ctx, ident_exec, e)?;
         }
-        let input_idents_typed =
-            TyChecker::type_input_idents(&sched.input_idents, &sched.input_views)?;
+        let input_idents_typed = TyChecker::type_input_idents(
+            &sched.input_idents,
+            &sched.input_views,
+            &body_ident_exec,
+        )?;
 
         let mut frm_ty = input_idents_typed
             .into_iter()
@@ -871,6 +881,7 @@ impl TyChecker {
     fn type_input_idents(
         input_idents: &[Ident],
         input_exprs: &[Expr],
+        body_exec_ident: &IdentExec,
     ) -> TyResult<Vec<IdentTyped>> {
         if input_idents.len() != input_exprs.len() {
             return Err(TyError::String(
@@ -911,7 +922,14 @@ impl TyChecker {
                 }
             })
             .zip(input_idents)
-            .map(|(ty, i)| Ok(IdentTyped::new(i.clone(), ty?, Mutability::Const)))
+            .map(|(ty, i)| {
+                Ok(IdentTyped::new(
+                    i.clone(),
+                    ty?,
+                    Mutability::Const,
+                    ExecExpr::new(Exec::new(BaseExec::Ident(body_exec_ident.ident.clone()))),
+                ))
+            })
             .collect::<TyResult<Vec<_>>>()
     }
 
@@ -939,6 +957,7 @@ impl TyChecker {
                         ))))),
                     },
                     mutbl: *mutbl,
+                    exec: ExecExpr::new(Exec::new(BaseExec::Ident(ident_exec.ident.clone()))),
                 })
                 .collect(),
         );
@@ -1668,28 +1687,9 @@ impl TyChecker {
         )
     }
 
-    fn type_idents(pattern: &Pattern, dty: DataTy) -> Vec<IdentTyped> {
-        match (pattern, dty.dty) {
-            (Pattern::Tuple(tuple_elems), DataTyKind::Tuple(tuple_dtys)) => tuple_elems
-                .iter()
-                .zip(tuple_dtys)
-                .fold(vec![], |mut acc, (tp, dty)| {
-                    acc.append(&mut TyChecker::type_idents(tp, dty));
-                    acc
-                }),
-            (Pattern::Ident(mutbl, ident), d) => {
-                vec![IdentTyped::new(
-                    ident.clone(),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(d)))),
-                    *mutbl,
-                )]
-            }
-            _ => panic!("Pattern and data type do not match."),
-        }
-    }
-
     fn infer_pattern_ident_tys(
         ty_ctx: TyCtx,
+        ident_exec: &IdentExec,
         pattern: &Pattern,
         pattern_ty: &Ty,
     ) -> TyResult<TyCtx> {
@@ -1705,6 +1705,7 @@ impl TyChecker {
                     ident.clone(),
                     Ty::new(TyKind::Data(Box::new(pattern_dty.clone()))),
                     *mutbl,
+                    ExecExpr::new(Exec::new(BaseExec::Ident(ident_exec.ident.clone()))),
                 );
                 Ok(ty_ctx.append_ident_typed(ident_with_annotated_ty))
             }
@@ -1715,6 +1716,7 @@ impl TyChecker {
                 .try_fold(ty_ctx, |ctx, (p, tty)| {
                     TyChecker::infer_pattern_ident_tys(
                         ctx,
+                        ident_exec,
                         p,
                         &Ty::new(TyKind::Data(Box::new(tty.clone()))),
                     )
@@ -1726,6 +1728,7 @@ impl TyChecker {
     fn infer_pattern_ty(
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
+        ident_exec: &IdentExec,
         pattern: &Pattern,
         pattern_ty: &mut Option<Box<Ty>>,
         assign_ty: &mut Ty,
@@ -1738,7 +1741,7 @@ impl TyChecker {
         } else {
             (ty_ctx, assign_ty.clone())
         };
-        TyChecker::infer_pattern_ident_tys(ty_ctx_sub, pattern, &pattern_ty)
+        TyChecker::infer_pattern_ident_tys(ty_ctx_sub, ident_exec, pattern, &pattern_ty)
     }
 
     fn ty_check_let(
@@ -1753,7 +1756,7 @@ impl TyChecker {
         let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, expr)?;
         let e_ty = expr.ty.as_mut().unwrap();
         let ty_ctx_with_idents =
-            TyChecker::infer_pattern_ty(kind_ctx, ty_ctx_e, pattern, pattern_ty, e_ty)?;
+            TyChecker::infer_pattern_ty(kind_ctx, ty_ctx_e, ident_exec, pattern, pattern_ty, e_ty)?;
         Ok((
             ty_ctx_with_idents,
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
@@ -1776,6 +1779,7 @@ impl TyChecker {
                     dty.clone(),
                 ))))),
                 Mutability::Mut,
+                ExecExpr::new(Exec::new(BaseExec::Ident(ident_exec.ident.clone()))),
             );
             let ty_ctx_with_ident = ty_ctx.append_ident_typed(ident_with_ty);
             Ok((
@@ -2104,7 +2108,7 @@ impl TyChecker {
             ExecTyKind::GpuBlockGrp(_, _) => Some(Memory::GpuLocal),
             ExecTyKind::GpuThreadGrp(_) => Some(Memory::GpuLocal),
             ExecTyKind::GpuBlock(_) => Some(Memory::GpuLocal),
-            ExecTyKind::Split(_, _) | ExecTyKind::View => None,
+            ExecTyKind::View => None,
         }
     }
 
@@ -2212,7 +2216,7 @@ impl TyChecker {
                 vec![Memory::GpuGlobal, Memory::GpuShared, Memory::GpuLocal]
             }
             ExecTyKind::GpuGlobalThreads(_) => vec![Memory::GpuGlobal, Memory::GpuLocal],
-            ExecTyKind::Split(_, _) | ExecTyKind::View => vec![],
+            ExecTyKind::View => vec![],
         }
     }
 
@@ -2377,8 +2381,8 @@ fn ty_check_exec(
     ident_exec: &IdentExec,
     exec_expr: &mut ExecExpr,
 ) -> TyResult<()> {
-    let exec_kind = match &mut exec_expr.exec {
-        ExecKind::Ident(ident) => {
+    let mut exec_ty = match &exec_expr.exec.base {
+        BaseExec::Ident(ident) => {
             if ident == &ident_exec.ident {
                 ident_exec.ty.ty.clone()
             } else {
@@ -2388,39 +2392,31 @@ fn ty_check_exec(
                 )));
             }
         }
-        ExecKind::CpuThread => ExecTyKind::CpuThread,
-        ExecKind::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid(gdim.clone(), bdim.clone()),
-        //ExecKind::ToGlobalThreads() => ExecTyKind::GpuGlobalThreads(dim),
-        ExecKind::Distrib(d, exec_expr) => {
-            ty_check_exec_distrib(kind_ctx, ident_exec, *d, exec_expr)?
-        }
-        // ExecKind::ToThreadGrp(exec_expr) => {
-        //     ty_check_exec_to_thread_grp(kind_ctx, ident_exec, exec_expr)?
-        // }
-        ExecKind::Split(exec_split) => ty_check_exec_split(
-            kind_ctx,
-            ident_exec,
-            exec_split.split_dim,
-            &exec_split.pos,
-            &mut exec_split.exec,
-        )?,
-        ExecKind::Proj(i, exec_split) => ty_check_exec_proj(kind_ctx, ident_exec, *i, exec_split)?,
-        ExecKind::ToThreadGrp(_) | ExecKind::View => {
-            unimplemented!()
-        }
+        BaseExec::CpuThread => ExecTyKind::CpuThread,
+        BaseExec::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid(gdim.clone(), bdim.clone()),
     };
-    exec_expr.ty = Some(Box::new(ExecTy::new(exec_kind)));
+
+    for e in &exec_expr.exec.path {
+        match &e {
+            ExecPathElem::Distrib(d) => {
+                exec_ty = ty_check_exec_distrib(*d, &exec_ty)?;
+            }
+            ExecPathElem::SplitProj(exec_split) => {
+                exec_ty = ty_check_exec_split_proj(
+                    exec_split.split_dim,
+                    &exec_split.pos,
+                    exec_split.proj,
+                    &exec_ty,
+                )?
+            }
+        }
+    }
+    exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
     Ok(())
 }
 
-fn ty_check_exec_distrib(
-    kind_ctx: &KindCtx,
-    ident_exec: &IdentExec,
-    d: DimCompo,
-    exec_expr: &mut ExecExpr,
-) -> TyResult<ExecTyKind> {
-    ty_check_exec(kind_ctx, ident_exec, exec_expr)?;
-    let exec_ty = match &exec_expr.ty.as_ref().unwrap().ty {
+fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    let res_ty = match exec_ty {
         ExecTyKind::GpuGrid(gdim, bdim) => {
             let inner_dim = remove_dim(gdim, d)?;
             match inner_dim {
@@ -2456,14 +2452,11 @@ fn ty_check_exec_distrib(
                 None => ExecTyKind::GpuThread,
             }
         }
-        ex @ ExecTyKind::CpuThread
-        | ex @ ExecTyKind::GpuThread
-        | ex @ ExecTyKind::Split(_, _)
-        | ex @ ExecTyKind::View => {
-            return Err(TyError::String(format!("Cannot shedule over {}", ex)))
+        ex @ ExecTyKind::CpuThread | ex @ ExecTyKind::GpuThread | ex @ ExecTyKind::View => {
+            return Err(TyError::String(format!("Cannot schedule over {}", ex)))
         }
     };
-    Ok(exec_ty)
+    Ok(res_ty)
 }
 
 // fn ty_check_exec_to_thread_grp(
@@ -2519,16 +2512,14 @@ pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
     }
 }
 
-fn ty_check_exec_split(
-    kind_ctx: &KindCtx,
-    ident_exec: &IdentExec,
+fn ty_check_exec_split_proj(
     d: DimCompo,
     n: &Nat,
-    exec_expr: &mut ExecExpr,
+    proj: u8,
+    exec_ty: &ExecTyKind,
 ) -> TyResult<ExecTyKind> {
     // TODO check well-formedness of Nats
-    ty_check_exec(kind_ctx, ident_exec, exec_expr)?;
-    let (lexec_ty, rexec_ty) = match &exec_expr.ty.as_ref().unwrap().ty {
+    let (lexec_ty, rexec_ty) = match exec_ty {
         ExecTyKind::GpuGrid(gdim, bdim) | ExecTyKind::GpuBlockGrp(gdim, bdim) => {
             let (ldim, rdim) = split_dim(d, n.clone(), gdim.clone())?;
             (
@@ -2557,10 +2548,7 @@ fn ty_check_exec_split(
             )))
         }
     };
-    Ok(ExecTyKind::Split(
-        Box::new(ExecTy::new(lexec_ty)),
-        Box::new(ExecTy::new(rexec_ty)),
-    ))
+    Ok(if proj == 0 { lexec_ty } else { rexec_ty })
 }
 
 fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
@@ -2688,32 +2676,6 @@ fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
             }
         }
     })
-}
-
-fn ty_check_exec_proj(
-    kind_ctx: &KindCtx,
-    ident_exec: &IdentExec,
-    i: u8,
-    exec_expr: &mut ExecExpr,
-) -> TyResult<ExecTyKind> {
-    ty_check_exec(kind_ctx, ident_exec, exec_expr)?;
-    if let ExecTyKind::Split(lexec_ty, rexec_ty) = &exec_expr.ty.as_ref().unwrap().ty {
-        if i == 0 {
-            Ok(lexec_ty.ty.clone())
-        } else if i == 1 {
-            Ok(rexec_ty.ty.clone())
-        } else {
-            panic!(
-                "Can only project two components with either 0 or 1, but found {}",
-                i
-            )
-        }
-    } else {
-        Err(TyError::String(format!(
-            "Attempting to partially use non-split execution resource: {}",
-            &exec_expr.ty.as_ref().unwrap().ty
-        )))
-    }
 }
 
 pub fn proj_elem_dty(dty: &DataTy, i: usize) -> TyResult<DataTy> {

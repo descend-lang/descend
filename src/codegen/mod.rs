@@ -16,20 +16,20 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let initial_fns_to_generate = collect_initial_fns_to_generate(comp_unit);
     let mut codegen_ctx = CodegenCtx::new(
         // CpuThread is only a dummy and will be set according to the generated function.
-        desc::ExecExpr::new(desc::ExecKind::CpuThread),
+        desc::ExecExpr::new(desc::Exec::new(desc::BaseExec::CpuThread)),
         &comp_unit.fun_defs,
     );
     let mut initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 2);
     for fun_def in &initial_fns_to_generate {
         let exec = match &fun_def.exec_decl.ty.ty {
-            desc::ExecTyKind::CpuThread => desc::ExecKind::CpuThread,
+            desc::ExecTyKind::CpuThread => desc::BaseExec::CpuThread,
             desc::ExecTyKind::GpuGrid(gdim, bdim) => {
-                desc::ExecKind::GpuGrid(gdim.clone(), bdim.clone())
+                desc::BaseExec::GpuGrid(gdim.clone(), bdim.clone())
             }
             _ => unreachable!("Every exec must be constructed based on a gpu grid."),
         };
         codegen_ctx.push_scope();
-        codegen_ctx.exec = desc::ExecExpr::new(exec);
+        codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(exec));
         initial_fns.push(gen_fun_def(fun_def, &mut codegen_ctx));
         codegen_ctx.drop_scope();
         debug_assert_eq!(codegen_ctx.shape_ctx.map.len(), 0);
@@ -412,12 +412,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                 gen_for_each(ident, coll_expr, body, codegen_ctx)
             }
         }
-        Indep(pb) => gen_indep(
-            &pb.split_exec,
-            &pb.branch_idents,
-            &pb.branch_bodies,
-            codegen_ctx,
-        ),
+        Indep(pb) => gen_indep(pb.dim_compo, &pb.pos, &pb.branch_bodies, codegen_ctx),
         Sched(pf) => gen_sched(pf, codegen_ctx),
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => match gen_expr(cond, codegen_ctx) {
@@ -737,7 +732,8 @@ fn gen_exec(
                     &ident_exec.ty.ty
                 )
             };
-            codegen_ctx.exec = desc::ExecExpr::new(desc::ExecKind::GpuGrid(gdim, bdim));
+            codegen_ctx.exec =
+                desc::ExecExpr::new(desc::Exec::new(desc::BaseExec::GpuGrid(gdim, bdim)));
 
             // Remember to inline input shape expression
             let in_name = &params[0].ident.name.clone();
@@ -861,7 +857,7 @@ fn gen_exec(
         unimplemented!()
     };
 
-    codegen_ctx.exec = desc::ExecExpr::new(desc::ExecKind::CpuThread);
+    codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(desc::BaseExec::CpuThread));
 
     if checks.is_empty() {
         CheckedExpr::Expr(cu::Expr::FunCall {
@@ -882,43 +878,31 @@ fn gen_exec(
 }
 
 fn gen_indep(
-    exec_split: &desc::ExecExpr,
-    branch_idents: &[desc::Ident],
+    dim_compo: desc::DimCompo,
+    pos: &desc::Nat,
     branch_bodies: &[desc::Expr],
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
-    let exec_split = if let desc::ExecKind::Split(s) = &exec_split.exec {
-        s
-    } else {
-        unreachable!()
-    };
     let outer_exec = codegen_ctx.exec.clone();
-    // Create an exec split with the current exec (which is the only possible exec) to avoid
-    // possible identifiers.
-    let exec_split = desc::ExecSplit::new(
-        exec_split.split_dim,
-        exec_split.pos.clone(),
-        codegen_ctx.exec.clone(),
-    );
-    let proj_exec_split = |i| {
-        desc::ExecExpr::new(desc::ExecKind::Proj(
-            i,
-            Box::new(desc::ExecExpr::new(desc::ExecKind::Split(Box::new(
-                exec_split.clone(),
-            )))),
-        ))
-    };
     codegen_ctx.push_scope();
-    codegen_ctx.exec = proj_exec_split(0);
+    codegen_ctx.exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().split_proj(
+        dim_compo,
+        pos.clone(),
+        0,
+    ));
     let fst_branch = gen_stmt(&branch_bodies[0], false, codegen_ctx);
     codegen_ctx.drop_scope();
     codegen_ctx.push_scope();
-    codegen_ctx.exec = proj_exec_split(1);
+    codegen_ctx.exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().split_proj(
+        dim_compo,
+        pos.clone(),
+        1,
+    ));
     let snd_branch = gen_stmt(&branch_bodies[1], false, codegen_ctx);
     codegen_ctx.drop_scope();
     codegen_ctx.exec = outer_exec;
 
-    let split_cond = gen_indep_branch_cond(&exec_split);
+    let split_cond = gen_indep_branch_cond(dim_compo, pos, &codegen_ctx.exec.exec);
     cu::Stmt::Seq(vec![
         cu::Stmt::IfElse {
             cond: split_cond,
@@ -956,10 +940,7 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
 
 fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(desc::ExecKind::Distrib(
-        sched.dim,
-        Box::new(codegen_ctx.exec.clone()),
-    ));
+    let inner_exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().distrib(sched.dim));
     let outer_exec = codegen_ctx.exec.clone();
     codegen_ctx.exec = inner_exec;
 
@@ -988,10 +969,8 @@ fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
             decls
                 .iter()
                 .map(|d| {
-                    let inner_exec = desc::ExecExpr::new(desc::ExecKind::Distrib(
-                        sched.dim,
-                        Box::new(codegen_ctx.exec.clone()),
-                    ));
+                    let inner_exec =
+                        desc::ExecExpr::new(codegen_ctx.exec.exec.clone().distrib(sched.dim));
                     gen_stmt(
                         d,
                         false,
@@ -1444,34 +1423,20 @@ fn mangle_name(name: &str, exec: &desc::ExecExpr, views: &[ShapeExpr]) -> Option
 
 fn stringify_exec(exec: &desc::ExecExpr) -> String {
     let mut str = String::with_capacity(10);
-    match &exec.exec {
-        desc::ExecKind::GpuGrid(_, _) | desc::ExecKind::CpuThread => (),
-        desc::ExecKind::Distrib(dim, exec) => {
-            str.push('D');
-            str.push_str(&format!("{}", dim));
-            str.push('_');
-            str.push_str(&stringify_exec(exec));
-        }
-        desc::ExecKind::Proj(i, split_exec) => {
-            if let desc::ExecKind::Split(exec_split) = &split_exec.exec {
+    for e in &exec.exec.path {
+        match e {
+            desc::ExecPathElem::Distrib(dim) => {
+                str.push('D');
+                str.push_str(&format!("{}", dim));
+                str.push('_');
+            }
+            desc::ExecPathElem::SplitProj(split_proj) => {
                 let s = format!(
-                    "P{}S{}{}_{}",
-                    *i,
-                    exec_split.split_dim,
-                    &exec_split.pos,
-                    stringify_exec(&exec_split.exec)
+                    "P{}S{}{}_",
+                    split_proj.proj, split_proj.split_dim, &split_proj.pos,
                 );
                 str.push_str(&s);
-            } else {
-                unreachable!("A projection must always contain a split.")
             }
-        }
-        desc::ExecKind::ToThreadGrp(exec) => {
-            str.push_str("TG");
-            str.push_str(&stringify_exec(exec));
-        }
-        desc::ExecKind::Ident(_) | desc::ExecKind::View | desc::ExecKind::Split(_) => {
-            unreachable!()
         }
     }
     str
@@ -1705,19 +1670,20 @@ enum ParallRange {
     SplitRange(desc::Nat, desc::Nat, desc::Nat),
 }
 
-fn gen_indep_branch_cond(exec_split: &desc::ExecSplit) -> cu::Expr {
+fn gen_indep_branch_cond(
+    dim_compo: desc::DimCompo,
+    pos: &desc::Nat,
+    exec: &desc::Exec,
+) -> cu::Expr {
     cu::Expr::BinOp {
         op: cu::BinOp::Lt,
         lhs: Box::new(cu::Expr::Nat(parall_idx(
-            exec_split.split_dim,
+            dim_compo,
             // The condition must range over the elements within the execution resource.
             // Use Distrib to indicate this.
-            &desc::ExecExpr::new(desc::ExecKind::Distrib(
-                exec_split.split_dim,
-                exec_split.exec.clone(),
-            )),
+            &desc::ExecExpr::new(exec.clone().distrib(dim_compo)),
         ))),
-        rhs: Box::new(cu::Expr::Nat(exec_split.pos.clone())),
+        rhs: Box::new(cu::Expr::Nat(pos.clone())),
     }
 }
 
@@ -2056,9 +2022,7 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
         | desc::ExecTyKind::GpuBlockGrp(_, _)
         | desc::ExecTyKind::GpuThreadGrp(_)
         | desc::ExecTyKind::GpuThread => true,
-        desc::ExecTyKind::Split(_, _) | desc::ExecTyKind::CpuThread | desc::ExecTyKind::View => {
-            false
-        }
+        desc::ExecTyKind::CpuThread | desc::ExecTyKind::View => false,
     }
 }
 
@@ -2378,86 +2342,77 @@ impl ShapeExpr {
 }
 
 fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat) {
-    match &exec.exec {
-        // desc::ExecKind::Ident(id) => to_parall_indices(&codegen_ctx.exec)
-        desc::ExecKind::GpuGrid(_, _) => {
+    let mut indices = match &exec.exec.base {
+        desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
         }
-        desc::ExecKind::Proj(i, exec_split) => {
-            if let desc::ExecKind::Split(exec_split) = &exec_split.exec {
-                let mut indices = to_parall_indices(&exec_split.exec);
-                if *i == 1 {
+        desc::BaseExec::Ident(_) | desc::BaseExec::CpuThread => unreachable!(),
+    };
+    for e in &exec.exec.path {
+        match e {
+            desc::ExecPathElem::SplitProj(split_proj) => {
+                if split_proj.proj == 1 {
                     let shift_idx = |idx: desc::Nat| {
                         desc::Nat::BinOp(
                             desc::BinOpNat::Sub,
                             Box::new(idx),
-                            Box::new(exec_split.pos.clone()),
+                            Box::new(split_proj.pos.clone()),
                         )
                     };
-                    match &exec_split.split_dim {
-                        desc::DimCompo::X => indices = (shift_idx(indices.0), indices.1, indices.2),
-                        desc::DimCompo::Y => indices = (indices.0, shift_idx(indices.1), indices.2),
-                        desc::DimCompo::Z => indices = (indices.0, indices.1, shift_idx(indices.2)),
+                    match &split_proj.split_dim {
+                        desc::DimCompo::X => indices.0 = shift_idx(indices.0),
+                        desc::DimCompo::Y => indices.1 = shift_idx(indices.1),
+                        desc::DimCompo::Z => indices.2 = shift_idx(indices.2),
                     }
                 }
-                indices
-            } else {
-                unreachable!("Only a split can be projected.")
             }
-        }
-        desc::ExecKind::Distrib(d, exec) => {
-            let indices = to_parall_indices(exec);
-            match d {
+            desc::ExecPathElem::Distrib(d) => match d {
                 desc::DimCompo::X => match contained_par_idx(&indices.0) {
-                    Some(desc::Nat::GridIdx) => {
-                        (desc::Nat::BlockIdx(desc::DimCompo::X), indices.1, indices.2)
-                    }
+                    Some(desc::Nat::GridIdx) => indices.0 = desc::Nat::BlockIdx(desc::DimCompo::X),
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::X => {
-                        (desc::Nat::ThreadIdx(d), indices.1, indices.2)
+                        indices.0 = desc::Nat::ThreadIdx(d)
                     }
                     _ => unreachable!(),
                 },
                 desc::DimCompo::Y => match contained_par_idx(&indices.1) {
-                    Some(desc::Nat::GridIdx) => {
-                        (indices.0, desc::Nat::BlockIdx(desc::DimCompo::Y), indices.2)
-                    }
+                    Some(desc::Nat::GridIdx) => indices.1 = desc::Nat::BlockIdx(desc::DimCompo::Y),
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::Y => {
-                        (indices.0, desc::Nat::ThreadIdx(d), indices.2)
+                        indices.1 = desc::Nat::ThreadIdx(d)
                     }
                     _ => unreachable!(),
                 },
                 desc::DimCompo::Z => match contained_par_idx(&indices.2) {
-                    Some(desc::Nat::GridIdx) => {
-                        (indices.0, indices.1, desc::Nat::BlockIdx(desc::DimCompo::Z))
-                    }
+                    Some(desc::Nat::GridIdx) => indices.2 = desc::Nat::BlockIdx(desc::DimCompo::Z),
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::Z => {
-                        (indices.0, indices.1, desc::Nat::ThreadIdx(d))
+                        indices.2 = desc::Nat::ThreadIdx(d)
                     }
                     _ => unreachable!(),
                 },
-            }
+            },
+            // desc::ExecPathElem::ToThreadGrp(grid) => {
+            //     assert!(matches!(&grid.exec, desc::ExecPathElem::GpuGrid(_, _)));
+            //     let global_idx = |d| {
+            //         desc::Nat::BinOp(
+            //             desc::BinOpNat::Add,
+            //             Box::new(desc::Nat::BinOp(
+            //                 desc::BinOpNat::Mul,
+            //                 Box::new(desc::Nat::BlockIdx(d)),
+            //                 Box::new(desc::Nat::BlockDim(d)),
+            //             )),
+            //             Box::new(desc::Nat::ThreadIdx(d)),
+            //         )
+            //     };
+            //     (
+            //         global_idx(desc::DimCompo::X),
+            //         global_idx(desc::DimCompo::Y),
+            //         global_idx(desc::DimCompo::Z),
+            //     )
+            // }
+            _ => unreachable!(),
         }
-        desc::ExecKind::ToThreadGrp(grid) => {
-            assert!(matches!(&grid.exec, desc::ExecKind::GpuGrid(_, _)));
-            let global_idx = |d| {
-                desc::Nat::BinOp(
-                    desc::BinOpNat::Add,
-                    Box::new(desc::Nat::BinOp(
-                        desc::BinOpNat::Mul,
-                        Box::new(desc::Nat::BlockIdx(d)),
-                        Box::new(desc::Nat::BlockDim(d)),
-                    )),
-                    Box::new(desc::Nat::ThreadIdx(d)),
-                )
-            };
-            (
-                global_idx(desc::DimCompo::X),
-                global_idx(desc::DimCompo::Y),
-                global_idx(desc::DimCompo::Z),
-            )
-        }
-        _ => unreachable!(),
     }
+
+    indices
 }
 
 fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {

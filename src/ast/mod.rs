@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::ast::ExprKind::Split;
 use descend_derive::span_derive;
 pub use span::*;
 
@@ -314,15 +315,25 @@ impl ExprSplit {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Indep {
-    pub split_exec: ExecExpr,
+    pub dim_compo: DimCompo,
+    pub pos: Nat,
+    pub exec: ExecExpr,
     pub branch_idents: Vec<Ident>,
     pub branch_bodies: Vec<Expr>,
 }
 
 impl Indep {
-    pub fn new(split_exec: ExecExpr, branch_idents: Vec<Ident>, branch_bodies: Vec<Expr>) -> Self {
+    pub fn new(
+        dim_compo: DimCompo,
+        pos: Nat,
+        exec: ExecExpr,
+        branch_idents: Vec<Ident>,
+        branch_bodies: Vec<Expr>,
+    ) -> Self {
         Indep {
-            split_exec,
+            dim_compo,
+            pos,
+            exec,
             branch_idents,
             branch_bodies,
         }
@@ -717,19 +728,19 @@ impl fmt::Display for PlaceExpr {
     }
 }
 
-#[span_derive(PartialEq)]
+#[span_derive(PartialEq, Eq)]
 #[derive(Debug, Clone)]
 pub struct ExecExpr {
-    pub exec: ExecKind,
+    pub exec: Box<Exec>,
     pub ty: Option<Box<ExecTy>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
 
 impl ExecExpr {
-    pub fn new(exec: ExecKind) -> Self {
+    pub fn new(exec: Exec) -> Self {
         ExecExpr {
-            exec,
+            exec: Box::new(exec),
             ty: None,
             span: None,
         }
@@ -742,50 +753,106 @@ impl fmt::Display for ExecExpr {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
-pub struct ExecSplit {
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct SplitProj {
     pub split_dim: DimCompo,
     pub pos: Nat,
-    pub exec: Box<ExecExpr>,
+    pub proj: u8,
 }
 
-impl ExecSplit {
-    pub fn new(split_dim: DimCompo, pos: Nat, exec: ExecExpr) -> Self {
-        ExecSplit {
+impl SplitProj {
+    pub fn new(split_dim: DimCompo, pos: Nat, proj: u8) -> Self {
+        SplitProj {
             split_dim,
             pos,
-            exec: Box::new(exec),
+            proj,
         }
     }
 }
 
-impl fmt::Display for ExecSplit {
+impl fmt::Display for SplitProj {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Split<{}, {}, {}>", self.split_dim, self.pos, self.exec)
+        write!(f, "split({}, {}).{}", self.split_dim, self.pos, self.proj)
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
-pub enum ExecKind {
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct Exec {
+    pub base: BaseExec,
+    pub path: Vec<ExecPathElem>,
+}
+
+impl Exec {
+    pub fn new(base: BaseExec) -> Self {
+        Exec { base, path: vec![] }
+    }
+    //
+    // pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
+    //     Exec { base, path }
+    // }
+    //
+    // pub fn append(mut self, path: Vec<ExecPathElem>) -> Self {
+    //     self.path.append(&mut path);
+    //     self
+    // }
+
+    pub fn split_proj(mut self, dim_compo: DimCompo, pos: Nat, proj: u8) -> Self {
+        self.path
+            .push(ExecPathElem::SplitProj(Box::new(SplitProj::new(
+                dim_compo, pos, proj,
+            ))));
+        self
+    }
+
+    pub fn distrib(mut self, dim_compo: DimCompo) -> Self {
+        self.path.push(ExecPathElem::Distrib(dim_compo));
+        self
+    }
+}
+
+impl fmt::Display for Exec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.base)?;
+        for e in &self.path {
+            write!(f, ".{}", e)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum BaseExec {
     Ident(Ident),
     CpuThread,
     GpuGrid(Dim, Dim),
-    Split(Box<ExecSplit>),
-    Proj(u8, Box<ExecExpr>),
-    Distrib(DimCompo, Box<ExecExpr>),
-    ToThreadGrp(Box<ExecExpr>),
 }
 
-impl fmt::Display for ExecKind {
+impl fmt::Display for BaseExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExecKind::Ident(ident) => write!(f, "{}", ident),
-            ExecKind::CpuThread => write!(f, "cpu.thread"),
-            ExecKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
-            ExecKind::Split(exec_split) => write!(f, "{}", exec_split),
-            ExecKind::Proj(i, exec) => write!(f, "proj{}<{}>", i, exec),
-            ExecKind::Distrib(d, exec) => write!(f, "distr<{}, {}>", d, exec),
-            ExecKind::ToThreadGrp(exec) => write!(f, "to_thread_grp<{}>", exec),
+            Self::Ident(ident) => write!(f, "{}", ident),
+            Self::CpuThread => write!(f, "cpu.thread"),
+            Self::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum ExecPathElem {
+    SplitProj(Box<SplitProj>),
+    Distrib(DimCompo),
+    // ToThreadGrp(Box<ExecExpr>),
+}
+
+impl fmt::Display for ExecPathElem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SplitProj(split_proj) => write!(
+                f,
+                "split_proj_{}({}, {})",
+                split_proj.proj, split_proj.split_dim, split_proj.pos
+            ),
+            Self::Distrib(dim_compo) => write!(f, "distrib({})", dim_compo),
         }
     }
 }
@@ -1368,7 +1435,6 @@ pub enum ExecTyKind {
     GpuThreadGrp(Dim),
     GpuThread,
     View,
-    Split(Box<ExecTy>, Box<ExecTy>),
 }
 
 impl fmt::Display for ExecTyKind {
@@ -1384,7 +1450,6 @@ impl fmt::Display for ExecTyKind {
             }
             ExecTyKind::GpuThreadGrp(size) => write!(f, "gpu.thread_grp<{}>", size),
             ExecTyKind::View => write!(f, "view"),
-            ExecTyKind::Split(ex1, ex2) => write!(f, "({}, {})", ex1, ex2),
         }
     }
 }
@@ -1614,8 +1679,9 @@ mod size_asserts {
     static_assert_size!(Dim, 16);
     static_assert_size!(DataTy, 112);
     static_assert_size!(DataTyKind, 72);
-    static_assert_size!(ExecExpr, 64);
-    static_assert_size!(ExecKind, 40);
+    static_assert_size!(ExecExpr, 32);
+    static_assert_size!(Exec, 64);
+    static_assert_size!(ExecPathElem, 16);
     static_assert_size!(ExecTy, 56);
     static_assert_size!(ExecTyKind, 40);
     static_assert_size!(Expr, 128);

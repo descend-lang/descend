@@ -311,10 +311,6 @@ impl Constrainable for ExecTy {
             | (ExecTyKind::GpuThreadGrp(ldim), ExecTyKind::GpuThreadGrp(rdim)) => {
                 ldim.constrain(rdim, constr_map, prv_rels)
             }
-            (ExecTyKind::Split(lexec0, lexec1), ExecTyKind::Split(rexec0, rexec1)) => {
-                lexec0.constrain(rexec0, constr_map, prv_rels)?;
-                lexec1.constrain(rexec1, constr_map, prv_rels)
-            }
             _ => Err(TyError::String(format!(
                 "Cannot Unify: {} and {}",
                 &self.ty, &other.ty

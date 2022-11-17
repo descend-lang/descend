@@ -30,12 +30,13 @@ pub trait VisitMut: Sized {
     fn visit_lit(&mut self, _lit: &mut Lit) {}
     fn visit_ident(&mut self, _ident: &mut Ident) {}
     fn visit_pattern(&mut self, pattern: &mut Pattern) { walk_pattern(self, pattern) }
-    fn visit_par_branch(&mut self, par_branch: &mut Indep) { walk_par_branch(self, par_branch) }
+    fn visit_indep(&mut self, indep: &mut Indep) { walk_indep(self, indep) }
     fn visit_par_for(&mut self, par_for: &mut Sched) { walk_par_for(self, par_for) }
     fn visit_expr_split(&mut self, expr_split: &mut ExprSplit) { walk_expr_split(self, expr_split) }
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
-    fn visit_exec_split(&mut self, exec_split: &mut ExecSplit) { walk_exec_split(self, exec_split) }
+    fn visit_split_proj(&mut self, exec_split: &mut SplitProj) { walk_split_proj(self, exec_split) }
     fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) { walk_exec_expr(self, exec_expr) }
+    fn visit_exec(&mut self, exec: &mut Exec) { walk_exec(self, exec) }
     fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
 }
@@ -217,13 +218,17 @@ pub fn walk_pattern<V: VisitMut>(visitor: &mut V, pattern: &mut Pattern) {
     }
 }
 
-pub fn walk_par_branch<V: VisitMut>(visitor: &mut V, par_branch: &mut Indep) {
+pub fn walk_indep<V: VisitMut>(visitor: &mut V, indep: &mut Indep) {
     let Indep {
-        split_exec,
+        dim_compo,
+        pos,
+        exec,
         branch_idents,
         branch_bodies,
-    } = par_branch;
-    visitor.visit_exec_expr(split_exec);
+    } = indep;
+    visitor.visit_dim_compo(dim_compo);
+    visitor.visit_nat(pos);
+    visitor.visit_exec_expr(exec);
     walk_list!(visitor, visit_ident, branch_idents);
     walk_list!(visitor, visit_expr, branch_bodies);
 }
@@ -345,7 +350,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(body);
         }
         ExprKind::Indep(par_branch) => {
-            visitor.visit_par_branch(par_branch);
+            visitor.visit_indep(par_branch);
         }
         ExprKind::Sched(par_for) => {
             visitor.visit_par_for(par_for);
@@ -380,34 +385,38 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
     }
 }
 
-pub fn walk_exec_split<V: VisitMut>(visitor: &mut V, exec_split: &mut ExecSplit) {
-    let ExecSplit {
+pub fn walk_split_proj<V: VisitMut>(visitor: &mut V, split_proj: &mut SplitProj) {
+    let SplitProj {
         split_dim,
         pos,
-        exec,
-    } = exec_split;
+        proj: _,
+    } = split_proj;
     visitor.visit_dim_compo(split_dim);
     visitor.visit_nat(pos);
-    visitor.visit_exec_expr(exec);
 }
 
 pub fn walk_exec_expr<V: VisitMut>(visitor: &mut V, exec_expr: &mut ExecExpr) {
-    match &mut exec_expr.exec {
-        ExecKind::Ident(ident) => visitor.visit_ident(ident),
-        ExecKind::Split(exec_split) => {
-            visitor.visit_exec_split(exec_split);
-        }
-        ExecKind::Proj(_, exec_expr) => visitor.visit_exec_expr(exec_expr),
-        ExecKind::Distrib(dim_compo, exec_expr) => {
-            visitor.visit_dim_compo(dim_compo);
-            visitor.visit_exec_expr(exec_expr);
-        }
-        ExecKind::ToThreadGrp(exec_expr) => visitor.visit_exec_expr(exec_expr),
-        ExecKind::GpuGrid(gdim, bdim) => {
+    visitor.visit_exec(&mut exec_expr.exec);
+    for t in &mut exec_expr.ty {
+        visitor.visit_exec_ty(t);
+    }
+}
+
+pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut Exec) {
+    let Exec { base, path } = exec;
+    match base {
+        BaseExec::CpuThread => (),
+        BaseExec::Ident(ident) => visitor.visit_ident(ident),
+        BaseExec::GpuGrid(gdim, bdim) => {
             visitor.visit_dim(gdim);
             visitor.visit_dim(bdim);
         }
-        ExecKind::CpuThread | ExecKind::View => {}
+    };
+    for e in path {
+        match e {
+            ExecPathElem::SplitProj(split_proj) => visitor.visit_split_proj(split_proj),
+            ExecPathElem::Distrib(dim_compo) => visitor.visit_dim_compo(dim_compo),
+        }
     }
 }
 

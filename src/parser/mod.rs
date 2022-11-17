@@ -373,11 +373,12 @@ peg::parser! {
             "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "indep" __ split_exec:exec_expr() _ "{" _
+            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:exec_expr() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
-                Expr::new(ExprKind::Indep(Box::new(Indep::new(split_exec,
+                Expr::new(ExprKind::Indep(Box::new(Indep::new(dim,
+                    n, exec,
                     branch.iter().map(|(i, _)| i.clone()).collect(),
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
             }
@@ -564,18 +565,15 @@ peg::parser! {
             / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$d"))) }
 
         rule exec_expr() -> ExecExpr =
-            begin:position!() exec:exec_expr_kind() end:position!() {
-                ExecExpr { exec, ty: None, span: Some(Span::new(begin,end)) }
+            begin:position!() exec:exec() end:position!() {
+                ExecExpr { exec: Box::new(exec), ty: None, span: Some(Span::new(begin,end)) }
             }
 
-        rule exec_expr_kind() -> ExecKind =
-            ident:ident() { ExecKind::Ident(ident) }
-            / "split_exec" _ "(" _ d:dim_component() _ ")" __ n:nat() __ exec:exec_expr() {
-                ExecKind::Split(Box::new(ExecSplit::new(d, n, exec)))
-            }
-            / "to_thread_grp" _ "(" _ exec:exec_expr() _ ")" {
-                ExecKind::ToThreadGrp(Box::new(exec))
-            }
+        rule exec() -> Exec =
+            base:base_exec() { Exec::new(base) }
+
+        rule base_exec() -> BaseExec =
+            ident:ident() { BaseExec::Ident(ident) }
 
         rule exec_ty() -> ExecTy =
             begin:position!() exec:exec_ty_kind() end:position!() {
