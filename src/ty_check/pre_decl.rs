@@ -1,7 +1,4 @@
-use crate::ast::{
-    BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
-    Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
-};
+use crate::ast::{AtomicTy, BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind};
 
 pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
@@ -9,13 +6,8 @@ pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
 pub static SHARED_ALLOC: &str = "shared_alloc";
 pub static COPY_TO_GPU: &str = "copy_to_gpu";
-pub static LOAD_ATOMIC: &str = "load_atomic";
-pub static LOAD_ATOMIC_HOST: &str = "load_atomic_host";
-pub static STORE_ATOMIC: &str = "store_atomic";
-pub static STORE_ATOMIC_HOST: &str = "store_atomic_host";
 pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
-pub static ATOMIC_SET: &str = "atomic_set";
 pub static SHUFFLE_XOR: &str = "shuffle_xor";
 
 pub static TO_VIEW: &str = "to_view";
@@ -36,6 +28,10 @@ pub static SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub static SPLIT_WARP: &str = "split_warp";
 pub static SPLIT_WARP_GRP: &str = "split_warp_grp";
 
+pub static ATOMIC_NEW: &str = "atomic_new";
+pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
+pub static ATOMIC_LOAD: &str = "atomic_load";
+
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
         // Built-in functions
@@ -45,13 +41,8 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (EXEC, exec_ty()),
         (SHARED_ALLOC, shared_alloc_ty()),
         (COPY_TO_GPU, copy_to_gpu_ty()),
-        (LOAD_ATOMIC, load_atomic_ty()),
-        (LOAD_ATOMIC_HOST, load_atomic_host_ty()),
-        (STORE_ATOMIC, store_atomic_ty()),
-        (STORE_ATOMIC_HOST, store_atomic_host_ty()),
         (TO_RAW_PTR, to_raw_ptr_ty()),
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
-        (ATOMIC_SET, atomic_set_ty()),
         (SHUFFLE_XOR, shuffle_xor_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
@@ -69,6 +60,9 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SPLIT_WARP_GRP, split_warp_grp_ty()),
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
+        (ATOMIC_NEW, atomic_new_ty()),
+        (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
+        (ATOMIC_LOAD, atomic_load_ty()),
     ];
 
     decls.to_vec()
@@ -133,41 +127,6 @@ fn offset_raw_ptr_ty() -> Ty {
         Exec::GpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::RawPtr(
             Box::new(DataTy::new(DataTyKind::Ident(t))),
-        ))))),
-    ))
-}
-
-fn atomic_set_ty() -> Ty {
-    let p = Ident::new("p");
-    let m = Ident::new("m");
-    let t = Ident::new("t");
-
-    let p_prv = IdentKinded {
-        ident: p.clone(),
-        kind: Kind::Provenance,
-    };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::Ty,
-    };
-    Ty::new(TyKind::Fn(
-        vec![p_prv, m_mem, t_ty],
-        vec![
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-                Provenance::Ident(p),
-                Ownership::Uniq,
-                Memory::Ident(m),
-                Box::new(DataTy::new(DataTyKind::Ident(t.clone()))),
-            )))),
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(t)))),
-        ],
-        Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::Unit,
         ))))),
     ))
 }
@@ -493,6 +452,58 @@ fn split_warp_ty() -> Ty {
     ))
 }
 
+// atomic_new:
+//  <>(u32) -[gpu.thread]-> AtomicU32
+fn atomic_new_ty() -> Ty {
+    Ty::new(TyKind::Fn(
+        vec![],
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Atomic(
+            AtomicTy::AtomicU32,
+        ))))
+        )))
+}
+
+// atomic_fetch_or:
+//  <>(AtomicU32, u32) -[gpu.thread]-> u32
+fn atomic_fetch_or_ty() -> Ty {
+    Ty::new(TyKind::Fn(
+        vec![],
+        vec![
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Atomic(
+                AtomicTy::AtomicU32,
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::U32,
+            ))))
+        ],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))
+        )))
+}
+
+// atomic_load:
+//  <>(AtomicU32) -[gpu.thread]-> u32
+fn atomic_load_ty() -> Ty {
+    Ty::new(TyKind::Fn(
+        vec![],
+        vec![
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Atomic(
+                AtomicTy::AtomicU32,
+            ))))
+        ],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))
+        )))
+}
+
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
 fn gpu_device_ty() -> Ty {
@@ -504,119 +515,6 @@ fn gpu_device_ty() -> Ty {
         Exec::CpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Gpu,
-        ))))),
-    ))
-}
-
-//  <r: prv, m: mem>(&r shrd m Atomic<i32>) -[gpu.global]-> i32
-fn load_atomic_ty() -> Ty {
-    let r = Ident::new("r");
-    let m = Ident::new("m");
-    let r_prv = IdentKinded {
-        ident: r.clone(),
-        kind: Kind::Provenance,
-    };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
-    Ty::new(TyKind::Fn(
-        vec![r_prv, m_mem],
-        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-            Provenance::Ident(r),
-            Ownership::Shrd,
-            Memory::Ident(m),
-            Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
-        ))))],
-        Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::I32,
-        ))))),
-    ))
-}
-
-fn load_atomic_host_ty() -> Ty {
-    let r = Ident::new("r");
-    let m = Ident::new("m");
-    let r_prv = IdentKinded {
-        ident: r.clone(),
-        kind: Kind::Provenance,
-    };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
-    Ty::new(TyKind::Fn(
-        vec![r_prv, m_mem],
-        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-            Provenance::Ident(r),
-            Ownership::Shrd,
-            Memory::Ident(m),
-            Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
-        ))))],
-        Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::I32,
-        ))))),
-    ))
-}
-
-// <r: prv, m: mem>(&r shrd m t, i32) -[gpu.global]-> ()
-fn store_atomic_ty() -> Ty {
-    let r = Ident::new("r");
-    let m = Ident::new("m");
-    let r_prv = IdentKinded {
-        ident: r.clone(),
-        kind: Kind::Provenance,
-    };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
-    Ty::new(TyKind::Fn(
-        vec![r_prv, m_mem],
-        vec![
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-                Provenance::Ident(r),
-                Ownership::Shrd,
-                Memory::Ident(m),
-                Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
-            )))),
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
-        ],
-        Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::Unit,
-        ))))),
-    ))
-}
-
-// <r: prv, m: mem>(&r shrd m t, i32) -[gpu.global]-> ()
-fn store_atomic_host_ty() -> Ty {
-    let r = Ident::new("r");
-    let m = Ident::new("m");
-    let r_prv = IdentKinded {
-        ident: r.clone(),
-        kind: Kind::Provenance,
-    };
-    let m_mem = IdentKinded {
-        ident: m.clone(),
-        kind: Kind::Memory,
-    };
-    Ty::new(TyKind::Fn(
-        vec![r_prv, m_mem],
-        vec![
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-                Provenance::Ident(r),
-                Ownership::Shrd,
-                Memory::Ident(m),
-                Box::new(DataTy::new(DataTyKind::Atomic(ScalarTy::I32))),
-            )))),
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
-        ],
-        Exec::CpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::Unit,
         ))))),
     ))
 }

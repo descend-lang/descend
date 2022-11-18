@@ -10,6 +10,7 @@ pub trait Visit: Sized {
     fn visit_mem(&mut self, mem: &Memory) { walk_mem(self, mem) }
     fn visit_prv(&mut self, prv: &Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &ScalarTy) {}
+    fn visit_atomic_ty(&mut self, _aty: &AtomicTy) {}
     fn visit_th_hierchy(&mut self, th_hierchy: &ThreadHierchyTy) { walk_th_hierchy(self, th_hierchy) }
     fn visit_dty(&mut self, dty: &DataTy) { walk_dty(self, dty) }
     fn visit_ty(&mut self, ty: &Ty) { walk_ty(self, ty) }
@@ -102,7 +103,7 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
     match &dty.dty {
         DataTyKind::Ident(ident) => visitor.visit_ident(ident),
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
-        DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
+        DataTyKind::Atomic(aty) => visitor.visit_atomic_ty(aty),
         DataTyKind::ThreadHierchy(th_hy) => visitor.visit_th_hierchy(th_hy),
         DataTyKind::SplitThreadHierchy(th_hy, n) => {
             visitor.visit_th_hierchy(th_hy);

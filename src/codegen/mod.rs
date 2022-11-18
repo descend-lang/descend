@@ -2323,15 +2323,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         Data(desc::DataTy {
             dty: d::Atomic(a), ..
         }) => match a {
-            desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
-            desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
-            desc::ScalarTy::U8 => cu::Ty::Atomic(cu::ScalarTy::U8),
-            desc::ScalarTy::U32 => cu::Ty::Atomic(cu::ScalarTy::U32),
-            desc::ScalarTy::U64 => cu::Ty::Atomic(cu::ScalarTy::U64),
-            desc::ScalarTy::F32 => cu::Ty::Atomic(cu::ScalarTy::F32),
-            desc::ScalarTy::F64 => cu::Ty::Atomic(cu::ScalarTy::F64),
-            desc::ScalarTy::Bool => cu::Ty::Atomic(cu::ScalarTy::Bool),
-            desc::ScalarTy::Gpu => cu::Ty::Atomic(cu::ScalarTy::Gpu),
+            desc::AtomicTy::AtomicU32 => cu::Ty::Atomic(cu::ScalarTy::U32),
         },
         Data(desc::DataTy {
             dty: d::Scalar(s), ..

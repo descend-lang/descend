@@ -7,7 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include <atomic>
+#include <cuda/atomic>
 
 #define CHECK_CUDA_ERR(err) { check_cuda_err((err), __FILE__, __LINE__); }
 inline void check_cuda_err(const cudaError_t err, const char * const file, const int line) {
@@ -207,7 +207,7 @@ template<typename ... Types>
 using tuple = thrust::tuple<Types...>;
 
 template<typename T>
-using atomic = std::atomic<T>;
+using atomic = cuda::atomic<T>;
 
 template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
@@ -450,37 +450,16 @@ auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> vo
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
 }
 
+
 template <typename T>
-__device__ void atomic_set(bool *address, bool val)
-{
-    unsigned long long addr = (unsigned long long)address;
-    unsigned pos = addr & 3;  // byte position within the int
-    int *int_addr = (int *)(addr - pos);  // int-aligned address
-    int old = *int_addr, assumed, ival;
-    bool current_value;
-
-    do
-    {
-        current_value = (bool)(old & ((0xFFU) << (8 * pos)));
-
-        if(current_value == val)
-            break;
-
-        assumed = old;
-        if(val)
-            ival = old | (1 << (8 * pos));
-        else
-            ival = old & (~((0xFFU) << (8 * pos)));
-        old = atomicCAS(int_addr, assumed, ival);
-    } while(assumed != old);
+__device__ atomic<T> atomic_new(T val) {
+    return atomic<T, cuda::thread_scope_device>(val);
 }
 
 template <typename T>
-__device__ void atomic_set(T *address, T val) {
-    atomicExch(address, val);
+__device__ void atomic_fetch_or(atomic<T> target, T val) {
+    target.fetch_or(val);
 }
-
-
 
 namespace detail
 {

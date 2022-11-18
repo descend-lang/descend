@@ -888,7 +888,7 @@ pub struct DataTy {
 pub enum DataTyKind {
     Ident(Ident),
     Scalar(ScalarTy),
-    Atomic(ScalarTy),
+    Atomic(AtomicTy),
     Array(Box<DataTy>, Nat),
     // [[ dty; n ]]
     ArrayShape(Box<DataTy>, Nat),
@@ -990,7 +990,7 @@ impl DataTy {
             | DataTyKind::SplitThreadHierchy(_, _)
             | DataTyKind::Range => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
-            DataTyKind::Atomic(sty) => &self.dty == &DataTyKind::Scalar(sty.clone()),
+            DataTyKind::Atomic(aty) => &self.dty == &DataTyKind::Atomic(aty.clone()),
             DataTyKind::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
             DataTyKind::RawPtr(elem_dty) => self.occurs_in(elem_dty),
             DataTyKind::Tuple(elem_dtys) => {
@@ -1101,6 +1101,11 @@ pub enum ScalarTy {
     F64,
     Bool,
     Gpu,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+pub enum AtomicTy {
+    AtomicU32,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]

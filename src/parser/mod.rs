@@ -540,8 +540,7 @@ peg::parser! {
             / "bool" { DataTyKind::Scalar(ScalarTy::Bool) }
             / "()" { DataTyKind::Scalar(ScalarTy::Unit) }
             / "Gpu" { DataTyKind::Scalar(ScalarTy::Gpu) }
-            / "Atomic<i32>" { DataTyKind::Atomic(ScalarTy::I32) }
-            / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
+            / "AtomicU32" { DataTyKind::Atomic(AtomicTy::AtomicU32) }
             / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
             / name:ident() { DataTyKind::Ident(name) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
@@ -635,7 +634,7 @@ peg::parser! {
 
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
-                / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
+                / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "AtomicU32" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
                 / "Block" / "Warp" / "Thread" / "with")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
