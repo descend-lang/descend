@@ -134,7 +134,7 @@ namespace descend {
         try {
             program.build(*gpu->device);
 
-            cl::Kernel kernel(program, "reduce_shared_mem", &err);
+            cl::Kernel kernel(program, "tree_reduce", &err);
             std::cout << "Created Kernel" << std::endl;
 
             cl_uint index = 0;
