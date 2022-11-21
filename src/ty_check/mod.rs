@@ -153,6 +153,9 @@ impl TyChecker {
             ExprKind::Index(pl_expr, index) => {
                 self.ty_check_index_copy(kind_ctx, ty_ctx, exec, pl_expr, index)?
             }
+            ExprKind::BorrowIndex(prv, own, arr_expr, idx) => {
+                self.ty_check_borrow_idx(kind_ctx, ty_ctx, exec, prv, *own, arr_expr, idx)?
+            }
             ExprKind::Assign(pl_expr, e) => {
                 if pl_expr.is_place() {
                     self.ty_check_assign_place(kind_ctx, ty_ctx, exec, &pl_expr, e)?
@@ -216,7 +219,6 @@ impl TyChecker {
                 self.ty_check_split(kind_ctx, ty_ctx, exec, r1, r2, *own, s, view_ref)?
             }
             ExprKind::Range(l, u) => self.ty_check_range(kind_ctx, ty_ctx, exec, l, u)?,
-            ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
             ExprKind::Idx(_, _) => {
                 unimplemented!("This is helper syntax to index into non-place expressions.")
             }
@@ -1937,6 +1939,28 @@ impl TyChecker {
         };
 
         Ok((res_ty_ctx, pl_ty))
+    }
+
+    fn ty_check_borrow_idx(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        prv_val_name: &Option<String>,
+        own: Ownership,
+        arr_expr: &mut PlaceExpr,
+        idx: &Nat,
+    ) -> TyResult<(TyCtx, Ty)> {
+        let (arr_ty_ctx, arr_expr_ty) =
+            self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv_val_name, own, arr_expr)?;
+        arr_expr.ty = Some(arr_expr_ty);
+        match &arr_expr.ty.as_ref().unwrap().ty {
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n),
+                ..
+            }) => Ok((arr_ty_ctx, Ty::new(TyKind::Data(elem_dty.as_ref().clone())))),
+            _ => Err(TyError::String("Expected and array or view.".to_string())),
+        }
     }
 
     fn ty_check_borrow(

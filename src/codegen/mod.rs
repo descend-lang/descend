@@ -1335,9 +1335,15 @@ fn gen_expr(
                 _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
             })
         }
-        BorrowIndex(_, _, pl_expr, n) => {
+        BorrowIndex(_, _, pl_expr, idx) => {
             if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
-                panic!("It should not be allowed to borrow from a shape expression.")
+                CheckedExpr::Expr(cu::Expr::Ref(Box::new(gen_idx_into_shape(
+                    pl_expr,
+                    idx,
+                    &codegen_ctx.shape_ctx,
+                    comp_unit,
+                    idx_checks,
+                ))))
             } else {
                 CheckedExpr::Expr(cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
                     array: Box::new(gen_pl_expr(
@@ -1346,7 +1352,7 @@ fn gen_expr(
                         comp_unit,
                         idx_checks,
                     )),
-                    index: n.clone(),
+                    index: idx.clone(),
                 })))
             }
         }
