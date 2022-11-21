@@ -470,11 +470,26 @@ fn atomic_new_ty() -> Ty {
 // atomic_fetch_or:
 //  <>(AtomicU32, u32) -[gpu.thread]-> u32
 fn atomic_fetch_or_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
     Ty::new(TyKind::Fn(
-        vec![],
+        vec![r_prv, m_mem],
         vec![
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Atomic(
-                AtomicTy::AtomicU32,
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                Provenance::Ident(r),
+                Ownership::Shrd,
+                Memory::Ident(m),
+                Box::new(DataTy::new(DataTyKind::Atomic(
+                    AtomicTy::AtomicU32,
+                ))),
             )))),
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::U32,
@@ -488,20 +503,35 @@ fn atomic_fetch_or_ty() -> Ty {
 }
 
 // atomic_load:
-//  <>(AtomicU32) -[gpu.thread]-> u32
+//  <m: mem>(AtomicU32) -[gpu.thread]-> u32
 fn atomic_load_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
     Ty::new(TyKind::Fn(
-        vec![],
+        vec![r_prv, m_mem],
         vec![
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Atomic(
-                AtomicTy::AtomicU32,
-            ))))
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                Provenance::Ident(r),
+                Ownership::Shrd,
+                Memory::Ident(m),
+                Box::new(DataTy::new(DataTyKind::Atomic(
+                    AtomicTy::AtomicU32,
+                ))),
+            )))),
         ],
         Exec::GpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
-        ))))
-        )))
+        )))))
+    ))
 }
 
 // gpu:

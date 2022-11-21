@@ -195,7 +195,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 {
                     let foo = &shrd sm_as;
                     let tmp_sm_as_view = to_view(&shrd *foo);
-                    let bar = &uniq sm_block_enc;
+                    let mut bar = &uniq sm_block_enc;
                     let tmp_sm_block_enc_view = to_view_mut(&uniq *bar);
                     parfor _ in block
                     with sm_as_item, sm_block_enc_item
@@ -221,7 +221,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         wrbits = codewordlen
                     };
                     let mut tmpcw: u32 = ( codeword >> ( codewordlen - wrbits ) ) as u32;
-                    atomic_fetch_or(sm_block_enc[kc], tmpcw << (32u32 - startbit - wrbits) );
+                    atomic_fetch_or(&shrd sm_block_enc[kc], tmpcw << (32u32 - startbit - wrbits) );
                     codewordlen = codewordlen - wrbits;
 
                     // Part 2 (second value in shared memory)
@@ -233,21 +233,21 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         };
                         codewordlen = codewordlen - wrbits;
                         tmpcw = ( codeword >> codewordlen ) as u32 & ( ( 1u32 << wrbits ) - 1u32 );
-                        atomic_fetch_or(sm_block_enc[kc+1], tmpcw << ( 32u32 - wrbits ) );
+                        atomic_fetch_or(&shrd sm_block_enc[kc+1], tmpcw << ( 32u32 - wrbits ) );
                         ()
                     };
 
                     // Part 3 (third value in shared memory)
                     if codewordlen > 0u32 {
                         tmpcw = (codeword & ( ( 1u64 << codewordlen) - 1u64) ) as u32;
-                        atomic_fetch_or(sm_block_enc[kc+2], tmpcw << ( 32u32 - codewordlen ) );
+                        atomic_fetch_or(&shrd sm_block_enc[kc+2], tmpcw << ( 32u32 - codewordlen ) );
                         ()
                     };
 
                     // write block solution to global memory output
                     // todo only threads with tid < sm_kcmax need to copy
                     // todo syncthreads should be generated here!
-                    *out_data_item = atomic_load(*sm_block_enc_item)
+                    *out_data_item = atomic_load(&shrd *sm_block_enc_item)
                 }
             }
           }

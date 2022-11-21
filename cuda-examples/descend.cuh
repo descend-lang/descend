@@ -452,13 +452,23 @@ auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> vo
 
 
 template <typename T>
-__device__ atomic<T> atomic_new(T val) {
+inline __device__ atomic<T> atomic_new(T val) {
     return atomic<T, cuda::thread_scope_device>(val);
 }
 
 template <typename T>
-__device__ void atomic_fetch_or(atomic<T> target, T val) {
-    target.fetch_or(val);
+inline __device__ void atomic_fetch_or(
+        atomic<T> *target,
+        T val,
+        std::memory_order order = std::memory_order_seq_cst) {
+    target.fetch_or(val, order);
+}
+
+template <typename T>
+inline __device__ T atomic_load(
+        atomic<T> *target,
+        std::memory_order order = std::memory_order_seq_cst) {
+    return target.load(order);
 }
 
 namespace detail
