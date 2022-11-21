@@ -4,3 +4,4 @@
 Cargo.lock
 /.vscode
 *.out
+.cargo/config.toml

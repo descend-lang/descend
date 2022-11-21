@@ -817,7 +817,7 @@ fn gen_exec(
     };
 
     // FIXME only allows Lambdas
-    let (dev_fun, free_kinded_idents) =
+    let (dev_fun, free_kinded_idents): (cu::Expr, Vec<desc::IdentKinded>) =
         if let desc::ExprKind::Lambda(params, _, _, body) = &fun.expr {
             let parall_collec = params[0].ident.clone();
             let mut fresh_parall_codegen_ctx = CodegenCtx {
@@ -862,33 +862,36 @@ fn gen_exec(
                 }),
             ];
 
-            let free_kinded_idents = {
-                let mut free_kinded_idents = utils::FreeKindedIdents::new();
-                free_kinded_idents.visit_expr(&body.clone());
-                free_kinded_idents
-                    .set
-                    .iter()
-                    .filter(|ki| ki.kind != desc::Kind::Provenance)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
-            let nat_param_decls = free_kinded_idents
-                .iter()
-                .map(|ki| match &ki.kind {
-                    desc::Kind::Nat => cu::ParamDecl {
-                        name: ki.ident.name.clone(),
-                        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                    },
-                    desc::Kind::Ty
-                    | desc::Kind::Provenance
-                    | desc::Kind::Memory
-                    | desc::Kind::DataTy => {
-                        panic!("Unexpected found {:?}.", ki.ident.name)
-                    }
-                })
-                .collect::<Vec<_>>();
+            // FIXME reintroduce, but differentiate between statically computed and runtime computed
+            //  values, especially for array sizes
+            // let free_kinded_idents = {
+            //     let mut free_kinded_idents = utils::FreeKindedIdents::new();
+            //     free_kinded_idents.visit_expr(&body.clone());
+            //     free_kinded_idents
+            //         .set
+            //         .iter()
+            //         .filter(|ki| ki.kind != desc::Kind::Provenance)
+            //         .cloned()
+            //         .collect::<Vec<_>>()
+            // };
+            // let nat_param_decls = free_kinded_idents
+            //     .iter()
+            //     .map(|ki| match &ki.kind {
+            //         desc::Kind::Nat => cu::ParamDecl {
+            //             name: ki.ident.name.clone(),
+            //             ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+            //         },
+            //         desc::Kind::Ty
+            //         | desc::Kind::Provenance
+            //         | desc::Kind::Memory
+            //         | desc::Kind::DataTy => {
+            //             panic!("Unexpected found {:?}.", ki.ident.name)
+            //         }
+            //     })
+            //     .collect::<Vec<_>>();
             let mut all_param_decls = param_decls;
-            all_param_decls.extend(nat_param_decls);
+            // FIXME see above
+            // all_param_decls.extend(nat_param_decls);
             (
                 cu::Expr::Lambda {
                     captures: vec![],
@@ -902,7 +905,9 @@ fn gen_exec(
                     ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
                     is_dev_fun: true,
                 },
-                free_kinded_idents,
+                vec![]
+                // FIXME see above
+                // free_kinded_idents,
             )
         } else {
             panic!("Currently only lambdas can be passed.")
@@ -1336,9 +1341,15 @@ fn gen_expr(
                 _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
             })
         }
-        BorrowIndex(_, _, pl_expr, n) => {
+        BorrowIndex(_, _, pl_expr, idx) => {
             if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
-                panic!("It should not be allowed to borrow from a shape expression.")
+                CheckedExpr::Expr(cu::Expr::Ref(Box::new(gen_idx_into_shape(
+                    pl_expr,
+                    idx,
+                    &codegen_ctx.shape_ctx,
+                    comp_unit,
+                    idx_checks,
+                ))))
             } else {
                 CheckedExpr::Expr(cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
                     array: Box::new(gen_pl_expr(
@@ -1347,7 +1358,7 @@ fn gen_expr(
                         comp_unit,
                         idx_checks,
                     )),
-                    index: n.clone(),
+                    index: idx.clone(),
                 })))
             }
         }
