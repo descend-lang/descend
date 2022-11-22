@@ -28,6 +28,8 @@ pub static SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub static SPLIT_WARP: &str = "split_warp";
 pub static SPLIT_WARP_GRP: &str = "split_warp_grp";
 
+pub static THREAD_ID_X: &str = "thread_id_x";
+
 pub static ATOMIC_NEW: &str = "atomic_new";
 pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
 pub static ATOMIC_LOAD: &str = "atomic_load";
@@ -60,6 +62,7 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SPLIT_WARP_GRP, split_warp_grp_ty()),
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
+        (THREAD_ID_X, thread_id_x_ty()),
         (ATOMIC_NEW, atomic_new_ty()),
         (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
         (ATOMIC_LOAD, atomic_load_ty()),
@@ -449,6 +452,19 @@ fn split_warp_ty() -> Ty {
                 ),
             ))),
         ]))))),
+    ))
+}
+
+// thread_id_x:
+//  <>() -[gpu.thread]-> i32
+fn thread_id_x_ty() -> Ty {
+    Ty::new(TyKind::Fn(
+        vec![],
+        vec![],
+        Exec::GpuThread,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32
+        ))))),
     ))
 }
 
