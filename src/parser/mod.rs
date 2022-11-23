@@ -867,6 +867,17 @@ mod tests {
     }
 
     #[test]
+    fn ty_atomic() {
+        assert_eq!(
+            descend::ty("AtomicU32"),
+            Ok(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Atomic(
+                AtomicTy::AtomicU32
+            ))))),
+            "does not recognize AtomicU32 type"
+        );
+    }
+
+    #[test]
     fn ty_gpu() {
         assert_eq!(
             descend::ty("Gpu"),
