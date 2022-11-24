@@ -456,14 +456,14 @@ fn split_warp_ty() -> Ty {
 }
 
 // thread_id_x:
-//  <>() -[gpu.thread]-> i32
+//  <>() -[gpu.thread]-> u32
 fn thread_id_x_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![],
         vec![],
         Exec::GpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::I32
+            ScalarTy::U32
         ))))),
     ))
 }

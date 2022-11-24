@@ -58,6 +58,14 @@ fn vlc_encode() -> Res {
 }
 
 #[test]
+fn histogram() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/histogram.desc")?
+    ))
+}
+
+#[test]
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",

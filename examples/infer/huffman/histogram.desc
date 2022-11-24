@@ -1,0 +1,47 @@
+fn hist<i: prv, o: prv>(
+    h_in: &s shrd cpu.mem [u8; 64*1024],
+    h_out: &oi uniq cpu.mem [u32; 256]
+) -[cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let d_in = gpu_alloc_copy(&uniq gpu, &shrd *h_in);
+    let mut d_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
+    exec::<64, 512>(
+        &uniq gpu,
+        (
+            &shrd d_in,
+            &uniq d_out
+        ),
+        | grid: BlockGrp<64, ThreadGrp<512>>,
+          inputs: (&shrd gpu.global [u32; 64*1024],
+                   &uniq gpu.global [u32; 256])
+        | -[gpu.grid]-> () {
+            let d_in_groups = group::<512>(to_view(inputs.0));
+            let mut d_out_arr = inputs.1;
+
+            decl {
+                let mut sm_output: [AtomicU32; 256] @ gpu.shared
+            } parfor block in grid
+            with d_in_group
+            from d_in_groups {
+                // create shared memory view for initialization
+                {
+                    let sm_output_view = to_view_mut( & uniq sm_output);
+
+                    parfor _ in block
+                    with sm_output_item
+                    from sm_output_view {
+                        *sm_output_item = atomic_new(0u32)
+                    }
+                };
+                parfor _ in block
+                with d_in_item
+                from d_in_group {
+                    atomic_fetch_or(&shrd sm_output[d_in_item], 1u32)
+                }
+            }
+        }
+    );
+    copy_to_host(&shrd out_data, h_input);
+    copy_to_host(&shrd out_idx, h_output)
+}

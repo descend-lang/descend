@@ -21,7 +21,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
           &uniq out_data,
           &uniq out_idx
         ),
-        | grid: BlockGrp<4, ThreadGrp<256>>,
+        | grid: BlockGrp<64, ThreadGrp<256>>,
           inputs: (&shrd gpu.global [u32; 64*256],
                    &shrd gpu.global [u32; 256],
                    &shrd gpu.global [u32; 256],
@@ -245,7 +245,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     };
 
                     // write block solution to global memory output
-                    if thread_id_x() < sm_kcmax[0] as i32 {
+                    if thread_id_x() <= sm_kcmax[0] {
                         *out_data_item = atomic_load(&shrd *sm_block_enc_item)
                     }
                 }
