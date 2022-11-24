@@ -2,10 +2,10 @@
 
 extern crate descend;
 
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::env;
 use std::fs;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 type Res = Result<(), descend::error::ErrorReported>;
 
@@ -94,35 +94,10 @@ fn computed_indexing() -> Res {
 }
 
 #[test]
-fn vec_add_compile_test() -> Res {
-    let compiled = descend::compile("examples/infer/vec_add_lion.desc")?;
-    let file_path = "cuda-examples/vec_add_cuda.cu";
-
-    fs::write(file_path, descend::compile("examples/infer/vec_add_lion.desc")?)
-        .expect("Cant write in the file");
-
-
-
-    Ok(println!("{}", compiled))
+fn lu_decomposition_test() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/lu_decomposition.desc")?,
+    ))
 }
 
-// #[test]
-// fn vec_add_test() -> Res {
-//     let compiled = descend::compile("examples/infer/vec_add_lion.desc")?;
-//     let a = [1, 2, 3, 4, 5, 6];
-//     let b = [3, 4, 5, 6, 7, 8];
-//     let res = [4, 6, 8, 10, 12, 14];
-//
-//     let mut compile_unit = Command::new("nvcc ")
-//         .stdin(Stdio:piped())
-//         .stdin(Stdio:piped())
-//         .spawn()
-//         .expect("Can't compile the CUDA nvcc Code");
-//
-//
-//     if let Some(mut stdin) = compile_unit.stdin.take() {
-//         stdin
-//             .write_all()
-//             .
-//     }
-// }

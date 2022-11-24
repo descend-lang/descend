@@ -322,14 +322,17 @@ peg::parser! {
                     Ty::new(TyKind::Data(utils::type_from_lit(&l)))
                 )
             }
-            p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? expr:(_ "=" _ e:expression() {e})? {
+            p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? _ op:( "+" {BinOp::Add} / "-" {BinOp::Sub} / "*" {BinOp::Mul} / "/" {BinOp::Div} / "%" {BinOp::Mod})? expr:( "=" _ e:expression() {e})? {
                 match expr {
                     None => match idx {
                         None => Expr::new(ExprKind::PlaceExpr(p)),
                         Some(idx) => Expr::new(ExprKind::Index(p,idx))
                     },
                     Some(expr) => match idx {
-                        None => Expr::new(ExprKind::Assign(p, Box::new(expr))),
+                        None => match op {
+                            None => Expr::new(ExprKind::Assign(p, Box::new(expr))),
+                            Some(bin_op) => Expr::new(ExprKind::Assign(p.clone(), Box::new(utils::make_binary(bin_op, Expr::new(ExprKind::PlaceExpr(p)), expr))))
+                        },
                         Some(idx) => Expr::new(ExprKind::IdxAssign(p, idx, Box::new(expr))),
                     }
                 }
@@ -483,6 +486,7 @@ peg::parser! {
             }
             x:(@) _ "+" _ y:@ { utils::make_binary_nat(BinOpNat::Add, x, y) }
             x:(@) _ "-" _ y:@ { utils::make_binary_nat(BinOpNat::Sub, x, y) }
+            x:(@) _ ".." _ y:@ { Nat::App(Ident::new("range"), vec![x, y]) }
             --
             x:(@) _ "*" _ y:@ { utils::make_binary_nat(BinOpNat::Mul, x, y) }
             x:(@) _ "/" _ y:@ { utils::make_binary_nat(BinOpNat::Div, x, y) }

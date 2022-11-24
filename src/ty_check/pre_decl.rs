@@ -349,27 +349,28 @@ fn split_thread_grp_ty() -> Ty {
         vec![k_nat, n1_nat, n2_nat, n3_nat],
         vec![input_ty],
         Exec::View,
-        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::SplitThreadHierchy(input_th_hy, Nat::Ident(k))))))
-        // Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
-        //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
-        //         ThreadHierchyTy::ThreadGrp(
-        //             Nat::Ident(k.clone()),
-        //             Nat::Ident(n2.clone()),
-        //             Nat::Ident(n3.clone()),
-        //         ),
-        //     ))),
-        //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
-        //         ThreadHierchyTy::ThreadGrp(
-        //             Nat::BinOp(
-        //                 BinOpNat::Sub,
-        //                 Box::new(Nat::Ident(n1)),
-        //                 Box::new(Nat::Ident(k)),
-        //             ),
-        //             Nat::Ident(n2.clone()),
-        //             Nat::Ident(n3.clone()),
-        //         ),
-        //     ))),
-        // ]))))),
+        Box::new(Ty::new(TyKind::Data(DataTy::new(
+            DataTyKind::SplitThreadHierchy(input_th_hy, Nat::Ident(k)),
+        )))), // Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(vec![
+              //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
+              //         ThreadHierchyTy::ThreadGrp(
+              //             Nat::Ident(k.clone()),
+              //             Nat::Ident(n2.clone()),
+              //             Nat::Ident(n3.clone()),
+              //         ),
+              //     ))),
+              //     DataTy::new(DataTyKind::ThreadHierchy(Box::new(
+              //         ThreadHierchyTy::ThreadGrp(
+              //             Nat::BinOp(
+              //                 BinOpNat::Sub,
+              //                 Box::new(Nat::Ident(n1)),
+              //                 Box::new(Nat::Ident(k)),
+              //             ),
+              //             Nat::Ident(n2.clone()),
+              //             Nat::Ident(n3.clone()),
+              //         ),
+              //     ))),
+              // ]))))),
     ))
 }
 
