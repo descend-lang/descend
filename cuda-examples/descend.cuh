@@ -465,6 +465,14 @@ inline __device__ void atomic_fetch_or(
 }
 
 template <typename T>
+inline __device__ void atomic_fetch_add(
+        atomic<T> *target,
+        T val,
+        std::memory_order order = std::memory_order_seq_cst) {
+    target.fetch_add(val, order);
+}
+
+template <typename T>
 inline __device__ T atomic_load(
         atomic<T> *target,
         std::memory_order order = std::memory_order_seq_cst) {
