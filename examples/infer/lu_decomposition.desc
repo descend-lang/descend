@@ -54,7 +54,8 @@ fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat>(
             //split_mat.1: &uniq [[[f64; tile_size]; tile_size]; block_size_per_grid]
 
             //TODO Berechnung der Diagonal tiles
-            parfor block in grid with m from (matrix_view[it])[it] {// m: &uniq [[ [[f64; tile_size]]; tile_size]]
+            let row_of_tiles = matrix_view[it];
+            parfor block in grid with m from row_of_tiles[it] {// m: &uniq [[ [[f64; tile_size]]; tile_size]]
                 diagonal_block(m)
             }
 
@@ -77,12 +78,13 @@ fn diagonal_block(
         //1.transpose von row.1 -> für das Splitten an der richtigen Stelle
         //2.split -> so splitten das 0..i in dem 1. teil des tupels sind
         //3.transpose -> damit die Zeilen passend zu den thread_elementen auf die threads verteilt werden
-        let split_column = split uniq i transpose_mut(row.1);
+        let rhs_tile_transposed = transpose_mut(row.1);
+        let split_column = split uniq i rhs_tile_transposed;
 
-        let thread_elements = transpose_mut(*split_column.1[0]); //[[f64; tile_size-1-i]]
+        let thread_elements = transpose_mut(split_column.1[0]); //[[f64; tile_size-1-i]]
 
         //für indiviuelle Zugriffe: -> die nicht veränderbar sein sollen
-        let indiv_access = &shrd transpose_mut(*split_column.0);
+        let indiv_access = &shrd *transpose_mut(split_column.0);
 
         //let outter_elements = &shrd *m; //werte splitten, dass nur Werte enthalten sind, die gelesen werden
 
