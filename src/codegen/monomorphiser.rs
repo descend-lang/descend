@@ -26,11 +26,11 @@ use crate::{
 /// Output:
 ///  * list of all structs without constraints
 ///  * global functions which have no constraint generic parameters anymore
-pub fn monomorphise_constraint_generics(
+pub fn monomorphise_constrained_generics(
     mut items: Vec<Item>,
     mut std_lib_items: Vec<Item>,
     monomorphise_all: bool,
-) -> (Vec<StructDecl>, Vec<FunDef>) {
+) -> (Vec<StructDef>, Vec<FunDef>) {
     // Copy all trait_defs to prevent borrowing errors in next statement
     let trait_defs = items
         .iter()
@@ -62,7 +62,7 @@ pub fn monomorphise_constraint_generics(
         .into_iter()
         .chain(std_lib_items.into_iter())
         .filter_map(|item| {
-            if let Item::StructDecl(mut struct_decl) = item {
+            if let Item::StructDef(mut struct_decl) = item {
                 // Constraints of structs are checked while Typechecking are not needed anymore
                 struct_decl.constraints.clear();
                 Some(struct_decl)
@@ -70,7 +70,7 @@ pub fn monomorphise_constraint_generics(
                 None
             }
         })
-        .collect::<Vec<StructDecl>>();
+        .collect::<Vec<StructDef>>();
 
     (struct_decls, fun_defs)
 }
@@ -151,7 +151,7 @@ impl<'a> Monomorphiser<'a> {
                     )
                 }))
             }
-            Item::StructDecl(_) => (),
+            Item::StructDef(_) => (),
         };
         items.iter().for_each(|item| item_to_funs(item, false));
         std_lib_items.iter().for_each(|item| {

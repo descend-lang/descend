@@ -54,11 +54,10 @@ pub enum TyError {
     CouldNotInferProvenance,
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
-    UnexpectedTypeKind {
-        expected_name: String,
+    ExpectedDataType {
         found: Ty,
     },
-    UnexpectedDataTypeKind {
+    UnexpectedDataType {
         expected_name: String,
         found: DataTy,
     },
@@ -216,16 +215,13 @@ impl TyError {
                     eprintln!("{:?}", &self);
                 };
             }
-            TyError::UnexpectedTypeKind {
-                expected_name,
-                found,
-            } => {
+            TyError::ExpectedDataType { found } => {
                 eprintln!(
-                    "Found unexpected type. Expected {}, found {:#?}.",
-                    expected_name, found
+                    "Found unexpected type. Expected DataType, found {:#?}.",
+                    found
                 );
             }
-            TyError::UnexpectedDataTypeKind {
+            TyError::UnexpectedDataType {
                 expected_name,
                 found,
             } => {

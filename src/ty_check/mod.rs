@@ -229,13 +229,13 @@ impl TyChecker {
     fn ty_check_item_def(&mut self, item_def: &mut Item) -> TyResult<()> {
         match item_def {
             Item::FunDef(fun_def) => self.ty_check_fun_def(KindCtx::new(), fun_def),
-            Item::StructDecl(struct_decl) => self.ty_check_struct_decl(struct_decl),
+            Item::StructDef(struct_decl) => self.ty_check_struct_decl(struct_decl),
             Item::TraitDef(trait_def) => self.ty_check_trait_def(trait_def),
             Item::ImplDef(impl_def) => self.ty_check_impl_def(impl_def),
         }
     }
 
-    fn ty_check_struct_decl(&mut self, struct_decl: &mut StructDecl) -> TyResult<()> {
+    fn ty_check_struct_decl(&mut self, struct_decl: &mut StructDef) -> TyResult<()> {
         // Append all generic params of the struct to the kinding context
         let kind_ctx = KindCtx::new().append_idents(struct_decl.generic_params.clone());
         let ty_ctx = TyCtx::new();
@@ -991,8 +991,7 @@ impl TyChecker {
             let ith_expr_dty = if let TyKind::Data(dty) = &mut ith_expr.ty.as_mut().unwrap().ty {
                 dty
             } else {
-                Err(TyError::UnexpectedTypeKind {
-                    expected_name: String::from("TyKind::Data"),
+                Err(TyError::ExpectedDataType {
                     found: ith_expr.ty.as_mut().unwrap().clone(),
                 })?
             };
@@ -1132,8 +1131,7 @@ impl TyChecker {
                 )),
             ]))))
         } else {
-            return Err(TyError::UnexpectedTypeKind {
-                expected_name: String::from("TyKind::Data"),
+            return Err(TyError::ExpectedDataType {
                 found: view.ty.as_ref().unwrap().clone(),
             });
         };
@@ -1700,14 +1698,13 @@ impl TyChecker {
                             tty.clone(),
                         )))))
                     } else {
-                        Err(TyError::UnexpectedDataTypeKind {
+                        Err(TyError::UnexpectedDataType {
                             expected_name: String::from("DataTyKind::ArrayShape"),
                             found: (**arr_view).clone(),
                         })
                     }
                 } else {
-                    Err(TyError::UnexpectedTypeKind {
-                        expected_name: String::from("TyKind::Data"),
+                    Err(TyError::ExpectedDataType {
                         found: e.ty.as_ref().unwrap().clone(),
                     })
                 }
@@ -2426,7 +2423,7 @@ impl TyChecker {
                 self.dty_well_formed(kind_ctx, &ty_ctx, Some(exec), dty)?;
 
                 // Get a suitable function
-                let fun_kind = self.gl_ctx.fun_kind_by_dty(
+                let fun_kind = self.gl_ctx.fun_kind_under_dty(
                     &self.constraint_env,
                     &mut self.implicit_ident_cons,
                     &fun_name.name,
@@ -2444,15 +2441,14 @@ impl TyChecker {
                 let mut dty = if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
                     dty.clone()
                 } else {
-                    Err(TyError::UnexpectedTypeKind {
-                        expected_name: String::from("TyKind::Data"),
+                    Err(TyError::ExpectedDataType {
                         found: first_arg.ty.as_ref().unwrap().clone(),
                     })?
                 };
 
                 let fun_kind = if fun_kind.is_none() {
                     // Get function name
-                    let fun_kind = self.gl_ctx.fun_kind_by_dty(
+                    let fun_kind = self.gl_ctx.fun_kind_under_dty(
                         &self.constraint_env,
                         &self.implicit_ident_cons,
                         &fun_name.name,
@@ -2468,7 +2464,7 @@ impl TyChecker {
                         match &dty.dty {
                             DataTyKind::Ref(_, _, _, r_dty) => {
                                 dty = (**r_dty).clone();
-                                self.gl_ctx.fun_kind_by_dty(
+                                self.gl_ctx.fun_kind_under_dty(
                                     &self.constraint_env,
                                     &self.implicit_ident_cons,
                                     &fun_name.name,
@@ -2510,7 +2506,7 @@ impl TyChecker {
                                     );
 
                                     dty = referenced_dty;
-                                    let fun_kind = self.gl_ctx.fun_kind_by_dty(
+                                    let fun_kind = self.gl_ctx.fun_kind_under_dty(
                                         &self.constraint_env,
                                         &self.implicit_ident_cons,
                                         &fun_name.name,

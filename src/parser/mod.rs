@@ -13,13 +13,13 @@ use crate::error::ErrorReported;
 pub use source::*;
 
 use crate::ast::visit_mut::{
-    walk_dty, walk_fun_def, walk_impl_def, walk_struct_decl, walk_trait_def, VisitMut,
+    walk_dty, walk_fun_def, walk_impl_def, walk_struct_def, walk_trait_def, VisitMut,
 };
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
     let mut item_defs = parser.parse().map_err(|err| err.emit())?;
-    let errs = visit_ast(&mut item_defs);
+    let errs = postprocess(&mut item_defs);
 
     if errs.is_empty() {
         Ok(CompilUnit::new(item_defs, source))
@@ -50,10 +50,10 @@ impl<'a> Parser<'a> {
 /// * Initialize struct_fields of struct-datatypes
 /// * Remove syntatic sugar for "Self" in impls
 /// * Check if struct-definitions are not cyclic
-fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
-    struct Visitor {
+fn postprocess(items: &mut Vec<Item>) -> Vec<String> {
+    struct PostProcessVisitor {
         /// List with all name of structs and corresponding StructDecl
-        structs: BTreeMap<String, StructDecl>,
+        structs: BTreeMap<String, StructDef>,
         /// Kinded identifier which are currently in scope
         kinded_identifier_in_scope: Vec<(String, Kind)>,
         /// Datatype of impl if the visitor is visiting items inside an impl
@@ -64,12 +64,12 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         errs: Vec<String>,
     }
 
-    impl Visitor {
+    impl PostProcessVisitor {
         fn new(items: &Vec<Item>) -> Self {
-            Visitor {
+            PostProcessVisitor {
                 //Iterate over all items and collect structs
                 structs: BTreeMap::from_iter(items.iter().filter_map(|item| {
-                    if let Item::StructDecl(struct_decl) = item {
+                    if let Item::StructDef(struct_decl) = item {
                         Some((struct_decl.name.clone(), struct_decl.clone()))
                     } else {
                         None
@@ -116,7 +116,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     }
 
     /// Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
-    fn replace_arg_kinded_kind(visitor: &mut Visitor, arg: &mut ArgKinded) {
+    fn replace_arg_kinded_kind(visitor: &mut PostProcessVisitor, arg: &mut ArgKinded) {
         if let ArgKinded::Ident(ident) = arg {
             let ident_kind = visitor
                 .kinded_identifier_in_scope
@@ -160,7 +160,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     }
 
     /// Replace "Self" in impls with the type of the impl
-    fn replace_self_in_impls(visitor: &Visitor, dty: &mut DataTy) {
+    fn replace_self_in_impls(visitor: &PostProcessVisitor, dty: &mut DataTy) {
         if let Some(impl_dty_in_scope) = &visitor.impl_dty_in_scope {
             if let DataTyKind::Ident(ident) = &dty.dty {
                 if ident.name == "Self" {
@@ -171,7 +171,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     }
 
     /// Distinguish between type variables and struct names without generic params
-    fn replace_tyidents_struct_names(visitor: &mut Visitor, dty: &mut DataTy) {
+    fn replace_tyidents_struct_names(visitor: &mut PostProcessVisitor, dty: &mut DataTy) {
         if let DataTyKind::Ident(name) = &mut dty.dty {
             let struct_decl = visitor.structs.get(&name.name);
             let is_type_ident = visitor.contains_kinded_ident(&name.name);
@@ -192,7 +192,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
     }
 
     /// Initialize struct_fields of struct-datatypes
-    fn initialize_struct_fields(visitor: &mut Visitor, dty: &mut DataTy) {
+    fn initialize_struct_fields(visitor: &mut PostProcessVisitor, dty: &mut DataTy) {
         if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
             //if the struct_fields arent initialized
             if struct_ty.struct_fields.len() == 0 {
@@ -220,15 +220,15 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         }
     }
 
-    impl VisitMut for Visitor {
+    impl VisitMut for PostProcessVisitor {
         fn visit_item_def(&mut self, item_def: &mut Item) {
             match item_def {
                 Item::FunDef(fun_def) => {
                     self.visit_fun_def(fun_def);
                 }
-                Item::StructDecl(struct_decl) => {
+                Item::StructDef(struct_decl) => {
                     self.add_idents_kinded(&struct_decl.generic_params);
-                    walk_struct_decl(self, struct_decl);
+                    walk_struct_def(self, struct_decl);
                     self.kinded_identifier_in_scope.clear();
                 }
                 Item::TraitDef(trait_def) => {
@@ -302,7 +302,7 @@ fn visit_ast(items: &mut Vec<Item>) -> Vec<String> {
         }
     }
 
-    let mut visitor = Visitor::new(items);
+    let mut visitor = PostProcessVisitor::new(items);
     items
         .iter_mut()
         .for_each(|item_def| visitor.visit_item_def(item_def));
@@ -373,7 +373,7 @@ peg::parser! {
 
         pub(crate) rule item() -> Item
             = result:(f: fun_def() { Item::FunDef(f) }
-            / s: struct_decl() { Item::StructDecl(s) }
+            / s: struct_decl() { Item::StructDef(s) }
             / t: trait_def() { Item::TraitDef(t) }
             / i: impl_def() { Item::ImplDef(i) }) {
                 result
@@ -423,7 +423,7 @@ peg::parser! {
                 }
         }
 
-        pub(crate) rule struct_decl() -> StructDecl
+        pub(crate) rule struct_decl() -> StructDef
             = "struct" __ name:identifier() _ g:generic_params()?  _  w:where_clause()? _
             struct_fields:(u:("{" t:(_ s:(struct_field() ** (_ "," _)) _ {s})? "}" {t}) {Some(u)}
                             / ";" {None}) _ {
@@ -433,7 +433,7 @@ peg::parser! {
                     Some(struct_fields) => match struct_fields {Some(s) => s, None => vec![]},
                     None => vec![]
                 };
-                StructDecl {
+                StructDef {
                     name,
                     generic_params,
                     constraints,
@@ -2462,7 +2462,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDecl {
+            StructDef {
                 name: String::from("Test"),
                 generic_params: vec![],
                 constraints: vec![],
@@ -2478,7 +2478,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDecl {
+            StructDef {
                 name: String::from("Test"),
                 generic_params: vec![],
                 constraints: vec![],
@@ -2494,7 +2494,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDecl {
+            StructDef {
                 name: String::from("Test"),
                 generic_params: vec![],
                 constraints: vec![],
@@ -2519,7 +2519,7 @@ mod tests {
 
         assert_eq!(
             result,
-            StructDecl {
+            StructDef {
                 name: String::from("Test"),
                 generic_params: vec![
                     IdentKinded::new(

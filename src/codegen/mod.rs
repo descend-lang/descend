@@ -4,7 +4,7 @@ mod printer;
 
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{self as desc, ProjEntry, StructDecl};
+use crate::ast::{self as desc, ProjEntry, StructDef};
 use crate::ast::{utils, Mutability};
 use crate::codegen::cu_ast::Item;
 use core::panic;
@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 pub fn gen(compil_unit: desc::CompilUnit, std_lib: desc::CompilUnit, idx_checks: bool) -> String {
     // Transform all impls and traits to global functions with unique names
     // and resolves all constraints from the functions
-    let (mut structs, funs) = monomorphiser::monomorphise_constraint_generics(
+    let (mut structs, funs) = monomorphiser::monomorphise_constrained_generics(
         compil_unit.item_defs,
         std_lib.item_defs,
         false,
@@ -83,7 +83,7 @@ pub fn gen(compil_unit: desc::CompilUnit, std_lib: desc::CompilUnit, idx_checks:
 }
 
 /// Order structs to make sure every struct is declared before it is used as attribute in an other struct
-fn order_structs(structs: &mut Vec<StructDecl>) {
+fn order_structs(structs: &mut Vec<StructDef>) {
     // Do a topological sorting
     for i in 0..structs.len() {
         // Search a struct with the property that no structs except structs[0..i] must be declared before
@@ -123,7 +123,7 @@ struct CodegenCtx {
 }
 
 struct CompilUnit {
-    structs: Vec<desc::StructDecl>,
+    structs: Vec<desc::StructDef>,
     funs: Vec<desc::FunDef>,
 }
 
@@ -237,22 +237,22 @@ impl CheckedExpr {
     }
 }
 
-fn gen_struct_forward_decl(struct_decl: &desc::StructDecl) -> cu::Item {
-    cu::Item::StructForwardDecl {
+fn gen_struct_forward_decl(struct_decl: &desc::StructDef) -> cu::Item {
+    cu::Item::StructDecl {
         name: struct_decl.name.clone(),
         templ_params: gen_templ_params(&struct_decl.generic_params),
     }
 }
 
-fn gen_struct_decl(struct_decl: &desc::StructDecl) -> cu::Item {
-    let desc::StructDecl {
+fn gen_struct_decl(struct_decl: &desc::StructDef) -> cu::Item {
+    let desc::StructDef {
         name,
         generic_params,
         constraints: _,
         struct_fields,
     } = struct_decl;
 
-    cu::Item::StructDecl {
+    cu::Item::StructDef {
         name: name.clone(),
         templ_params: gen_templ_params(generic_params),
         attributes: struct_fields
@@ -282,7 +282,7 @@ fn gen_fun_decl(fun_def: &desc::FunDef) -> cu::Item {
         body_expr: _,
     } = fun_def;
 
-    cu::Item::FunForwardDecl {
+    cu::Item::FunDecl {
         name: name.clone(),
         templ_params: gen_templ_params(generic_params),
         params: gen_param_decls(params),

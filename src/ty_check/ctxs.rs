@@ -13,7 +13,7 @@ use super::TyResult;
 pub(super) type TypedPlace = (internal::Place, Ty);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub(crate) struct TyCtx {
+pub(super) struct TyCtx {
     frame: Vec<Frame>,
 }
 
@@ -87,7 +87,7 @@ impl TyCtx {
         })
     }
 
-    pub(crate) fn substitute(&mut self, constr_map: &ConstrainMap) {
+    pub(super) fn substitute(&mut self, constr_map: &ConstrainMap) {
         self.idents_typed_mut()
             .for_each(|ident_typed| ident_typed.ty.substitute(constr_map))
     }
@@ -232,7 +232,7 @@ impl TyCtx {
                     let mut place_frame = vec![(pl.clone(), ty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
                         let mut exploded_index = explode(
-                            pl.clone().push(&ProjEntry::TupleAccess(index)),
+                            pl.clone().proj(&ProjEntry::TupleAccess(index)),
                             Ty::new(TyKind::Data(proj_ty.clone())),
                         );
                         place_frame.append(&mut exploded_index);
@@ -247,7 +247,7 @@ impl TyCtx {
                     struct_ty.struct_fields.iter().for_each(|field| {
                         let mut exploded_index = explode(
                             pl.clone()
-                                .push(&ProjEntry::StructAccess(field.name.clone())),
+                                .proj(&ProjEntry::StructAccess(field.name.clone())),
                             Ty::new(TyKind::Data(field.dty.clone())),
                         );
                         place_frame.append(&mut exploded_index);
@@ -532,7 +532,7 @@ impl KindCtx {
 pub(super) struct GlobalCtx {
     funs: HashMap<FunctionName, TypeScheme>,
     fun_names: HashMap<String, Vec<FunctionKind>>,
-    structs: HashMap<String, StructDecl>,
+    structs: HashMap<String, StructDef>,
     traits: HashMap<String, TraitDef>,
 }
 
@@ -590,13 +590,13 @@ impl GlobalCtx {
             .iter()
             .fold(Vec::<CtxError>::new(), |mut errs, item_def| {
                 match item_def {
-                    Item::FunDef(fun_def) => self.append_fun(
+                    Item::FunDef(fun_def) => self.append_fun_def(
                         FunctionName::global_fun(&fun_def.name),
                         fun_def.ty(),
                         &fun_def.param_decls,
                         &mut errs,
                     ),
-                    Item::StructDecl(struct_decl) => {
+                    Item::StructDef(struct_decl) => {
                         // Insert this struct in context
                         let old_val = self
                             .structs
@@ -668,7 +668,7 @@ impl GlobalCtx {
                                     };
 
                                     // Insert this function in context
-                                    self.append_fun(
+                                    self.append_fun_def(
                                         FunctionName::from_impl(&fun_def.name, impl_def),
                                         extended_fun_ty_scheme,
                                         &fun_def.param_decls,
@@ -688,12 +688,12 @@ impl GlobalCtx {
             })
     }
 
-    /// Append a function
+    /// Append a function definition
     /// * `fun_name` - FunctionName of the function
     /// * `fun_ty_scheme` - type-scheme of the function
     /// * `fun_params` - parameter declarations which are checked for name conflicts
     /// * `errs` - vector where errors which occur are appended
-    fn append_fun(
+    fn append_fun_def(
         &mut self,
         fun_name: FunctionName,
         fun_ty_scheme: TypeScheme,
@@ -869,7 +869,7 @@ impl GlobalCtx {
     }
 
     /// Get a struct-declaration by its name
-    pub fn struct_by_name(&self, name: &String) -> CtxResult<&StructDecl> {
+    pub fn struct_by_name(&self, name: &String) -> CtxResult<&StructDef> {
         match self.structs.get(name) {
             Some(ty) => Ok(ty),
             None => Err(CtxError::StructNotFound(name.clone())),
@@ -880,7 +880,7 @@ impl GlobalCtx {
     /// This function does not add constraints on implicit identifiers or return a substitution with
     /// inferred types. This happens in function application when unify types of arguments
     /// and expected type of arguments
-    pub fn fun_kind_by_dty(
+    pub fn fun_kind_under_dty(
         &self,
         constraint_env: &ConstraintCtx,
         implicit_ident_cons: &IdentsConstrained,

@@ -72,7 +72,7 @@ impl Place {
         Place { ident, path }
     }
 
-    pub fn push(mut self, n: &ProjEntry) -> Self {
+    pub fn proj(mut self, n: &ProjEntry) -> Self {
         self.path.push(n.clone());
         self
     }

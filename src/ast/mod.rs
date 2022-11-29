@@ -37,7 +37,7 @@ impl<'a> CompilUnit<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     FunDef(FunDef),
-    StructDecl(StructDecl),
+    StructDef(StructDef),
     TraitDef(TraitDef),
     ImplDef(ImplDef),
 }
@@ -66,12 +66,12 @@ pub struct FunDecl {
     pub prv_rels: Vec<PrvRel>,
 }
 
-/// Representation of a declaration of a struct
+/// Representation of a definition of a struct
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructDecl {
+pub struct StructDef {
     /// name of the struct
     pub name: String,
-    /// kinded identifier which are used in this StructDecl
+    /// kinded identifier which are used in this StructDef
     pub generic_params: Vec<IdentKinded>,
     /// constraints on `generic_params`
     pub constraints: Vec<Constraint>,
@@ -88,7 +88,7 @@ pub struct StructField {
     pub dty: DataTy,
 }
 
-impl StructDecl {
+impl StructDef {
     /// Returns a typescheme corresponding to the StructDecl
     pub fn ty(&self) -> TypeScheme {
         let struct_ty = StructDataType {
@@ -1024,7 +1024,7 @@ impl PlaceExpr {
                 let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
-                        pl = pl.push(n);
+                        pl = pl.proj(n);
                         (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
                     _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), n.clone()), pl),
