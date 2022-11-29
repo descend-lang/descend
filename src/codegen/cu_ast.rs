@@ -1,10 +1,18 @@
-use crate::ast::Nat;
+use crate::ast::{Nat, ProjEntry};
 
 pub(super) type CuProgram = Vec<Item>;
 
 // TODO big difference in sizes beteween variants
 pub(super) enum Item {
+    EmptyLine,
     Include(String),
+    FunDecl {
+        name: String,
+        templ_params: Vec<TemplParam>,
+        params: Vec<ParamDecl>,
+        ret_ty: Ty,
+        is_dev_fun: bool,
+    },
     FunDef {
         name: String,
         templ_params: Vec<TemplParam>,
@@ -12,6 +20,15 @@ pub(super) enum Item {
         ret_ty: Ty,
         body: Stmt,
         is_dev_fun: bool,
+    },
+    StructDecl {
+        name: String,
+        templ_params: Vec<TemplParam>,
+    },
+    StructDef {
+        name: String,
+        templ_params: Vec<TemplParam>,
+        attributes: Vec<(String, Ty)>,
     },
 }
 
@@ -93,7 +110,12 @@ pub(super) enum Expr {
     },
     Proj {
         tuple: Box<Expr>,
-        n: usize,
+        n: ProjEntry,
+    },
+    StructInst {
+        name: String,
+        template_args: Vec<TemplateArg>,
+        args: Vec<Expr>,
     },
     InitializerList {
         elems: Vec<Expr>,
@@ -167,6 +189,7 @@ pub(super) enum Ty {
     Scalar(ScalarTy),
     Atomic(ScalarTy),
     Tuple(Vec<Ty>),
+    Struct(String, Vec<TemplateArg>),
     Array(Box<Ty>, Nat),
     CArray(Box<Ty>, Nat),
     Buffer(Box<Ty>, BufferKind),

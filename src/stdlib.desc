@@ -1,0 +1,81 @@
+trait Copy {}
+
+trait Number: Copy {}
+
+trait Add<RHS, OUTPUT> { fn add(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Sub<RHS, OUTPUT> { fn sub(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Mul<RHS, OUTPUT> { fn mul(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Div<RHS, OUTPUT> { fn div(Self, RHS) -[gpu.thread]-> OUTPUT; }
+trait Rem<RHS, OUTPUT> { fn rem(Self, RHS) -[gpu.thread]-> OUTPUT; } // (modulo operator)
+
+// Eq uses no references at the moment!
+trait Eq {
+    fn eq(Self, Self) -[gpu.thread]-> bool;
+    fn ne(self, other: Self) -[gpu.thread]-> bool {
+        !self.eq(other)
+    }
+}
+trait Ord: Eq {
+    fn lt(self, Self) -[gpu.thread]-> bool;
+    fn le(self, Self) -[gpu.thread]-> bool;
+    fn gt(self, Self) -[gpu.thread]-> bool;
+    fn ge(self, Self) -[gpu.thread]-> bool;
+}
+
+
+impl<T> Copy for T where T: Number {}
+impl Copy for bool {}
+impl Copy for Gpu {}
+impl Copy for () {}
+impl Copy for Atomic<i32> {}
+impl Copy for Atomic<bool> {}
+impl<T, a: prv, m: mem> Copy for &a shrd m T {}
+// FIXME thread hierarchies and their splits should be non-copyable!
+impl<T, n: nat> Copy for [T; n] where T: Copy {}
+impl<n1: nat, n2: nat, n3: nat, n4: nat, n5: nat, n6: nat> Copy for BlockGrp<n1, n2, n3, ThreadGrp<n4, n5, n6>> {}
+impl<n1: nat, n2: nat, n3: nat> Copy for ThreadGrp<n1, n2, n3> {}
+impl<n: nat> Copy for WarpGrp<n> {}
+impl Copy for Warp {}
+
+
+impl Number for f32 {}
+impl Number for f64 {}
+impl Number for i32 {}
+impl Number for u32 {}
+
+// The implementations for this predefined operators are replaced by builtin binary
+// C++-operations anyway.
+impl<T> Add<T, T> for T where T: Number {
+    fn add(t1: T, t2: T) -[gpu.thread]-> T { t1 }
+}
+impl<T> Sub<T, T> for T where T: Number {
+    fn sub(t1: T, t2: T) -[gpu.thread]-> T { t1 }
+}
+impl<T> Mul<T, T> for T where T: Number {
+    fn mul(t1: T, t2: T) -[gpu.thread]-> T { t1 }
+}
+impl<T> Div<T, T> for T where T: Number {
+    fn div(t1: T, t2: T) -[gpu.thread]-> T { t1 }
+}
+impl Rem<i32, i32> for i32 {
+    fn rem(t1: i32, t2: i32) -[gpu.thread]-> i32 { t1 }
+}
+impl Rem<u32, u32> for u32 {
+    fn rem(t1: u32, t2: u32) -[gpu.thread]-> u32 { t1 }
+}
+impl<T> Eq for T where T: Number {
+    fn eq(t1: T, t2: T) -[gpu.thread]-> bool { true }
+}
+impl<T> Ord for T where T: Number {
+    fn lt(self, other: Self) -[gpu.thread]-> bool { true }
+    fn le(self, other: Self) -[gpu.thread]-> bool { true }
+    fn gt(self, other: Self) -[gpu.thread]-> bool { true }
+    fn ge(self, other: Self) -[gpu.thread]-> bool { true }
+}
+
+// Its also allowed to check equality of references of types which implements Eq
+impl<T, a: prv, m: mem> Eq for &a shrd m T where T: Eq + Copy {
+    fn eq(t1: Self, t2: Self) -[gpu.thread]-> bool {
+        T::eq(*t1, *t2)
+    }
+}

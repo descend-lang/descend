@@ -2,8 +2,8 @@ use super::cu_ast::{
     BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
 use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
-use std::fmt::Formatter;
 use std::env;
+use std::fmt::Formatter;
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
@@ -27,7 +27,7 @@ fn clang_format(code: &str) -> String {
     //If clang-format is not available for user, it's path can be set in this env Variable (e.g. in .cargo/config.toml)
     let clang_format_path = match env::var("CLANG_FORMAT_PATH") {
         Ok(path) => path,
-        Err(_) => String::from("clang-format")
+        Err(_) => String::from("clang-format"),
     };
 
     use std::io::Write;
@@ -51,7 +51,33 @@ fn clang_format(code: &str) -> String {
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Item::EmptyLine => writeln!(f),
             Item::Include(path) => write!(f, "#include \"{}\"", path),
+            Item::FunDecl {
+                name,
+                templ_params,
+                params,
+                ret_ty,
+                is_dev_fun,
+            } => {
+                if !templ_params.is_empty() {
+                    write!(f, "template<")?;
+                    fmt_vec(f, templ_params, ", ")?;
+                    writeln!(f, ">")?;
+                }
+                write!(
+                    f,
+                    "{} auto {}(",
+                    if *is_dev_fun { "__device__ " } else { "" },
+                    name
+                )?;
+                if !params.is_empty() {
+                    writeln!(f)?;
+                    fmt_vec(f, params, ",\n")?;
+                    writeln!(f)?;
+                }
+                write!(f, ") -> {};", ret_ty)
+            }
             Item::FunDef {
                 name,
                 templ_params,
@@ -65,16 +91,45 @@ impl std::fmt::Display for Item {
                     fmt_vec(f, templ_params, ", ")?;
                     writeln!(f, ">")?;
                 }
-                writeln!(
+                write!(
                     f,
                     "{}auto {}(",
                     if *is_dev_fun { "__device__ " } else { "" },
                     name
                 )?;
-                fmt_vec(f, params, ",\n")?;
-                writeln!(f, "\n) -> {} {{", ret_ty)?;
+                if !params.is_empty() {
+                    writeln!(f)?;
+                    fmt_vec(f, params, ",\n")?;
+                    writeln!(f)?;
+                }
+                writeln!(f, ") -> {} {{", ret_ty)?;
                 write!(f, "{}", body)?;
                 writeln!(f, "\n}}")
+            }
+            Item::StructDecl { name, templ_params } => {
+                if !templ_params.is_empty() {
+                    write!(f, "template<")?;
+                    fmt_vec(f, templ_params, ", ")?;
+                    writeln!(f, ">")?;
+                }
+                write!(f, "struct {};", name)
+            }
+            Item::StructDef {
+                name,
+                templ_params,
+                attributes,
+            } => {
+                if !templ_params.is_empty() {
+                    write!(f, "template<")?;
+                    fmt_vec(f, templ_params, ", ")?;
+                    writeln!(f, ">")?;
+                }
+
+                writeln!(f, "struct {} {{", name)?;
+                attributes
+                    .iter()
+                    .try_for_each(|(name, ty)| writeln!(f, "{} {};", ty, name))?;
+                writeln!(f, "}};")
             }
         }
     }
@@ -175,7 +230,7 @@ impl std::fmt::Display for Expr {
                 is_dev_fun,
             } => {
                 let dev_qual = if *is_dev_fun { "__device__" } else { "" };
-                writeln!(f, "[");
+                writeln!(f, "[")?;
                 fmt_vec(f, &captures, ",")?;
                 writeln!(f, "] {} (", dev_qual)?;
                 fmt_vec(f, &params, ",\n")?;
@@ -201,7 +256,29 @@ impl std::fmt::Display for Expr {
             UnOp { op, arg } => write!(f, "{}{}", op, arg),
             BinOp { op, lhs, rhs } => write!(f, "{} {} {}", lhs, op, rhs),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
-            Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
+            Proj { tuple, n } => match n {
+                crate::ast::ProjEntry::TupleAccess(n) => write!(f, "{}.{}", tuple, n),
+                crate::ast::ProjEntry::StructAccess(n) => write!(f, "{}.{}", tuple, n),
+            },
+            StructInst {
+                name,
+                template_args,
+                args,
+            } => {
+                write!(f, "{}", name)?;
+                if template_args.len() > 0 {
+                    write!(f, "<")?;
+                    fmt_vec(f, template_args, ", ")?;
+                    write!(f, ">")?;
+                }
+                if args.len() > 0 {
+                    write!(f, " {{\n")?;
+                    fmt_vec(f, args, ",\n")?;
+                    write!(f, "\n}}")
+                } else {
+                    write!(f, " {{}}")
+                }
+            }
             InitializerList { elems } => {
                 write!(f, "{{")?;
                 fmt_vec(f, elems, ", ")?;
@@ -330,6 +407,15 @@ impl std::fmt::Display for Ty {
                 write!(f, "descend::tuple<")?;
                 fmt_vec(f, tys, ", ")?;
                 write!(f, ">")
+            }
+            Struct(name, generics) => {
+                if !generics.is_empty() {
+                    write!(f, "struct {}<", name)?;
+                    fmt_vec(f, generics, ", ")?;
+                    write!(f, ">")
+                } else {
+                    write!(f, "struct {}", name)
+                }
             }
             Buffer(ty, buff_kind) => match buff_kind {
                 BufferKind::CpuMem => write!(f, "HeapBuffer<{}>", ty),

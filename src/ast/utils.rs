@@ -1,6 +1,7 @@
 use crate::ast::visit::Visit;
 use crate::ast::{
-    visit, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    visit, DataTy, DataTyKind, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance,
+    Ty, TyKind,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -93,15 +94,16 @@ impl Visit for FreeKindedIdents {
                         .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty)))
                 }
             }
-            TyKind::Fn(idents_kinded, param_tys, _, ret_ty) => {
-                if !idents_kinded.is_empty() {
-                    panic!("Generic function types can not appear, only their instatiated counter parts.")
-                }
-
-                walk_list!(self, visit_ty, param_tys);
-                self.visit_ty(ret_ty)
-            }
             _ => visit::walk_ty(self, ty),
+        }
+    }
+
+    fn visit_dty(&mut self, dty: &DataTy) {
+        match &dty.dty {
+            DataTyKind::Ident(ident) => {
+                self.set.insert(IdentKinded::new(ident, Kind::DataTy));
+            }
+            _ => visit::walk_dty(self, dty),
         }
     }
 
@@ -118,5 +120,23 @@ impl Visit for FreeKindedIdents {
             }
             _ => visit::walk_expr(self, expr),
         }
+    }
+
+    //Visiting this items is not supported because this items can bound identifiers.
+    //This would require corresponding checks in "visit_dty" etc.
+    fn visit_item_def(&mut self, _: &super::Item) {
+        unimplemented!()
+    }
+    fn visit_trait_def(&mut self, _: &super::TraitDef) {
+        unimplemented!()
+    }
+    fn visit_struct_def(&mut self, _: &super::StructDef) {
+        unimplemented!()
+    }
+    fn visit_impl_def(&mut self, _: &super::ImplDef) {
+        unimplemented!()
+    }
+    fn visit_fun_def(&mut self, _: &super::FunDef) {
+        unimplemented!()
     }
 }

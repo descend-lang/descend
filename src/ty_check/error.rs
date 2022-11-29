@@ -1,6 +1,9 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind};
+use crate::ast::{
+    AssociatedItem, Constraint, DataTy, FunctionName, Ident, Kind, Ownership, PlaceExpr, TyKind,
+    TypeScheme,
+};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -51,7 +54,42 @@ pub enum TyError {
     CouldNotInferProvenance,
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
-    UnexpectedType,
+    ExpectedDataType {
+        found: Ty,
+    },
+    UnexpectedDataType {
+        expected_name: String,
+        found: DataTy,
+    },
+    UnexpectedType {
+        expected: Ty,
+        found: Ty,
+    },
+    UnexpectedAssItemInImpl(AssociatedItem),
+    WrongNumberOfGenericParams {
+        expected: usize,
+        found: usize,
+    },
+    WrongNumberOfArguments {
+        expected: usize,
+        found: usize,
+        fun_name: Ident,
+    },
+    MissingStructField {
+        missing_field: String,
+        struct_name: String,
+    },
+    UnexpectedStructField {
+        unexpected_field: String,
+        struct_name: String,
+    },
+    WrongKind {
+        expected: Kind,
+        found: Kind,
+    },
+    TypeAnnotationsNeeded(String),
+    UnfulfilledConstraint(Constraint),
+    IllegalProjection(String),
     // TODO remove as soon as possible
     String(String),
 }
@@ -164,7 +202,7 @@ impl TyError {
                 if let Some(pl_expr_span) = pl_expr.span {
                     let label = format!("expected tuple type but found `{:?}`", ty_kind);
                     let (begin_line, begin_column) = source.get_line_col(pl_expr_span.begin);
-                    let (end_line, end_column) = source.get_line_col(pl_expr_span.end);
+                    let (_, end_column) = source.get_line_col(pl_expr_span.end);
                     let snippet = error::single_line_snippet(
                         source,
                         &label,
@@ -176,6 +214,99 @@ impl TyError {
                 } else {
                     eprintln!("{:?}", &self);
                 };
+            }
+            TyError::ExpectedDataType { found } => {
+                eprintln!(
+                    "Found unexpected type. Expected DataType, found {:#?}.",
+                    found
+                );
+            }
+            TyError::UnexpectedDataType {
+                expected_name,
+                found,
+            } => {
+                eprintln!(
+                    "Found unexpected data type. Expected {}, found {:#?}.",
+                    expected_name, found
+                );
+            }
+            TyError::UnexpectedAssItemInImpl(item) => {
+                eprintln!("Found unexpected item in impl: {:#?}.", item);
+            }
+            TyError::UnexpectedType { expected, found } => {
+                eprintln!(
+                    "Found unexpected type. Expected {:#?}, found {:#?}.",
+                    expected, found
+                );
+            }
+            TyError::WrongNumberOfGenericParams { expected, found } => {
+                eprintln!(
+                    "Wrong amount of generic arguments. Expected {}, found {}.",
+                    expected, found
+                );
+            }
+            TyError::WrongNumberOfArguments {
+                expected,
+                found,
+                fun_name,
+            } => {
+                let label = format!(
+                    "wrong number of parameters. Expected: {}, found: {}",
+                    expected, found
+                );
+                if let Some(span) = fun_name.span {
+                    let (begin_line, begin_column) = source.get_line_col(span.begin);
+                    let (end_line, end_column) = source.get_line_col(span.end);
+                    if begin_line != end_line {
+                        panic!("an identifier can't span multiple lines")
+                    }
+                    let snippet = error::single_line_snippet(
+                        source,
+                        &label,
+                        begin_line,
+                        begin_column,
+                        end_column,
+                    );
+                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                } else {
+                    eprintln!("{}", label);
+                };
+            }
+            TyError::MissingStructField {
+                missing_field,
+                struct_name,
+            } => {
+                eprintln!(
+                    "Could not find struct_field \"{}\" in struct instantiation of struct \"{}\".",
+                    missing_field, struct_name
+                );
+            }
+            TyError::UnexpectedStructField {
+                unexpected_field: unexpected_filed,
+                struct_name,
+            } => {
+                eprintln!(
+                    "Found unexpected struct_field \"{}\" in struct instantiation of struct \"{}\".",
+                    unexpected_filed, struct_name
+                );
+            }
+            TyError::WrongKind { expected, found } => {
+                eprintln!(
+                    "Wrong Kind. Expected: \"{}\" Found: \"{}\"",
+                    expected, found
+                );
+            }
+            TyError::TypeAnnotationsNeeded(expr) => {
+                eprintln!("Type annotations needed. Could not infer type {}", expr)
+            }
+            TyError::UnfulfilledConstraint(con) => {
+                eprintln!("Constraint \"{:#?}\" is not fulfilled.", con)
+            }
+            TyError::CtxError(ctx_error) => {
+                eprintln!("CtxError {}", ctx_error)
+            }
+            TyError::IllegalProjection(message) => {
+                eprintln!("IllegalProjection {}", message)
             }
             err => {
                 eprintln!("{:?}", err);
@@ -215,6 +346,8 @@ pub enum SubTyError {
 pub enum CtxError {
     //format!("Identifier: {} not found in context.", ident)),
     IdentNotFound(Ident),
+    TraitNotFound(String),
+    StructNotFound(String),
     //"Cannot find identifier {} in kinding context",
     KindedIdentNotFound(Ident),
     // "Typing Context is missing the provenance value {}",
@@ -223,8 +356,112 @@ pub enum CtxError {
     PrvIdentNotFound(Ident),
     // format!("{} is not defined as outliving {}.", l, s)
     OutlRelNotDefined(Ident, Ident),
-    // TODO move to TyError
-    IllegalProjection,
+    // Multiple defined objects
+    MultipleDefinedFunctions(FunctionName),
+    MultipleDefinedItems(String),
+    MultipleDefinedStructs(String),
+    MultipleDefinedTraits(String),
+    MultipleDefinedImplsForTrait {
+        trait_name: String,
+        impl_dty: TypeScheme,
+    },
+    // If there the function which should be called is ambiguous
+    AmbiguousFunctionCall {
+        function_name: String,
+        impl_dty: DataTy,
+    },
+    FunNotImplemented {
+        function_name: String,
+        trait_name: String,
+        impl_dty: TypeScheme,
+    },
+}
+
+impl std::fmt::Display for CtxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            CtxError::IdentNotFound(ident) => {
+                write!(f, "Identifier \"{}\" not found in context.", ident)
+            }
+            CtxError::TraitNotFound(trait_name) => {
+                write!(f, "Trait \"{}\" not found in context.", trait_name)
+            }
+            CtxError::StructNotFound(struct_name) => {
+                write!(f, "Struct \"{}\" not found in context.", struct_name)
+            }
+            CtxError::KindedIdentNotFound(ident) => {
+                write!(
+                    f,
+                    "Cannot find identifier \"{}\" in kinding context.",
+                    ident
+                )
+            }
+            CtxError::PrvValueNotFound(prov) => {
+                write!(
+                    f,
+                    "Typing Context is missing the provenance value \"{}\".",
+                    prov
+                )
+            }
+            CtxError::PrvIdentNotFound(prov) => {
+                write!(f, "Provenance ident \"{}\" not found in context.", prov)
+            }
+            CtxError::OutlRelNotDefined(l, s) => {
+                write!(f, "\"{}\" is not defined as outliving {}.", l, s)
+            }
+            CtxError::MultipleDefinedFunctions(fun_name) => {
+                write!(
+                    f,
+                    "Found multiple definitions of function \"{:#?}\".",
+                    fun_name
+                )
+            }
+            CtxError::MultipleDefinedItems(item_name) => {
+                write!(f, "Found multiple definitions of \"{}\".", item_name)
+            }
+            CtxError::MultipleDefinedStructs(struct_name) => {
+                write!(
+                    f,
+                    "Found multiple definitions of trait \"{}\".",
+                    struct_name
+                )
+            }
+            CtxError::MultipleDefinedTraits(trait_name) => {
+                write!(f, "Found multiple definitions of trait \"{}\".", trait_name)
+            }
+            CtxError::MultipleDefinedImplsForTrait {
+                trait_name,
+                impl_dty,
+            } => {
+                write!(
+                    f,
+                    "Found multiple implmentations of trait \"{}\" for impl_dty \"{:#?}\".",
+                    trait_name, impl_dty
+                )
+            }
+            CtxError::AmbiguousFunctionCall {
+                function_name,
+                impl_dty,
+            } => {
+                write!(
+                    f,
+                    "Function call of function \"{}\" for impl_dty \"{:#?}\" is ambiguous.",
+                    function_name, impl_dty
+                )
+            }
+            CtxError::FunNotImplemented {
+                function_name,
+                trait_name,
+                impl_dty,
+            } => {
+                write!(
+                    f,
+                    "impl \"{:#?}\" for trait \"{}\" did not implement function \"{}\".",
+                    impl_dty, trait_name, function_name
+                )
+            }
+        }
+    }
 }
 
 impl From<CtxError> for SubTyError {

@@ -30,11 +30,6 @@ fn bitonic_sort_shrd_mem() -> Res {
 
 #[test]
 fn scan() -> Res {
-    eprintln!(
-        "Breaks because there are name clashes between nats and type variables.\n \
-    This is not the case for the fully typed version.\n\
-    Solution: Keep track of the kinded arguments for dependent function separately depending on their kinds."
-    );
     Ok(println!(
         "{}",
         descend::compile("examples/infer/scan.desc")?

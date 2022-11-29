@@ -1,29 +1,55 @@
-use crate::ast::utils::{fresh_ident, FreeKindedIdents};
+use crate::ast::utils::FreeKindedIdents;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::TyError;
 use crate::ty_check::subty::multiple_outlives;
-use crate::ty_check::{TyChecker, TyResult};
+use crate::ty_check::TyResult;
+use core::fmt;
 use std::collections::{HashMap, HashSet};
 
-pub(super) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
-    let (subst, _) = constrain(t1, t2)?;
-    substitute(&subst, t1);
-    substitute(&subst, t2);
-    Ok(())
+use super::constraint_check::{ConstraintCtx, IdentsConstrained};
+use super::expand_to_valid_subst;
+
+pub(crate) fn unify<S: Constrainable + Clone>(
+    t1: &S,
+    t2: &S,
+    idents_constr: &mut IdentsConstrained,
+    constraint_env: &ConstraintCtx,
+) -> TyResult<ConstrainMap> {
+    let mut constr_map = unify_without_expand(&mut t1.clone(), &mut t2.clone())?;
+    if !constr_map.is_empty() {
+        constr_map = expand_to_valid_subst(&constr_map, idents_constr, constraint_env)?;
+    }
+    Ok(constr_map)
+}
+
+pub(crate) fn unify_without_expand<S: Constrainable + Clone>(
+    t1: &S,
+    t2: &S,
+) -> TyResult<ConstrainMap> {
+    let (constr_map, _) = constrain(&mut t1.clone(), &mut t2.clone())?;
+    Ok(constr_map)
 }
 
 pub(super) fn sub_unify<C: Constrainable>(
     kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
+    mut ty_ctx: TyCtx,
     sub: &mut C,
     sup: &mut C,
+    idents_constr: &mut IdentsConstrained,
+    constraint_env: &ConstraintCtx,
+    implicit_ident_substitution: &mut ConstrainMap,
 ) -> TyResult<TyCtx> {
-    let (subst, prv_rels) = constrain(sub, sup)?;
+    let (mut subst, prv_rels) = constrain(sub, sup)?;
+    if !subst.is_empty() {
+        subst = expand_to_valid_subst(&subst, idents_constr, constraint_env)?;
+        ty_ctx.substitute(&subst);
+    }
     substitute(&subst, sub);
     substitute(&subst, sup);
+    implicit_ident_substitution.composition(subst);
     let outlives_ctx = multiple_outlives(
         kind_ctx,
         ty_ctx,
@@ -39,46 +65,11 @@ fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap
     Ok((constr_map, prv_rels))
 }
 
-pub(super) fn inst_fn_ty_scheme(
-    idents_kinded: &[IdentKinded],
-    param_tys: &[Ty],
-    exec: Exec,
-    ret_ty: &Ty,
-) -> TyResult<Ty> {
-    let mono_idents: Vec<_> = idents_kinded
-        .iter()
-        .map(|i| match i.kind {
-            Kind::Ty => ArgKinded::Ty(Ty::new(fresh_ident(&i.ident.name, TyKind::Ident))),
-            Kind::DataTy => {
-                ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
-            }
-            Kind::Nat => ArgKinded::Nat(fresh_ident(&i.ident.name, Nat::Ident)),
-            Kind::Memory => ArgKinded::Memory(fresh_ident(&i.ident.name, Memory::Ident)),
-            Kind::Provenance => {
-                ArgKinded::Provenance(fresh_ident(&i.ident.name, Provenance::Ident))
-            }
-        })
-        .collect();
-
-    let mono_param_tys = param_tys
-        .iter()
-        .map(|ty| TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ty))
-        .collect();
-    let mono_ret_ty = TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
-
-    Ok(Ty::new(TyKind::Fn(
-        vec![],
-        mono_param_tys,
-        exec,
-        Box::new(mono_ret_ty),
-    )))
-}
-
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(super) struct PrvConstr(pub Provenance, pub Provenance);
+pub(crate) struct PrvConstr(pub Provenance, pub Provenance);
 
-#[derive(Debug)]
-pub(super) struct ConstrainMap {
+#[derive(Debug, Clone)]
+pub(crate) struct ConstrainMap {
     pub ty_unifier: HashMap<String, Ty>,
     pub dty_unifier: HashMap<String, DataTy>,
     pub nat_unifier: HashMap<String, Nat>,
@@ -86,12 +77,62 @@ pub(super) struct ConstrainMap {
 }
 
 impl ConstrainMap {
-    fn new() -> Self {
+    pub fn new() -> Self {
         ConstrainMap {
             ty_unifier: HashMap::new(),
             dty_unifier: HashMap::new(),
             nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.ty_unifier.clear();
+        self.dty_unifier.clear();
+        self.nat_unifier.clear();
+        self.mem_unifier.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ty_unifier.is_empty()
+            && self.dty_unifier.is_empty()
+            && self.nat_unifier.is_empty()
+            && self.mem_unifier.is_empty()
+    }
+
+    /// Compose two substitutions `other` \circ `self`
+    pub fn composition(&mut self, other: ConstrainMap) {
+        if !other.is_empty() {
+            self.ty_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
+            self.dty_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.dty_unifier.get(name).is_none()));
+            self.nat_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.nat_unifier.get(name).is_none()));
+            self.mem_unifier
+                .iter()
+                .for_each(|(name, _)| assert!(other.mem_unifier.get(name).is_none()));
+
+            self.ty_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
+            self.dty_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
+            self.nat_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
+            self.mem_unifier
+                .iter_mut()
+                .for_each(|(_, bound)| bound.substitute(&other));
+
+            self.ty_unifier.extend(other.ty_unifier.into_iter());
+            self.dty_unifier.extend(other.dty_unifier.into_iter());
+            self.nat_unifier.extend(other.nat_unifier.into_iter());
+            self.mem_unifier.extend(other.mem_unifier.into_iter());
         }
     }
 }
@@ -113,12 +154,15 @@ impl Ty {
             if &old != self {
                 panic!(
                     "Rebinding bound type variable.\n\
-                    Old: {:?}\n\
-                    New: {:?}",
+                Old: {:?}\n\
+                New: {:?}",
                     old, self
                 );
             }
         }
+        constr_map
+            .ty_unifier
+            .insert(ident.name.clone(), self.clone());
         constr_map
             .ty_unifier
             .values_mut()
@@ -144,12 +188,15 @@ impl DataTy {
             if &old != self {
                 panic!(
                     "Rebinding bound type variable.\n\
-                    Old: {:?}\n\
-                    New: {:?}",
+                Old: {:?}\n\
+                New: {:?}",
                     old, self
                 );
             }
         }
+        constr_map
+            .dty_unifier
+            .insert(ident.name.clone(), self.clone());
         constr_map
             .dty_unifier
             .values_mut()
@@ -158,7 +205,7 @@ impl DataTy {
     }
 }
 
-pub(super) trait Constrainable {
+pub(crate) trait Constrainable: fmt::Debug {
     fn constrain(
         &mut self,
         other: &mut Self,
@@ -171,6 +218,137 @@ pub(super) trait Constrainable {
     fn occurs_check<S: Constrainable>(ident_kinded: &IdentKinded, s: &S) -> bool {
         s.free_idents().contains(ident_kinded)
     }
+
+    fn constrain_vec<S: Constrainable>(
+        vec1: &mut Vec<S>,
+        vec2: &mut Vec<S>,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        // substitute result of unification for every following unification
+        // TODO Refactor: create iterator over Some((next_lhs, tail_lhs), (next_rhs, tail_rhs))?
+        //  move into function
+        let mut i = 0;
+        let mut remain_lhs = &mut vec1[i..];
+        let mut remain_rhs = &mut vec2[i..];
+        while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
+            (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
+        {
+            next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
+            tail_lhs
+                .iter_mut()
+                .for_each(|ty| substitute(constr_map, ty));
+            tail_rhs
+                .iter_mut()
+                .for_each(|ty| substitute(constr_map, ty));
+
+            i += 1;
+            remain_lhs = &mut vec1[i..];
+            remain_rhs = &mut vec2[i..];
+        }
+
+        Ok(())
+    }
+}
+
+impl Constrainable for ArgKinded {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        match (self, other) {
+            (ArgKinded::Ident(_), ArgKinded::Ident(_)) => unimplemented!("needed?"),
+            (ArgKinded::DataTy(dt1), ArgKinded::DataTy(dt2)) => {
+                dt1.constrain(dt2, constr_map, prv_rels)
+            }
+            (ArgKinded::Memory(mem1), ArgKinded::Memory(mem2)) => {
+                mem1.constrain(mem2, constr_map, prv_rels)
+            }
+            (ArgKinded::Nat(nat1), ArgKinded::Nat(nat2)) => {
+                nat1.constrain(nat2, constr_map, prv_rels)
+            }
+            (ArgKinded::Provenance(prov1), ArgKinded::Provenance(prov2)) => {
+                prov1.constrain(prov2, constr_map, prv_rels)
+            }
+            (ArgKinded::Ty(ty1), ArgKinded::Ty(ty2)) => ty1.constrain(ty2, constr_map, prv_rels),
+            _ => Err(TyError::CannotUnify),
+        }
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_arg_kinded(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_arg_kinded(self);
+    }
+}
+
+impl Constrainable for Constraint {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        if self.trait_bound.name != other.trait_bound.name {
+            return Err(TyError::CannotUnify);
+        }
+
+        self.dty.constrain(&mut other.dty, constr_map, prv_rels)?;
+        self.trait_bound.substitute(constr_map);
+        other.trait_bound.substitute(constr_map);
+        self.trait_bound
+            .constrain(&mut other.trait_bound, constr_map, prv_rels)
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_constraint(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_constraint(self);
+    }
+}
+
+impl Constrainable for TraitMonoType {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> TyResult<()> {
+        if self.name != other.name {
+            return Err(TyError::CannotUnify);
+        }
+
+        assert!(self.generic_args.len() == other.generic_args.len());
+        Self::constrain_vec(
+            &mut self.generic_args,
+            &mut other.generic_args,
+            constr_map,
+            prv_rels,
+        )
+    }
+
+    fn free_idents(&self) -> HashSet<IdentKinded> {
+        let mut free_idents = FreeKindedIdents::new();
+        free_idents.visit_trait_mono_ty(self);
+        free_idents.set
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_trait_mono_ty(self);
+    }
 }
 
 impl Constrainable for Ty {
@@ -181,43 +359,19 @@ impl Constrainable for Ty {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (&mut self.ty, &mut other.ty) {
-            (TyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
-            (_, TyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
-            (
-                TyKind::Fn(idents_kinded1, param_tys1, exec1, ret_ty1),
-                TyKind::Fn(idents_kinded2, param_tys2, exec2, ret_ty2),
-            ) => {
-                assert!(idents_kinded1.is_empty());
-                assert!(idents_kinded2.is_empty());
-
+            (TyKind::Ident(i), _) if i.is_implicit => other.bind_to_ident(i, constr_map),
+            (_, TyKind::Ident(i)) if i.is_implicit => self.bind_to_ident(i, constr_map),
+            (TyKind::Ident(i1), TyKind::Ident(i2)) if i1 == i2 => Ok(()),
+            (TyKind::Fn(param_tys1, exec1, ret_ty1), TyKind::Fn(param_tys2, exec2, ret_ty2)) => {
                 if exec1 != exec2 {
                     return Err(TyError::CannotUnify);
                 }
                 if param_tys1.len() != param_tys2.len() {
                     return Err(TyError::CannotUnify);
                 }
-                // substitute result of unification for every following unification
-                // TODO Refactor: create iterator over Some((next_lhs, tail_lhs), (next_rhs, tail_rhs))?
-                //  move into function
-                let mut i = 0;
-                let mut remain_lhs = &mut param_tys1[i..];
-                let mut remain_rhs = &mut param_tys2[i..];
-                while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
-                    (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
-                {
-                    next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
-                    tail_lhs
-                        .iter_mut()
-                        .for_each(|ty| substitute(constr_map, ty));
-                    tail_rhs
-                        .iter_mut()
-                        .for_each(|ty| substitute(constr_map, ty));
-
-                    i += 1;
-                    remain_lhs = &mut param_tys1[i..];
-                    remain_rhs = &mut param_tys2[i..];
-                }
-
+                Self::constrain_vec(param_tys1, param_tys2, constr_map, prv_rels)?;
+                ret_ty1.substitute(constr_map);
+                ret_ty2.substitute(constr_map);
                 ret_ty1.constrain(ret_ty2, constr_map, prv_rels)
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
@@ -248,8 +402,9 @@ impl Constrainable for DataTy {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (&mut self.dty, &mut other.dty) {
-            (DataTyKind::Ident(i), _) => other.bind_to_ident(i, constr_map),
-            (_, DataTyKind::Ident(i)) => self.bind_to_ident(i, constr_map),
+            (DataTyKind::Ident(i), _) if i.is_implicit => other.bind_to_ident(i, constr_map),
+            (_, DataTyKind::Ident(i)) if i.is_implicit => self.bind_to_ident(i, constr_map),
+            (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) if i1 == i2 => Ok(()),
             (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
                 if sty1 != sty2 {
                     Err(TyError::CannotUnify)
@@ -263,22 +418,42 @@ impl Constrainable for DataTy {
                 }
                 prv1.constrain(prv2, constr_map, prv_rels)?;
                 mem1.constrain(mem2, constr_map, prv_rels)?;
+                dty1.substitute(&constr_map);
+                dty2.substitute(&constr_map);
                 dty1.constrain(dty2, constr_map, prv_rels)
             }
-            (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => elem_dtys1
-                .iter_mut()
-                .zip(elem_dtys2)
-                .try_for_each(|(dty1, dty2)| dty1.constrain(dty2, constr_map, prv_rels)),
+            (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
+                Self::constrain_vec(elem_dtys1, elem_dtys2, constr_map, prv_rels)
+            }
+            (DataTyKind::Struct(struct_1), DataTyKind::Struct(struct_2)) => {
+                if struct_1.name != struct_2.name {
+                    return Err(TyError::CannotUnify);
+                }
+                assert!(struct_1.generic_args.len() == struct_2.generic_args.len());
+                assert!(struct_1.struct_fields.len() == struct_2.struct_fields.len());
+                Self::constrain_vec(
+                    &mut struct_1.generic_args,
+                    &mut struct_2.generic_args,
+                    constr_map,
+                    prv_rels,
+                )
+            }
             (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
+                n1.substitute(&constr_map);
+                n2.substitute(&constr_map);
                 n1.constrain(n2, constr_map, prv_rels)
             }
             (DataTyKind::ArrayShape(dty1, n1), DataTyKind::ArrayShape(dty2, n2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
+                n1.substitute(&constr_map);
+                n2.substitute(&constr_map);
                 n1.constrain(n2, constr_map, prv_rels)
             }
             (DataTyKind::At(dty1, mem1), DataTyKind::At(dty2, mem2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
+                mem1.substitute(&constr_map);
+                mem2.substitute(&constr_map);
                 mem1.constrain(mem2, constr_map, prv_rels)
             }
             (DataTyKind::Atomic(sty1), DataTyKind::Atomic(sty2)) => {
@@ -295,10 +470,20 @@ impl Constrainable for DataTy {
                         ThreadHierchyTy::BlockGrp(m1, m2, m3, m4, m5, m6),
                     ) => {
                         n1.constrain(m1, constr_map, prv_rels)?;
+                        n2.substitute(&constr_map);
+                        m2.substitute(&constr_map);
                         n2.constrain(m2, constr_map, prv_rels)?;
+                        n3.substitute(&constr_map);
+                        m3.substitute(&constr_map);
                         n3.constrain(m3, constr_map, prv_rels)?;
+                        n4.substitute(&constr_map);
+                        m4.substitute(&constr_map);
                         n4.constrain(m4, constr_map, prv_rels)?;
+                        n5.substitute(&constr_map);
+                        m5.substitute(&constr_map);
                         n5.constrain(m5, constr_map, prv_rels)?;
+                        n6.substitute(&constr_map);
+                        m6.substitute(&constr_map);
                         n6.constrain(m6, constr_map, prv_rels)
                     }
                     (
@@ -306,7 +491,11 @@ impl Constrainable for DataTy {
                         ThreadHierchyTy::ThreadGrp(m1, m2, m3),
                     ) => {
                         n1.constrain(m1, constr_map, prv_rels)?;
+                        n2.substitute(&constr_map);
+                        m2.substitute(&constr_map);
                         n2.constrain(m2, constr_map, prv_rels)?;
+                        n3.substitute(&constr_map);
+                        m3.substitute(&constr_map);
                         n3.constrain(m3, constr_map, prv_rels)
                     }
                     (ThreadHierchyTy::WarpGrp(n), ThreadHierchyTy::WarpGrp(m)) => {
@@ -321,7 +510,10 @@ impl Constrainable for DataTy {
                 unimplemented!()
             }
             (DataTyKind::Dead(_), _) => {
-                panic!()
+                panic!(
+                    "Found a dead type.\n Tried to unify {:#?} with {:#?}",
+                    self, other
+                )
             }
             _ => Err(TyError::CannotUnify),
         }
@@ -346,6 +538,12 @@ impl Nat {
         constr_map: &mut ConstrainMap,
         _: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
+        if let Nat::Ident(nat_id) = &self {
+            if nat_id == ident {
+                return Ok(());
+            }
+        }
+
         // Nats can be equal to an expression in which the nat appears again. E.g., a = a * 1
         // match &self {
         //     _ if Self::occurs_check(&IdentKinded::new(ident, Kind::Nat), self) => {
@@ -360,10 +558,12 @@ impl Nat {
             .nat_unifier
             .insert(ident.name.clone(), self.clone())
         {
-            println!(
-                "WARNING: Not able to check equality of Nats `{}` and `{}`",
-                old, self
-            )
+            if old != *self {
+                println!(
+                    "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                    old, self
+                )
+            }
         }
         Ok(())
     }
@@ -389,7 +589,7 @@ impl Constrainable for Nat {
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        match (&mut *self, &mut *other) {
+        match (&*self, &*other) {
             (Nat::Ident(n1i), Nat::Ident(n2i)) => match (n1i.is_implicit, n2i.is_implicit) {
                 (true, true) => other.bind_to(n1i, constr_map, prv_rels),
                 (true, false) => other.bind_to(n1i, constr_map, prv_rels),
@@ -406,8 +606,8 @@ impl Constrainable for Nat {
                     }
                 }
             },
-            (Nat::Ident(n1i), _) => other.bind_to(n1i, constr_map, prv_rels),
-            (_, Nat::Ident(n2i)) => self.bind_to(n2i, constr_map, prv_rels),
+            (Nat::Ident(n1i), _) if n1i.is_implicit => other.bind_to(n1i, constr_map, prv_rels),
+            (_, Nat::Ident(n2i)) if n2i.is_implicit => self.bind_to(n2i, constr_map, prv_rels),
             _ => Self::unify(self, other, constr_map),
         }
     }
@@ -435,18 +635,9 @@ impl Memory {
                 return Ok(());
             }
         }
-        if let Some(old) = constr_map
-            .mem_unifier
-            .insert(ident.name.clone(), self.clone())
-        {
-            if &old != self {
-                panic!(
-                    "Attempting to bind same variable name twice.\n\
-        Old value: `{:?}` replaced by new value: `{:?}`",
-                    old, self
-                )
-            }
-        }
+        let mut self_mem = self.clone();
+        self_mem.substitute(&constr_map);
+        constr_map.mem_unifier.insert(ident.name.clone(), self_mem);
         constr_map
             .mem_unifier
             .values_mut()
@@ -460,12 +651,12 @@ impl Constrainable for Memory {
         &mut self,
         other: &mut Self,
         constr_map: &mut ConstrainMap,
-        prv_rels: &mut Vec<PrvConstr>,
+        _: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
         match (self, other) {
-            (Memory::Ident(i1), Memory::Ident(i2)) => Ok(()),
-            (Memory::Ident(i), o) => o.bind_to(i, constr_map),
-            (s, Memory::Ident(i)) => s.bind_to(i, constr_map),
+            (Memory::Ident(i1), Memory::Ident(i2)) if i1 == i2 => Ok(()),
+            (Memory::Ident(i), o) if i.is_implicit => o.bind_to(i, constr_map),
+            (s, Memory::Ident(i)) if i.is_implicit => s.bind_to(i, constr_map),
             (mem1, mem2) if mem1 == mem2 => Ok(()),
             _ => Err(TyError::CannotUnify),
         }
@@ -654,7 +845,7 @@ impl<'a> VisitMut for SubstIdent<'a, DataTy> {
 #[test]
 fn scalar() -> TyResult<()> {
     let mut i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
-    let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
+    let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
     let (subst, _) = constrain(&mut i32, &mut t)?;
     substitute(&subst, &mut i32);
     substitute(&subst, &mut t);
@@ -673,7 +864,7 @@ fn shrd_ref() -> TyResult<()> {
             Nat::Ident(Ident::new("n")),
         ))),
     ));
-    let mut t = DataTy::new(DataTyKind::Ident(Ident::new("t")));
+    let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
     let (subst, _) = constrain(&mut shrd_ref, &mut t)?;
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut t);
@@ -696,10 +887,9 @@ fn shrd_ref_inner_var() -> TyResult<()> {
         Provenance::Value("r".to_string()),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
+        Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli("t")))),
     ));
     let (subst, _) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
-    println!("{:?}", subst);
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut shrd_ref_t);
     assert_eq!(shrd_ref, shrd_ref_t);
@@ -721,10 +911,9 @@ fn prv_val_ident() -> TyResult<()> {
         Provenance::Ident(Ident::new("a")),
         Ownership::Shrd,
         Memory::GpuGlobal,
-        Box::new(DataTy::new(DataTyKind::Ident(Ident::new("t")))),
+        Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli("t")))),
     ));
     let (subst, prv_rels) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
-    println!("{:?}", subst);
     substitute(&subst, &mut shrd_ref);
     substitute(&subst, &mut shrd_ref_t);
     assert_eq!(
@@ -734,5 +923,41 @@ fn prv_val_ident() -> TyResult<()> {
             Provenance::Ident(Ident::new("a"))
         )
     );
+    Ok(())
+}
+
+#[test]
+fn test_unify_traits() -> TyResult<()> {
+    let ix = DataTy::new(DataTyKind::Ident(Ident::new_impli("$x_0")));
+    let it = DataTy::new(DataTyKind::Ident(Ident::new_impli("$t_1")));
+    let i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
+
+    let ix_a = ArgKinded::DataTy(ix.clone());
+    let it_a = ArgKinded::DataTy(it.clone());
+    let i32_a = ArgKinded::DataTy(i32.clone());
+
+    let t1 = TraitMonoType {
+        name: String::from("Add"),
+        generic_args: vec![it_a.clone(), it_a.clone()],
+    };
+    let t2 = TraitMonoType {
+        name: String::from("Add"),
+        generic_args: vec![ix_a.clone(), i32_a.clone()],
+    };
+
+    let mut res_subs = ConstrainMap::new();
+    res_subs
+        .dty_unifier
+        .insert(String::from("$x_0"), i32.clone());
+    res_subs
+        .dty_unifier
+        .insert(String::from("$t_1"), i32.clone());
+
+    let subs = unify_without_expand(&t1, &t2)?;
+    assert_eq!(subs.dty_unifier, res_subs.dty_unifier);
+
+    let subs = unify_without_expand(&t2, &t1)?;
+    assert_eq!(subs.dty_unifier, res_subs.dty_unifier);
+
     Ok(())
 }

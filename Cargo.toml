@@ -3,6 +3,7 @@ name = "descend"
 version = "0.1.0"
 authors = ["Köpcke <bastian.koepcke@wwu.de>"]
 edition = "2021"
+rust-version = "1.59"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

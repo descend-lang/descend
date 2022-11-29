@@ -2,28 +2,31 @@
 pub mod source;
 mod utils;
 
-use crate::ast::*;
-use core::iter;
+use crate::ast::{
+    visit_mut::{walk_arg_kinded, walk_expr},
+    *,
+};
 use error::ParseError;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::error::ErrorReported;
 pub use source::*;
 
-use crate::ast::utils::fresh_ident;
-use crate::ast::visit_mut::VisitMut;
+use crate::ast::visit_mut::{
+    walk_dty, walk_fun_def, walk_impl_def, walk_struct_def, walk_trait_def, VisitMut,
+};
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
-    Ok(CompilUnit::new(
-        parser
-            .parse()
-            .map_err(|err| err.emit())?
-            .into_iter()
-            .map(replace_arg_kinded_idents)
-            .collect::<Vec<FunDef>>(),
-        source,
-    ))
+    let mut item_defs = parser.parse().map_err(|err| err.emit())?;
+    let errs = postprocess(&mut item_defs);
+
+    if errs.is_empty() {
+        Ok(CompilUnit::new(item_defs, source))
+    } else {
+        errs.iter().for_each(|err| eprintln!("{}", err));
+        Err(ErrorReported)
+    }
 }
 
 #[derive(Debug)]
@@ -36,73 +39,274 @@ impl<'a> Parser<'a> {
         Parser { source }
     }
 
-    fn parse(&self) -> Result<Vec<FunDef>, ParseError<'_>> {
+    fn parse(&self) -> Result<Vec<Item>, ParseError<'_>> {
         descend::compil_unit(self.source.str()).map_err(|peg_err| ParseError::new(self, peg_err))
     }
 }
 
-fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
-    struct ReplaceArgKindedIdents {
-        ident_names_to_kinds: HashMap<String, Kind>,
+/// Visit the parsed AST and make a few adjustments:
+/// * Replace unkinded args by kinded args
+/// * Distinguish between kinded identifier and struct names
+/// * Initialize struct_fields of struct-datatypes
+/// * Remove syntatic sugar for "Self" in impls
+/// * Check if struct-definitions are not cyclic
+fn postprocess(items: &mut Vec<Item>) -> Vec<String> {
+    struct PostProcessVisitor {
+        /// List with all name of structs and corresponding StructDecl
+        structs: BTreeMap<String, StructDef>,
+        /// Kinded identifier which are currently in scope
+        kinded_identifier_in_scope: Vec<(String, Kind)>,
+        /// Datatype of impl if the visitor is visiting items inside an impl
+        impl_dty_in_scope: Option<DataTy>,
+        /// List of nested visited structs to prevent endless loops
+        struct_visit_stack: Vec<String>,
+        /// List with errors which occured
+        errs: Vec<String>,
     }
-    impl VisitMut for ReplaceArgKindedIdents {
-        fn visit_expr(&mut self, expr: &mut Expr) {
-            match &mut expr.expr {
-                ExprKind::Block(prvs, body) => {
-                    self.ident_names_to_kinds
-                        .extend(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
-                    self.visit_expr(body)
-                }
-                ExprKind::App(f, gen_args, args) => {
-                    self.visit_expr(f);
-                    for gen_arg in gen_args {
-                        if let ArgKinded::Ident(ident) = gen_arg {
-                            let to_be_kinded = ident.clone();
-                            match self.ident_names_to_kinds.get(&ident.name).unwrap() {
-                                Kind::Provenance => {
-                                    *gen_arg =
-                                        ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
-                                }
-                                Kind::Memory => {
-                                    *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded))
-                                }
-                                Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
-                                Kind::Ty => {
-                                    // TODO how to deal with View??!! This is a problem!
-                                    //  Ident only for Ty but not for DataTy or ViewTy?
-                                    *gen_arg = ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(
-                                        DataTyKind::Ident(to_be_kinded),
-                                    ))))
-                                }
-                                _ => panic!("This kind can not be referred to with an identifier."),
-                            }
+
+    impl PostProcessVisitor {
+        fn new(items: &Vec<Item>) -> Self {
+            PostProcessVisitor {
+                //Iterate over all items and collect structs
+                structs: BTreeMap::from_iter(items.iter().filter_map(|item| {
+                    if let Item::StructDef(struct_decl) = item {
+                        Some((struct_decl.name.clone(), struct_decl.clone()))
+                    } else {
+                        None
+                    }
+                })),
+                kinded_identifier_in_scope: Vec::new(),
+                impl_dty_in_scope: None,
+                struct_visit_stack: Vec::new(),
+                errs: vec![],
+            }
+        }
+
+        /// Add multiple kinded identifier to the list of kinded identifier which are currently in scope
+        fn add_idents_kinded(&mut self, generics: &Vec<IdentKinded>) {
+            self.add_kinded_idents(
+                generics
+                    .iter()
+                    .map(|ident_kinded| (ident_kinded.ident.name.clone(), ident_kinded.kind)),
+            );
+        }
+
+        /// Add pairs consisting of name and kind to the list of kinded identifier which are currently in scope
+        fn add_kinded_idents<I>(&mut self, ident_kinded: I)
+        where
+            I: Iterator<Item = (String, Kind)>,
+        {
+            self.kinded_identifier_in_scope.extend(ident_kinded);
+        }
+
+        /// Remove the last n added ident_kinded from the list of kinded identifier which are currently in scope
+        fn pop_kinded_idents(&mut self, n: usize) {
+            self.kinded_identifier_in_scope
+                .truncate(self.kinded_identifier_in_scope.len() - n);
+        }
+
+        /// Determinate if an kinded identifier is currently in scope
+        fn contains_kinded_ident(&self, name: &str) -> bool {
+            self.kinded_identifier_in_scope
+                .iter()
+                .rev()
+                .find(|(generic_name, _)| generic_name == name)
+                .is_some()
+        }
+    }
+
+    /// Replace ArgKinded::Ident-identifier with ArgKinded-Identifier of correct kind
+    fn replace_arg_kinded_kind(visitor: &mut PostProcessVisitor, arg: &mut ArgKinded) {
+        if let ArgKinded::Ident(ident) = arg {
+            let ident_kind = visitor
+                .kinded_identifier_in_scope
+                .iter()
+                .rev()
+                .find(|(name, _)| *name == ident.name);
+            let struct_decl = visitor.structs.get(&ident.name);
+
+            match (ident_kind.is_some(), struct_decl.is_some()) {
+                (true, false) => {
+                    *arg = match ident_kind.unwrap().1 {
+                        Kind::Provenance => ArgKinded::Provenance(Provenance::Ident(ident.clone())),
+                        Kind::Memory => ArgKinded::Memory(Memory::Ident(ident.clone())),
+                        Kind::Nat => ArgKinded::Nat(Nat::Ident(ident.clone())),
+                        Kind::Ty =>
+                        // TODO how to deal with View??!! This is a problem!
+                        //  Ident only for Ty but not for DataTy or ViewTy?
+                        {
+                            ArgKinded::Ty(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(
+                                ident.clone(),
+                            )))))
+                        }
+                        Kind::DataTy => {
+                            ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident.clone())))
                         }
                     }
-                    walk_list!(self, visit_expr, args)
                 }
-                ExprKind::ForNat(ident, _, body) => {
-                    self.ident_names_to_kinds
-                        .extend(iter::once((ident.name.clone(), Kind::Nat)));
-                    self.visit_expr(body)
+                (false, true) => {
+                    *arg = ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(ident.clone())))
                 }
-                _ => visit_mut::walk_expr(self, expr),
+                (false, false) => visitor.errs.push(format!(
+                    "Could not find kind of ArgKinded-identifier \"{:#?}\"",
+                    ident
+                )),
+                (true, true) => visitor.errs.push(format!(
+                    "Ambiguous ArgKinded-identifier \"{:#?}\" is a struct-name and also an bound identifier",
+                    ident
+                )),
+            }
+        }
+    }
+
+    /// Replace "Self" in impls with the type of the impl
+    fn replace_self_in_impls(visitor: &PostProcessVisitor, dty: &mut DataTy) {
+        if let Some(impl_dty_in_scope) = &visitor.impl_dty_in_scope {
+            if let DataTyKind::Ident(ident) = &dty.dty {
+                if ident.name == "Self" {
+                    *dty = impl_dty_in_scope.clone();
+                }
+            }
+        }
+    }
+
+    /// Distinguish between type variables and struct names without generic params
+    fn replace_tyidents_struct_names(visitor: &mut PostProcessVisitor, dty: &mut DataTy) {
+        if let DataTyKind::Ident(name) = &mut dty.dty {
+            let struct_decl = visitor.structs.get(&name.name);
+            let is_type_ident = visitor.contains_kinded_ident(&name.name);
+
+            match (struct_decl.is_some(), is_type_ident) {
+                (true, false) => {
+                    dty.dty = match struct_decl.unwrap().ty().mono_ty.ty {
+                        TyKind::Data(dty) => dty.dty,
+                        _ => panic!("Struct should have a Datatype!"),
+                    }
+                }
+                (false, true) | (false, false) => (),
+                (true, true) =>
+                    visitor.errs
+                        .push(format!("Ambiguous identifier \"{:#?}\" is a struct-name and also an bounded datatype-identifier", name)),
+            }
+        }
+    }
+
+    /// Initialize struct_fields of struct-datatypes
+    fn initialize_struct_fields(visitor: &mut PostProcessVisitor, dty: &mut DataTy) {
+        if let DataTyKind::Struct(struct_ty) = &mut dty.dty {
+            //if the struct_fields arent initialized
+            if struct_ty.struct_fields.len() == 0 {
+                if let Some(struct_decl) = visitor.structs.get(&struct_ty.name) {
+                    let inst_struct_mono = struct_decl
+                        .ty()
+                        .part_inst_qual_ty(&struct_ty.generic_args)
+                        .mono_ty;
+                    if let TyKind::Data(dataty) = inst_struct_mono.ty {
+                        if let DataTyKind::Struct(inst_struct_ty) = dataty.dty {
+                            struct_ty.struct_fields = inst_struct_ty.struct_fields;
+                        } else {
+                            panic!("Instantiated struct def should have struct type")
+                        }
+                    } else {
+                        panic!("Instantiated struct def should have struct type")
+                    }
+                } else {
+                    visitor.errs.push(format!(
+                        "Did not find struct definition for struct \"{:#?}\"",
+                        struct_ty
+                    ))
+                }
+            }
+        }
+    }
+
+    impl VisitMut for PostProcessVisitor {
+        fn visit_item_def(&mut self, item_def: &mut Item) {
+            match item_def {
+                Item::FunDef(fun_def) => {
+                    self.visit_fun_def(fun_def);
+                }
+                Item::StructDef(struct_decl) => {
+                    self.add_idents_kinded(&struct_decl.generic_params);
+                    walk_struct_def(self, struct_decl);
+                    self.kinded_identifier_in_scope.clear();
+                }
+                Item::TraitDef(trait_def) => {
+                    self.add_idents_kinded(&trait_def.generic_params);
+                    walk_trait_def(self, trait_def);
+                    self.kinded_identifier_in_scope.clear();
+                }
+                Item::ImplDef(impl_def) => {
+                    self.add_idents_kinded(&impl_def.generic_params);
+                    self.impl_dty_in_scope = Some(impl_def.dty.clone());
+                    walk_impl_def(self, impl_def);
+                    self.impl_dty_in_scope = None;
+                    self.kinded_identifier_in_scope.clear();
+                }
             }
         }
 
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
-            self.ident_names_to_kinds = fun_def
-                .generic_params
-                .iter()
-                .map(|IdentKinded { ident, kind }| (ident.name.clone(), *kind))
-                .collect();
-            visit_mut::walk_fun_def(self, fun_def)
+            self.add_idents_kinded(&fun_def.generic_params);
+            walk_fun_def(self, fun_def);
+            self.pop_kinded_idents(fun_def.generic_params.len());
+        }
+
+        fn visit_expr(&mut self, expr: &mut Expr) {
+            match &mut expr.expr {
+                ExprKind::Block(prvs, body) => {
+                    self.add_kinded_idents(prvs.iter().map(|prv| (prv.clone(), Kind::Provenance)));
+                    self.visit_expr(body);
+                    self.pop_kinded_idents(prvs.len());
+                }
+                ExprKind::ForNat(ident, _, body) => {
+                    self.kinded_identifier_in_scope
+                        .push((ident.name.clone(), Kind::Nat));
+                    self.visit_expr(body);
+                    self.kinded_identifier_in_scope.pop();
+                }
+                _ => {
+                    walk_expr(self, expr);
+                }
+            }
+        }
+
+        fn visit_dty(&mut self, dty: &mut DataTy) {
+            replace_self_in_impls(self, dty);
+            replace_tyidents_struct_names(self, dty);
+            initialize_struct_fields(self, dty);
+
+            match &dty.dty {
+                //This prevents infinite loops when visit cylic struct definitions
+                DataTyKind::Struct(struct_dty) => {
+                    if !self.struct_visit_stack.contains(&struct_dty.name) {
+                        self.struct_visit_stack.push(struct_dty.name.clone());
+                        walk_dty(self, dty);
+                        self.struct_visit_stack.pop();
+                    } else {
+                        self.errs.push(format!(
+                            "struct \"{}\" has cylic definition. Multiple visits of struct \"{}\" while visiting attributes of struct \"{}\"",
+                            self.struct_visit_stack.first().unwrap(),
+                            struct_dty.name,
+                            self.struct_visit_stack.first().unwrap(),
+                        ))
+                    }
+                }
+                _ => walk_dty(self, dty),
+            }
+        }
+
+        fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) {
+            replace_arg_kinded_kind(self, arg_kinded);
+            walk_arg_kinded(self, arg_kinded);
         }
     }
-    let mut replace = ReplaceArgKindedIdents {
-        ident_names_to_kinds: HashMap::new(),
-    };
-    replace.visit_fun_def(&mut fun_def);
-    fun_def
+
+    let mut visitor = PostProcessVisitor::new(items);
+    items
+        .iter_mut()
+        .for_each(|item_def| visitor.visit_item_def(item_def));
+    visitor.errs
 }
 
 pub mod error {
@@ -162,40 +366,222 @@ pub mod error {
 peg::parser! {
     pub(crate) grammar descend() for str {
 
-        pub(crate) rule compil_unit() -> Vec<FunDef>
-            = _ funcs:(fun:global_fun_def() { fun }) ** _ _ {
-                funcs
+        pub(crate) rule compil_unit() -> Vec<Item>
+            = _ items:(item:item() { item }) ** _ _ {
+                items
             }
 
-        pub(crate) rule global_fun_def() -> FunDef
-            = "fn" __ name:identifier() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
+        pub(crate) rule item() -> Item
+            = result:(f: fun_def() { Item::FunDef(f) }
+            / s: struct_decl() { Item::StructDef(s) }
+            / t: trait_def() { Item::TraitDef(t) }
+            / i: impl_def() { Item::ImplDef(i) }) {
+                result
+            }
+
+        pub(crate) rule fun_def() -> FunDef
+            = "fn" __ name:identifier() _ generic_params:generic_params()? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
-            "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
-            body_expr:block() {
+            "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">"
+            _ ret_dty:dty() _ w:where_clause()? _ body_expr:block() {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
                     None => vec![]
                 };
+                let constraints = w.unwrap_or(vec![]);
                 FunDef {
-                  name,
-                  generic_params,
-                  param_decls,
-                  ret_dty,
-                  exec,
-                  prv_rels: vec![],
-                  body_expr
+                    name,
+                    generic_params,
+                    constraints,
+                    param_decls,
+                    ret_dty,
+                    exec,
+                    prv_rels: vec![],
+                    body_expr
+                }
+        }
+
+        pub(crate) rule fun_decl() -> FunDecl
+            = "fn" __ name:identifier() _ g:generic_params()? _
+            "(" _ param_decls:(p:fun_parameter_decl() ** (_ "," _) {p}) _ ")" _
+            "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">"
+             _ ret_dty:dty() _ w:where_clause()? _ ";" {
+                let generic_params =
+                    match g {
+                        Some(x) => x,
+                        None => Vec::new()
+                    };
+                let constraints = w.unwrap_or(vec![]);
+                FunDecl {
+                    name,
+                    generic_params,
+                    constraints,
+                    param_decls,
+                    ret_dty,
+                    exec,
+                    prv_rels: vec![],
+                }
+        }
+
+        pub(crate) rule struct_decl() -> StructDef
+            = "struct" __ name:identifier() _ g:generic_params()?  _  w:where_clause()? _
+            struct_fields:(u:("{" t:(_ s:(struct_field() ** (_ "," _)) _ {s})? "}" {t}) {Some(u)}
+                            / ";" {None}) _ {
+                let generic_params = g.unwrap_or(vec![]);
+                let constraints = w.unwrap_or(vec![]);
+                let struct_fields: Vec<StructField> = match struct_fields {
+                    Some(struct_fields) => match struct_fields {Some(s) => s, None => vec![]},
+                    None => vec![]
+                };
+                StructDef {
+                    name,
+                    generic_params,
+                    constraints,
+                    struct_fields,
                 }
             }
 
+        pub(crate) rule trait_def() -> TraitDef
+            = "trait" __ name:identifier() _ g:generic_params()?
+            supertraits:(_ ":" _ t:trait_mono_ty() **<1,> (_ "+" _) {t})?
+            _ w:where_clause()? _ "{" _ ass_items:(_ i:associated_item() ** _ {i}) _ "}"   {
+                let generic_params = g.unwrap_or(vec![]);
+                let mut constraints = w.unwrap_or(vec![]);
+                TraitDef {
+                    name,
+                    generic_params,
+                    constraints,
+                    ass_items,
+                    supertraits: supertraits.unwrap_or(vec![])
+                }
+            }
+
+        pub(crate) rule impl_def() -> ImplDef
+            = "impl" _ g:generic_params()? _ trait_impl:(t:trait_mono_ty() __ "for" __ { t })?
+            dty:dty() _ w:where_clause()? _ "{" _
+            ass_items:(_ i:associated_item() ** _ {i}) _ "}" {
+                match dty.dty {
+                    DataTyKind::Ident(name) if name.name == "Self" => panic!("impls for ident \"Self\" are not allowed"),
+                    _ => (),
+                }
+                let generic_params = g.unwrap_or(vec![]);
+                let constraints = w.unwrap_or(vec![]);
+                ImplDef { dty, generic_params, constraints, ass_items, trait_impl}
+        }
+
+        rule associated_item() -> AssociatedItem
+            = ass_item:(f:fun_def() {AssociatedItem::FunDef(f)}
+            / f:fun_decl() {AssociatedItem::FunDecl(f)}) {
+                ass_item
+        }
+
+        rule trait_mono_ty() -> TraitMonoType
+            = name:identifier() generic_args:(_ "<" _ generic_args:(k:kind_argument() ** (_ "," _) {k}) _ ">" { generic_args })? {
+                TraitMonoType { name, generic_args: generic_args.unwrap_or(vec![]) }
+            }
+
+        rule struct_field() -> StructField
+            = name:identifier() _ ":" _ dty:dty() {
+                StructField {name, dty}
+        }
+
+        rule generic_params() -> Vec<IdentKinded>
+            = params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t}) {
+                params
+        }
+
+        // only syntatic sugar to specify trait bounds inside generic param list
+        // rule generic_params() -> (Vec<IdentKinded>, Vec<WhereClauseItem>)
+        //     = generic_params:("<" _ t:(genericParam() ** (_ "," _)) _ ">" {t}) {
+        //         let (idents, preds_options): (Vec<_>, Vec<_>) = generic_params.into_iter().unzip();
+        //         let  preds = preds_options.into_iter().filter_map(|option| option).collect();
+        //         (idents, preds)
+        //     }
+
+        //  rule genericParam() -> (IdentKinded, Option<WhereClauseItem>)
+        //     = name:ident() bound:(_ ":" _ r:(k:kind(){Ok(k)} / t:identifier(){Err(t)}) {r})? {
+        //         match bound {
+        //             Some(kind_or_trait) =>
+        //                 match kind_or_trait {
+        //                     Ok(kind) => (IdentKinded::new(&name, kind), None),
+        //                     Err(trait_bound) => {
+        //                         let name_string = name.name.clone();
+        //                         (IdentKinded::new(&name, Kind::Ty),
+        //                             Some(WhereClauseItem{param: name_string, trait_bound}))
+        //                     }
+        //                 },
+        //             None => (IdentKinded::new(&name, Kind::Ty), None)
+        //         }
+        //     }
+
+        rule where_clause() -> Vec<Constraint>
+            = "where" __ clauses:(where_clause_item() **<1,> (_ "," _)) {
+                clauses.into_iter().fold(Vec::new(), |mut clauses, clause| {
+                    clauses.extend(clause);
+                    clauses
+                })
+            }
+
+        rule where_clause_item() -> Vec<Constraint>
+            = dty:dty() _ ":" _ trait_bounds:(trait_mono_ty() **<1,> (_ "+" _)) {
+                trait_bounds.into_iter().map(|trait_bound|
+                    Constraint{
+                        dty: dty.clone(),
+                        trait_bound
+                    }
+                ).collect()
+            }
+
         rule kind_parameter() -> IdentKinded
-            = name:ident() _ ":" _ kind:kind() {
-                IdentKinded::new(&name, kind)
+            = name:ident() kind:(_ ":" _ kind:kind() {kind})? {
+                IdentKinded::new(&name, kind.unwrap_or(Kind::DataTy))
             }
 
         rule fun_parameter() -> ParamDecl
-            = mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() {
+            = result:(
+            mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
                 ParamDecl { ident, ty:Some(ty), mutbl }
+            } / s:self_param() { s }) {
+                result
+            }
+
+        rule fun_parameter_decl() -> ParamTypeDecl
+            = result:(
+            mutbl:(m:mutability() __ {m})? (ident() _ ":" _)? ty:ty() {
+                let mutbl = mutbl.unwrap_or(Mutability::Const);
+                ParamTypeDecl { ty, mutbl }
+            } / s:self_param() { ParamTypeDecl{ty: s.ty.unwrap(), mutbl: s.mutbl} }) {
+                result
+            }
+
+        rule self_param() -> ParamDecl
+            = result:(s:shorthand_self() { s } / s:typed_self() {s}) {
+                result
+            }
+
+        rule shorthand_self() -> ParamDecl
+            = ref_params:("&" _ prov:(prv:provenance() __ { prv })? own:ownership() __
+            mem:memory_kind() __ { (prov, own, mem) })? mutbl:(m:mutability() __ {m})? "self" {
+                let self_dtykind = DataTyKind::Ident(Ident::new("Self"));
+                let s_type = match ref_params {
+                    Some(ref_params) => {
+                        let (prov, own, mem) = ref_params;
+                        DataTyKind::Ref(match prov {
+                            Some(prv) => prv,
+                            None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$r")))
+                        }, own, mem, Box::new(DataTy::new(self_dtykind)))
+                    }
+                    None => self_dtykind
+                };
+                let mutbl = mutbl.unwrap_or(Mutability::Const);
+                ParamDecl{ ident: Ident::new("self"), ty: Some(Ty::new(TyKind::Data(DataTy::new(s_type)))), mutbl}
+            }
+
+        rule typed_self() -> ParamDecl
+            = mutbl:(m:mutability() __ {m})? "self" _ ":" _ ty:ty() {
+                let mutbl = mutbl.unwrap_or(Mutability::Const);
+                ParamDecl { ident: Ident::new("self"), ty:Some(ty), mutbl }
             }
 
         rule lambda_parameter() -> ParamDecl
@@ -281,7 +667,12 @@ peg::parser! {
             // To achieve this, move the first _ in front of ns.
             e:(@) ns:("." _ n:nat_literal() {n})+ {
                 ns.into_iter().fold(e,
-                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
+                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), ProjEntry::TupleAccess(n)))
+                )
+            }
+            e:(@) ns:("." _ n:identifier() {n})+ {
+                ns.into_iter().fold(e,
+                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), ProjEntry::StructAccess(n)))
                 )
             }
             begin:position!() "split" __ r1:(prv:prov_value() __ { prv })?
@@ -289,12 +680,58 @@ peg::parser! {
                     s:nat() __ view:place_expression() end:position!() {
                 Expr::new(ExprKind::Split(r1, r2, o, s, Box::new(view)))
             }
+            begin:position!() struct_name:identifier() _
+                kind_args:("::" _ "<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "{" _ args:(i:ident() e:(_ ":" _ e:expression(){e})? {(i, e)}) ** (_ "," _)
+                _ "}"  end:position!() {{
+                let args = args.iter().map(|(ident, expr_option)| {
+                    match expr_option {
+                        Some(e) => (ident.clone(), e.clone()),
+                        None => (ident.clone(), Expr::new(ExprKind::PlaceExpr(
+                            PlaceExpr::new(PlaceExprKind::Ident(ident.clone())))))
+                    }}).collect();
+                Expr::with_span(
+                    ExprKind::StructInst(
+                        struct_name,
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    ),
+                    Span::new(begin, end)
+                )
+            }}
+            e:(p:place_expression() { Expr::new(ExprKind::PlaceExpr(p)) }
+                / "(" _ e:expression() _ ")" { e }) _ "." _
+                begin:position!() func:ident() place_end:position!() _
+                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
+            {{
+                let args = {
+                    let mut result = Vec::with_capacity(args.len() + 1);
+                    result.push(e);
+                    result.extend(args.clone());
+                    result
+                };
+                Expr::new(
+                    ExprKind::App(
+                        Path::InferFromFirstArg,
+                        None,
+                        Box::new(Expr::with_span(
+                            ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
+                            Span::new(begin, place_end)
+                        )),
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    )
+                )
+            }}
             begin:position!() func:ident() place_end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
                 "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
             {
                 Expr::new(
                     ExprKind::App(
+                        Path::Empty,
+                        None,
                         Box::new(Expr::with_span(
                             ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
                             Span::new(begin, place_end)
@@ -304,6 +741,24 @@ peg::parser! {
                     )
                 )
             }
+            path:(path:dty() "::" { path }) begin:position!() func:ident() place_end:position!() _
+                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
+                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
+            {{
+                let path = Path::DataTy(path);
+                Expr::new(
+                    ExprKind::App(
+                        path,
+                        None,
+                        Box::new(Expr::with_span(
+                            ExprKind::PlaceExpr(PlaceExpr::new(PlaceExprKind::Ident(func))),
+                            Span::new(begin, place_end)
+                        )),
+                        kind_args.unwrap_or(vec![]),
+                        args
+                    )
+                )
+            }}
             begin:position!() func:ident() end:position!() _
                 kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" { k })
             {
@@ -429,7 +884,12 @@ peg::parser! {
             = precedence!{
                 "*" _ deref:@ { PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref))) }
                 --
-                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n))}
+                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(
+                    Box::new(proj), ProjEntry::TupleAccess(n)))}
+                // The !(_ "(") makes sure this is not a method call on a struct
+                struct_access:@ _ "." _ i:identifier() !(_ "(") {
+                    PlaceExpr::new(PlaceExprKind::Proj(
+                        Box::new(struct_access), ProjEntry::StructAccess(i))) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -438,6 +898,7 @@ peg::parser! {
                     }
                 }
                 ident:ident() { PlaceExpr::new(PlaceExprKind::Ident(ident)) }
+                "self" { PlaceExpr::new(PlaceExprKind::Ident(Ident::new("self"))) }
                 "(" _ pl_expr:place_expression() _ ")" { pl_expr }
             }
             // = begin:position!() begin_derefs:(begin_deref:position!() "*" _ { begin_deref })*
@@ -504,7 +965,6 @@ peg::parser! {
                 }
             }
 
-
         pub(crate) rule ty() -> Ty
             = begin:position!() dty:dty() end:position!() {
                 Ty::with_span(TyKind::Data(dty), Span::new(begin, end))
@@ -528,7 +988,12 @@ peg::parser! {
             / "Atomic<i32>" { DataTyKind::Atomic(ScalarTy::I32) }
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
             / th_hy:th_hy() { DataTyKind::ThreadHierchy(Box::new(th_hy)) }
+            / name:identifier() _ "<" _ params:(k:kind_argument() ** (_ "," _) {k}) _ ">"
+                { DataTyKind::Struct( StructDataType{
+                    name, struct_fields: vec![], generic_args: params, })}
+            // this could be also a structType. That is decided later
             / name:ident() { DataTyKind::Ident(name) }
+            / "Self" { DataTyKind::Ident(Ident::new("Self")) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTyKind::Array(Box::new(t), n) }
             / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
@@ -591,6 +1056,7 @@ peg::parser! {
             = "nat" { Kind::Nat }
             / "mem" { Kind::Memory }
             / "ty" { Kind::Ty }
+            / "dty" { Kind::DataTy }
             / "prv" { Kind::Provenance }
 
         rule ident() -> Ident
@@ -621,8 +1087,8 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "in" / "from" / "with" / "decl"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "Grid"
-                / "Block" / "Warp" / "Thread" / "with")
+                / "let"("prov")? / "if" / "else" / "par_branch" / "parfor" / "for_nat" / "for" / "while" / "across" / "fn" / "struct"
+                / "trait" / "where" / "impl" / "Grid" / "Block" / "Warp" / "Thread" / "with")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
             / "cpu.mem" / "gpu.global" / "gpu.shared"
@@ -1173,7 +1639,7 @@ mod tests {
             descend::place_expression("x.0"),
             Ok(PlaceExpr::new(PlaceExprKind::Proj(
                 Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                0
+                ProjEntry::TupleAccess(0)
             ))),
             "does not recognize place expression projection `x.0`"
         );
@@ -1182,7 +1648,7 @@ mod tests {
             Ok(PlaceExpr::new(PlaceExprKind::Deref(Box::new(
                 PlaceExpr::new(PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    0
+                    ProjEntry::TupleAccess(0)
                 ))
             )))),
             "does not recognize place expression `*x.0`"
@@ -1199,7 +1665,7 @@ mod tests {
             Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
                 PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    0
+                    ProjEntry::TupleAccess(0)
                 )
             )))),
             "does not recognize place expression projection `x.0`"
@@ -1209,7 +1675,7 @@ mod tests {
             Ok(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
                 PlaceExprKind::Deref(Box::new(PlaceExpr::new(PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    0
+                    ProjEntry::TupleAccess(0)
                 ))))
             )))),
             "does not recognize place expression `*x.0`"
@@ -1220,13 +1686,15 @@ mod tests {
             descend::expression("f::<x>().0"),
             Ok(Expr::new(ExprKind::Proj(
                 Box::new(Expr::new(ExprKind::App(
+                    Path::Empty,
+                    None,
                     Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
                         PlaceExprKind::Ident(Ident::new("f"))
                     )))),
                     vec![ArgKinded::Ident(Ident::new("x"))],
                     vec![]
                 ))),
-                zero_literal
+                ProjEntry::TupleAccess(zero_literal)
             ))),
             "does not recognize projection on function application"
         );
@@ -1244,7 +1712,7 @@ mod tests {
                         Ident::new("z")
                     ))))
                 ]))),
-                one_literal
+                ProjEntry::TupleAccess(one_literal)
             ))),
             "does not recognize projection on tuple view expression"
         );
@@ -1327,7 +1795,7 @@ mod tests {
                 PlaceExprKind::Deref(Box::new(PlaceExpr::new(PlaceExprKind::Deref(Box::new(
                     PlaceExpr::new(PlaceExprKind::Proj(
                         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                        7
+                        ProjEntry::TupleAccess(7)
                     ))
                 )))))
             ))))
@@ -1338,9 +1806,9 @@ mod tests {
                 PlaceExprKind::Proj(
                     Box::new(PlaceExpr::new(PlaceExprKind::Proj(
                         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                        2
+                        ProjEntry::TupleAccess(2)
                     ))),
-                    3
+                    ProjEntry::TupleAccess(3)
                 )
             ))))
         );
@@ -1741,7 +2209,7 @@ mod tests {
         }"#;
         let body = r#"42"#;
 
-        let result = descend::global_fun_def(src).expect("Parsing failed");
+        let result = descend::fun_def(src).expect("Parsing failed");
 
         // TODO: Do proper check against expected AST
         let name = "test_kinds".into();
@@ -1771,6 +2239,7 @@ mod tests {
         let intended = FunDef {
             name,
             param_decls: params,
+            constraints: vec![],
             exec,
             prv_rels,
             body_expr: Expr::new(ExprKind::Block(
@@ -1809,8 +2278,8 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let result_1 = descend::global_fun_def(src_1);
-        let result_2 = descend::global_fun_def(src_2);
+        let result_1 = descend::fun_def(src_1);
+        let result_2 = descend::fun_def(src_2);
 
         print!("{:?}", result_1);
 
@@ -1829,19 +2298,19 @@ mod tests {
             answer_to_everything
         }"#;
 
-        let result = descend::global_fun_def(src);
+        let result = descend::fun_def(src);
 
         assert!(result.is_err());
     }
 
     #[test]
     fn global_fun_def_no_function_parameters_required() {
-        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () <>{            
+        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;
 
-        let result = descend::global_fun_def(src);
+        let result = descend::fun_def(src);
         assert!(result.is_ok());
     }
 
@@ -1929,11 +2398,11 @@ mod tests {
     #[test]
     fn compil_unit_test_one() {
         let src = r#"
-        
+
         fn foo() -[cpu.thread]-> () <>{
             42
         }
-        
+
         "#;
         let result =
             descend::compil_unit(src).expect("Cannot parse compilation unit with one function");
@@ -1943,7 +2412,7 @@ mod tests {
     #[test]
     fn compil_unit_test_multiple() {
         let src = r#"
-        
+
         fn foo() -[cpu.thread]-> () <>{
             42
         }
@@ -1956,10 +2425,506 @@ mod tests {
         fn baz() -[cpu.thread]-> () <>{
             1337
         }
-        
+
         "#;
         let result = descend::compil_unit(src)
             .expect("Cannot parse compilation unit with multiple functions");
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn compil_unit_test_fun_calls() {
+        let src = r#"
+        trait Eq {
+            fn eq(&shrd cpu.mem self) -[cpu.thread]-> () { () }
+        }
+        struct Point {}
+        impl Eq for Point {}
+        fn foo<T>(t: T) -[cpu.thread]-> () where T:Eq {
+            let p: Point = Point {};
+            foo();
+            Point::eq(p);
+            p.eq();
+            eq(p); //This should not typecheck
+            T::eq(t);
+            t.eq()
+        }
+        "#;
+        let result = descend::compil_unit(src)
+            .expect("Cannot parse compilation unit with different function calls");
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn compil_struct_decl() {
+        let src = "struct Test ;";
+        let result = descend::struct_decl(src).expect("Cannot parse empty struct");
+
+        assert_eq!(
+            result,
+            StructDef {
+                name: String::from("Test"),
+                generic_params: vec![],
+                constraints: vec![],
+                struct_fields: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn compil_struct_decl2() {
+        let src = "struct Test { }";
+        let result = descend::struct_decl(src).expect("Cannot parse empty struct");
+
+        assert_eq!(
+            result,
+            StructDef {
+                name: String::from("Test"),
+                generic_params: vec![],
+                constraints: vec![],
+                struct_fields: vec![],
+            }
+        )
+    }
+
+    #[test]
+    fn compil_struct_decl3() {
+        let src = "struct Test { a: i32, b: f32 }";
+        let result = descend::struct_decl(src).expect("Cannot parse struct");
+
+        assert_eq!(
+            result,
+            StructDef {
+                name: String::from("Test"),
+                generic_params: vec![],
+                constraints: vec![],
+                struct_fields: vec![
+                    StructField {
+                        name: String::from("a"),
+                        dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                    },
+                    StructField {
+                        name: String::from("b"),
+                        dty: DataTy::new(DataTyKind::Scalar(ScalarTy::F32)),
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn compil_struct_decl4() {
+        let src = "struct Test<T: dty, Q: dty> where Q:Number { }";
+        let result = descend::struct_decl(src).expect("Cannot parse empty struct with generics");
+
+        assert_eq!(
+            result,
+            StructDef {
+                name: String::from("Test"),
+                generic_params: vec![
+                    IdentKinded::new(
+                        &Ident::with_span(String::from("T"), Span::new(12, 13)),
+                        Kind::DataTy,
+                    ),
+                    IdentKinded::new(
+                        &Ident::with_span(String::from("Q"), Span::new(20, 21)),
+                        Kind::DataTy,
+                    ),
+                ],
+                constraints: vec![Constraint {
+                    dty: DataTy::with_span(
+                        DataTyKind::Ident(Ident::with_span(String::from("Q"), Span::new(34, 35))),
+                        Span::new(32, 33),
+                    ),
+                    trait_bound: TraitMonoType {
+                        name: String::from("Number"),
+                        generic_args: vec![],
+                    },
+                }],
+                struct_fields: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn compil_trait_decl() {
+        let src = r#"trait Eq {
+            fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+            fn eq2(&shrd cpu.mem self, test: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+                false
+            }
+        }"#;
+        let result = descend::trait_def(src).expect("Cannot parse trait");
+
+        assert_eq!(result.ass_items.len(), 2);
+        let params1 = match &result.ass_items[0] {
+            AssociatedItem::FunDecl(fun_decl) => fun_decl.param_decls.clone(),
+            _ => vec![],
+        };
+        let params2 = match &result.ass_items[1] {
+            AssociatedItem::FunDef(fun_decl) => fun_decl.param_decls.clone(),
+            _ => vec![],
+        };
+
+        assert_eq!(
+            result,
+            TraitDef {
+                name: String::from("Eq"),
+                generic_params: vec![],
+                constraints: vec![],
+                ass_items: vec![
+                    AssociatedItem::FunDecl(FunDecl {
+                        name: String::from("eq"),
+                        generic_params: vec![],
+                        constraints: vec![],
+                        param_decls: params1,
+                        ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                        exec: Exec::CpuThread,
+                        prv_rels: vec![],
+                    }),
+                    AssociatedItem::FunDef(FunDef {
+                        name: String::from("eq2"),
+                        generic_params: vec![],
+                        constraints: vec![],
+                        param_decls: params2,
+                        ret_dty: DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)),
+                        exec: Exec::CpuThread,
+                        prv_rels: vec![],
+                        body_expr: Expr::new(ExprKind::Block(
+                            vec![],
+                            Box::new(Expr::with_type(
+                                ExprKind::Lit(Lit::Bool(false)),
+                                Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                                    ScalarTy::Bool,
+                                )))),
+                            )),
+                        )),
+                    }),
+                ],
+                supertraits: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn compil_trait_decl2() {
+        let src = r#"trait Ord: Eq {
+            fn lt(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+            fn le(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+        }"#;
+
+        let result = descend::trait_def(src).expect("Cannot parse empty struct");
+        let supertraits = vec![TraitMonoType {
+            name: String::from("Eq"),
+            generic_args: vec![],
+        }];
+        assert_eq!(result.constraints, vec![]);
+        assert_eq!(result.supertraits, supertraits);
+        assert_eq!(result.ass_items.len(), 2);
+    }
+
+    #[test]
+    fn compil_trait_decl3() {
+        let src = r#"trait Ord: Eq + Eq2 {
+            fn lt(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+            fn le(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+        }"#;
+
+        let result = descend::trait_def(src).expect("Cannot parse empty struct");
+        let supertraits = vec![
+            TraitMonoType {
+                name: String::from("Eq"),
+                generic_args: vec![],
+            },
+            TraitMonoType {
+                name: String::from("Eq2"),
+                generic_args: vec![],
+            },
+        ];
+        assert_eq!(result.constraints, vec![]);
+        assert_eq!(result.supertraits, supertraits);
+        assert_eq!(result.ass_items.len(), 2);
+    }
+
+    #[test]
+    fn compil_struct_and_trait() {
+        let src = r#"
+        struct Point {
+            x: i32,
+            y: i32
+        }
+        trait Eq {
+            // const important_const: f32;
+            // const magic_number: i32 = 42;
+            fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+        }
+        impl Eq for Point {
+            fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Point) -[cpu.thread]-> bool {
+                self.x == other.x && self.y == other.y
+            }
+        }
+        struct GenericStruct<N: nat, Q: dty, S: dty> where Q: Number, S: SomeTrait {
+            x: T
+        }
+        impl <T: dty, Q: dty, S: dty> GenericStruct where S: SomeTrait, Q: Number {
+            fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Point) -[cpu.thread]-> bool {
+                self.x == other.x && self.x == other.y
+            }
+        }
+        fn bar() -[cpu.thread] -> Point {
+            let x = 3;
+            Point { x, y: 42 }
+        }
+        fn main() -[cpu.thread] -> () {
+            let (p1, p2) = (Point {x: 3, y: 4}, Point {x: 4, y: 5});
+            let test = Point::eq(p1, &shrd p2);
+            let are_equal = p1.eq(&shrd p2);
+            let x = bar().x
+        }
+        "#;
+        let result = descend::compil_unit(src).expect("Cannot parse struct and trait");
+        assert_eq!(result.len(), 7);
+    }
+
+    #[test]
+    fn non_place_expr_assigment() {
+        let src = r#"
+        fn main() -[cpu.thread] -> () {
+            bar().x = 42
+        }
+        "#;
+        descend::compil_unit(src).expect_err("Assigment to non place_expr not possible");
+    }
+
+    #[test]
+    fn test_struct_datatype() {
+        let src = r#"
+        fn main() -[cpu.thread] -> (){
+            let p: Point<i32, i32> = x
+        }
+        "#;
+        let result = descend::compil_unit(src).expect("Cannot use struct datatypes");
+        assert_eq!(result.len(), 1);
+
+        let letty = if let Item::FunDef(fun_def) = &result[0] {
+            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                if let ExprKind::Let(_, ty, _) = &expr.expr {
+                    ty.clone().unwrap().ty
+                } else {
+                    panic!("Cannot recognize let expr");
+                }
+            } else {
+                panic!("Cannot recognize block expr");
+            }
+        } else {
+            panic!("Cannot recognize fundef");
+        };
+
+        if let TyKind::Data(dataty) = letty {
+            assert_eq!(
+                dataty,
+                DataTy::with_span(
+                    DataTyKind::Struct(StructDataType {
+                        name: String::from("Point"),
+                        struct_fields: vec![],
+                        generic_args: vec![
+                            ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
+                            ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
+                        ],
+                    }),
+                    Span::new(59, 64)
+                )
+            );
+        } else {
+            panic!("Cannot recognize datatype");
+        }
+    }
+
+    #[test]
+    fn test_struct_datatype2() {
+        let src = r#"
+        struct Point {
+            x: i32
+        }
+        fn main() -[cpu.thread] -> (){
+            let p: Point = x
+        }
+        "#;
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot use struct datatypes")
+            .item_defs;
+        assert_eq!(result.len(), 2);
+
+        let let_ty = if let Item::FunDef(fun_def) = &result[1] {
+            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                if let ExprKind::Let(_, ty, _) = &expr.expr {
+                    ty.clone().unwrap().ty
+                } else {
+                    panic!("Cannot recognize let expr");
+                }
+            } else {
+                panic!("Cannot recognize block expr");
+            }
+        } else {
+            panic!("Cannot recognize fundef");
+        };
+
+        let struct_ty = StructDataType {
+            name: String::from("Point"),
+            struct_fields: vec![StructField {
+                name: String::from("x"),
+                dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+            }],
+            generic_args: vec![],
+        };
+
+        if let TyKind::Data(dataty) = let_ty {
+            assert_eq!(
+                dataty,
+                DataTy::with_span(DataTyKind::Struct(struct_ty), Span::new(59, 64))
+            );
+        } else {
+            panic!("Cannot recognize datatype");
+        }
+    }
+
+    #[test]
+    fn test_struct_datatype3() {
+        let src = r#"
+        struct Point<T: dty> {
+            x: T,
+            y: T
+        }
+        fn main() -[cpu.thread] -> (){
+            let p: Point<i32> = x
+        }
+        "#;
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot use struct datatypes")
+            .item_defs;
+        assert_eq!(result.len(), 2);
+
+        let let_ty = if let Item::FunDef(fun_def) = &result[1] {
+            if let ExprKind::Block(_, expr) = &fun_def.body_expr.expr {
+                if let ExprKind::Let(_, ty, _) = &expr.expr {
+                    ty.clone().unwrap().ty
+                } else {
+                    panic!("Cannot recognize let expr");
+                }
+            } else {
+                panic!("Cannot recognize block expr");
+            }
+        } else {
+            panic!("Cannot recognize fundef");
+        };
+
+        let struct_ty = StructDataType {
+            name: String::from("Point"),
+            struct_fields: vec![
+                StructField {
+                    name: String::from("x"),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                },
+                StructField {
+                    name: String::from("y"),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                },
+            ],
+            generic_args: vec![ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::I32,
+            )))],
+        };
+
+        if let TyKind::Data(dataty) = let_ty {
+            assert_eq!(
+                dataty,
+                DataTy::with_span(DataTyKind::Struct(struct_ty), Span::new(59, 64))
+            );
+        } else {
+            panic!("Cannot recognize datatype");
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_and_trait() {
+        let src = r#"
+        struct Point {
+            x: i32,
+            y: i32
+        }
+        trait Eq {
+            fn eq(&shrd cpu.mem self, &shrd cpu.mem Self) -[cpu.thread]-> bool;
+        }
+        impl Eq for Point {
+            fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+                self.x == other.x && self.y == other.y
+            }
+        }
+        impl Eq for i32 {
+            fn eq(&shrd cpu.mem self, other: &shrd cpu.mem Self) -[cpu.thread]-> bool {
+                self == other
+            }
+        }
+        "#;
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot parse structs, traits and impls")
+            .item_defs;
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_replace_self() {
+        let src = r#"
+        struct Point {
+            x: i32,
+            y: i32
+        }
+        impl Point {
+            fn getX(self) -[cpu.thread]-> i32 {
+                self.x
+            }
+        }
+        "#;
+        let struct_ty = StructDataType {
+            name: String::from("Point"),
+            struct_fields: vec![
+                StructField {
+                    name: String::from("x"),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                },
+                StructField {
+                    name: String::from("y"),
+                    dty: DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
+                },
+            ],
+            generic_args: vec![],
+        };
+        let result = parse(&SourceCode::new(String::from(src)))
+            .expect("Cannot parse structs and impl")
+            .item_defs;
+        assert_eq!(result.len(), 2);
+        if let Item::ImplDef(impl_def) = &result[1] {
+            assert_eq!(impl_def.ass_items.len(), 1);
+            if let AssociatedItem::FunDef(fun_def) = &impl_def.ass_items[0] {
+                assert_eq!(fun_def.param_decls.len(), 1);
+                assert_eq!(fun_def.param_decls[0].ident.name, "self");
+                assert_eq!(
+                    fun_def.param_decls[0].ty.as_ref().unwrap(),
+                    &Ty::new(TyKind::Data(DataTy::new(DataTyKind::Struct(struct_ty))))
+                )
+            } else {
+                panic!("Does not recognize FunDef")
+            }
+        } else {
+            panic!("Does not recognize ImplDef")
+        }
+    }
+
+    #[test]
+    #[ignore] //TODO Dont work
+    fn test_pass_arg_kinded_with_generics() {
+        let src = "let x = Point::<42, Point2<T>> { x: 42, x: 43}";
+
+        descend::expr_helper(src).expect("Cannot parse struct initialization");
     }
 }
