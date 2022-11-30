@@ -165,6 +165,11 @@ pub mod error {
     }
 }
 
+enum IdxOrSelect {
+    Idx(Nat),
+    Select(Option<String>, Ident),
+}
+
 peg::parser! {
     pub(crate) grammar descend() for str {
 
@@ -333,18 +338,7 @@ peg::parser! {
                     Ty::new(TyKind::Data(Box::new(utils::type_from_lit(&l))))
                 )
             }
-            p:place_expression() idx:(_ "[" _ n:nat() _ "]" {n})? expr:(_ "=" _ e:expression() {e})? {
-                match expr {
-                    None => match idx {
-                        None => Expr::new(ExprKind::PlaceExpr(Box::new(p))),
-                        Some(idx) => Expr::new(ExprKind::Index(Box::new(p),idx))
-                    },
-                    Some(expr) => match idx {
-                        None => Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr))),
-                        Some(idx) => Expr::new(ExprKind::IdxAssign(Box::new(p), idx, Box::new(expr))),
-                    }
-                }
-            }
+            e:maybe_square_bracket_indexing_assignment() { e }
             "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression()
                 idx:(_ "[" _ n:nat() _ "]" {n})? {
                 match idx {
@@ -368,12 +362,11 @@ peg::parser! {
                     Some(false_block) => ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(false_block)),
                     None => ExprKind::If(Box::new(cond), Box::new(iftrue))
                 })
-
             }
             "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:exec_expr() _ "{" _
+            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:ident() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
@@ -382,16 +375,12 @@ peg::parser! {
                     branch.iter().map(|(i, _)| i.clone()).collect(),
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
             }
-            decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
             "sched" sched:(_ "(" _ dim:dim_component() _ ")" { dim })? __
-                input_idents:ident() **<1,> (_ "," _) __
-                "in" __ input:expression() **<1,> (_ "," _) __
-                "to" __ inner_exec:maybe_ident() __ "in" __ exec_expr:exec_expr() _
-                body:block() {
-                Expr::new(ExprKind::Sched(Box::new(Sched::new(decls, match sched {
+                inner_exec_ident:maybe_ident() __ "in" __ sched_exec:ident() _ body:block() {
+                Expr::new(ExprKind::Sched(Box::new(Sched::new(match sched {
                     Some(d) => d,
                     None => DimCompo::X,
-                }, inner_exec, exec_expr, input_idents, input, body))))
+                }, inner_exec_ident, sched_exec, body))))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
@@ -401,6 +390,29 @@ peg::parser! {
             block:block() { block }
             expression: expr_helper() { expression }
         }
+
+        rule maybe_square_bracket_indexing_assignment() -> Expr =
+            p:place_expression()
+            idx:(_ "[" _ n:nat() _ "]" { n })?
+            select_info:(_ "[" _ "[" prv:(p:prov_value() __ { p })? ident:ident() _ "]" _ "]" {
+                (prv, ident)
+            })?
+            expr:(_ "=" _ e:expression() {e})? { ?
+                match expr {
+                    None => match (idx, select_info) {
+                        (None, None) => Ok(Expr::new(ExprKind::PlaceExpr(Box::new(p)))),
+                        (Some(idx), None) => Ok(Expr::new(ExprKind::Index(Box::new(p), idx))),
+                        (None, Some((prv, ident))) =>
+                            Ok(Expr::new(ExprKind::Select(prv, Box::new(p), Box::new(ident)))),
+                        (Some(_), Some(_)) => Err("cannot select on an indexing expression")
+                    },
+                    Some(expr) => match (idx, select_info) {
+                        (None, None) => Ok(Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr)))),
+                        (Some(idx), None) => Ok(Expr::new(ExprKind::IdxAssign(Box::new(p), idx, Box::new(expr)))),
+                        (_, Some(_)) => Err("expected a place expression or indexing, but found a selection instead"),
+                    }
+                }
+            }
 
         rule maybe_ident() -> Option<Ident> =
             i:ident() { Some(i) }
@@ -570,10 +582,18 @@ peg::parser! {
             }
 
         rule exec() -> Exec =
-            base:base_exec() { Exec::new(base) }
+            base:base_exec() _ "." _  exec_path_elem: exec_path_elem() { Exec::new(base) }
 
         rule base_exec() -> BaseExec =
             ident:ident() { BaseExec::Ident(ident) }
+            / "cpu.thread" { BaseExec::CpuThread }
+            / "gpu.grid" _ "<" _ gdim:dim() _ "," _ bdim:dim() _ ">" { BaseExec::GpuGrid(gdim, bdim) }
+
+        rule exec_path_elem() -> ExecPathElem =
+            "distrib" _ "<" _ dim_compo:dim_component() _ ">" { ExecPathElem::Distrib(dim_compo) }
+            / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { 0 }/ "1" { 1 }) _ ">" {
+                ExecPathElem::SplitProj(Box::new(SplitProj::new(dim_compo, pos, proj)))
+            }
 
         rule exec_ty() -> ExecTy =
             begin:position!() exec:exec_ty_kind() end:position!() {

@@ -1,4 +1,4 @@
-use crate::ast::internal::{Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
+use crate::ast::internal::{ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
 use std::collections::{HashMap, HashSet};
@@ -22,6 +22,22 @@ impl TyCtx {
         TyCtx { frame: vec![fr_ty] }
     }
 
+    pub fn get_exec_expr(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
+        let exec_expr = self
+            .frame
+            .iter()
+            .flatten()
+            .rev()
+            .find_map(|entry| match entry {
+                FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
+                _ => None,
+            });
+        match exec_expr {
+            Some(exec) => Ok(exec),
+            None => Err(CtxError::IdentNotFound(ident.clone())),
+        }
+    }
+
     pub fn append_frame(mut self, frm_ty: Frame) -> Self {
         self.frame.append(&mut vec![frm_ty]);
         self
@@ -37,6 +53,12 @@ impl TyCtx {
     pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
         let frame_typing = self.frame.iter_mut().last().unwrap();
         frame_typing.push(FrameEntry::Var(id_typed));
+        self
+    }
+
+    pub fn append_exec_mapping(mut self, ident: Ident, exec: ExecExpr) -> Self {
+        let frame_typing = self.frame.iter_mut().last().unwrap();
+        frame_typing.push(FrameEntry::ExecMapping(ExecMapping::new(ident, exec)));
         self
     }
 
@@ -330,6 +352,9 @@ impl TyCtx {
                                 loans: without_reborrow,
                             })
                         }
+                        FrameEntry::ExecMapping(exec_mapping) => {
+                            FrameEntry::ExecMapping(exec_mapping.clone())
+                        }
                     })
                     .collect::<Vec<_>>()
             })
@@ -337,6 +362,31 @@ impl TyCtx {
         TyCtx {
             frame: res_frame_tys,
         }
+    }
+}
+
+pub(super) struct ExecCtx {
+    ctx: HashMap<ExecExpr, HashSet<Loan>>,
+}
+
+impl ExecCtx {
+    pub fn new() -> Self {
+        ExecCtx {
+            ctx: HashMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, exec: &ExecExpr, loans: HashSet<Loan>) {
+        let new_loans = if let Some(old) = self.ctx.get(&exec) {
+            old.union(&loans).cloned().collect()
+        } else {
+            loans
+        };
+        self.ctx.insert(exec.clone(), new_loans);
+    }
+
+    pub fn clear_exec(&mut self, exec: &ExecExpr) {
+        self.ctx.remove(exec);
     }
 }
 
@@ -457,6 +507,40 @@ impl GlobalCtx {
         }
     }
 }
+//
+// pub(super) struct ExecCtx {
+//     idents_typed: Vec<IdentExec>,
+// }
+//
+// impl ExecCtx {
+//     pub fn new() -> Self {
+//         ExecCtx {
+//             idents_typed: Vec::new(),
+//         }
+//     }
+//
+//     pub fn push(&mut self, ident: Ident, exec_ty: ExecTy) {
+//         self.idents_typed.push(IdentExec::new(ident, exec_ty))
+//     }
+//
+//     pub fn pop(&mut self) -> Option<IdentExec> {
+//         self.idents_typed.pop()
+//     }
+//
+//     pub fn get(&self, ident: &Ident) -> CtxResult<&ExecTy> {
+//         let search_res = self.idents_typed.iter().rev().find_map(|id| {
+//             if &id.ident.name == &ident.name {
+//                 Some(&id.ty)
+//             } else {
+//                 None
+//             }
+//         });
+//         match search_res {
+//             Some(ty) => Ok(ty),
+//             None => Err(CtxError::IdentNotFound(ident.clone())),
+//         }
+//     }
+// }
 
 #[test]
 fn test_kill_place_ident() {

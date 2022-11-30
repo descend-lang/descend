@@ -222,37 +222,29 @@ pub fn walk_indep<V: VisitMut>(visitor: &mut V, indep: &mut Indep) {
     let Indep {
         dim_compo,
         pos,
-        exec,
+        split_exec_ident,
         branch_idents,
         branch_bodies,
     } = indep;
     visitor.visit_dim_compo(dim_compo);
     visitor.visit_nat(pos);
-    visitor.visit_exec_expr(exec);
+    visitor.visit_ident(split_exec_ident);
     walk_list!(visitor, visit_ident, branch_idents);
     walk_list!(visitor, visit_expr, branch_bodies);
 }
 
 pub fn walk_par_for<V: VisitMut>(visitor: &mut V, par_for: &mut Sched) {
     let Sched {
-        decls,
         dim,
-        exec_ident: inner_exec,
-        exec,
-        input_idents,
-        input_views,
+        inner_exec_ident,
+        sched_exec,
         body,
     } = par_for;
     visitor.visit_dim_compo(dim);
-    for d in decls {
-        walk_list!(visitor, visit_expr, d)
-    }
-    for ident in inner_exec {
+    for ident in inner_exec_ident {
         visitor.visit_ident(ident)
     }
-    visitor.visit_exec_expr(exec);
-    walk_list!(visitor, visit_ident, input_idents);
-    walk_list!(visitor, visit_expr, input_views);
+    visitor.visit_ident(sched_exec);
     visitor.visit_expr(body);
 }
 
@@ -354,6 +346,10 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::Sched(par_for) => {
             visitor.visit_par_for(par_for);
+        }
+        ExprKind::Select(_, p, distrib_exec) => {
+            visitor.visit_pl_expr(p);
+            visitor.visit_ident(distrib_exec);
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(ident);

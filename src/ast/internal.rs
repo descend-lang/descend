@@ -22,6 +22,7 @@ pub fn append_idents_typed(frm: &Frame, idents_typed: Vec<IdentTyped>) -> Frame 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum FrameEntry {
     Var(IdentTyped),
+    ExecMapping(ExecMapping),
     PrvMapping(PrvMapping),
 }
 
@@ -41,6 +42,18 @@ impl IdentTyped {
             mutbl,
             exec,
         }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct ExecMapping {
+    pub ident: Ident,
+    pub exec_expr: ExecExpr,
+}
+
+impl ExecMapping {
+    pub fn new(ident: Ident, exec_expr: ExecExpr) -> Self {
+        ExecMapping { ident, exec_expr }
     }
 }
 

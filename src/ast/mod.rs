@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::ast::ExprKind::Split;
 use descend_derive::span_derive;
 pub use span::*;
 
@@ -254,33 +253,23 @@ impl Expr {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct Sched {
-    // TODO remove decls
-    pub decls: Option<Vec<Expr>>,
     pub dim: DimCompo,
-    pub exec_ident: Option<Ident>,
-    pub exec: ExecExpr,
-    pub input_idents: Vec<Ident>,
-    pub input_views: Vec<Expr>,
+    pub inner_exec_ident: Option<Ident>,
+    pub sched_exec: Ident,
     pub body: Box<Expr>,
 }
 
 impl Sched {
     pub fn new(
-        decls: Option<Vec<Expr>>,
         dim: DimCompo,
-        inner_exec: Option<Ident>,
-        exec: ExecExpr,
-        input_idents: Vec<Ident>,
-        input_views: Vec<Expr>,
+        inner_exec_ident: Option<Ident>,
+        sched_exec: Ident,
         body: Expr,
     ) -> Self {
         Sched {
-            decls,
             dim,
-            exec_ident: inner_exec,
-            exec,
-            input_idents,
-            input_views,
+            inner_exec_ident,
+            sched_exec,
             body: Box::new(body),
         }
     }
@@ -317,7 +306,7 @@ impl ExprSplit {
 pub struct Indep {
     pub dim_compo: DimCompo,
     pub pos: Nat,
-    pub exec: ExecExpr,
+    pub split_exec_ident: Ident,
     pub branch_idents: Vec<Ident>,
     pub branch_bodies: Vec<Expr>,
 }
@@ -326,14 +315,14 @@ impl Indep {
     pub fn new(
         dim_compo: DimCompo,
         pos: Nat,
-        exec: ExecExpr,
+        split_exec_ident: Ident,
         branch_idents: Vec<Ident>,
         branch_bodies: Vec<Expr>,
     ) -> Self {
         Indep {
             dim_compo,
             pos,
-            exec,
+            split_exec_ident,
             branch_idents,
             branch_bodies,
         }
@@ -389,6 +378,7 @@ pub enum ExprKind {
     UnOp(UnOp, Box<Expr>),
     Indep(Box<Indep>),
     Sched(Box<Sched>),
+    Select(Option<String>, Box<PlaceExpr>, Box<Ident>),
     Split(Box<ExprSplit>),
     Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
@@ -728,7 +718,7 @@ impl fmt::Display for PlaceExpr {
     }
 }
 
-#[span_derive(PartialEq, Eq)]
+#[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct ExecExpr {
     pub exec: Box<Exec>,
@@ -745,6 +735,23 @@ impl ExecExpr {
             span: None,
         }
     }
+
+    pub fn is_subexec_of(&self, exec: &ExecExpr) -> bool {
+        if self.exec.base == exec.exec.base {
+            if self.exec.path.len() < exec.exec.path.len() {
+                return false;
+            }
+
+            for (l, r) in self.exec.path.iter().zip(&exec.exec.path) {
+                if l != r {
+                    return false;
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl fmt::Display for ExecExpr {
@@ -753,7 +760,7 @@ impl fmt::Display for ExecExpr {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct SplitProj {
     pub split_dim: DimCompo,
     pub pos: Nat,
@@ -776,7 +783,7 @@ impl fmt::Display for SplitProj {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Exec {
     pub base: BaseExec,
     pub path: Vec<ExecPathElem>,
@@ -808,6 +815,15 @@ impl Exec {
         self.path.push(ExecPathElem::Distrib(dim_compo));
         self
     }
+
+    pub fn active_distrib_dim(&self) -> Option<DimCompo> {
+        for e in self.path.iter().rev() {
+            if let ExecPathElem::Distrib(dim) = e {
+                return Some(*dim);
+            }
+        }
+        None
+    }
 }
 
 impl fmt::Display for Exec {
@@ -820,7 +836,7 @@ impl fmt::Display for Exec {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum BaseExec {
     Ident(Ident),
     CpuThread,
@@ -837,7 +853,7 @@ impl fmt::Display for BaseExec {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ExecPathElem {
     SplitProj(Box<SplitProj>),
     Distrib(DimCompo),
@@ -1029,6 +1045,22 @@ impl Dim {
     }
     pub fn new_1d<F: Fn(Box<Dim1d>) -> Self>(constr: F, n: Nat) -> Self {
         constr(Box::new(Dim1d(n)))
+    }
+
+    pub fn proj_size(&self, dim_compo: DimCompo) -> Nat {
+        match (dim_compo, self) {
+            (DimCompo::X, Dim::XYZ(dim3d)) => dim3d.0.clone(),
+            (DimCompo::X, Dim::XY(dim2d) | Dim::XZ(dim2d)) => dim2d.0.clone(),
+            (DimCompo::X, Dim::X(dim1d)) => dim1d.0.clone(),
+            (DimCompo::Y, Dim::XYZ(dim3d)) => dim3d.1.clone(),
+            (DimCompo::Y, Dim::XY(dim2d)) => dim2d.1.clone(),
+            (DimCompo::Y, Dim::YZ(dim2d)) => dim2d.0.clone(),
+            (DimCompo::Y, Dim::Y(dim1d)) => dim1d.0.clone(),
+            (DimCompo::Z, Dim::XYZ(dim3d)) => dim3d.2.clone(),
+            (DimCompo::Z, Dim::XZ(dim2d) | Dim::YZ(dim2d)) => dim2d.1.clone(),
+            (DimCompo::Z, Dim::Z(dim1d)) => dim1d.0.clone(),
+            _ => panic!("Attempting to project size for a dimension that does not exist."),
+        }
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {

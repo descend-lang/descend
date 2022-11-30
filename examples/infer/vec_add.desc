@@ -9,14 +9,17 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
     let b_array = gpu_alloc_copy(&uniq gpu, &shrd *hb_array);
     exec::<64, 1024>(
         &uniq gpu,
-        // FIXME nothing stops me from passing the complete @-value via a move here
         (&uniq a_array, &shrd b_array),
         | input: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n]) |
             -[grid: gpu.grid<X<64>, X<1024>>]-> () {
             let view_a = group_mut::<1024>(to_view_mut(input.0));
             let view_b = group::<1024>(to_view(input.1));
-            sched a_group, b_group in view_a, view_b to block in grid {
-                sched a, b in a_group, b_group to thread in block {
+            sched block in grid {
+                let a_row = view_a[[block]];
+                let b_row = view_b[[block]];
+                sched thread in block {
+                    let a = a_row[[thread]];
+                    let b = b_row[[thread]];
                     *a = *a + *b
                 }
             }
