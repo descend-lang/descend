@@ -2070,26 +2070,19 @@ impl TyChecker {
         let (arr_ty_ctx, arr_expr_ty) =
             self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv_val_name, own, arr_expr)?;
         arr_expr.ty = Some(arr_expr_ty);
-        match &arr_expr.ty.as_ref().unwrap().ty {
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n),
-                ..
-            }) => Ok((arr_ty_ctx, Ty::new(TyKind::Data(elem_dty.as_ref().clone())))),
-            TyKind::Data(DataTy {
-                dty: DataTyKind::At(dty, _),
-                ..
-            }) => {
-                if let DataTy {
-                    dty: DataTyKind::Array(elem_dty, _),
-                    ..
-                } = dty.as_ref()
-                {
+        if let TyKind::Data(DataTy {
+            dty: DataTyKind::Ref(_, _, _, ref_dty),
+            ..
+        }) = &arr_expr.ty.as_ref().unwrap().ty
+        {
+            match &ref_dty.as_ref().dty {
+                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
                     Ok((arr_ty_ctx, Ty::new(TyKind::Data(elem_dty.as_ref().clone()))))
-                } else {
-                    Err(TyError::String("Execpted an array or view.".to_string()))
                 }
+                _ => Err(TyError::String("Expected an array or view.".to_string())),
             }
-            _ => Err(TyError::String("Expected an array or view.".to_string())),
+        } else {
+            unreachable!();
         }
     }
 
