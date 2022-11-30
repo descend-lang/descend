@@ -1951,18 +1951,23 @@ impl TyChecker {
         arr_expr: &mut PlaceExpr,
         idx: &Nat,
     ) -> TyResult<(TyCtx, Ty)> {
-        let (arr_ty_ctx, arr_expr_ty) =
+        let (arr_ty_ctx, _) =
             self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv_val_name, own, arr_expr)?;
-        arr_expr.ty = Some(arr_expr_ty);
         if let TyKind::Data(DataTy {
-            dty: DataTyKind::Ref(_, _, _, ref_dty),
+            dty: DataTyKind::Ref(prv, own, mem, ref_dty),
             ..
         }) = &arr_expr.ty.as_ref().unwrap().ty
         {
             match &ref_dty.as_ref().dty {
-                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
-                    Ok((arr_ty_ctx, Ty::new(TyKind::Data(elem_dty.as_ref().clone()))))
-                }
+                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => Ok((
+                    arr_ty_ctx,
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                        prv.clone(),
+                        *own,
+                        mem.clone(),
+                        Box::new(elem_dty.as_ref().clone()),
+                    )))),
+                )),
                 _ => Err(TyError::String("Expected an array or view.".to_string())),
             }
         } else {
