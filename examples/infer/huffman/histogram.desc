@@ -42,11 +42,11 @@ fn hist<i: prv, ot: prv, o: prv>(
                 };
 
 
-                /*parfor _ in block
+                parfor _ in block
                 with d_in_item
                 from d_in_group {
-                    atomic_fetch_add(&shrd sm_out[d_in_item], 1u32)
-                };*/
+                    atomic_fetch_add(&shrd sm_out[*d_in_item], 1u32)
+                };
 
                 {
                     let foo = &shrd sm_out;

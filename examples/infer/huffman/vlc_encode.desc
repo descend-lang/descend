@@ -74,7 +74,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // encode four input symbols per thread
                 // and save the total bit-length of the encoded symbols per thread in shared memory
                 {
-                    let foo = &uniq sm_as;
+                    let mut foo = &uniq sm_as;
                     let tmp_sm_as_view = to_view_mut(&uniq *foo);
                     parfor _ in block
                     with d_item , sm_as_item
