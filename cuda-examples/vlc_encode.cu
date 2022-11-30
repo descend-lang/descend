@@ -27,14 +27,13 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                 [] __device__(const descend::u32 *const p0,
                               const descend::u32 *const p1,
                               const descend::u32 *const p2, descend::u32 *const p3,
-                              descend::u32 *const p4, std::size_t d, std::size_t kc,
-                              std::size_t tmp_d_item_i) -> void {
+                              descend::u32 *const p4) -> void {
                     {
 
                         __shared__ descend::u32 sm_cw[256];
                         __shared__ descend::u32 sm_cwl[256];
                         __shared__ descend::u32 sm_as[256];
-                        __shared__ descend::Atomic<descend::u32> sm_block_enc[256];
+                        __shared__ descend::atomic<descend::u32> sm_block_enc[256];
                         __shared__ descend::u32 sm_kcmax[1];
                         {
 
@@ -48,7 +47,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                 sm_cwl[threadIdx.x] = p2[threadIdx.x];
                             }
                             {
-                                const descend::u32 *const foo = sm_as;
+                                descend::u32 *foo = sm_as;
 
                                 {
                                     codeword = 0;
@@ -80,7 +79,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                             }
                             {
                                 descend::u32 *foo = sm_as;
-                                for (std::size_t d = 256; (d > 0); d = (d / 2)) {
+                                for (std::size_t d = 128; (d > 0); d = (d / 2)) {
 
                                     if ((threadIdx.x < d)) {
                                         (&(*foo))[(((threadIdx.x - 0) * (256 / d)) +
@@ -102,7 +101,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                             __syncthreads();
                             {
                                 descend::u32 *foo = sm_as;
-                                for (std::size_t d = 1; (d <= 256); d = (d * 2)) {
+                                for (std::size_t d = 1; (d <= 128); d = (d * 2)) {
 
                                     if ((threadIdx.x < d)) {
                                         const const descend::u32 t = (&(*foo))[(
@@ -136,7 +135,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                             {
                                 const const descend::u32 *const foo = sm_as;
 
-                                const descend::Atomic<descend::u32> *const bar = sm_block_enc;
+                                descend::atomic<descend::u32> *bar = sm_block_enc;
 
                                 {
                                     kc = ((&(*foo))[threadIdx.x] / 32);
@@ -154,7 +153,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                 }
                                 descend::u32 tmpcw =
                                         (descend::u32)((codeword >> (codewordlen - wrbits)));
-                                descend::atomic_fetch_or(sm_block_enc[kc],
+                                descend::atomic_fetch_or((&sm_block_enc[kc]),
                                                          (tmpcw << ((32 - startbit) - wrbits)));
                                 codewordlen = (codewordlen - wrbits);
                                 if ((codewordlen > 0)) {
@@ -166,22 +165,24 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                     codewordlen = (codewordlen - wrbits);
                                     tmpcw = ((descend::u32)((codeword >> codewordlen)) &
                                              ((1 << wrbits) - 1));
-                                    descend::atomic_fetch_or(sm_block_enc[(kc + 1)],
+                                    descend::atomic_fetch_or((&sm_block_enc[(kc + 1)]),
                                                              (tmpcw << (32 - wrbits)));
                                 }
                                 if ((codewordlen > 0)) {
                                     tmpcw = (descend::u32)((codeword & ((1 << codewordlen) - 1)));
-                                    descend::atomic_fetch_or(sm_block_enc[(kc + 2)],
+                                    descend::atomic_fetch_or((&sm_block_enc[(kc + 2)]),
                                                              (tmpcw << (32 - codewordlen)));
                                 }
-                                p3[((blockIdx.x * 256) + threadIdx.x)] =
-                                        descend::atomic_load(sm_block_enc[threadIdx.x]);
+
+                                if ((descend::thread_id_x() <= sm_kcmax[0])) {
+                                    p3[((blockIdx.x * 256) + threadIdx.x)] =
+                                            descend::atomic_load((&sm_block_enc[threadIdx.x]));
+                                }
                             }
                         }
                     }
                 },
-                (&source_data), (&codewords), (&codewordlens), (&out_data), (&out_idx),
-                d, kc, tmp_d_item_i);
+                (&source_data), (&codewords), (&codewordlens), (&out_data), (&out_idx));
         descend::copy_to_host<descend::array<descend::u32, (64 * 256)>>((&out_data),
                                                                         h_out_data);
         descend::copy_to_host<descend::array<descend::u32, 64>>((&out_idx),
