@@ -2075,7 +2075,21 @@ impl TyChecker {
                 dty: DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n),
                 ..
             }) => Ok((arr_ty_ctx, Ty::new(TyKind::Data(elem_dty.as_ref().clone())))),
-            _ => Err(TyError::String("Expected and array or view.".to_string())),
+            TyKind::Data(DataTy {
+                dty: DataTyKind::At(dty, _),
+                ..
+            }) => {
+                if let DataTy {
+                    dty: DataTyKind::Array(elem_dty, _),
+                    ..
+                } = dty.as_ref()
+                {
+                    Ok((arr_ty_ctx, Ty::new(TyKind::Data(elem_dty.as_ref().clone()))))
+                } else {
+                    Err(TyError::String("Execpted an array or view.".to_string()))
+                }
+            }
+            _ => Err(TyError::String("Expected an array or view.".to_string())),
         }
     }
 
