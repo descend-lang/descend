@@ -2067,12 +2067,12 @@ impl TyChecker {
         arr_expr: &mut PlaceExpr,
         idx: &Nat,
     ) -> TyResult<(TyCtx, Ty)> {
-        let (arr_ty_ctx, _) =
+        let (arr_ty_ctx, ref_dty) =
             self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv_val_name, own, arr_expr)?;
         if let TyKind::Data(DataTy {
             dty: DataTyKind::Ref(prv, own, mem, ref_dty),
             ..
-        }) = &arr_expr.ty.as_ref().unwrap().ty
+        }) = &ref_dty.ty
         {
             match &ref_dty.as_ref().dty {
                 DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => Ok((
