@@ -8,19 +8,19 @@ fn hist<i: prv, ot: prv, o: prv>(
     let d_in = gpu_alloc_copy(&uniq gpu, &shrd *h_in);
     let d_out_tmp = gpu_alloc_copy(&uniq gpu, &shrd *h_out_tmp);
     let mut d_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
-    exec::<64, 512>(
+    exec::<64, 1024>(
         &uniq gpu,
         (
             &shrd d_in,
             &shrd d_out_tmp,
             &uniq d_out
         ),
-        | grid: BlockGrp<64, ThreadGrp<512>>,
+        | grid: BlockGrp<64, ThreadGrp<1024>>,
           inputs: (&shrd gpu.global [u8; 64*1024],
                    &shrd gpu.global [AtomicU32; 256],
                    &uniq gpu.global [u32; 256])
         | -[gpu.grid]-> () {
-            let d_in_groups = group::<512>(to_view(inputs.0));
+            let d_in_groups = group::<1024>(to_view(inputs.0));
 
             decl {
                 let mut sm_out: [AtomicU32; 256] @ gpu.shared

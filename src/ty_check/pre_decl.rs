@@ -30,10 +30,10 @@ pub static SPLIT_WARP_GRP: &str = "split_warp_grp";
 
 pub static THREAD_ID_X: &str = "thread_id_x";
 
-pub static ATOMIC_NEW: &str = "atomic_new";
+pub static ATOMIC_STORE: &str = "atomic_store";
+pub static ATOMIC_LOAD: &str = "atomic_load";
 pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
 pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
-pub static ATOMIC_LOAD: &str = "atomic_load";
 
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
@@ -64,10 +64,10 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
         (THREAD_ID_X, thread_id_x_ty()),
-        (ATOMIC_NEW, atomic_new_ty()),
+        (ATOMIC_STORE, atomic_store_ty()),
+        (ATOMIC_LOAD, atomic_load_ty()),
         (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
         (ATOMIC_FETCH_ADD, atomic_fetch_add_ty()),
-        (ATOMIC_LOAD, atomic_load_ty()),
     ];
 
     decls.to_vec()
@@ -470,19 +470,39 @@ fn thread_id_x_ty() -> Ty {
     ))
 }
 
-// atomic_new:
-//  <>(u32) -[gpu.thread]-> AtomicU32
-fn atomic_new_ty() -> Ty {
+// atomic_store:
+//  <>(AtomicU32, u32) -[gpu.thread]-> Unit
+fn atomic_store_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
     Ty::new(TyKind::Fn(
-        vec![],
-        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::U32,
-        ))))],
+        vec![r_prv, m_mem],
+        vec![
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                Provenance::Ident(r),
+                Ownership::Shrd,
+                Memory::Ident(m),
+                Box::new(DataTy::new(DataTyKind::Atomic(
+                    AtomicTy::AtomicU32,
+                ))),
+            )))),
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::U32,
+            ))))
+        ],
         Exec::GpuThread,
-        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Atomic(
-            AtomicTy::AtomicU32,
-        ))))
-        )))
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))))
+    )
 }
 
 // atomic_fetch_or:

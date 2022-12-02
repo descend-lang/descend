@@ -1,3 +1,5 @@
+// code generated from ../examples/infer/huffman/vlc_encode.desc
+
 #include "descend.cuh"
 auto vlc_encode(const descend::u32 *const h_source_data,
                 const descend::u32 *const h_codewords,
@@ -32,7 +34,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
 
                         __shared__ descend::u32 sm_cw[256];
                         __shared__ descend::u32 sm_cwl[256];
-                        __shared__ descend::u32 sm_as[256];
+                        __shared__ descend::u32 sm_res_location[256];
                         __shared__ descend::atomic<descend::u32> sm_block_enc[256];
                         __shared__ descend::u32 sm_kcmax[1];
                         {
@@ -47,7 +49,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                 sm_cwl[threadIdx.x] = p2[threadIdx.x];
                             }
                             {
-                                descend::u32 *foo = sm_as;
+                                descend::u32 *foo = sm_res_location;
 
                                 {
                                     codeword = 0;
@@ -78,7 +80,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                 }
                             }
                             {
-                                descend::u32 *foo = sm_as;
+                                descend::u32 *foo = sm_res_location;
                                 for (std::size_t d = 128; (d > 0); d = (d / 2)) {
 
                                     if ((threadIdx.x < d)) {
@@ -95,12 +97,12 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                             }
 
                             if ((threadIdx.x < 1)) {
-                                sm_as[((threadIdx.x - 0) + (256 - 1))] = 0;
+                                sm_res_location[((threadIdx.x - 0) + (256 - 1))] = 0;
                             } else {
                             }
                             __syncthreads();
                             {
-                                descend::u32 *foo = sm_as;
+                                descend::u32 *foo = sm_res_location;
                                 for (std::size_t d = 1; (d <= 128); d = (d * 2)) {
 
                                     if ((threadIdx.x < d)) {
@@ -126,21 +128,20 @@ auto vlc_encode(const descend::u32 *const h_source_data,
 
                                 {
                                     p4[((blockIdx.x * 1) + (threadIdx.x - 255))] =
-                                            (sm_as[255] + codewordlen);
+                                            (sm_res_location[255] + codewordlen);
                                     sm_kcmax[(threadIdx.x - 255)] =
-                                            ((sm_as[255] + codewordlen) / 32);
+                                            ((sm_res_location[255] + codewordlen) / 32);
                                 }
                             }
                             __syncthreads();
                             {
-                                const const descend::u32 *const foo = sm_as;
-
-                                descend::atomic<descend::u32> *bar = sm_block_enc;
+                                const const descend::u32 *const foo = sm_res_location;
 
                                 {
                                     kc = ((&(*foo))[threadIdx.x] / 32);
                                     startbit = ((&(*foo))[threadIdx.x] % 32);
-                                    (&(*bar))[threadIdx.x] = descend::atomic_new(0);
+                                    descend::atomic_store((&sm_block_enc[threadIdx.x]),
+                                                          (descend::u32)(0));
                                 }
                             }
 
