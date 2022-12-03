@@ -104,19 +104,6 @@ impl ConstrainMap {
     pub fn composition(&mut self, other: ConstrainMap) {
         if !other.is_empty() {
             self.ty_unifier
-                .iter()
-                .for_each(|(name, _)| assert!(other.ty_unifier.get(name).is_none()));
-            self.dty_unifier
-                .iter()
-                .for_each(|(name, _)| assert!(other.dty_unifier.get(name).is_none()));
-            self.nat_unifier
-                .iter()
-                .for_each(|(name, _)| assert!(other.nat_unifier.get(name).is_none()));
-            self.mem_unifier
-                .iter()
-                .for_each(|(name, _)| assert!(other.mem_unifier.get(name).is_none()));
-
-            self.ty_unifier
                 .iter_mut()
                 .for_each(|(_, bound)| bound.substitute(&other));
             self.dty_unifier
@@ -506,8 +493,8 @@ impl Constrainable for DataTy {
                 }
             }
             (DataTyKind::Range, DataTyKind::Range) => Ok(()), // FIXME/ REMOVE
-            (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
-                unimplemented!()
+            (DataTyKind::RawPtr(dty1), DataTyKind::RawPtr(dty2)) => {
+                dty1.constrain(dty2, constr_map, prv_rels)
             }
             (DataTyKind::Dead(_), _) => {
                 panic!(

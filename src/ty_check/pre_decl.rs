@@ -147,7 +147,7 @@ fn to_raw_ptr_ty() -> TypeScheme {
     };
     let t_ty = IdentKinded {
         ident: t.clone(),
-        kind: Kind::Ty,
+        kind: Kind::DataTy,
     };
 
     TypeScheme {
@@ -176,7 +176,7 @@ fn offset_raw_ptr_ty() -> TypeScheme {
     let t = Ident::new("t");
     let t_ty = IdentKinded {
         ident: t.clone(),
-        kind: Kind::Ty,
+        kind: Kind::DataTy,
     };
 
     TypeScheme {
@@ -212,7 +212,7 @@ fn atomic_set_ty() -> TypeScheme {
     };
     let t_ty = IdentKinded {
         ident: t.clone(),
-        kind: Kind::Ty,
+        kind: Kind::DataTy,
     };
     TypeScheme {
         generic_params: vec![p_prv, m_mem, t_ty],

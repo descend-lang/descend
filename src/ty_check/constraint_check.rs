@@ -1,6 +1,5 @@
 use crate::ast::SubstKindedIdents;
 use crate::ast::{Constraint, DataTyKind, Ident, IdentKinded};
-use crate::ty_check;
 use crate::ty_check::unify::{ConstrainMap, Constrainable};
 use crate::ty_check::utils::fresh_name;
 use crate::ty_check::{pre_decl, unify};
