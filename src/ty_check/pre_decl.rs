@@ -1,9 +1,11 @@
 use crate::ast::{
-    BinOp, BinOpNat, DataTy, DataTyKind, Exec, ExprKind, FunctionKind, Ident, IdentKinded, Kind,
-    Memory, Nat, Ownership, Path, Provenance, ScalarTy, ThreadHierchyTy, TraitMonoType, Ty, TyKind,
-    TypeScheme,
+    ArgKinded, BinOp, BinOpNat, Constraint, DataTy, DataTyKind, Exec, ExprKind, FunctionKind,
+    Ident, IdentKinded, Kind, Memory, Nat, Ownership, Path, Provenance, ScalarTy, ThreadHierchyTy,
+    TraitMonoType, Ty, TyKind, TypeScheme,
 };
 use crate::ty_check::{Expr, PlaceExpr, PlaceExprKind};
+
+use super::constraint_check::ConstraintScheme;
 
 pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
@@ -38,6 +40,10 @@ pub const SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub const SPLIT_WARP: &str = "split_warp";
 pub const SPLIT_WARP_GRP: &str = "split_warp_grp";
 
+pub static COPY_TRAIT_NAME: &str = "Copy";
+pub static DEREF_TRAIT_NAME: &str = "Deref";
+pub static INDEX_ACCESS_TRAIT_NAME: &str = "IndexAccess";
+
 pub const BINOPS: [(BinOp, &str, &str); 11] = [
     (BinOp::Add, "Add", "add"),
     (BinOp::Sub, "Sub", "sub"),
@@ -54,7 +60,7 @@ pub const BINOPS: [(BinOp, &str, &str); 11] = [
 
 pub fn copy_trait() -> TraitMonoType {
     TraitMonoType {
-        name: String::from("Copy"),
+        name: String::from(COPY_TRAIT_NAME),
         generic_args: vec![],
     }
 }
@@ -126,6 +132,121 @@ pub fn fun_decls() -> Vec<(&'static str, TypeScheme)> {
     ];
 
     decls.to_vec()
+}
+
+pub fn constr_scheme_decls() -> [ConstraintScheme; 8] {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let n = Ident::new("n");
+    let t = Ident::new("t");
+
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
+    let nat_n = Nat::Ident(n.clone());
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::DataTy,
+    };
+    let t_dty = DataTy::new(DataTyKind::Ident(t.clone()));
+    let t_arg = ArgKinded::DataTy(t_dty.clone());
+
+    let deref_ref = |own| ConstraintScheme {
+        generic_params: vec![r_prv.clone(), m_mem.clone(), t_ty.clone()],
+        premis: vec![],
+        consequence: Constraint {
+            dty: DataTy::new(DataTyKind::Ref(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                Box::new(t_dty.clone()),
+            )),
+            trait_bound: TraitMonoType {
+                name: String::from(DEREF_TRAIT_NAME),
+                generic_args: vec![t_arg.clone()],
+            },
+        },
+    };
+    let deref_raw = ConstraintScheme {
+        generic_params: vec![t_ty.clone()],
+        premis: vec![],
+        consequence: Constraint {
+            dty: DataTy::new(DataTyKind::RawPtr(Box::new(t_dty.clone()))),
+            trait_bound: TraitMonoType {
+                name: String::from(DEREF_TRAIT_NAME),
+                generic_args: vec![t_arg.clone()],
+            },
+        },
+    };
+    let index_array = ConstraintScheme {
+        generic_params: vec![n_nat.clone(), t_ty.clone()],
+        premis: vec![],
+        consequence: Constraint {
+            dty: DataTy::new(DataTyKind::Array(Box::new(t_dty.clone()), nat_n.clone())),
+            trait_bound: TraitMonoType {
+                name: String::from(INDEX_ACCESS_TRAIT_NAME),
+                generic_args: vec![t_arg.clone()],
+            },
+        },
+    };
+    let index_array_ref = |own| ConstraintScheme {
+        generic_params: vec![r_prv.clone(), m_mem.clone(), n_nat.clone(), t_ty.clone()],
+        premis: vec![],
+        consequence: Constraint {
+            dty: DataTy::new(DataTyKind::Ref(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                Box::new(DataTy::new(DataTyKind::Array(
+                    Box::new(t_dty.clone()),
+                    nat_n.clone(),
+                ))),
+            )),
+            trait_bound: TraitMonoType {
+                name: String::from(INDEX_ACCESS_TRAIT_NAME),
+                generic_args: vec![t_arg.clone()],
+            },
+        },
+    };
+    let index_array_shape_ref = |own| ConstraintScheme {
+        generic_params: vec![r_prv.clone(), m_mem.clone(), n_nat.clone(), t_ty.clone()],
+        premis: vec![],
+        consequence: Constraint {
+            dty: DataTy::new(DataTyKind::Ref(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                Box::new(DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(t_dty.clone()),
+                    nat_n.clone(),
+                ))),
+            )),
+            trait_bound: TraitMonoType {
+                name: String::from(INDEX_ACCESS_TRAIT_NAME),
+                generic_args: vec![t_arg.clone()],
+            },
+        },
+    };
+
+    [
+        deref_ref(Ownership::Shrd),
+        deref_ref(Ownership::Uniq),
+        deref_raw,
+        index_array,
+        index_array_ref(Ownership::Shrd),
+        index_array_ref(Ownership::Uniq),
+        index_array_shape_ref(Ownership::Shrd),
+        index_array_shape_ref(Ownership::Uniq),
+    ]
 }
 
 // to_raw_ptr:

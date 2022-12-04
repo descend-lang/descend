@@ -45,7 +45,6 @@ fn warp_reduce() -> Res {
     ))
 }
 
-#[ignore]
 #[test]
 fn bfs() -> Res {
     Ok(println!(

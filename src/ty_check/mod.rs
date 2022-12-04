@@ -86,15 +86,17 @@ struct TyChecker {
     // Somewhere later in the code we may infer $T is f32. Then we must adjust the typing context
     // but also the type of the expressions whose types contain $T
     implicit_ident_substitution: ConstrainMap,
+    borrow_check: bool,
 }
 
 impl TyChecker {
     pub fn new() -> Self {
         TyChecker {
             gl_ctx: GlobalCtx::new().append_fun_decls(pre_decl::fun_decls().into_iter()),
-            constraint_env: ConstraintCtx::new(),
+            constraint_env: ConstraintCtx::new(&pre_decl::constr_scheme_decls()),
             implicit_ident_cons: IdentsConstrained::new(),
             implicit_ident_substitution: ConstrainMap::new(),
+            borrow_check: true,
         }
     }
 
@@ -710,10 +712,12 @@ impl TyChecker {
                     })
                     .collect(),
             );
-            let ty_ctx = TyCtx::from(glf_frame);
+            let ty_ctx = TyCtx::from(glf_frame.clone());
 
             // Check body-expression
+            self.borrow_check = false;
             self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
+            self.borrow_check = true;
 
             // t <= t_f
             // unify::constrain(
@@ -745,6 +749,36 @@ impl TyChecker {
             }
 
             // Make sure the body does not contain any implicit kinded identifier
+            TyChecker::apply_substitution_exprs(
+                std::iter::once(&mut gf.body_expr),
+                &self.implicit_ident_substitution,
+            )?;
+
+            // Check again with borrow_checker
+            let ty_ctx = TyCtx::from(glf_frame);
+            self.ty_check_expr(&kind_ctx, ty_ctx, gf.exec, &mut gf.body_expr)?;
+
+            let (empty_ty_ctx, mut subs) = subty::check(
+                &kind_ctx,
+                TyCtx::new(),
+                gf.body_expr.ty.as_ref().unwrap().dty(),
+                &gf.ret_dty,
+            )?;
+            //TODO why is this the case?
+            assert!(
+                empty_ty_ctx.is_empty(),
+                "Expected typing context to be empty. But TyCtx:\n {:?}",
+                empty_ty_ctx
+            );
+
+            if !subs.is_empty() {
+                subs = expand_to_valid_subst(
+                    &subs,
+                    &mut self.implicit_ident_cons,
+                    &self.constraint_env,
+                )?;
+                self.implicit_ident_substitution.composition(subs);
+            }
             TyChecker::apply_substitution_exprs(
                 std::iter::once(&mut gf.body_expr),
                 &self.implicit_ident_substitution,
@@ -1056,7 +1090,7 @@ impl TyChecker {
     }
 
     fn ty_check_split(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -1083,15 +1117,20 @@ impl TyChecker {
         }
 
         let (ty_ctx_prv1, prv1) = TyChecker::infer_prv(ty_ctx, r1);
-        let (ty_ctx_prv1_prv2, prv2) = TyChecker::infer_prv(ty_ctx_prv1, r2);
+        let (mut ty_ctx_prv1_prv2, prv2) = TyChecker::infer_prv(ty_ctx_prv1, r2);
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv1)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv1));
         }
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv2)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv2));
         }
-        let mems =
-            self.place_expr_ty_mems_under_exec_own(kind_ctx, &ty_ctx_prv1_prv2, exec, own, view)?;
+        let mems = self.place_expr_ty_mems_under_exec_own(
+            kind_ctx,
+            &mut ty_ctx_prv1_prv2,
+            exec,
+            own,
+            view,
+        )?;
 
         let split_ty = if let TyKind::Data(DataTy {
             dty: DataTyKind::ArrayShape(elem_dty, n),
@@ -1139,7 +1178,7 @@ impl TyChecker {
         let loans = borrow_check::ownership_safe(
             self,
             kind_ctx,
-            &ty_ctx_prv1_prv2,
+            &mut ty_ctx_prv1_prv2,
             exec,
             &[],
             own,
@@ -1290,52 +1329,55 @@ impl TyChecker {
             self.ty_check_expr(kind_ctx, cond_ty_ctx.append_frame(vec![]), exec, body)?;
 
         let body_outer_ty_ctx = body_ty_ctx.drop_last_frame();
-        let cond_temp_ty_ctx =
-            self.ty_check_expr(kind_ctx, body_outer_ty_ctx.clone(), exec, cond)?;
-        if body_outer_ty_ctx != cond_temp_ty_ctx {
-            return Err(TyError::String(
-                "Context should have stayed the same".to_string(),
-            ));
-        }
-        let body_temp_ty_ctx = self.ty_check_expr(
-            kind_ctx,
-            body_outer_ty_ctx.clone().append_frame(vec![]),
-            exec,
-            body,
-        )?;
-        if body_outer_ty_ctx != body_temp_ty_ctx.drop_last_frame() {
-            return Err(TyError::String(
-                "Context should have stayed the same".to_string(),
-            ));
+        if self.borrow_check {
+            let cond_temp_ty_ctx =
+                self.ty_check_expr(kind_ctx, body_outer_ty_ctx.clone(), exec, cond)?;
+            if body_outer_ty_ctx != cond_temp_ty_ctx {
+                return Err(TyError::String(
+                    "Context should have stayed the same".to_string(),
+                ));
+            }
+            let body_temp_ty_ctx = self.ty_check_expr(
+                kind_ctx,
+                body_outer_ty_ctx.clone().append_frame(vec![]),
+                exec,
+                body,
+            )?;
+            if body_outer_ty_ctx != body_temp_ty_ctx.drop_last_frame() {
+                return Err(TyError::String(
+                    "Context should have stayed the same".to_string(),
+                ));
+            }
+
+            let cond_ty = cond.ty.as_ref().unwrap();
+            let body_ty = body.ty.as_ref().unwrap();
+
+            if !matches!(
+                &cond_ty.ty,
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Scalar(ScalarTy::Bool),
+                    ..
+                })
+            ) {
+                return Err(TyError::String(format!(
+                    "Expected condition in while loop, instead got {:?}",
+                    cond_ty
+                )));
+            }
+            if !matches!(
+                &body_ty.ty,
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Scalar(ScalarTy::Unit),
+                    ..
+                })
+            ) {
+                return Err(TyError::String(format!(
+                    "Body of while loop is not of unit type, instead got {:?}",
+                    body_ty
+                )));
+            }
         }
 
-        let cond_ty = cond.ty.as_ref().unwrap();
-        let body_ty = body.ty.as_ref().unwrap();
-
-        if !matches!(
-            &cond_ty.ty,
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Scalar(ScalarTy::Bool),
-                ..
-            })
-        ) {
-            return Err(TyError::String(format!(
-                "Expected condition in while loop, instead got {:?}",
-                cond_ty
-            )));
-        }
-        if !matches!(
-            &body_ty.ty,
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Scalar(ScalarTy::Unit),
-                ..
-            })
-        ) {
-            return Err(TyError::String(format!(
-                "Body of while loop is not of unit type, instead got {:?}",
-                body_ty
-            )));
-        }
         Ok((
             body_outer_ty_ctx,
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
@@ -1944,9 +1986,9 @@ impl TyChecker {
         pl_expr: &PlaceExpr,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let mut assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let pl = pl_expr.to_place().unwrap();
-        let mut place_ty = assigned_val_ty_ctx.place_ty(&pl)?;
+        let mut place_ty = assigned_val_ty_ctx.place_ty_infer(&pl, self)?;
         // FIXME this should be checked for ArrayViews as well
         // fn contains_view_dty(ty: &TyKind) -> bool {
         //     unimplemented!()
@@ -1960,17 +2002,19 @@ impl TyChecker {
         Self::check_mutable(&assigned_val_ty_ctx, &pl)?;
 
         // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
-        if !matches!(
-            &place_ty.ty,
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Dead(_),
-                ..
-            })
-        ) {
+        if self.borrow_check
+            && !matches!(
+                &place_ty.ty,
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Dead(_),
+                    ..
+                })
+            )
+        {
             let pl_uniq_loans = borrow_check::ownership_safe(
                 self,
                 kind_ctx,
-                &assigned_val_ty_ctx,
+                &mut assigned_val_ty_ctx,
                 exec,
                 &[],
                 Ownership::Uniq,
@@ -2017,53 +2061,29 @@ impl TyChecker {
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         let mut assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
-        // TODO not very good solution
-        if let PlaceExprKind::Deref(inner_pl) = &deref_expr.pl_expr {
-            if let PlaceExprKind::Ident(ident) = &(**inner_pl).pl_expr {
-                if let Ok(ident_ty) = assigned_val_ty_ctx.ty_of_ident(ident) {
-                    if let TyKind::Data(ident_dty) = &ident_ty.ty {
-                        if let DataTyKind::Ident(dty_ident) = &ident_dty.dty {
-                            if dty_ident.is_implicit {
-                                let new_dty = DataTy::new(DataTyKind::Ref(
-                                    Provenance::Ident(Ident::new_impli(&fresh_name("$r"))),
-                                    Ownership::Uniq,
-                                    Memory::Ident(Ident::new_impli(&fresh_name("$m"))),
-                                    Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli(
-                                        &fresh_name("$d"),
-                                    )))),
-                                ));
-                                let mut constr_map = ConstrainMap::new();
-                                constr_map
-                                    .dty_unifier
-                                    .insert(dty_ident.name.clone(), new_dty);
-                                assigned_val_ty_ctx.substitute(&constr_map);
-                                self.implicit_ident_substitution.composition(constr_map);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+
         self.place_expr_ty_under_exec_own(
             kind_ctx,
-            &assigned_val_ty_ctx,
+            &mut assigned_val_ty_ctx,
             exec,
             Ownership::Uniq,
             deref_expr,
         )?;
 
-        borrow_check::ownership_safe(
-            self,
-            kind_ctx,
-            &assigned_val_ty_ctx,
-            exec,
-            &[],
-            Ownership::Uniq,
-            &deref_expr,
-        )
-        .map_err(|err| {
-            TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
-        })?;
+        if self.borrow_check {
+            borrow_check::ownership_safe(
+                self,
+                kind_ctx,
+                &mut assigned_val_ty_ctx,
+                exec,
+                &[],
+                Ownership::Uniq,
+                &deref_expr,
+            )
+            .map_err(|err| {
+                TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
+            })?;
+        }
 
         let deref_ty = &mut deref_expr.ty.as_mut().unwrap();
         let after_subty_ctx = unify::sub_unify(
@@ -2113,90 +2133,103 @@ impl TyChecker {
             )));
         }
 
-        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let mut assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         self.place_expr_ty_under_exec_own(
             kind_ctx,
-            &assigned_val_ty_ctx,
+            &mut assigned_val_ty_ctx,
             exec,
             Ownership::Uniq,
             pl_expr,
         )?;
-        let (n, own, mem, dty) = match &pl_expr.ty.as_ref().unwrap().ty {
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Array(elem_dty, n),
-                ..
-            }) => unimplemented!(), //(Ty::Data(*elem_ty), n),
-            TyKind::Data(DataTy {
-                dty: DataTyKind::At(arr_dty, mem),
-                ..
-            }) => {
-                if let DataTy {
+
+        let dty = if self.borrow_check {
+            let (n, own, mem, dty) = match &pl_expr.ty.as_ref().unwrap().ty {
+                TyKind::Data(DataTy {
                     dty: DataTyKind::Array(elem_dty, n),
                     ..
-                } = arr_dty.as_ref()
-                {
-                    unimplemented!() //(Ty::Data(*elem_ty), n)
-                } else {
-                    return Err(TyError::String(
-                        "Trying to index into non array type.".to_string(),
-                    ));
+                }) => unimplemented!(), //(Ty::Data(*elem_ty), n),
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::At(arr_dty, mem),
+                    ..
+                }) => {
+                    if let DataTy {
+                        dty: DataTyKind::Array(elem_dty, n),
+                        ..
+                    } = arr_dty.as_ref()
+                    {
+                        unimplemented!() //(Ty::Data(*elem_ty), n)
+                    } else {
+                        return Err(TyError::String(
+                            "Trying to index into non array type.".to_string(),
+                        ));
+                    }
                 }
-            }
-            // FIXME is this allowed? There is no reborrow but this leaks the lifetime and does not
-            //  consume the array view.
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Ref(prv, own, mem, arr_view),
-                ..
-            }) => match &arr_view.dty {
-                DataTyKind::ArrayShape(sdty, n) if matches!(&sdty.dty, DataTyKind::Scalar(_)) => {
-                    (n, own, mem, sdty.as_ref())
-                }
-                DataTyKind::ArrayShape(_, _) => return Err(TyError::AssignToView),
+                // FIXME is this allowed? There is no reborrow but this leaks the lifetime and does not
+                //  consume the array view.
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Ref(prv, own, mem, arr_view),
+                    ..
+                }) => match &arr_view.dty {
+                    DataTyKind::ArrayShape(sdty, n)
+                        if matches!(&sdty.dty, DataTyKind::Scalar(_)) =>
+                    {
+                        (n, own, mem, sdty.as_ref())
+                    }
+                    DataTyKind::ArrayShape(_, _) => return Err(TyError::AssignToView),
+                    _ => {
+                        return Err(TyError::String(
+                            "Expected a reference to array view.".to_string(),
+                        ))
+                    }
+                },
                 _ => {
                     return Err(TyError::String(
-                        "Expected a reference to array view.".to_string(),
+                        "Trying to index into non array type.".to_string(),
                     ))
                 }
-            },
-            _ => {
+            };
+
+            if !dty.is_fully_alive() {
                 return Err(TyError::String(
-                    "Trying to index into non array type.".to_string(),
-                ))
+                    "Trying to assign through reference, to a type which is not fully alive."
+                        .to_string(),
+                ));
+            }
+            Self::accessible_memory(exec, mem)?;
+
+            if own != &Ownership::Uniq {
+                return Err(TyError::String(
+                    "Cannot assign through shared references.".to_string(),
+                ));
+            }
+
+            if n <= idx {
+                return Err(TyError::String(
+                    "Trying to access array out-of-bounds.".to_string(),
+                ));
+            }
+
+            borrow_check::ownership_safe(
+                self,
+                kind_ctx,
+                &mut assigned_val_ty_ctx,
+                exec,
+                &[],
+                Ownership::Uniq,
+                pl_expr,
+            )
+            .map_err(|err| {
+                TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
+            })?;
+
+            dty.clone()
+        } else {
+            if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
+                index_access_dty(dty, &self.constraint_env, &mut self.implicit_ident_cons)?
+            } else {
+                todo!("TODO throw error")
             }
         };
-
-        if !dty.is_fully_alive() {
-            return Err(TyError::String(
-                "Trying to assign through reference, to a type which is not fully alive."
-                    .to_string(),
-            ));
-        }
-        Self::accessible_memory(exec, mem)?;
-
-        if own != &Ownership::Uniq {
-            return Err(TyError::String(
-                "Cannot assign through shared references.".to_string(),
-            ));
-        }
-
-        if n <= idx {
-            return Err(TyError::String(
-                "Trying to access array out-of-bounds.".to_string(),
-            ));
-        }
-
-        borrow_check::ownership_safe(
-            self,
-            kind_ctx,
-            &assigned_val_ty_ctx,
-            exec,
-            &[],
-            Ownership::Uniq,
-            pl_expr,
-        )
-        .map_err(|err| {
-            TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
-        })?;
 
         let (mut after_subty_ctx, mut subs) = subty::check(
             kind_ctx,
@@ -2224,70 +2257,104 @@ impl TyChecker {
     fn ty_check_index_copy(
         &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: TyCtx,
+        mut ty_ctx: TyCtx,
         exec: Exec,
         pl_expr: &mut PlaceExpr,
         idx: &mut Nat,
     ) -> TyResult<(TyCtx, Ty)> {
-        // TODO refactor
-        borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], Ownership::Shrd, pl_expr)
+        let elem_dty = if self.borrow_check {
+            // TODO refactor
+            borrow_check::ownership_safe(
+                self,
+                kind_ctx,
+                &mut ty_ctx,
+                exec,
+                &[],
+                Ownership::Shrd,
+                pl_expr,
+            )
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
             })?;
-        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
-        let (elem_dty, n) = match pl_expr.ty.as_ref().unwrap().ty.clone() {
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Array(elem_dty, n),
-                ..
-            }) => (*elem_dty, n),
-            TyKind::Data(DataTy {
-                dty: DataTyKind::At(arr_dty, _),
-                ..
-            }) => {
-                if let DataTyKind::Array(elem_ty, n) = &arr_dty.dty {
-                    (elem_ty.as_ref().clone(), n.clone())
-                } else {
+            self.place_expr_ty_under_exec_own(
+                kind_ctx,
+                &mut ty_ctx,
+                exec,
+                Ownership::Shrd,
+                pl_expr,
+            )?;
+            let (elem_dty, n) = match pl_expr.ty.as_ref().unwrap().ty.clone() {
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Array(elem_dty, n),
+                    ..
+                }) => (*elem_dty, n),
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::At(arr_dty, _),
+                    ..
+                }) => {
+                    if let DataTyKind::Array(elem_ty, n) = &arr_dty.dty {
+                        (elem_ty.as_ref().clone(), n.clone())
+                    } else {
+                        return Err(TyError::String(
+                            "Trying to index into non array type.".to_string(),
+                        ));
+                    }
+                }
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Ref(prv, own, mem, dty),
+                    ..
+                }) => {
+                    match &dty.dty {
+                        DataTyKind::ArrayShape(sty, n)
+                            if matches!(&sty.dty, DataTyKind::Scalar(_)) =>
+                        {
+                            (sty.as_ref().clone(), n.clone())
+                        }
+                        DataTyKind::ArrayShape(view_ty, n) => {
+                            Self::accessible_memory(exec, &mem)?;
+                            // TODO is ownership checking necessary here?
+                            (
+                                DataTy::new(DataTyKind::Ref(prv, own, mem, view_ty.clone())),
+                                n.clone(),
+                            )
+                        }
+                        DataTyKind::Array(elem_ty, n) => (elem_ty.as_ref().clone(), n.clone()),
+                        _ => {
+                            return Err(TyError::String(
+                                "Expected a reference as element type of array view.".to_string(),
+                            ))
+                        }
+                    }
+                }
+                _ => {
                     return Err(TyError::String(
                         "Trying to index into non array type.".to_string(),
-                    ));
+                    ))
                 }
-            }
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Ref(prv, own, mem, dty),
-                ..
-            }) => {
-                match &dty.dty {
-                    DataTyKind::ArrayShape(sty, n) if matches!(&sty.dty, DataTyKind::Scalar(_)) => {
-                        (sty.as_ref().clone(), n.clone())
-                    }
-                    DataTyKind::ArrayShape(view_ty, n) => {
-                        Self::accessible_memory(exec, &mem)?;
-                        // TODO is ownership checking necessary here?
-                        (
-                            DataTy::new(DataTyKind::Ref(prv, own, mem, view_ty.clone())),
-                            n.clone(),
-                        )
-                    }
-                    DataTyKind::Array(elem_ty, n) => (elem_ty.as_ref().clone(), n.clone()),
-                    _ => {
-                        return Err(TyError::String(
-                            "Expected a reference as element type of array view.".to_string(),
-                        ))
-                    }
-                }
-            }
-            _ => {
+            };
+
+            if &n < idx {
                 return Err(TyError::String(
-                    "Trying to index into non array type.".to_string(),
-                ))
+                    "Trying to access array out-of-bounds.".to_string(),
+                ));
+            }
+
+            elem_dty.clone()
+        } else {
+            self.place_expr_ty_under_exec_own(
+                kind_ctx,
+                &mut ty_ctx,
+                exec,
+                Ownership::Shrd,
+                pl_expr,
+            )?;
+
+            if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
+                index_access_dty(dty, &self.constraint_env, &mut self.implicit_ident_cons)?
+            } else {
+                todo!("TODO throw error")
             }
         };
-
-        if &n < idx {
-            return Err(TyError::String(
-                "Trying to access array out-of-bounds.".to_string(),
-            ));
-        }
 
         if is_dty_copyable(
             &elem_dty,
@@ -2415,130 +2482,132 @@ impl TyChecker {
             panic!("function is not a place expr");
         };
 
-        // Infer function_kind from path
-        let function_kind = match path {
-            Path::Empty => FunctionKind::GlobalFun,
-            Path::DataTy(dty) => {
-                // Check well-formedness of dty in path
-                self.dty_well_formed(kind_ctx, &ty_ctx, Some(exec), dty)?;
+        if !self.borrow_check {
+            // Infer function_kind from path
+            let function_kind = match path {
+                Path::Empty => FunctionKind::GlobalFun,
+                Path::DataTy(dty) => {
+                    // Check well-formedness of dty in path
+                    self.dty_well_formed(kind_ctx, &ty_ctx, Some(exec), dty)?;
 
-                // Get a suitable function
-                let fun_kind = self.gl_ctx.fun_kind_under_dty(
-                    &self.constraint_env,
-                    &mut self.implicit_ident_cons,
-                    &fun_name.name,
-                    dty,
-                )?;
-
-                fun_kind.clone()
-            }
-            Path::InferFromFirstArg => {
-                // Check first arg
-                let first_arg = args.first_mut().unwrap();
-                ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, first_arg)?;
-
-                // Get dty from first arg
-                let mut dty = if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
-                    dty.clone()
-                } else {
-                    Err(TyError::ExpectedDataType {
-                        found: first_arg.ty.as_ref().unwrap().clone(),
-                    })?
-                };
-
-                let fun_kind = if fun_kind.is_none() {
-                    // Get function name
+                    // Get a suitable function
                     let fun_kind = self.gl_ctx.fun_kind_under_dty(
                         &self.constraint_env,
-                        &self.implicit_ident_cons,
+                        &mut self.implicit_ident_cons,
                         &fun_name.name,
-                        &mut dty,
-                    );
+                        dty,
+                    )?;
 
-                    if let Ok(fun_kind) = fun_kind {
-                        fun_kind.clone()
-                    }
-                    // Try some kind of auto-dereferencing
-                    // This is very helpful is the first arg of the function is e.g. `&self`
-                    else {
-                        match &dty.dty {
-                            DataTyKind::Ref(_, _, _, r_dty) => {
-                                dty = (**r_dty).clone();
-                                self.gl_ctx.fun_kind_under_dty(
-                                    &self.constraint_env,
-                                    &self.implicit_ident_cons,
-                                    &fun_name.name,
-                                    &dty,
-                                )?
-                            }
-                            DataTyKind::Ident(ident) if ident.is_implicit => {
-                                // Create a new fresh identifier
-                                let referenced_dty_name = fresh_name("$d");
-                                // A datatype with an implicit ident with this fresh name
-                                let referenced_dty = DataTy::new(DataTyKind::Ident(
-                                    Ident::new_impli(&referenced_dty_name),
-                                ));
-                                // `ident`-datatype could may also replaced by an reference
-                                // So we try to replace `ident`-datatype by a reference and
-                                // look if the dereferenced type implement a suitable method
-                                let mut subs_dty_ref_dty = ConstrainMap::new();
-                                subs_dty_ref_dty.dty_unifier.insert(
-                                    ident.name.clone(),
-                                    DataTy::new(DataTyKind::Ref(
-                                        Provenance::Ident(Ident::new_impli(&fresh_name("$r"))),
-                                        Ownership::Shrd,
-                                        Memory::Ident(Ident::new_impli(&fresh_name("$m"))),
-                                        Box::new(referenced_dty.clone()),
-                                    )),
-                                );
-                                // Check is this substitution is valid
-                                let mut implicit_ident_cons = self.implicit_ident_cons.clone();
-                                if let Ok(_) = expand_to_valid_subst(
-                                    &subs_dty_ref_dty,
-                                    &mut implicit_ident_cons,
-                                    &self.constraint_env,
-                                ) {
-                                    // Add temporary the constraints on `ref_dty_name` to `self.implicit_ident_cons`
-                                    self.implicit_ident_cons.add_idents_constrained(
-                                        implicit_ident_cons
-                                            .drain_constr_for_ident(&referenced_dty_name)
-                                            .map(|con| (referenced_dty_name.clone(), con)),
-                                    );
+                    fun_kind.clone()
+                }
+                Path::InferFromFirstArg => {
+                    // Check first arg
+                    let first_arg = args.first_mut().unwrap();
+                    ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, first_arg)?;
 
-                                    dty = referenced_dty;
-                                    let fun_kind = self.gl_ctx.fun_kind_under_dty(
+                    // Get dty from first arg
+                    let mut dty = if let TyKind::Data(dty) = &first_arg.ty.as_ref().unwrap().ty {
+                        dty.clone()
+                    } else {
+                        Err(TyError::ExpectedDataType {
+                            found: first_arg.ty.as_ref().unwrap().clone(),
+                        })?
+                    };
+
+                    let fun_kind = if fun_kind.is_none() {
+                        // Get function name
+                        let fun_kind = self.gl_ctx.fun_kind_under_dty(
+                            &self.constraint_env,
+                            &self.implicit_ident_cons,
+                            &fun_name.name,
+                            &mut dty,
+                        );
+
+                        if let Ok(fun_kind) = fun_kind {
+                            fun_kind.clone()
+                        }
+                        // Try some kind of auto-dereferencing
+                        // This is very helpful is the first arg of the function is e.g. `&self`
+                        else {
+                            match &dty.dty {
+                                DataTyKind::Ref(_, _, _, r_dty) => {
+                                    dty = (**r_dty).clone();
+                                    self.gl_ctx.fun_kind_under_dty(
                                         &self.constraint_env,
                                         &self.implicit_ident_cons,
                                         &fun_name.name,
                                         &dty,
-                                    );
-
-                                    //Remove temporary added constraints
-                                    self.implicit_ident_cons
-                                        .drain_constr_for_ident(&referenced_dty_name);
-
-                                    fun_kind?
-                                } else {
-                                    fun_kind?
+                                    )?
                                 }
+                                DataTyKind::Ident(ident) if ident.is_implicit => {
+                                    // Create a new fresh identifier
+                                    let referenced_dty_name = fresh_name("$d");
+                                    // A datatype with an implicit ident with this fresh name
+                                    let referenced_dty = DataTy::new(DataTyKind::Ident(
+                                        Ident::new_impli(&referenced_dty_name),
+                                    ));
+                                    // `ident`-datatype could may also replaced by an reference
+                                    // So we try to replace `ident`-datatype by a reference and
+                                    // look if the dereferenced type implement a suitable method
+                                    let mut subs_dty_ref_dty = ConstrainMap::new();
+                                    subs_dty_ref_dty.dty_unifier.insert(
+                                        ident.name.clone(),
+                                        DataTy::new(DataTyKind::Ref(
+                                            Provenance::Ident(Ident::new_impli(&fresh_name("$r"))),
+                                            Ownership::Shrd,
+                                            Memory::Ident(Ident::new_impli(&fresh_name("$m"))),
+                                            Box::new(referenced_dty.clone()),
+                                        )),
+                                    );
+                                    // Check is this substitution is valid
+                                    let mut implicit_ident_cons = self.implicit_ident_cons.clone();
+                                    if let Ok(_) = expand_to_valid_subst(
+                                        &subs_dty_ref_dty,
+                                        &mut implicit_ident_cons,
+                                        &self.constraint_env,
+                                    ) {
+                                        // Add temporary the constraints on `ref_dty_name` to `self.implicit_ident_cons`
+                                        self.implicit_ident_cons.add_idents_constrained(
+                                            implicit_ident_cons
+                                                .drain_constr_for_ident(&referenced_dty_name)
+                                                .map(|con| (referenced_dty_name.clone(), con)),
+                                        );
+
+                                        dty = referenced_dty;
+                                        let fun_kind = self.gl_ctx.fun_kind_under_dty(
+                                            &self.constraint_env,
+                                            &self.implicit_ident_cons,
+                                            &fun_name.name,
+                                            &dty,
+                                        );
+
+                                        //Remove temporary added constraints
+                                        self.implicit_ident_cons
+                                            .drain_constr_for_ident(&referenced_dty_name);
+
+                                        fun_kind?
+                                    } else {
+                                        fun_kind?
+                                    }
+                                }
+                                _ => fun_kind?,
                             }
-                            _ => fun_kind?,
+                            .clone()
                         }
-                        .clone()
                     }
+                    // Binop-functions have already a function_kind
+                    else {
+                        fun_kind.as_ref().unwrap().clone()
+                    };
+
+                    // Replace InferFromFirstArg-path by Path::DataTy
+                    *path = Path::DataTy(dty);
+
+                    fun_kind
                 }
-                // Binop-functions have already a function_kind
-                else {
-                    fun_kind.as_ref().unwrap().clone()
-                };
-
-                // Replace InferFromFirstArg-path by Path::DataTy
-                *path = Path::DataTy(dty);
-
-                fun_kind
-            }
-        };
-        *fun_kind = Some(function_kind);
+            };
+            *fun_kind = Some(function_kind);
+        }
 
         // Get function type and number of implicit (inferred) kinded args (necessary for proper error messages)
         let (fun_ty, number_implicit_kargs) = {
@@ -2579,87 +2648,94 @@ impl TyChecker {
                     // Using fresh generic param names avoid name clashes
                     let fun_ty = fun_ty?.fresh_generic_param_names();
 
-                    // Infer first generic parameter "Self" and other generic parameters of trait
-                    let number_implicit_kargs = {
-                        // Argument for "Self"
-                        let path_dty = if let Path::DataTy(dty) = &path {
-                            dty
-                        } else {
-                            panic!("Found a trait-function with an invalid path")
+                    if !self.borrow_check {
+                        // Infer first generic parameter "Self" and other generic parameters of trait
+                        let number_implicit_kargs = {
+                            // Argument for "Self"
+                            let path_dty = if let Path::DataTy(dty) = &path {
+                                dty
+                            } else {
+                                panic!("Found a trait-function with an invalid path")
+                            };
+                            let self_arg = ArgKinded::DataTy(path_dty.clone());
+
+                            // Find trait in context
+                            let trait_def = self.gl_ctx.trait_ty_by_name(trait_name).unwrap();
+
+                            // Implicit args for trait
+                            let trait_args = trait_def.generic_params.iter().map(|gen| {
+                                let mut gen = gen.clone();
+                                gen.ident.name = fresh_name(&gen.ident.name);
+                                gen.as_arg_kinded_implicit()
+                            });
+
+                            // Push self_arg and trait_args in front of k_args
+                            let mut new_kargs = Vec::with_capacity(fun_ty.generic_params.len());
+                            new_kargs.push(self_arg.clone());
+                            new_kargs.extend(trait_args);
+                            new_kargs.append(k_args);
+                            *k_args = new_kargs;
+
+                            1 + trait_def.generic_params.len()
                         };
-                        let self_arg = ArgKinded::DataTy(path_dty.clone());
-
-                        // Find trait in context
-                        let trait_def = self.gl_ctx.trait_ty_by_name(trait_name).unwrap();
-
-                        // Implicit args for trait
-                        let trait_args = trait_def.generic_params.iter().map(|gen| {
-                            let mut gen = gen.clone();
-                            gen.ident.name = fresh_name(&gen.ident.name);
-                            gen.as_arg_kinded_implicit()
-                        });
-
-                        // Push self_arg and trait_args in front of k_args
-                        let mut new_kargs = Vec::with_capacity(fun_ty.generic_params.len());
-                        new_kargs.push(self_arg.clone());
-                        new_kargs.extend(trait_args);
-                        new_kargs.append(k_args);
-                        *k_args = new_kargs;
-
-                        1 + trait_def.generic_params.len()
-                    };
-
-                    (fun_ty, number_implicit_kargs)
+                        (fun_ty, number_implicit_kargs)
+                    } else {
+                        (fun_ty, 0)
+                    }
                 }
                 FunctionKind::ImplFun(impl_ty_scheme, _) => {
                     // Using fresh generic param names avoid name clashes
                     let fun_ty = fun_ty?.fresh_generic_param_names();
 
-                    // Use implicit identifier as args for impl
-                    let impl_ty_scheme = impl_ty_scheme
-                        .fresh_generic_param_names()
-                        .make_generic_params_implicit();
-                    let impl_args = impl_ty_scheme
-                        .generic_params
-                        .iter()
-                        .map(|gen| gen.as_arg_kinded_implicit());
+                    if !self.borrow_check {
+                        // Use implicit identifier as args for impl
+                        let impl_ty_scheme = impl_ty_scheme
+                            .fresh_generic_param_names()
+                            .make_generic_params_implicit();
+                        let impl_args = impl_ty_scheme
+                            .generic_params
+                            .iter()
+                            .map(|gen| gen.as_arg_kinded_implicit());
 
-                    // Push impl_args in front of k_args
-                    let mut new_kargs = Vec::with_capacity(fun_ty.generic_params.len());
-                    new_kargs.extend(impl_args);
-                    new_kargs.append(k_args);
-                    *k_args = new_kargs;
+                        // Push impl_args in front of k_args
+                        let mut new_kargs = Vec::with_capacity(fun_ty.generic_params.len());
+                        new_kargs.extend(impl_args);
+                        new_kargs.append(k_args);
+                        *k_args = new_kargs;
 
-                    // Unification of impl_ty_scheme and path-datatype to try to infer implicit identifier
-                    let impl_mono_dty = if let TyKind::Data(dty) = &impl_ty_scheme.mono_ty.ty {
-                        dty
-                    } else {
-                        panic!("Found invalid type of impl")
-                    };
-                    let path_dty = if let Path::DataTy(dty) = &path {
-                        dty
-                    } else {
-                        panic!("Found a trait-function with an invalid path")
-                    };
-                    let constr_map = unify::unify(
-                        impl_mono_dty,
-                        path_dty,
-                        &mut self.implicit_ident_cons,
-                        &self.constraint_env,
-                    )
-                    .expect(&format!(
+                        // Unification of impl_ty_scheme and path-datatype to try to infer implicit identifier
+                        let impl_mono_dty = if let TyKind::Data(dty) = &impl_ty_scheme.mono_ty.ty {
+                            dty
+                        } else {
+                            panic!("Found invalid type of impl")
+                        };
+                        let path_dty = if let Path::DataTy(dty) = &path {
+                            dty
+                        } else {
+                            panic!("Found a trait-function with an invalid path")
+                        };
+                        let constr_map = unify::unify(
+                            impl_mono_dty,
+                            path_dty,
+                            &mut self.implicit_ident_cons,
+                            &self.constraint_env,
+                        )
+                        .expect(&format!(
                         "Tryied to unify {:#?} with {:#?} but it doesnt work. How is this possible?\
                          They should be already constraint while determinating function_name!",
                         impl_mono_dty, path_dty));
-                    if !constr_map.is_empty() {
-                        k_args[0..impl_ty_scheme.generic_params.len()]
-                            .iter_mut()
-                            .for_each(|arg| arg.substitute(&constr_map));
-                        ty_ctx.substitute(&constr_map);
-                        self.implicit_ident_substitution.composition(constr_map);
-                    }
+                        if !constr_map.is_empty() {
+                            k_args[0..impl_ty_scheme.generic_params.len()]
+                                .iter_mut()
+                                .for_each(|arg| arg.substitute(&constr_map));
+                            ty_ctx.substitute(&constr_map);
+                            self.implicit_ident_substitution.composition(constr_map);
+                        }
 
-                    (fun_ty, impl_ty_scheme.generic_params.len())
+                        (fun_ty, impl_ty_scheme.generic_params.len())
+                    } else {
+                        (fun_ty, 0)
+                    }
                 }
             }
         };
@@ -2878,8 +2954,8 @@ impl TyChecker {
             panic!("Place expression should have been typechecked by a different rule.")
         }
 
-        let tuple_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
-        let elem_ty = proj_elem_ty(e.ty.as_ref().unwrap(), i)?;
+        let mut tuple_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
+        let elem_ty = self.proj_elem_ty(e.ty.as_ref().unwrap(), i, &mut tuple_ty_ctx)?;
 
         Ok((tuple_ty_ctx, elem_ty))
     }
@@ -3076,63 +3152,58 @@ impl TyChecker {
         exec: Exec,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
-        // if the pl_expr is a deref of an implicit ident: replace it
-        // by a reference to an implicit ident
-        // TODO not very good solution
-        if let PlaceExprKind::Deref(inner_pl) = &pl_expr.pl_expr {
-            if let PlaceExprKind::Ident(ident) = &(**inner_pl).pl_expr {
-                if let Ok(ident_ty) = ty_ctx.ty_of_ident(ident) {
-                    if let TyKind::Data(ident_dty) = &ident_ty.ty {
-                        if let DataTyKind::Ident(dty_ident) = &ident_dty.dty {
-                            if dty_ident.is_implicit {
-                                let new_dty = DataTy::new(DataTyKind::Ref(
-                                    Provenance::Ident(Ident::new_impli(&fresh_name("$r"))),
-                                    Ownership::Shrd,
-                                    Memory::Ident(Ident::new_impli(&fresh_name("$m"))),
-                                    Box::new(DataTy::new(DataTyKind::Ident(Ident::new_impli(
-                                        &fresh_name("$d"),
-                                    )))),
-                                ));
-                                let mut constr_map = ConstrainMap::new();
-                                constr_map
-                                    .dty_unifier
-                                    .insert(dty_ident.name.clone(), new_dty);
-                                ty_ctx.substitute(&constr_map);
-                                self.implicit_ident_substitution.composition(constr_map);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // TODO refactor
-        borrow_check::ownership_safe(self, kind_ctx, &ty_ctx, exec, &[], Ownership::Shrd, pl_expr)
+        if self.borrow_check {
+            // TODO refactor
+            borrow_check::ownership_safe(
+                self,
+                kind_ctx,
+                &mut ty_ctx,
+                exec,
+                &[],
+                Ownership::Shrd,
+                pl_expr,
+            )
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
             })?;
-        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
-        if !pl_expr.ty.as_ref().unwrap().is_fully_alive() {
-            return Err(TyError::String(format!(
-                "Part of Place {:?} was moved before.",
-                pl_expr
-            )));
-        }
-        if is_ty_copyable(
-            pl_expr.ty.as_ref().unwrap(),
-            &self.constraint_env,
-            &mut self.implicit_ident_cons,
-        ) {
-            Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
+            self.place_expr_ty_under_exec_own(
+                kind_ctx,
+                &mut ty_ctx,
+                exec,
+                Ownership::Shrd,
+                pl_expr,
+            )?;
+            if !pl_expr.ty.as_ref().unwrap().is_fully_alive() {
+                return Err(TyError::String(format!(
+                    "Part of Place {:?} was moved before.",
+                    pl_expr
+                )));
+            }
+            if is_ty_copyable(
+                pl_expr.ty.as_ref().unwrap(),
+                &self.constraint_env,
+                &mut self.implicit_ident_cons,
+            ) {
+                Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
+            } else {
+                Err(TyError::String("Data type is not copyable.".to_string()))
+            }
         } else {
-            Err(TyError::String("Data type is not copyable.".to_string()))
+            self.place_expr_ty_under_exec_own(
+                kind_ctx,
+                &mut ty_ctx,
+                exec,
+                Ownership::Shrd,
+                pl_expr,
+            )?;
+            Ok((ty_ctx, pl_expr.ty.as_ref().unwrap().clone()))
         }
     }
 
     fn ty_check_pl_expr_without_deref(
         &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: TyCtx,
+        mut ty_ctx: TyCtx,
         exec: Exec,
         pl_expr: &PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
@@ -3145,20 +3216,25 @@ impl TyChecker {
             panic!("function identifiers should only appear in App-expressions")
         } else {
             // If place is NOT referring to a globally declared function
-            let pl_ty = ty_ctx.place_ty(&place)?;
-            if !pl_ty.is_fully_alive() {
-                return Err(TyError::String(format!(
-                    "Part of Place {:?} was moved before.",
-                    pl_expr
-                )));
-            }
-            let res_ty_ctx =
-                if is_ty_copyable(&pl_ty, &self.constraint_env, &mut self.implicit_ident_cons) {
+            let pl_ty = ty_ctx.place_ty_infer(&place, self)?;
+
+            if self.borrow_check {
+                if !pl_ty.is_fully_alive() {
+                    return Err(TyError::String(format!(
+                        "Part of Place {:?} was moved before.",
+                        pl_expr
+                    )));
+                }
+                let res_ty_ctx = if is_ty_copyable(
+                    &pl_ty,
+                    &self.constraint_env,
+                    &mut self.implicit_ident_cons,
+                ) {
                     // TODO refactor
                     borrow_check::ownership_safe(
                         self,
                         kind_ctx,
-                        &ty_ctx,
+                        &mut ty_ctx,
                         exec,
                         &[],
                         Ownership::Shrd,
@@ -3172,7 +3248,7 @@ impl TyChecker {
                     borrow_check::ownership_safe(
                         self,
                         kind_ctx,
-                        &ty_ctx,
+                        &mut ty_ctx,
                         exec,
                         &[],
                         Ownership::Uniq,
@@ -3183,14 +3259,17 @@ impl TyChecker {
                     })?;
                     ty_ctx.kill_place(&place)
                 };
-            (res_ty_ctx, pl_ty)
+                (res_ty_ctx, pl_ty)
+            } else {
+                (ty_ctx, pl_ty)
+            }
         };
 
         Ok((res_ty_ctx, pl_ty))
     }
 
     fn ty_check_borrow(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
         ty_ctx: TyCtx,
         exec: Exec,
@@ -3204,91 +3283,145 @@ impl TyChecker {
                 return Err(TyError::ConstBorrow(pl_expr.clone()));
             }
         }
-        let (impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx, prv_val_name);
-
+        let (mut impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx, prv_val_name);
         if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
             return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
         }
-        let loans =
-            borrow_check::ownership_safe(self, kind_ctx, &impl_ctx, exec, &[], own, pl_expr)
-                .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
 
-        let mems =
-            self.place_expr_ty_mems_under_exec_own(kind_ctx, &impl_ctx, exec, own, pl_expr)?;
-        mems.iter()
-            .try_for_each(|mem| Self::accessible_memory(exec, mem))?;
+        if self.borrow_check {
+            let loans = borrow_check::ownership_safe(
+                self,
+                kind_ctx,
+                &mut impl_ctx,
+                exec,
+                &[],
+                own,
+                pl_expr,
+            )
+            .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
 
-        let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
-        if !pl_expr_ty.is_fully_alive() {
-            return Err(TyError::String(
-                "The place was at least partially moved before.".to_string(),
-            ));
-        }
-        let (reffed_ty, rmem) = match &pl_expr_ty.ty {
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Dead(_),
-                ..
-            })
-            | TyKind::Dead(_) => {
-                panic!("Cannot happen because of the alive check.")
-            }
-            TyKind::Data(DataTy {
-                dty: DataTyKind::ThreadHierchy(_),
-                ..
-            }) => {
+            let mems = self.place_expr_ty_mems_under_exec_own(
+                kind_ctx,
+                &mut impl_ctx,
+                exec,
+                own,
+                pl_expr,
+            )?;
+            mems.iter()
+                .try_for_each(|mem| Self::accessible_memory(exec, mem))?;
+
+            let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
+            if !pl_expr_ty.is_fully_alive() {
                 return Err(TyError::String(
-                    "Trying to borrow thread hierarchy.".to_string(),
-                ))
+                    "The place was at least partially moved before.".to_string(),
+                ));
             }
-            TyKind::Data(DataTy {
-                dty: DataTyKind::At(inner_ty, m),
-                ..
-            }) => (inner_ty.deref().clone(), m.clone()),
-            TyKind::Data(dty) => (
-                dty.clone(),
-                if !mems.is_empty() {
-                    let m = mems.last().unwrap();
-                    m.clone()
-                } else {
+            let (reffed_ty, rmem) = match &pl_expr_ty.ty {
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Dead(_),
+                    ..
+                })
+                | TyKind::Dead(_) => {
+                    panic!("Cannot happen because of the alive check.")
+                }
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::ThreadHierchy(_),
+                    ..
+                }) => {
                     return Err(TyError::String(
-                        "Trying to borrow value that does not exist for the current \
+                        "Trying to borrow thread hierarchy.".to_string(),
+                    ))
+                }
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::At(inner_ty, m),
+                    ..
+                }) => (inner_ty.deref().clone(), m.clone()),
+                TyKind::Data(dty) => (
+                    dty.clone(),
+                    if !mems.is_empty() {
+                        let m = mems.last().unwrap();
+                        m.clone()
+                    } else {
+                        return Err(TyError::String(
+                            "Trying to borrow value that does not exist for the current \
             execution resource."
-                            .to_string(),
-                    ));
-                },
-            ),
-            TyKind::Fn(_, _, _) => {
-                return Err(TyError::String("Trying to borrow a function.".to_string()))
-            }
-            TyKind::Ident(_) => {
-                return Err(TyError::String(
-                    "Borrowing from value of unspecified type. This could be a view.\
+                                .to_string(),
+                        ));
+                    },
+                ),
+                TyKind::Fn(_, _, _) => {
+                    return Err(TyError::String("Trying to borrow a function.".to_string()))
+                }
+                TyKind::Ident(_) => {
+                    return Err(TyError::String(
+                        "Borrowing from value of unspecified type. This could be a view.\
             Therefore it is not allowed to borrow."
-                        .to_string(),
-                ))
+                            .to_string(),
+                    ))
+                }
+            };
+            if rmem == Memory::GpuLocal {
+                return Err(TyError::String(
+                    "Trying to take reference of unaddressable gpu.local memory.".to_string(),
+                ));
             }
-        };
-        if rmem == Memory::GpuLocal {
-            return Err(TyError::String(
-                "Trying to take reference of unaddressable gpu.local memory.".to_string(),
+            let res_dty = DataTy::new(DataTyKind::Ref(
+                Provenance::Value(prv_val_name.to_string()),
+                own,
+                rmem,
+                Box::new(reffed_ty),
             ));
+            let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
+            Ok((res_ty_ctx, Ty::new(TyKind::Data(res_dty))))
+        } else {
+            let mems = self.place_expr_ty_mems_under_exec_own(
+                kind_ctx,
+                &mut impl_ctx,
+                exec,
+                own,
+                pl_expr,
+            )?;
+            mems.iter()
+                .try_for_each(|mem| Self::accessible_memory(exec, mem))?;
+
+            let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
+            let (reffed_ty, rmem) = match &pl_expr_ty.ty {
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::At(inner_ty, m),
+                    ..
+                }) => (inner_ty.deref().clone(), m.clone()),
+                TyKind::Data(dty) => (
+                    dty.clone(),
+                    if !mems.is_empty() {
+                        let m = mems.last().unwrap();
+                        m.clone()
+                    } else {
+                        return Err(TyError::String(
+                            "Trying to borrow value that does not exist for the current \
+            execution resource."
+                                .to_string(),
+                        ));
+                    },
+                ),
+                _ => todo!("error"),
+            };
+
+            let res_dty = DataTy::new(DataTyKind::Ref(
+                Provenance::Value(prv_val_name.to_string()),
+                own,
+                rmem,
+                Box::new(reffed_ty),
+            ));
+            Ok((impl_ctx, Ty::new(TyKind::Data(res_dty))))
         }
-        let res_dty = DataTy::new(DataTyKind::Ref(
-            Provenance::Value(prv_val_name.to_string()),
-            own,
-            rmem,
-            Box::new(reffed_ty),
-        ));
-        let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
-        Ok((res_ty_ctx, Ty::new(TyKind::Data(res_dty))))
     }
 
     // Δ; Γ ⊢ω p:τ
     // p in an ω context has type τ under Δ and Γ
     fn place_expr_ty_under_exec_own(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: &TyCtx,
+        ty_ctx: &mut TyCtx,
         exec: Exec,
         own: Ownership,
         pl_expr: &mut PlaceExpr,
@@ -3298,9 +3431,9 @@ impl TyChecker {
     }
 
     fn place_expr_ty_mems_under_exec_own(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: &TyCtx,
+        ty_ctx: &mut TyCtx,
         exec: Exec,
         own: Ownership,
         pl_expr: &mut PlaceExpr,
@@ -3313,9 +3446,9 @@ impl TyChecker {
     // Δ; Γ ⊢ω p:τ,{ρ}
     // p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
     fn place_expr_ty_mem_passed_prvs_under_exec_own(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: &TyCtx,
+        ty_ctx: &mut TyCtx,
         exec: Exec,
         own: Ownership,
         pl_expr: &mut PlaceExpr,
@@ -3403,9 +3536,9 @@ impl TyChecker {
     }
 
     fn proj_expr_ty_mem_passed_prvs_under_exec_own(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: &TyCtx,
+        ty_ctx: &mut TyCtx,
         exec: Exec,
         own: Ownership,
         tuple_expr: &mut PlaceExpr,
@@ -3414,6 +3547,45 @@ impl TyChecker {
         let (mem, passed_prvs) = self.place_expr_ty_mem_passed_prvs_under_exec_own(
             kind_ctx, ty_ctx, exec, own, tuple_expr,
         )?;
+
+        let mut infer_struct = |ident: &Ident, attr_name: &String| match self
+            .gl_ctx
+            .struct_by_attribute_name(attr_name)
+        {
+            Some(struct_def) => {
+                if let DataTyKind::Struct(struct_ty) = &struct_def
+                    .ty()
+                    .fresh_generic_param_names()
+                    .make_generic_params_implicit()
+                    .mono_ty
+                    .dty()
+                    .dty
+                {
+                    let mut subs = ConstrainMap::new();
+                    subs.dty_unifier.insert(
+                        ident.name.clone(),
+                        DataTy::new(DataTyKind::Struct(struct_ty.clone())),
+                    );
+                    subs = expand_to_valid_subst(
+                        &subs,
+                        &mut self.implicit_ident_cons,
+                        &self.constraint_env,
+                    )?;
+                    ty_ctx.substitute(&subs);
+                    self.implicit_ident_substitution.composition(subs);
+                    Ok(Ty::new(TyKind::Data(
+                        struct_ty.attribute_dty(attr_name).unwrap().clone(),
+                    )))
+                } else {
+                    panic!("This cannot happen")
+                }
+            }
+            None => Err(TyError::TypeAnnotationsNeeded(format!(
+                "{:?}.{:?}",
+                ident.name, attr_name
+            ))),
+        };
+
         match (&tuple_expr.ty.as_ref().unwrap().ty, proj) {
             (
                 TyKind::Data(DataTy {
@@ -3445,10 +3617,16 @@ impl TyChecker {
                     ))
                 }
             }
-            (TyKind::Ident(_), _) => Err(TyError::String(
-                "Type unspecified. Cannot project from potentially non tuple/non struct type."
-                    .to_string(),
-            )),
+            (TyKind::Ident(ident), ProjEntry::StructAccess(attr_name)) => {
+                Ok((infer_struct(ident, attr_name)?, mem, passed_prvs))
+            }
+            (
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Ident(ident),
+                    ..
+                }),
+                ProjEntry::StructAccess(attr_name),
+            ) => Ok((infer_struct(ident, attr_name)?, mem, passed_prvs)),
             _ => Err(TyError::IllegalProjection(format!(
                 "Unexpected type or projection access. Found access: {:?} on ty {:#?}",
                 proj,
@@ -3458,49 +3636,66 @@ impl TyChecker {
     }
 
     fn deref_expr_ty_mem_passed_prvs_under_exec_own(
-        &self,
+        &mut self,
         kind_ctx: &KindCtx,
-        ty_ctx: &TyCtx,
+        ty_ctx: &mut TyCtx,
         exec: Exec,
         own: Ownership,
         borr_expr: &mut PlaceExpr,
     ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
         let (mut inner_mem, mut passed_prvs) = self
             .place_expr_ty_mem_passed_prvs_under_exec_own(kind_ctx, ty_ctx, exec, own, borr_expr)?;
-        if let TyKind::Data(DataTy {
-            dty: DataTyKind::Ref(prv, ref_own, mem, dty),
-            ..
-        }) = &borr_expr.ty.as_ref().unwrap().ty
-        {
-            if ref_own < &own {
-                return Err(TyError::String(
-                    "Trying to dereference and mutably use a shrd reference.".to_string(),
-                ));
+
+        if self.borrow_check {
+            if let TyKind::Data(DataTy {
+                dty: DataTyKind::Ref(prv, ref_own, mem, dty),
+                ..
+            }) = &borr_expr.ty.as_ref().unwrap().ty
+            {
+                if ref_own < &own {
+                    return Err(TyError::String(
+                        "Trying to dereference and mutably use a shrd reference.".to_string(),
+                    ));
+                }
+                let outl_rels = passed_prvs.iter().map(|passed_prv| (prv, passed_prv));
+                subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
+                passed_prvs.push(prv.clone());
+                inner_mem.push(mem.clone());
+                Ok((
+                    Ty::new(TyKind::Data(dty.as_ref().clone())),
+                    inner_mem,
+                    passed_prvs,
+                ))
+            } else if let TyKind::Data(DataTy {
+                dty: DataTyKind::RawPtr(dty),
+                ..
+            }) = &borr_expr.ty.as_ref().unwrap().ty
+            {
+                // TODO is anything of this correct?
+                Ok((
+                    Ty::new(TyKind::Data(dty.as_ref().clone())),
+                    inner_mem,
+                    passed_prvs,
+                ))
+            } else {
+                Err(TyError::String(
+                    "Trying to dereference non reference type.".to_string(),
+                ))
             }
-            let outl_rels = passed_prvs.iter().map(|passed_prv| (prv, passed_prv));
-            subty::multiple_outlives(kind_ctx, ty_ctx.clone(), outl_rels)?;
-            passed_prvs.push(prv.clone());
-            inner_mem.push(mem.clone());
-            Ok((
-                Ty::new(TyKind::Data(dty.as_ref().clone())),
-                inner_mem,
-                passed_prvs,
-            ))
-        } else if let TyKind::Data(DataTy {
-            dty: DataTyKind::RawPtr(dty),
-            ..
-        }) = &borr_expr.ty.as_ref().unwrap().ty
-        {
-            // TODO is anything of this correct?
-            Ok((
-                Ty::new(TyKind::Data(dty.as_ref().clone())),
-                inner_mem,
-                passed_prvs,
-            ))
         } else {
-            Err(TyError::String(
-                "Trying to dereference non reference type.".to_string(),
-            ))
+            if let TyKind::Data(dty) = &borr_expr.ty.as_ref().unwrap().ty {
+                Ok((
+                    Ty::new(TyKind::Data(deref_dty(
+                        dty,
+                        &self.constraint_env,
+                        &mut self.implicit_ident_cons,
+                    )?)),
+                    inner_mem,
+                    passed_prvs,
+                ))
+            } else {
+                todo!()
+            }
         }
     }
 
@@ -3667,48 +3862,49 @@ impl TyChecker {
                 if !elem_ty.is_fully_alive() {
                     return Err(TyError::ReferenceToDeadTy);
                 }
-                let loans = ty_ctx.loans_in_prv(prv)?;
-                if !loans.is_empty() {
-                    let mut exists = false;
-                    //TODO what to do if exec is None?
-                    if exec.is_some() {
-                        for loan in loans {
-                            let Loan {
-                                place_expr,
-                                own: l_own,
-                            } = loan;
-                            if l_own != own {
-                                return Err(TyError::ReferenceToWrongOwnership);
-                            }
-                            let mut borrowed_pl_expr = place_expr.clone();
-                            self.place_expr_ty_under_exec_own(
-                                kind_ctx,
-                                ty_ctx,
-                                exec.unwrap(),
-                                *l_own,
-                                &mut borrowed_pl_expr,
-                            )?;
-                            if let TyKind::Data(pl_expr_dty) = borrowed_pl_expr.ty.unwrap().ty {
-                                if !pl_expr_dty.is_fully_alive() {
-                                    return Err(TyError::ReferenceToDeadTy);
-                                }
-                                if dty.occurs_in(&pl_expr_dty) {
-                                    exists = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if !exists {
-                        if let DataTyKind::ArrayShape(_, _) = &dty.dty {
-                            eprintln!(
-                                "WARNING: Did not check well-formedness of view type reference."
-                            )
-                        } else {
-                            return Err(TyError::ReferenceToIncompatibleType);
-                        }
-                    }
-                }
+                //TODO FIXME
+                // let loans = ty_ctx.loans_in_prv(prv)?;
+                // if !loans.is_empty() {
+                //     let mut exists = false;
+                //     //TODO what to do if exec is None?
+                //     if exec.is_some() {
+                //         for loan in loans {
+                //             let Loan {
+                //                 place_expr,
+                //                 own: l_own,
+                //             } = loan;
+                //             if l_own != own {
+                //                 return Err(TyError::ReferenceToWrongOwnership);
+                //             }
+                //             let mut borrowed_pl_expr = place_expr.clone();
+                //             // self.place_expr_ty_under_exec_own(
+                //             //     kind_ctx,
+                //             //     ty_ctx,
+                //             //     exec.unwrap(),
+                //             //     *l_own,
+                //             //     &mut borrowed_pl_expr,
+                //             // )?;
+                //             if let TyKind::Data(pl_expr_dty) = borrowed_pl_expr.ty.unwrap().ty {
+                //                 if !pl_expr_dty.is_fully_alive() {
+                //                     return Err(TyError::ReferenceToDeadTy);
+                //                 }
+                //                 if dty.occurs_in(&pl_expr_dty) {
+                //                     exists = true;
+                //                     break;
+                //                 }
+                //             }
+                //         }
+                //     }
+                //     if !exists {
+                //         if let DataTyKind::ArrayShape(_, _) = &dty.dty {
+                //             eprintln!(
+                //                 "WARNING: Did not check well-formedness of view type reference."
+                //             )
+                //         } else {
+                //             return Err(TyError::ReferenceToIncompatibleType);
+                //         }
+                //     }
+                // }
                 self.dty_well_formed(kind_ctx, ty_ctx, exec, elem_ty)?;
             }
             DataTyKind::Ref(Provenance::Ident(ident), _, mem, dty) => {
@@ -3834,6 +4030,60 @@ impl TyChecker {
         iter_TyResult_to_TyResult!(generics
             .iter()
             .map(|gen| self.arg_kinded_well_formed(kind_ctx, ty_ctx, exec, gen)))
+    }
+
+    pub fn proj_elem_ty(&mut self, ty: &Ty, proj: &ProjEntry, ty_ctx: &mut TyCtx) -> TyResult<Ty> {
+        let mut infer_struct = |ident: &Ident, attr_name: &String| match self
+            .gl_ctx
+            .struct_by_attribute_name(attr_name)
+        {
+            Some(struct_def) => {
+                if let DataTyKind::Struct(struct_ty) = &struct_def
+                    .ty()
+                    .fresh_generic_param_names()
+                    .make_generic_params_implicit()
+                    .mono_ty
+                    .dty()
+                    .dty
+                {
+                    let mut subs = ConstrainMap::new();
+                    subs.dty_unifier.insert(
+                        ident.name.clone(),
+                        DataTy::new(DataTyKind::Struct(struct_ty.clone())),
+                    );
+                    subs = expand_to_valid_subst(
+                        &subs,
+                        &mut self.implicit_ident_cons,
+                        &self.constraint_env,
+                    )?;
+                    ty_ctx.substitute(&subs);
+                    self.implicit_ident_substitution.composition(subs);
+                    Ok(Ty::new(TyKind::Data(
+                        struct_ty.attribute_dty(attr_name).unwrap().clone(),
+                    )))
+                } else {
+                    panic!("This cannot happen")
+                }
+            }
+            None => Err(TyError::TypeAnnotationsNeeded(format!(
+                "{:?}.{:?}",
+                ident.name, attr_name
+            ))),
+        };
+
+        match (&ty.ty, proj) {
+            (TyKind::Ident(ident), ProjEntry::StructAccess(attr_name)) => {
+                infer_struct(ident, attr_name)
+            }
+            (
+                TyKind::Data(DataTy {
+                    dty: DataTyKind::Ident(ident),
+                    ..
+                }),
+                ProjEntry::StructAccess(attr_name),
+            ) => infer_struct(ident, attr_name),
+            _ => proj_elem_ty(ty, proj),
+        }
     }
 }
 
@@ -3981,5 +4231,57 @@ fn is_dty_copyable(
         _ => constraint_env
             .check_constraint(&is_dty_copy_constraint, implicit_ident_cons)
             .is_ok(),
+    }
+}
+
+fn deref_dty(
+    dty: &DataTy,
+    constraint_env: &ConstraintCtx,
+    implicit_ident_cons: &mut IdentsConstrained,
+) -> TyResult<DataTy> {
+    let mut fresh_dty = DataTy::new(DataTyKind::Ident(Ident::new_impli(&utils::fresh_name("d"))));
+    let implements_dty_deref_constraint = Constraint {
+        dty: dty.clone(),
+        trait_bound: TraitMonoType {
+            name: String::from(pre_decl::DEREF_TRAIT_NAME),
+            generic_args: vec![ArgKinded::DataTy(fresh_dty.clone())],
+        },
+    };
+
+    match constraint_env.check_constraint(&implements_dty_deref_constraint, implicit_ident_cons) {
+        Ok(subs) => {
+            fresh_dty.substitute(&subs);
+            Ok(fresh_dty)
+        }
+        Err(()) => Err(TyError::UnfulfilledConstraint(
+            implements_dty_deref_constraint,
+        )),
+    }
+}
+
+fn index_access_dty(
+    dty: &DataTy,
+    constraint_env: &ConstraintCtx,
+    implicit_ident_cons: &mut IdentsConstrained,
+) -> TyResult<DataTy> {
+    let mut fresh_dty = DataTy::new(DataTyKind::Ident(Ident::new_impli(&utils::fresh_name("d"))));
+    let implements_dty_index_access_constraint = Constraint {
+        dty: dty.clone(),
+        trait_bound: TraitMonoType {
+            name: String::from(pre_decl::INDEX_ACCESS_TRAIT_NAME),
+            generic_args: vec![ArgKinded::DataTy(fresh_dty.clone())],
+        },
+    };
+
+    match constraint_env
+        .check_constraint(&implements_dty_index_access_constraint, implicit_ident_cons)
+    {
+        Ok(subs) => {
+            fresh_dty.substitute(&subs);
+            Ok(fresh_dty)
+        }
+        Err(()) => Err(TyError::UnfulfilledConstraint(
+            implements_dty_index_access_constraint,
+        )),
     }
 }

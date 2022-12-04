@@ -141,10 +141,12 @@ impl IdentsConstrained {
 }
 
 impl ConstraintCtx {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(cons: &[ConstraintScheme]) -> Self {
+        let mut constraint_ctx = Self {
             constraint_schemes: Vec::new(),
-        }
+        };
+        constraint_ctx.append_constraint_schemes(&cons.to_vec());
+        constraint_ctx
     }
 
     /// Append a constraint-scheme to this environment

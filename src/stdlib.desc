@@ -22,6 +22,9 @@ trait Ord: Eq {
     fn ge(self, Self) -[gpu.thread]-> bool;
 }
 
+trait Deref<T> { fn deref(Self) -[gpu.thread]-> T; }
+trait IndexAccess<T> { fn index_acess<i: nat>(Self) -[gpu.thread]-> T; }
+
 
 impl<T> Copy for T where T: Number {}
 impl Copy for bool {}

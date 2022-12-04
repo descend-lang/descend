@@ -12,9 +12,9 @@ type OwnResult<T> = Result<T, BorrowingError>;
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
 pub(super) fn ownership_safe(
-    ty_checker: &TyChecker,
+    ty_checker: &mut TyChecker,
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: &mut TyCtx,
     exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,
@@ -26,7 +26,7 @@ pub(super) fn ownership_safe(
         let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
         let pl_ctx_no_deref = pl_ctx.without_innermost_deref();
         // Γ(π) = &r ωπ τπ
-        match ty_ctx.place_ty(&most_spec_pl)?.ty {
+        match ty_ctx.place_ty_infer(&most_spec_pl, ty_checker)?.ty {
             TyKind::Data(DataTy {
                 dty: DataTyKind::Ref(Provenance::Value(prv_val_name), ref_own, _, _),
                 ..
@@ -116,9 +116,9 @@ fn ownership_safe_place(
 }
 
 fn ownership_safe_deref(
-    ty_checker: &TyChecker,
+    ty_checker: &mut TyChecker,
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: &mut TyCtx,
     exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,
@@ -129,11 +129,11 @@ fn ownership_safe_deref(
     split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
     // Γ(r) = { ω′pi }
-    let loans_in_prv = ty_ctx.loans_in_prv(prv_val_name)?;
+    let loans_in_prv = ty_ctx.loans_in_prv(prv_val_name)?.clone();
     // ω ≲ ωπ
     new_own_weaker_equal(own, ref_own)?;
     // List<pi = pi□ [πi]>
-    let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_in_loans(loans_in_prv);
+    let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_in_loans(&loans_in_prv);
     // List<πe>, List<πi>, π
     // TODO Refactor into own function
     let mut extended_reborrows = Vec::from(reborrows);
@@ -149,7 +149,7 @@ fn ownership_safe_deref(
         &extended_reborrows,
         own,
         pl_ctx_no_deref,
-        loans_in_prv,
+        &loans_in_prv,
         split_tag_path,
     )?;
 
@@ -171,9 +171,9 @@ fn ownership_safe_deref(
 }
 
 fn subst_pl_with_potential_prvs_ownership_safe(
-    ty_checker: &TyChecker,
+    ty_checker: &mut TyChecker,
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: &mut TyCtx,
     exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,
@@ -202,9 +202,9 @@ fn subst_pl_with_potential_prvs_ownership_safe(
 }
 
 fn ownership_safe_deref_abs(
-    ty_checker: &TyChecker,
+    ty_checker: &mut TyChecker,
     kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
+    ty_ctx: &mut TyCtx,
     exec: Exec,
     reborrows: &[internal::Place],
     own: Ownership,

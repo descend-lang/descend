@@ -21,18 +21,6 @@ impl Incrementable for i32 {
     }
 }
 
-fn prepare_iteration<T>(
-    change3: &uniq gpu.global HChange<T>,
-    stop3: &uniq gpu.global bool
-) -[gpu.thread]-> () {
-    if (*change3).updatingMask {
-        (*change3).mask = true;
-        (*change3).visited = true;
-        atomic_set(stop3, true);
-        (*change3).updatingMask = false
-    }
-}
-
 fn iteration<m: nat, T>(
     nod2: &shrd gpu.global Node,
     chgn2: &uniq gpu.global HChange<T>,
@@ -61,6 +49,15 @@ fn bfs<n:nat, m:nat>(
     h_changes: &uniq cpu.mem [HChange<i32>; n],
     h_stop: &uniq cpu.mem bool
 ) -[cpu.thread]-> () {
+    let prepare_iteration = |change3, stop3| -[gpu.thread]-> () {
+        if (*change3).updatingMask {
+            (*change3).mask = true;
+            (*change3).visited = true;
+            atomic_set(stop3, true);
+            (*change3).updatingMask = false
+        }
+    };
+
     let mut gpu: Gpu = gpu_device(0);
     let mut stop = gpu_alloc_copy(&uniq gpu, &shrd *h_stop);
     let nodes = gpu_alloc_copy(&uniq gpu, h_nodes);

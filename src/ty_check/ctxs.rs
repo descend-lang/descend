@@ -7,7 +7,7 @@ use crate::ty_check::proj_elem_ty;
 use std::collections::{HashMap, HashSet};
 
 use super::unify::{unify, ConstrainMap, Constrainable};
-use super::TyResult;
+use super::{TyChecker, TyResult};
 
 // TODO introduce proper struct
 pub(super) type TypedPlace = (internal::Place, Ty);
@@ -273,6 +273,20 @@ impl TyCtx {
             Some(id) => Ok(id),
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
+    }
+
+    pub fn place_ty_infer(
+        &mut self,
+        place: &internal::Place,
+        ty_checker: &mut TyChecker,
+    ) -> TyResult<Ty> {
+        let ident_ty = self.ty_of_ident(&place.ident)?;
+        place
+            .path
+            .iter()
+            .try_fold(ident_ty.clone(), |res, path_entry| {
+                ty_checker.proj_elem_ty(&res, path_entry, self)
+            })
     }
 
     pub fn place_ty(&self, place: &internal::Place) -> TyResult<Ty> {
@@ -874,6 +888,30 @@ impl GlobalCtx {
             Some(ty) => Ok(ty),
             None => Err(CtxError::StructNotFound(name.clone())),
         }
+    }
+
+    /// Find a struct by a name of an struct_field of this struct
+    pub fn struct_by_attribute_name(&self, name: &String) -> Option<&StructDef> {
+        let mut found_struct = false;
+        let mut result = None;
+
+        self.structs.values().for_each(|struct_def| {
+            if struct_def
+                .struct_fields
+                .iter()
+                .find(|struct_field| struct_field.name == *name)
+                .is_some()
+            {
+                if !found_struct {
+                    result = Some(struct_def);
+                    found_struct = true;
+                } else {
+                    result = None;
+                }
+            }
+        });
+
+        result
     }
 
     /// Get a FunctionName by the name of the function and the datatype of corresponding impl. <br>
