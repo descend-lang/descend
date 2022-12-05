@@ -376,7 +376,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_nat(i);
         }
         ExprKind::Deref(expr) => visitor.visit_expr(expr),
-        ExprKind::Range(_, _) => (),
+        ExprKind::Range(_, _) | ExprKind::Sync => (),
     }
 }
 

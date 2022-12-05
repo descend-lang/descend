@@ -384,6 +384,15 @@ impl TyChecker {
                 &mut expr_split.pos,
                 &mut expr_split.view,
             )?,
+            ExprKind::Sync => {
+                //TODO implement
+                (
+                    ty_ctx,
+                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                        ScalarTy::Unit,
+                    ))))),
+                )
+            }
             ExprKind::Range(l, u) => {
                 self.ty_check_range(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, l, u)?
             }

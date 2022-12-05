@@ -1270,6 +1270,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
             }),
             index: i.clone(),
         }),
+        Sync => CheckedExpr::Expr(cu::Expr::FunCall {
+            fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
+            template_args: vec![],
+            args: vec![],
+        }),
         Let(_, _, _)
         | LetUninit(_, _)
         | Block(_, _)

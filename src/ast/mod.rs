@@ -380,6 +380,7 @@ pub enum ExprKind {
     Sched(Box<Sched>),
     Select(Option<String>, Box<PlaceExpr>, Box<Ident>),
     Split(Box<ExprSplit>),
+    Sync,
     Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),

@@ -24,8 +24,8 @@ fn reduce<n: nat, a: prv, b: prv>(
                             }
                         },
                         inactive_threads => { () }
-                    }
-                    // sync; not enforced yet
+                    };
+                    sync //not enforced yet
                 }
             }
         }

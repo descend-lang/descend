@@ -338,6 +338,9 @@ peg::parser! {
                     Ty::new(TyKind::Data(Box::new(utils::type_from_lit(&l))))
                 )
             }
+            "sync" {
+                Expr::new(ExprKind::Sync)
+            }
             e:maybe_square_bracket_indexing_assignment() { e }
             "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression()
                 idx:(_ "[" _ n:nat() _ "]" {n})? {
@@ -694,7 +697,7 @@ peg::parser! {
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to" / "with" / "decl"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
-                / "cpu.mem" / "gpu.global" / "gpu.shared"
+                / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
                 / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
