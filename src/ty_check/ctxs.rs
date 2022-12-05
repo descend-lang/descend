@@ -1,6 +1,7 @@
 use crate::ast::internal::{ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
+use std::collections::hash_map::Iter;
 use std::collections::{HashMap, HashSet};
 
 // TODO introduce proper struct
@@ -365,13 +366,13 @@ impl TyCtx {
     }
 }
 
-pub(super) struct ExecCtx {
+pub(super) struct ExecBorrowCtx {
     ctx: HashMap<ExecExpr, HashSet<Loan>>,
 }
 
-impl ExecCtx {
+impl ExecBorrowCtx {
     pub fn new() -> Self {
-        ExecCtx {
+        ExecBorrowCtx {
             ctx: HashMap::new(),
         }
     }
@@ -383,6 +384,10 @@ impl ExecCtx {
             loans
         };
         self.ctx.insert(exec.clone(), new_loans);
+    }
+
+    pub fn iter(&self) -> Iter<ExecExpr, HashSet<Loan>> {
+        self.ctx.iter()
     }
 
     pub fn clear_exec(&mut self, exec: &ExecExpr) {

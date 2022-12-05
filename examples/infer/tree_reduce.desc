@@ -9,20 +9,23 @@ fn reduce<n: nat, a: prv, b: prv>(
         (&uniq a_array,),
         | input: (&uniq gpu.global [i32; n])| -[grid: gpu.grid<X<64>, X<1024>>]-> () {
             let block_group = group_mut::<1024>(to_view_mut(input.0));
-            sched ib in block_group to block in grid {
+            sched block in grid {
+                let ib = block_group[[block]];
                 for_nat k in halved_range(512) {
                     let split_ib = (split uniq 2*k (*ib)).0;
                     let (active_half0, active_half1) = split uniq k (*split_ib);
 
                     indep(X) k block {
                         active_threads => {
-                            sched fst_half, snd_half in active_half0, active_half1
-                            to _ in active_threads {
+                            sched thread in active_threads {
+                                let fst_half = active_half0[[thread]];
+                                let snd_half = active_half1[[thread]];
                                 *fst_half = *fst_half + *snd_half
                             }
                         },
                         inactive_threads => { () }
                     }
+                    // sync; not enforced yet
                 }
             }
         }

@@ -10,7 +10,7 @@ use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::utils;
 use crate::ast::*;
 use crate::error::ErrorReported;
-use ctxs::{GlobalCtx, KindCtx, TyCtx};
+use ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
 use std::ops::Deref;
@@ -26,7 +26,7 @@ macro_rules! matches_dty {
         }
     };
 }
-use crate::ty_check::ctxs::ExecCtx;
+use crate::ty_check::pre_decl::EXEC;
 pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -43,6 +43,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
 
 struct TyChecker {
     gl_ctx: GlobalCtx,
+    exec_borrow_ctx: ExecBorrowCtx,
 }
 
 impl TyChecker {
@@ -50,7 +51,10 @@ impl TyChecker {
         let gl_ctx = GlobalCtx::new()
             .append_from_fun_defs(&compil_unit.fun_defs)
             .append_fun_decls(&pre_decl::fun_decls());
-        TyChecker { gl_ctx }
+        TyChecker {
+            gl_ctx,
+            exec_borrow_ctx: ExecBorrowCtx::new(),
+        }
     }
 
     fn ty_check(&mut self, compil_unit: &mut CompilUnit) -> TyResult<()> {
@@ -73,6 +77,7 @@ impl TyChecker {
 
     // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
     fn ty_check_global_fun_def(&mut self, gf: &mut FunDef) -> TyResult<()> {
+        self.exec_borrow_ctx = ExecBorrowCtx::new();
         let kind_ctx = KindCtx::from(gf.generic_params.clone(), gf.prv_rels.clone())?;
 
         // TODO check that every prv_rel only uses provenance variables bound in generic_params
@@ -89,11 +94,19 @@ impl TyChecker {
                 })
                 .collect(),
         );
+        let mut exec_borrow_ctx = ExecBorrowCtx::new();
         let ty_ctx = TyCtx::from(glf_frame);
 
         let mut exec = ExecExpr::new(Exec::new(BaseExec::Ident(gf.exec_decl.ident.clone())));
         ty_check_exec(&kind_ctx, &ty_ctx, &gf.exec_decl, &mut exec)?;
-        self.ty_check_expr(&kind_ctx, ty_ctx, &gf.exec_decl, &exec, &mut gf.body_expr)?;
+        self.ty_check_expr(
+            &kind_ctx,
+            &mut exec_borrow_ctx,
+            ty_ctx,
+            &gf.exec_decl,
+            &exec,
+            &mut gf.body_expr,
+        )?;
 
         // t <= t_f
         // unify::constrain(
@@ -134,6 +147,7 @@ impl TyChecker {
     fn ty_check_expr(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -145,93 +159,225 @@ impl TyChecker {
             ExprKind::PlaceExpr(pl_expr) => {
                 if pl_expr.is_place() {
                     self.ty_check_pl_expr_without_deref(
-                        kind_ctx, ty_ctx, ident_exec, exec, pl_expr,
+                        kind_ctx,
+                        exec_borrow_ctx,
+                        ty_ctx,
+                        ident_exec,
+                        exec,
+                        pl_expr,
                     )?
                 } else {
-                    self.ty_check_pl_expr_with_deref(kind_ctx, ty_ctx, ident_exec, exec, pl_expr)?
+                    self.ty_check_pl_expr_with_deref(
+                        kind_ctx,
+                        exec_borrow_ctx,
+                        ty_ctx,
+                        ident_exec,
+                        exec,
+                        pl_expr,
+                    )?
                 }
             }
-            ExprKind::Block(prvs, body) => {
-                self.ty_check_block(kind_ctx, ty_ctx, ident_exec, exec, prvs, body)?
-            }
-            ExprKind::Let(pattern, ty, e) => {
-                self.ty_check_let(kind_ctx, ty_ctx, ident_exec, exec, pattern, ty, e)?
-            }
+            ExprKind::Block(prvs, body) => self.ty_check_block(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                prvs,
+                body,
+            )?,
+            ExprKind::Let(pattern, ty, e) => self.ty_check_let(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                pattern,
+                ty,
+                e,
+            )?,
             ExprKind::LetUninit(ident, ty) => {
-                Self::ty_check_let_uninit(ty_ctx, ident_exec, exec, ident, ty)?
+                Self::ty_check_let_uninit(ty_ctx, exec_borrow_ctx, ident_exec, exec, ident, ty)?
             }
-            ExprKind::Seq(es) => self.ty_check_seq(kind_ctx, ty_ctx, ident_exec, exec, es)?,
+            ExprKind::Seq(es) => {
+                self.ty_check_seq(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, es)?
+            }
             ExprKind::Lit(l) => Self::ty_check_literal(ty_ctx, l),
             ExprKind::Array(elems) => {
-                self.ty_check_array(kind_ctx, ty_ctx, ident_exec, exec, elems)?
+                self.ty_check_array(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, elems)?
             }
             ExprKind::Tuple(elems) => {
-                self.ty_check_tuple(kind_ctx, ty_ctx, ident_exec, exec, elems)?
+                self.ty_check_tuple(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, elems)?
             }
             ExprKind::Proj(e, i) => {
-                self.ty_check_proj(kind_ctx, ty_ctx, ident_exec, exec, e, *i)?
+                self.ty_check_proj(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, e, *i)?
             }
-            ExprKind::App(ef, k_args, args) => {
-                self.ty_check_app(kind_ctx, ty_ctx, ident_exec, exec, ef, k_args, args)?
-            }
+            ExprKind::App(ef, k_args, args) => self.ty_check_app(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                ef,
+                k_args,
+                args,
+            )?,
             ExprKind::DepApp(ef, k_args) => {
-                let (ty_ctx, _, _, _, fun_ty) =
-                    self.ty_check_dep_app(kind_ctx, ty_ctx, ident_exec, exec, ef, k_args)?;
+                let (ty_ctx, _, _, _, fun_ty) = self.ty_check_dep_app(
+                    kind_ctx,
+                    exec_borrow_ctx,
+                    ty_ctx,
+                    ident_exec,
+                    exec,
+                    ef,
+                    k_args,
+                )?;
                 (ty_ctx, fun_ty)
             }
-            ExprKind::Ref(prv, own, pl_expr) => {
-                self.ty_check_borrow(kind_ctx, ty_ctx, ident_exec, exec, prv, *own, pl_expr)?
-            }
-            ExprKind::Index(pl_expr, index) => {
-                self.ty_check_index_copy(kind_ctx, ty_ctx, ident_exec, exec, pl_expr, index)?
-            }
+            ExprKind::Ref(prv, own, pl_expr) => self.ty_check_borrow(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                prv,
+                *own,
+                pl_expr,
+            )?,
+            ExprKind::Index(pl_expr, index) => self.ty_check_index_copy(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                pl_expr,
+                index,
+            )?,
             ExprKind::Assign(pl_expr, e) => {
                 if pl_expr.is_place() {
-                    self.ty_check_assign_place(kind_ctx, ty_ctx, ident_exec, exec, &pl_expr, e)?
+                    self.ty_check_assign_place(
+                        kind_ctx,
+                        exec_borrow_ctx,
+                        ty_ctx,
+                        ident_exec,
+                        exec,
+                        &pl_expr,
+                        e,
+                    )?
                 } else {
-                    self.ty_check_assign_deref(kind_ctx, ty_ctx, ident_exec, exec, pl_expr, e)?
+                    self.ty_check_assign_deref(
+                        kind_ctx,
+                        exec_borrow_ctx,
+                        ty_ctx,
+                        ident_exec,
+                        exec,
+                        pl_expr,
+                        e,
+                    )?
                 }
             }
-            ExprKind::IdxAssign(pl_expr, idx, e) => {
-                self.ty_check_idx_assign(kind_ctx, ty_ctx, ident_exec, exec, pl_expr, idx, e)?
-            }
+            ExprKind::IdxAssign(pl_expr, idx, e) => self.ty_check_idx_assign(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                pl_expr,
+                idx,
+                e,
+            )?,
             ExprKind::Indep(indep) => {
-                self.ty_check_indep(kind_ctx, ty_ctx, ident_exec, exec, indep)?
+                self.ty_check_indep(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, indep)?
             }
             ExprKind::Sched(sched) => {
-                self.ty_check_sched(kind_ctx, ty_ctx, ident_exec, exec, sched)?
+                self.ty_check_sched(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, sched)?
             }
-            ExprKind::Select(r, p, distrib_exec) => {
-                self.ty_check_select(kind_ctx, ty_ctx, ident_exec, exec, r, p, distrib_exec)?
-            }
-            ExprKind::ForNat(var, range, body) => {
-                self.ty_check_for_nat(kind_ctx, ty_ctx, ident_exec, exec, var, range, body)?
-            }
-            ExprKind::For(ident, collec, body) => {
-                self.ty_check_for(kind_ctx, ty_ctx, ident_exec, exec, ident, collec, body)?
-            }
-            ExprKind::IfElse(cond, case_true, case_false) => self.ty_check_if_else(
-                kind_ctx, ty_ctx, ident_exec, exec, cond, case_true, case_false,
+            ExprKind::Select(r, p, distrib_exec) => self.ty_check_select(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                r,
+                p,
+                distrib_exec,
             )?,
-            ExprKind::If(cond, case_true) => {
-                self.ty_check_if(kind_ctx, ty_ctx, ident_exec, exec, cond, case_true)?
-            }
-            ExprKind::While(cond, body) => {
-                self.ty_check_while(kind_ctx, ty_ctx, ident_exec, exec, cond, body)?
-            }
+            ExprKind::ForNat(var, range, body) => self.ty_check_for_nat(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                var,
+                range,
+                body,
+            )?,
+            ExprKind::For(ident, collec, body) => self.ty_check_for(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                ident,
+                collec,
+                body,
+            )?,
+            ExprKind::IfElse(cond, case_true, case_false) => self.ty_check_if_else(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                cond,
+                case_true,
+                case_false,
+            )?,
+            ExprKind::If(cond, case_true) => self.ty_check_if(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                cond,
+                case_true,
+            )?,
+            ExprKind::While(cond, body) => self.ty_check_while(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                cond,
+                body,
+            )?,
             ExprKind::Lambda(params, lambda_exec_ident, ret_ty, body) => {
                 self.ty_check_lambda(kind_ctx, ty_ctx, params, lambda_exec_ident, ret_ty, body)?
             }
-            ExprKind::BinOp(bin_op, lhs, rhs) => {
-                self.ty_check_binary_op(kind_ctx, ty_ctx, ident_exec, exec, bin_op, lhs, rhs)?
-            }
-            ExprKind::UnOp(un_op, e) => {
-                self.ty_check_unary_op(kind_ctx, ty_ctx, ident_exec, exec, un_op, e)?
-            }
-            ExprKind::Split(expr_split) => self.ty_check_split(
+            ExprKind::BinOp(bin_op, lhs, rhs) => self.ty_check_binary_op(
                 kind_ctx,
+                exec_borrow_ctx,
                 ty_ctx,
                 ident_exec,
+                exec,
+                bin_op,
+                lhs,
+                rhs,
+            )?,
+            ExprKind::UnOp(un_op, e) => self.ty_check_unary_op(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                un_op,
+                e,
+            )?,
+            ExprKind::Split(expr_split) => self.ty_check_split(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
                 &mut expr_split.lrgn,
                 &mut expr_split.rrgn,
                 expr_split.own,
@@ -239,7 +385,7 @@ impl TyChecker {
                 &mut expr_split.view,
             )?,
             ExprKind::Range(l, u) => {
-                self.ty_check_range(kind_ctx, ty_ctx, ident_exec, exec, l, u)?
+                self.ty_check_range(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, l, u)?
             }
             ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
             ExprKind::Idx(_, _) => {
@@ -262,6 +408,7 @@ impl TyChecker {
     fn ty_check_range(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -274,8 +421,10 @@ impl TyChecker {
             return Err(TyError::IllegalExec);
         }
 
-        let ty_ctx_l = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, l)?;
-        let ty_ctx_u = self.ty_check_expr(kind_ctx, ty_ctx_l, ident_exec, exec, u)?;
+        let ty_ctx_l =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, l)?;
+        let ty_ctx_u =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx_l, ident_exec, exec, u)?;
 
         if !matches_dty!(
             l.ty.as_ref().unwrap(),
@@ -306,8 +455,10 @@ impl TyChecker {
     fn ty_check_split(
         &self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
+        exec: &ExecExpr,
         r1: &Option<String>,
         r2: &Option<String>,
         own: Ownership,
@@ -330,7 +481,7 @@ impl TyChecker {
             (fst, snd)
         }
 
-        let (ty_ctx_prv1, prv1) = TyChecker::infer_prv(ty_ctx, r1);
+        let (ty_ctx_prv1, prv1) = TyChecker::infer_prv(ty_ctx.clone(), r1);
         let (ty_ctx_prv1_prv2, prv2) = TyChecker::infer_prv(ty_ctx_prv1, r2);
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv1)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv1));
@@ -338,13 +489,9 @@ impl TyChecker {
         if !(ty_ctx_prv1_prv2.loans_in_prv(&prv2)?.is_empty()) {
             return Err(TyError::PrvValueAlreadyInUse(prv2));
         }
-        let mems = self.place_expr_ty_mems_under_exec_own(
-            kind_ctx,
-            &ty_ctx_prv1_prv2,
-            &ident_exec.ty,
-            own,
-            view,
-        )?;
+
+        let mems =
+            self.place_expr_ty_mems_under_exec_own(kind_ctx, &ty_ctx_prv1_prv2, exec, own, view)?;
 
         let split_ty = if let TyKind::Data(dty) = &view.ty.as_ref().unwrap().ty {
             if let DataTyKind::ArrayShape(elem_dty, n) = &dty.dty {
@@ -389,8 +536,9 @@ impl TyChecker {
         let loans = borrow_check::ownership_safe(
             self,
             kind_ctx,
+            exec_borrow_ctx,
             &ty_ctx_prv1_prv2,
-            &ident_exec.ty,
+            exec,
             &[],
             own,
             &view.clone(),
@@ -425,6 +573,7 @@ impl TyChecker {
     fn ty_check_for_nat(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -438,6 +587,7 @@ impl TyChecker {
         }]);
         let ty_ctx_1 = self.ty_check_expr(
             &scoped_kind_ctx,
+            exec_borrow_ctx,
             ty_ctx.clone().append_frame(vec![]),
             ident_exec,
             exec,
@@ -465,6 +615,7 @@ impl TyChecker {
     fn ty_check_for(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -472,7 +623,8 @@ impl TyChecker {
         collec: &mut Expr,
         body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let collec_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, collec)?;
+        let collec_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, collec)?;
         let collec_dty = if let TyKind::Data(collec_dty) = &collec.ty.as_ref().unwrap().ty {
             collec_dty.as_ref()
         } else {
@@ -522,8 +674,14 @@ impl TyChecker {
                     Mutability::Const,
                     ExecExpr::new(Exec::new(BaseExec::Ident(ident_exec.ident.clone()))),
                 ))]);
-        let iter_ty_ctx =
-            self.ty_check_expr(kind_ctx, collec_ty_ctx_with_ident, ident_exec, exec, body)?;
+        let iter_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            exec_borrow_ctx,
+            collec_ty_ctx_with_ident,
+            ident_exec,
+            exec,
+            body,
+        )?;
         let ty_ctx_no_body = iter_ty_ctx.drop_last_frame();
         if collec_ty_ctx != ty_ctx_no_body {
             return Err(TyError::String(
@@ -541,15 +699,18 @@ impl TyChecker {
     fn ty_check_while(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
         cond: &mut Expr,
         body: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let cond_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, cond)?;
+        let cond_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, cond)?;
         let body_ty_ctx = self.ty_check_expr(
             kind_ctx,
+            exec_borrow_ctx,
             cond_ty_ctx.append_frame(vec![]),
             ident_exec,
             exec,
@@ -557,8 +718,14 @@ impl TyChecker {
         )?;
 
         let body_outer_ty_ctx = body_ty_ctx.drop_last_frame();
-        let cond_temp_ty_ctx =
-            self.ty_check_expr(kind_ctx, body_outer_ty_ctx.clone(), ident_exec, exec, cond)?;
+        let cond_temp_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            exec_borrow_ctx,
+            body_outer_ty_ctx.clone(),
+            ident_exec,
+            exec,
+            cond,
+        )?;
         if body_outer_ty_ctx != cond_temp_ty_ctx {
             return Err(TyError::String(
                 "Context should have stayed the same".to_string(),
@@ -566,6 +733,7 @@ impl TyChecker {
         }
         let body_temp_ty_ctx = self.ty_check_expr(
             kind_ctx,
+            exec_borrow_ctx,
             body_outer_ty_ctx.clone().append_frame(vec![]),
             ident_exec,
             exec,
@@ -615,6 +783,7 @@ impl TyChecker {
     fn ty_check_if_else(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -623,11 +792,24 @@ impl TyChecker {
         case_false: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO deal with provenances in cases
-        let cond_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, cond)?;
-        let _case_true_ty_ctx =
-            self.ty_check_expr(kind_ctx, cond_ty_ctx.clone(), ident_exec, exec, case_true)?;
-        let case_false_ty_ctx =
-            self.ty_check_expr(kind_ctx, cond_ty_ctx, ident_exec, exec, case_false)?;
+        let cond_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, cond)?;
+        let _case_true_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            exec_borrow_ctx,
+            cond_ty_ctx.clone(),
+            ident_exec,
+            exec,
+            case_true,
+        )?;
+        let case_false_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            exec_borrow_ctx,
+            cond_ty_ctx,
+            ident_exec,
+            exec,
+            case_false,
+        )?;
 
         let cond_ty = cond.ty.as_ref().unwrap();
         let case_true_ty = case_true.ty.as_ref().unwrap();
@@ -681,6 +863,7 @@ impl TyChecker {
     fn ty_check_if(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -688,9 +871,16 @@ impl TyChecker {
         case_true: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO deal with provenances in cases
-        let cond_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, cond)?;
-        let case_true_ty_ctx =
-            self.ty_check_expr(kind_ctx, cond_ty_ctx.clone(), ident_exec, exec, case_true)?;
+        let cond_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, cond)?;
+        let case_true_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            exec_borrow_ctx,
+            cond_ty_ctx.clone(),
+            ident_exec,
+            exec,
+            case_true,
+        )?;
 
         let cond_ty = cond.ty.as_ref().unwrap();
         let case_true_ty = case_true.ty.as_ref().unwrap();
@@ -731,6 +921,7 @@ impl TyChecker {
     fn ty_check_indep(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -770,6 +961,7 @@ impl TyChecker {
                 .append_exec_mapping(indep.branch_idents[i].clone(), branch_exec.clone());
             let branch_res_ctx = self.ty_check_expr(
                 kind_ctx,
+                exec_borrow_ctx,
                 branch_ty_ctx,
                 &ident_exec,
                 &branch_exec,
@@ -795,6 +987,7 @@ impl TyChecker {
     fn ty_check_sched(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -816,6 +1009,7 @@ impl TyChecker {
         };
         let body_ty_ctx = self.ty_check_expr(
             kind_ctx,
+            exec_borrow_ctx,
             inner_ty_ctx,
             ident_exec,
             &body_exec,
@@ -848,6 +1042,7 @@ impl TyChecker {
     fn ty_check_select(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -862,7 +1057,7 @@ impl TyChecker {
             ));
         }
 
-        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, &ident_exec.ty, Ownership::Shrd, p)?;
+        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, p)?;
 
         if let DataTyKind::Ref(ref_dty) = &p.ty.as_ref().unwrap().dty().dty {
             if let DataTyKind::ArrayShape(elem_dty, n) = &ref_dty.dty.dty {
@@ -870,15 +1065,16 @@ impl TyChecker {
                 // if n != distrib_exec.active_distrib_size() {
                 //     return Err(TyError::String("There must be as many elements in the view as there exist execution resources that select from it.".to_string()));
                 // }
-                let (impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx, prv_val_name);
+                let (impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx.clone(), prv_val_name);
                 if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
                     return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
                 }
                 let loans = borrow_check::ownership_safe(
                     self,
                     kind_ctx,
+                    exec_borrow_ctx,
                     &impl_ctx,
-                    &ident_exec.ty,
+                    exec,
                     &[],
                     ref_dty.own,
                     p,
@@ -894,6 +1090,7 @@ impl TyChecker {
                         elem_dty.as_ref().clone(),
                     )),
                 )))));
+                exec_borrow_ctx.insert(distrib_exec, loans.clone());
                 let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
                 Ok((res_ty_ctx, res_dty))
             } else {
@@ -1001,6 +1198,7 @@ impl TyChecker {
             fun_ty_ctx.append_exec_mapping(lambda_ident_exec.ident.clone(), body_exec.clone());
         let capture_ty_ctx = self.ty_check_expr(
             kind_ctx,
+            &mut ExecBorrowCtx::new(),
             fun_ty_ctx_with_exec,
             lambda_ident_exec,
             &body_exec,
@@ -1055,6 +1253,7 @@ impl TyChecker {
     fn ty_check_block(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1065,7 +1264,14 @@ impl TyChecker {
         for prv in prvs {
             ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping::new(prv))
         }
-        let body_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx_with_prvs, ident_exec, exec, body)?;
+        let body_ty_ctx = self.ty_check_expr(
+            kind_ctx,
+            exec_borrow_ctx,
+            ty_ctx_with_prvs,
+            ident_exec,
+            exec,
+            body,
+        )?;
         let res_ty_ctx = body_ty_ctx.drop_last_frame();
         Ok((res_ty_ctx, body.ty.as_ref().unwrap().as_ref().clone()))
     }
@@ -1081,13 +1287,15 @@ impl TyChecker {
     fn ty_check_assign_place(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
         pl_expr: &PlaceExpr,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, e)?;
+        let assigned_val_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, e)?;
         let pl = pl_expr.to_place().unwrap();
         let mut place_ty = assigned_val_ty_ctx.place_dty(&pl)?;
         // FIXME this should be checked for ArrayViews as well
@@ -1107,8 +1315,9 @@ impl TyChecker {
             let pl_uniq_loans = borrow_check::ownership_safe(
                 self,
                 kind_ctx,
+                exec_borrow_ctx,
                 &assigned_val_ty_ctx,
-                &ident_exec.ty,
+                exec,
                 &[],
                 Ownership::Uniq,
                 pl_expr,
@@ -1138,17 +1347,19 @@ impl TyChecker {
     fn ty_check_assign_deref(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
         deref_expr: &mut PlaceExpr,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, e)?;
+        let assigned_val_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, e)?;
         self.place_expr_ty_under_exec_own(
             kind_ctx,
             &assigned_val_ty_ctx,
-            &ident_exec.ty,
+            exec,
             Ownership::Uniq,
             deref_expr,
         )?;
@@ -1156,8 +1367,9 @@ impl TyChecker {
         borrow_check::ownership_safe(
             self,
             kind_ctx,
+            exec_borrow_ctx,
             &assigned_val_ty_ctx,
-            &ident_exec.ty,
+            exec,
             &[],
             Ownership::Uniq,
             &deref_expr,
@@ -1198,6 +1410,7 @@ impl TyChecker {
     fn ty_check_idx_assign(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1212,11 +1425,12 @@ impl TyChecker {
             )));
         }
 
-        let assigned_val_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, e)?;
+        let assigned_val_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, e)?;
         self.place_expr_ty_under_exec_own(
             kind_ctx,
             &assigned_val_ty_ctx,
-            &ident_exec.ty,
+            exec,
             Ownership::Uniq,
             pl_expr,
         )?;
@@ -1269,7 +1483,7 @@ impl TyChecker {
                     .to_string(),
             ));
         }
-        Self::accessible_memory(ident_exec, &mem)?;
+        Self::accessible_memory(exec.ty.as_ref().unwrap().as_ref(), &mem)?;
 
         if own != Ownership::Uniq {
             return Err(TyError::String(
@@ -1286,8 +1500,9 @@ impl TyChecker {
         borrow_check::ownership_safe(
             self,
             kind_ctx,
+            exec_borrow_ctx,
             &assigned_val_ty_ctx,
-            &ident_exec.ty,
+            exec,
             &[],
             Ownership::Uniq,
             pl_expr,
@@ -1314,6 +1529,7 @@ impl TyChecker {
     fn ty_check_index_copy(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1324,8 +1540,9 @@ impl TyChecker {
         borrow_check::ownership_safe(
             self,
             kind_ctx,
+            exec_borrow_ctx,
             &ty_ctx,
-            &ident_exec.ty,
+            exec,
             &[],
             Ownership::Shrd,
             pl_expr,
@@ -1333,13 +1550,7 @@ impl TyChecker {
         .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
-        self.place_expr_ty_under_exec_own(
-            kind_ctx,
-            &ty_ctx,
-            &ident_exec.ty,
-            Ownership::Shrd,
-            pl_expr,
-        )?;
+        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
 
         let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
             dty
@@ -1366,7 +1577,7 @@ impl TyChecker {
                         (sty.as_ref().clone(), n.clone())
                     }
                     DataTyKind::ArrayShape(view_ty, n) => {
-                        Self::accessible_memory(ident_exec, &reff.mem)?;
+                        Self::accessible_memory(exec.ty.as_ref().unwrap().as_ref(), &reff.mem)?;
                         // TODO is ownership checking necessary here?
                         (
                             DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
@@ -1414,6 +1625,7 @@ impl TyChecker {
     fn ty_check_binary_op(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1423,8 +1635,10 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         // FIXME certain operations should only be allowed for certain data types
         //      true > false is currently valid
-        let lhs_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, lhs)?;
-        let rhs_ty_ctx = self.ty_check_expr(kind_ctx, lhs_ty_ctx, ident_exec, exec, rhs)?;
+        let lhs_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, lhs)?;
+        let rhs_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, lhs_ty_ctx, ident_exec, exec, rhs)?;
 
         let lhs_ty = lhs.ty.as_ref().unwrap();
         let rhs_ty = rhs.ty.as_ref().unwrap();
@@ -1476,13 +1690,14 @@ impl TyChecker {
     fn ty_check_unary_op(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
         un_op: &UnOp,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let res_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, e)?;
+        let res_ctx = self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, e)?;
         let e_ty = e.ty.as_ref().unwrap();
         let e_dty = if let TyKind::Data(dty) = &e_ty.ty {
             dty.as_ref()
@@ -1508,6 +1723,7 @@ impl TyChecker {
     fn ty_check_app(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1517,7 +1733,15 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO check well-kinded: FrameTyping, Prv, Ty
         let (mut res_ty_ctx, f_remain_gen_args, f_subst_param_tys, f_subst_ret_ty, mut f_mono_ty) =
-            self.ty_check_dep_app(kind_ctx, ty_ctx, ident_exec, exec, ef, k_args)?;
+            self.ty_check_dep_app(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                ef,
+                k_args,
+            )?;
         let exec_f = if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
             if !fn_ty.exec_ty.callable_in(exec.ty.as_ref().unwrap()) {
                 return Err(TyError::String(format!(
@@ -1535,7 +1759,8 @@ impl TyChecker {
         };
 
         for arg in args.iter_mut() {
-            res_ty_ctx = self.ty_check_expr(kind_ctx, res_ty_ctx, ident_exec, exec, arg)?;
+            res_ty_ctx =
+                self.ty_check_expr(kind_ctx, exec_borrow_ctx, res_ty_ctx, ident_exec, exec, arg)?;
         }
         let ret_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
             "ret_ty",
@@ -1571,13 +1796,15 @@ impl TyChecker {
     fn ty_check_dep_app(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
         ef: &mut Expr,
         k_args: &mut [ArgKinded],
     ) -> TyResult<(TyCtx, Vec<IdentKinded>, Vec<Ty>, Ty, Ty)> {
-        let res_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, ef)?;
+        let res_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, ef)?;
         if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
             if fn_ty.generics.len() < k_args.len() {
                 return Err(TyError::String(format!(
@@ -1647,6 +1874,7 @@ impl TyChecker {
     fn ty_check_tuple(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1654,7 +1882,14 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let mut tmp_ty_ctx = ty_ctx;
         for elem in elems.iter_mut() {
-            tmp_ty_ctx = self.ty_check_expr(kind_ctx, tmp_ty_ctx, ident_exec, exec, elem)?;
+            tmp_ty_ctx = self.ty_check_expr(
+                kind_ctx,
+                exec_borrow_ctx,
+                tmp_ty_ctx,
+                ident_exec,
+                exec,
+                elem,
+            )?;
         }
         let elem_tys: TyResult<Vec<_>> = elems
             .iter()
@@ -1676,6 +1911,7 @@ impl TyChecker {
     fn ty_check_proj(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1686,7 +1922,8 @@ impl TyChecker {
             panic!("Place expression should have been typechecked by a different rule.")
         }
 
-        let tuple_ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, e)?;
+        let tuple_ty_ctx =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, e)?;
         let e_dty = if let TyKind::Data(dty) = &e.ty.as_ref().unwrap().ty {
             dty.as_ref()
         } else {
@@ -1701,6 +1938,7 @@ impl TyChecker {
     fn ty_check_array(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         mut ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1708,7 +1946,8 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         assert!(!elems.is_empty());
         for elem in elems.iter_mut() {
-            ty_ctx = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, elem)?;
+            ty_ctx =
+                self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, elem)?;
         }
         let ty = elems.first().unwrap().ty.as_ref();
         if !matches!(&ty.unwrap().ty, TyKind::Data(_)) {
@@ -1808,6 +2047,7 @@ impl TyChecker {
     fn ty_check_let(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1815,7 +2055,8 @@ impl TyChecker {
         pattern_ty: &mut Option<Box<Ty>>,
         expr: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        let ty_ctx_e = self.ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, expr)?;
+        let ty_ctx_e =
+            self.ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, expr)?;
         let e_ty = expr.ty.as_mut().unwrap();
         let ty_ctx_with_idents =
             TyChecker::infer_pattern_ty(kind_ctx, ty_ctx_e, ident_exec, pattern, pattern_ty, e_ty)?;
@@ -1830,6 +2071,7 @@ impl TyChecker {
     // TODO respect exec?
     fn ty_check_let_uninit(
         ty_ctx: TyCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
         ident: &Ident,
@@ -1859,6 +2101,7 @@ impl TyChecker {
     fn ty_check_seq(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1867,7 +2110,7 @@ impl TyChecker {
         let mut ty_ctx = ty_ctx;
         for e in &mut *es {
             ty_ctx = self
-                .ty_check_expr(kind_ctx, ty_ctx, ident_exec, exec, e)?
+                .ty_check_expr(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, e)?
                 .garbage_collect_loans();
         }
         Ok((
@@ -1879,17 +2122,20 @@ impl TyChecker {
     fn ty_check_pl_expr_with_deref(
         &mut self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         mut ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(TyCtx, Ty)> {
         // TODO refactor
+        let exec = ty_ctx.get_exec_expr(&ident_exec.ident)?;
         borrow_check::ownership_safe(
             self,
             kind_ctx,
+            exec_borrow_ctx,
             &ty_ctx,
-            &ident_exec.ty,
+            exec,
             &[],
             Ownership::Shrd,
             pl_expr,
@@ -1897,13 +2143,7 @@ impl TyChecker {
         .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
-        self.place_expr_ty_under_exec_own(
-            kind_ctx,
-            &ty_ctx,
-            &ident_exec.ty,
-            Ownership::Shrd,
-            pl_expr,
-        )?;
+        self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
         if !pl_expr.ty.as_ref().unwrap().is_fully_alive() {
             return Err(TyError::String(format!(
                 "Part of Place {:?} was moved before.",
@@ -1927,6 +2167,7 @@ impl TyChecker {
     fn ty_check_pl_expr_without_deref(
         &self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -1947,11 +2188,14 @@ impl TyChecker {
             }
             let res_ty_ctx = if pl_ty.copyable() {
                 // TODO refactor
+
+                let exec = ty_ctx.get_exec_expr(&ident_exec.ident)?;
                 borrow_check::ownership_safe(
                     self,
                     kind_ctx,
+                    exec_borrow_ctx,
                     &ty_ctx,
-                    &ident_exec.ty,
+                    exec,
                     &[],
                     Ownership::Shrd,
                     pl_expr,
@@ -1964,8 +2208,9 @@ impl TyChecker {
                 borrow_check::ownership_safe(
                     self,
                     kind_ctx,
+                    exec_borrow_ctx,
                     &ty_ctx,
-                    &ident_exec.ty,
+                    exec,
                     &[],
                     Ownership::Uniq,
                     pl_expr,
@@ -1984,6 +2229,7 @@ impl TyChecker {
     fn ty_check_borrow(
         &self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
@@ -2002,26 +2248,23 @@ impl TyChecker {
         if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
             return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
         }
+
         let loans = borrow_check::ownership_safe(
             self,
             kind_ctx,
+            exec_borrow_ctx,
             &impl_ctx,
-            &ident_exec.ty,
+            exec,
             &[],
             own,
             pl_expr,
         )
         .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
 
-        let mems = self.place_expr_ty_mems_under_exec_own(
-            kind_ctx,
-            &impl_ctx,
-            &ident_exec.ty,
-            own,
-            pl_expr,
-        )?;
+        let mems =
+            self.place_expr_ty_mems_under_exec_own(kind_ctx, &impl_ctx, exec, own, pl_expr)?;
         mems.iter()
-            .try_for_each(|mem| Self::accessible_memory(ident_exec, mem))?;
+            .try_for_each(|mem| Self::accessible_memory(exec.ty.as_ref().unwrap().as_ref(), mem))?;
 
         let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
         if !pl_expr_ty.is_fully_alive() {
@@ -2063,6 +2306,7 @@ impl TyChecker {
             rmem,
             reffed_ty,
         ))));
+        exec_borrow_ctx.insert(exec, loans.clone());
         let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
         Ok((res_ty_ctx, Ty::new(TyKind::Data(Box::new(res_dty)))))
     }
@@ -2073,12 +2317,11 @@ impl TyChecker {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        exec_ty: &ExecTy,
+        exec: &ExecExpr,
         own: Ownership,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<()> {
-        let _mem =
-            self.place_expr_ty_mems_under_exec_own(kind_ctx, ty_ctx, exec_ty, own, pl_expr)?;
+        let _mem = self.place_expr_ty_mems_under_exec_own(kind_ctx, ty_ctx, exec, own, pl_expr)?;
         Ok(())
     }
 
@@ -2086,13 +2329,12 @@ impl TyChecker {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        exec_ty: &ExecTy,
+        exec: &ExecExpr,
         own: Ownership,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<Vec<Memory>> {
-        let (mem, _) = self.place_expr_ty_mem_passed_prvs_under_exec_own(
-            kind_ctx, ty_ctx, exec_ty, own, pl_expr,
-        )?;
+        let (mem, _) = self
+            .place_expr_ty_mem_passed_prvs_under_exec_own(kind_ctx, ty_ctx, exec, own, pl_expr)?;
         Ok(mem)
     }
 
@@ -2102,23 +2344,23 @@ impl TyChecker {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        exec_ty: &ExecTy,
+        exec: &ExecExpr,
         own: Ownership,
         pl_expr: &mut PlaceExpr,
     ) -> TyResult<(Vec<Memory>, Vec<Provenance>)> {
         let (ty, mem, prvs) = match &mut pl_expr.pl_expr {
             // TC-Var
             PlaceExprKind::Ident(ident) => {
-                self.var_expr_ty_mem_empty_prvs_under_exec_own(ty_ctx, exec_ty, ident)?
+                self.var_expr_ty_mem_empty_prvs_under_exec_own(ty_ctx, exec, ident)?
             }
             // TC-Proj
             PlaceExprKind::Proj(tuple_expr, n) => self
                 .proj_expr_ty_mem_passed_prvs_under_exec_own(
-                    kind_ctx, ty_ctx, exec_ty, own, tuple_expr, *n,
+                    kind_ctx, ty_ctx, exec, own, tuple_expr, *n,
                 )?,
             // TC-Deref
             PlaceExprKind::Deref(borr_expr) => self.deref_expr_ty_mem_passed_prvs_under_exec_own(
-                kind_ctx, ty_ctx, exec_ty, own, borr_expr,
+                kind_ctx, ty_ctx, exec, own, borr_expr,
             )?,
         };
         pl_expr.ty = Some(Box::new(ty));
@@ -2128,7 +2370,7 @@ impl TyChecker {
     fn var_expr_ty_mem_empty_prvs_under_exec_own(
         &self,
         ty_ctx: &TyCtx,
-        exec_ty: &ExecTy,
+        exec: &ExecExpr,
         ident: &Ident,
     ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
         if let Ok(tty) = ty_ctx.ty_of_ident(ident) {
@@ -2146,7 +2388,7 @@ impl TyChecker {
             }
             // FIXME Should throw an error if thread local memory is accessed by a block
             //  for example.
-            let mem = Self::default_mem_by_exec(&exec_ty.ty);
+            let mem = Self::default_mem_by_exec(&exec.ty.as_ref().unwrap().ty);
             Ok((
                 tty.clone(),
                 if mem.is_some() {
@@ -2183,13 +2425,13 @@ impl TyChecker {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        exec_ty: &ExecTy,
+        exec: &ExecExpr,
         own: Ownership,
         tuple_expr: &mut PlaceExpr,
         n: usize,
     ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
         let (mem, passed_prvs) = self.place_expr_ty_mem_passed_prvs_under_exec_own(
-            kind_ctx, ty_ctx, exec_ty, own, tuple_expr,
+            kind_ctx, ty_ctx, exec, own, tuple_expr,
         )?;
         let tuple_dty = match &tuple_expr.ty.as_ref().unwrap().ty {
             TyKind::Data(dty) => dty,
@@ -2227,13 +2469,12 @@ impl TyChecker {
         &self,
         kind_ctx: &KindCtx,
         ty_ctx: &TyCtx,
-        exec_ty: &ExecTy,
+        exec: &ExecExpr,
         own: Ownership,
         borr_expr: &mut PlaceExpr,
     ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-        let (mut inner_mem, mut passed_prvs) = self.place_expr_ty_mem_passed_prvs_under_exec_own(
-            kind_ctx, ty_ctx, exec_ty, own, borr_expr,
-        )?;
+        let (mut inner_mem, mut passed_prvs) = self
+            .place_expr_ty_mem_passed_prvs_under_exec_own(kind_ctx, ty_ctx, exec, own, borr_expr)?;
         let borr_dty = if let TyKind::Data(dty) = &borr_expr.ty.as_ref().unwrap().ty {
             dty
         } else {
@@ -2287,13 +2528,13 @@ impl TyChecker {
         }
     }
 
-    fn accessible_memory(ident_exec: &IdentExec, mem: &Memory) -> TyResult<()> {
-        if Self::allowed_mem_for_exec(&ident_exec.ty.ty).contains(mem) {
+    fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
+        if Self::allowed_mem_for_exec(&exec_ty.ty).contains(mem) {
             Ok(())
         } else {
             Err(TyError::String(format!(
                 "Trying to dereference pointer to `{}` from execution resource `{}`",
-                mem, &ident_exec.ty.ty
+                mem, &exec_ty.ty
             )))
         }
     }
@@ -2339,13 +2580,13 @@ impl TyChecker {
                                         return Err(TyError::ReferenceToWrongOwnership);
                                     }
                                     let mut borrowed_pl_expr = place_expr.clone();
-                                    self.place_expr_ty_under_exec_own(
-                                        kind_ctx,
-                                        ty_ctx,
-                                        exec_ty,
-                                        *l_own,
-                                        &mut borrowed_pl_expr,
-                                    )?;
+                                    // self.place_expr_ty_under_exec_own(
+                                    //     kind_ctx,
+                                    //     ty_ctx,
+                                    //     exec_ty,
+                                    //     *l_own,
+                                    //     &mut borrowed_pl_expr,
+                                    // )?;
                                     if let TyKind::Data(pl_expr_dty) =
                                         borrowed_pl_expr.ty.unwrap().ty
                                     {
