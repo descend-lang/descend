@@ -1,0 +1,100 @@
+fn matrix_multiply_naiv<n: nat, m: nat, k: nat>(
+    ha_matrix: &shrd cpu.mem [[f32; k]; m],
+    hb_matrix: &shrd cpu.mem [[f32; n]; k],
+    mut h_result_matrix: [[f32; n]; m]
+) -[cpu.thread]-> [[f32; n]; m] {
+    let mut gpu = gpu_device(0);
+
+    let a_matrix = gpu_alloc_copy(&uniq gpu, ha_matrix);
+    let b_matrix = gpu_alloc_copy(&uniq gpu, hb_matrix);
+    // let mut result_matrix = gpu_alloc(&uniq gpu);
+    let mut result_matrix = gpu_alloc_copy(&uniq gpu, &shrd h_result_matrix);
+
+    exec::<64, 1024>(
+        &uniq gpu,
+        (&shrd a_matrix, &shrd b_matrix , &uniq result_matrix),
+        | grid, input | -[gpu.grid]-> () {
+            let view_a = to_view(input.0);
+            let mut view_res = to_view_mut(input.2);
+            parfor block in grid with a_row, res_row from view_a, view_res {
+                let view_bT = to_view(input.1);
+                // let view_bT = transpose(to_view(input.1));
+                let mut view_res_row = to_view_mut(res_row);
+                parfor thread in block with b_column, res from view_bT, view_res_row {
+                    let mut scalar_product = a_row[0] + b_column[0];
+                    for i in 1 .. 10 {
+                        scalar_product = scalar_product + a_row[i] + b_column[i]
+                    };
+                    *res = scalar_product
+                    // *res = a_row * b_column
+                    // *res = a_row * a_row
+                }
+            }
+        }
+    );
+
+    copy_to_host(&shrd result_matrix, &uniq h_result_matrix);
+    h_result_matrix
+}
+
+impl<k: nat, T, R, O> Mul<&shrd gpu.global [[R; k]], O> for &shrd gpu.global [[T; k]]
+        where T: Copy + Mul<R, O>, R: Copy, O: Add<O, O> {
+    fn mul(self, other: &shrd gpu.global [[R; k]]) -[gpu.thread]-> O {
+        let mut scalar_product = self[0] * other[0];
+        for i in 1 .. 10 {
+            scalar_product = scalar_product + (self[i] * other[i])
+        };
+        scalar_product
+    }
+}
+
+impl<k: nat, T, R, O> Mul<&shrd gpu.global [R; k], O> for &shrd gpu.global [T; k]
+        where T: Copy + Mul<R, O>, R: Copy, O: Add<O, O> {
+    fn mul(self, other: &shrd gpu.global [R; k]) -[gpu.thread]-> O {
+        to_view(self) * to_view(other)
+    }
+}
+
+// fn matrix_multiply_tile<n: nat, m: nat, k: nat>(
+//     ha_matrix: &uniq cpu.mem [[f32; k]; m],
+//     hb_matrix: &shrd cpu.mem [[f32; n]; k]
+// ) -[cpu.thread]-> [[f32; n]; m] {
+//     let mut gpu = gpu_device(0);
+
+//     let a_matrix = gpu_alloc_copy(&uniq gpu, &shrd *ha_matrix);
+//     let b_matrix = gpu_alloc_copy(&uniq gpu, &shrd *hb_matrix);
+//     let mut result_matrix = gpu_alloc(&uniq gpu);
+
+//     exec::<64, 1024>(
+//         &uniq gpu,
+//         (&shrd a_matrix, &shrd b_array, &uniq result_matrix),
+//         | grid, input | -[gpu.grid]-> () {
+//             let view_a = group::<128>(to_view(input.0));
+//             let view_res = group_mut::<128>(to_view_mut(input.2));
+//             parfor block in grid with a_block, res_row_block from view_a, view_res {
+//                 let view_bT = group::<128>(transpose(to_view(input.1)));
+//                 let view_res_row_blockT = group::<128>(transpose(res_row_block));
+//                 parfor thread in block with b_blockT, res_tileT from view_bT, view_res_row_blockT {
+//                     let res_tile = transpose(res_tileT);
+//                     let b_block = transpose(b_blockT);
+//                     *res_tile = a_block * b_block;
+//                 }
+//             }
+//         }
+//     );
+
+//     let mut h_result_matrix: [[f32; n]; m];
+//     copy_to_host(&shrd result_matrix, &uniq h_result_matrix);
+//     h_result_matrix
+// }
+
+// impl<m: nat, n: nat, k: nat, T, R, O> Mul<&shrd gpu.global [[[[R; n]]; k]], [[O; n]; m]> for &shrd gpu.global [[[[T; k]]; m]] where T: Mul<R, O> {
+//     fn mul(self, other: &shrd gpu.global [[[[R; n]]; k]]) -[gpu.thread]-> O {
+//         let mut res: [[O; n]; m];
+//         for i in 0..m {
+//             for j in 0..n{
+//                 (res[i])[j] = self[i] * transpose(other)[j];
+//             }
+//         }
+//     }
+// }

@@ -75,6 +75,11 @@ fn bfs() -> Res {
 }
 
 #[test]
+fn mm() -> Res {
+    Ok(println!("{}", descend::compile("examples/infer/mm.desc")?))
+}
+
+#[test]
 fn computed_indexing() -> Res {
     Ok(println!(
         "{}",
