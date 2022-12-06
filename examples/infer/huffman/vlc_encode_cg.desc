@@ -38,7 +38,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
             decl {
                 let mut sm_cw: [u32; 256] @ gpu.shared;
                 let mut sm_cwl: [u32; 256] @ gpu.shared;
-                let mut sm_res_location: [u32; 256] @ gpu.shared;
+                let mut sm_scan_arr: [u32; 8] @ gpu.shared; //one for each warp
                 let mut sm_block_enc: [AtomicU32; 256] @ gpu.shared;
                 let mut sm_kcmax: [u32; 1] @ gpu.shared
             } parfor block in grid
@@ -47,7 +47,6 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // create shared memory views
                 let sm_cw_view = to_view_mut(&uniq sm_cw);
                 let sm_cwl_view = to_view_mut(&uniq sm_cwl);
-                let sm_res_location_view = to_view_mut(&uniq sm_res_location);
                 let sm_block_enc_view = to_view(&shrd sm_block_enc);
                 let sm_kcmax_view = to_view_mut(&uniq sm_kcmax);
 
@@ -73,103 +72,82 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
 
                 // encode four input symbols per thread
                 // and save the total bit-length of the encoded symbols per thread in shared memory
-                {
-                    let mut foo = &uniq sm_res_location;
-                    let tmp_sm_res_location_view = to_view_mut(&uniq *foo);
-                    parfor _ in block
-                    with d_item , sm_res_location_item
-                    from d_group , tmp_sm_res_location_view {
-                        codeword = 0u64;
-                        codewordlen = 0u32;
+                parfor _ in block
+                with d_item
+                from d_group {
+                    codeword = 0u64;
+                    codewordlen = 0u32;
 
-                        let tmp_d_item = *d_item;
+                    let tmp_d_item = *d_item;
 
-                        let mut tmp_d_item_i = (tmp_d_item >> 24) as u8;
-                        let mut tmpcw = sm_cw[tmp_d_item_i];
-                        let mut tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
+                    let mut tmp_d_item_i = (tmp_d_item >> 24) as u8;
+                    let mut tmpcw = sm_cw[tmp_d_item_i];
+                    let mut tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl;
 
-                        tmp_d_item_i = (tmp_d_item >> 16) as u8;
-                        tmpcw = sm_cw[tmp_d_item_i];
-                        tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
+                    tmp_d_item_i = (tmp_d_item >> 16) as u8;
+                    tmpcw = sm_cw[tmp_d_item_i];
+                    tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl;
 
-                        tmp_d_item_i = (tmp_d_item >> 8) as u8;
-                        tmpcw = sm_cw[tmp_d_item_i];
-                        tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
+                    tmp_d_item_i = (tmp_d_item >> 8) as u8;
+                    tmpcw = sm_cw[tmp_d_item_i];
+                    tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl;
 
-                        tmp_d_item_i = tmp_d_item as u8;
-                        tmpcw = sm_cw[tmp_d_item_i];
-                        tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
-
-                        *sm_res_location_item = codewordlen
-                    }
+                    tmp_d_item_i = tmp_d_item as u8;
+                    tmpcw = sm_cw[tmp_d_item_i];
+                    tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl
                 };
 
-                // todo syncthreads
-
-                // calculate prefix sum (scan) of codeword lengths
-                // (required for position of encoded symbols in output)
-                // work-efficient shared memory implementation (optimization possible when using shuffle instructions!)
-                // step 1: up-sweep phase
-                {
-                    let mut foo = &uniq sm_res_location;
-                    for_nat d in halved_range(128) <'a>{
-                        let tmp_up_view = group_mut::<256/d, 'a, gpu.shared, 256, u32>(to_view_mut(&uniq *foo));
-                        par_branch split_thread_grp::<d>(block) {
-                            active_threads =>
-                            parfor _ in active_threads
-                            with arr
-                            from tmp_up_view {
-                                arr[256/d-1] = arr[256/d-1] + arr[128/d-1]
-                            },
-                            rest => { () }
+                // wip: prefix sum with cooperative groups
+                let mut tmp_shfl: u32;
+                let mut scan_codewordlen: u32;
+                let sm_scan_arr_view = to_view_mut(&uniq scan_arr);
+                let warps = to_warps(block);
+                parfor warp in warps
+                with sm_scan_arr_item
+                from sm_scan_arr_view {
+                    parfor _ in warp
+                    with _
+                    from _ {
+                        scan_codewordlen = codewordlen;
+                    }
+                    for_nat k in doubled_range(16) {
+                        parfor lane in warp
+                        with _
+                        from _ {
+                            tmp_scan = shfl_up(warp, lane, scan_codewordlen, k)
                         }
-                        // syncthreads
-                    }
-                };
-
-                // step 2: set last value to zero
-                let tmp_view2 = to_view_mut(&uniq sm_res_location);
-                let tmp_last = (split uniq (256 - 1) (*tmp_view2)).1;
-                par_branch split_thread_grp::<1>(block) {
-                    active_thread =>
-                    parfor _ in active_thread
-                    with last
-                    from &uniq *tmp_last {
-                        *last = 0u32
-                    },
-                    rest => { () }
-                };
-
-                // syncthreads
-
-                // step 3: down-sweep phase
-                {
-                    let mut foo = &uniq sm_res_location;
-                    for_nat d in doubled_range(1, 128) <'b>{
-                        let tmp_down_view = group_mut::<256 / d, 'b, gpu.shared, 256, u32>(
-                            to_view_mut::<'b, gpu.shared, 256, u32 > (&'b uniq *foo));
-                        par_branch split_thread_grp::<d>(block) {
-                            active_threads =>
-                            parfor _ in active_threads
-                            with arr
-                            from tmp_down_view {
-                                let t = arr[128/d-1];
-                                arr[128/d-1] = arr[256/d-1];
-                                arr[256/d-1] = arr[256/d-1] + t
-                            },
-                            rest => { () }
+                        par_branch split_warp::<k>(warp) {
+                            inactive_lanes => { () },
+                            active_lanes => {
+                                parfor _ in active_lanes
+                                with _
+                                from _ {
+                                    scan_codewordlen = scan_codewordlen + tmp_scan
+                                }
+                            }
                         }
-                        // syncthreads
                     }
-                };
+                    par_branch split_warp::<31>(warp) {
+                        inactive_lanes => { () },
+                        active_lane => {
+                            parfor _ in active_lane
+                            with _
+                            from _ {
+                                *sm_scan_arr_item = scan_codewordlen
+                            }
+                        }
+                    }
+                }
+
+
 
                 // output the bit-index after the last codeword of the block for every block (out_idx_item)
                 // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)
@@ -179,8 +157,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         parfor _ in active_thread
                         with out_idx_item, sm_kcmax_item
                         from out_idx_group, sm_kcmax_view {
-                            *out_idx_item = sm_res_location[255] + codewordlen;
-                            *sm_kcmax_item = (sm_res_location[255] + codewordlen) / 32u32
+                            *out_idx_item = scan_codewordlen + codewordlen;
+                            *sm_kcmax_item = (scan_codewordlen + codewordlen) / 32u32
                         }
                     }
                 };
@@ -191,17 +169,12 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 //            current thread starts
                 // startbit = bit-index inside of the value in the output array where the codeword of the current thread
                 //            starts
-                // set all values in sm_block_enc to 0 to use it for storing the encoded symbols for every block
-                {
-                    let foo = &shrd sm_res_location;
-                    let tmp_sm_res_location_view = to_view(&shrd *foo);
-                    parfor _ in block
-                    with sm_res_location_item, sm_block_enc_item
-                    from tmp_sm_res_location_view, sm_block_enc_view {
-                        kc = *sm_res_location_item / 32u32;
-                        startbit = *sm_res_location_item % 32u32;
-                        atomic_store(&shrd *sm_block_enc_item, 0 as u32)
-                    }
+                parfor _ in block
+                with sm_block_enc_item
+                from sm_block_enc_view {
+                    kc = scan_codewordlen / 32u32;
+                    startbit = scan_codewordlen % 32u32;
+                    atomic_store(&shrd *sm_block_enc_item, 0 as u32)
                 };
 
                 // todo syncthreads

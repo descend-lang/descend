@@ -190,15 +190,15 @@ public:
 #endif
 
 
-// TODO cuda::std::int32_t
 using i32 = std::int32_t;
 extern const i32 NO_ERROR = -1;
 using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
-// FIXME there is no way to guarantee that float holds 32 bits
 using f32 = float;
+static_assert(sizeof(f32) == 4);
 using f64 = double;
+static_assert(sizeof(f64) == 8);
 
 template<typename T, std::size_t n>
 using array = std::array<T, n>;
