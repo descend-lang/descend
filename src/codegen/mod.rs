@@ -2966,14 +2966,3 @@ fn incr_label_counter() -> i32 {
 fn incr_atomic_counter(counter: &AtomicI32) -> i32 {
     counter.fetch_add(1, Ordering::SeqCst)
 }
-
-// fn tranpose_mut(matrix: &mut [[descend::f64]; descend::f64],  height: descend::i32, width: descend::i32) -> void
-// {
-//     for i in 0..height-1 {
-//         for j in 0..width-1 {
-//             let tmp = *matrix[i][j];
-//             *matrix[i][j] = *matrix[j][i];
-//             *matrix[j][i] = tmp;
-//         }
-//     }
-// }

@@ -4,13 +4,12 @@ fn lud_descend<tile_size: nat, matrix_dim: nat>(
     m: &uniq cpu.mem [[f64; matrix_dim]; matrix_dim]
     ) -[cpu.thread]-> ()
 {
-    //let it = 0;
     let mut gpu = gpu_device(0);
     let mut m_gpu = gpu_alloc_copy(&uniq gpu, &shrd *m);
 
     for_nat it in 0..(matrix_dim/tile_size)-1 {
 
-        lud_diagonal::<it, tile_size, matrix_dim>(&uniq m_gpu);
+        lud_diagonal::<it, tile_size, matrix_dim>(&uniq m_gpu, &uniq gpu);
 
         lud_perimeter::<it, tile_size, matrix_dim>(&uniq m_gpu);
 
@@ -24,12 +23,13 @@ fn lud_descend<tile_size: nat, matrix_dim: nat>(
 
 
 fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat>(
-    m: &uniq gpu.global [[f64; matrix_dim]; matrix_dim]
+    m: &uniq gpu.global [[f64; matrix_dim]; matrix_dim],
+    gpu: &uniq cpu.mem Gpu
     ) -[cpu.thread]-> ()
 {
     //1-D Grid mit 1-D Threads
     exec::<1, tile_size>(
-        &uniq gpu,
+        gpu,
         (m,),
         | grid: BlockGrp<1, ThreadGrp<tile_size>>, matrix: (
                 &uniq gpu.global [[f64; n]; n]
@@ -142,7 +142,8 @@ fn tile_partition<tile_size: nat, tiles_per_dim: nat, matrix_dim: nat, a: prv>(
 
 
 fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat>(
-    m: &shrd gpu.global [[f64; n]; n]
+    m: &shrd gpu.global [[f64; n]; n],
+    gpu: &uniq cpu.mem Gpu
     ) -[cpu.thread]-> ()
 {
     //1-D Grid mit 1-D Threads
@@ -155,7 +156,8 @@ fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat>(
 }
 
 fn lud_internal<it:nat, tile_size: nat, matrix_dim: nat>(
-    m: &shrd gpu.global [[f64; matrix_dim]; matrix_dim]
+    m: &shrd gpu.global [[f64; matrix_dim]; matrix_dim],
+    gpu: &uniq cpu.mem Gpu
     ) -[cpu.thread]-> ()
 {
     //2-D/1-D (beides möglich) grid mit 2-D Threads
