@@ -38,7 +38,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
             decl {
                 let mut sm_cw: [u32; 256] @ gpu.shared;
                 let mut sm_cwl: [u32; 256] @ gpu.shared;
-                let mut sm_scan_arr: [u32; 8] @ gpu.shared; //one for each warp
+                let mut sm_scan_arr: [u32; 7] @ gpu.shared;
                 let mut sm_block_enc: [AtomicU32; 256] @ gpu.shared;
                 let mut sm_kcmax: [u32; 1] @ gpu.shared
             } parfor block in grid
@@ -105,49 +105,125 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     codewordlen = codewordlen + tmpcwl
                 };
 
-                // wip: prefix sum with cooperative groups
-                let mut tmp_shfl: u32;
+                // ---------------------------------------------------------------------------------
+                // exclusive scan with cooperative groups
+                // todo: introduce cooperative groups and warp level primitives
+                let mut tmp_shfl_res: u32;
                 let mut scan_codewordlen: u32;
-                let sm_scan_arr_view = to_view_mut(&uniq scan_arr);
+                let mut tmp_scan_block: u32;
+                let sm_scan_arr_view = to_view_mut(&uniq sm_scan_arr);
                 let warps = to_warps(block);
-                parfor warp in warps
-                with sm_scan_arr_item
-                from sm_scan_arr_view {
-                    parfor _ in warp
-                    with _
-                    from _ {
-                        scan_codewordlen = codewordlen;
-                    }
+
+                // calculate inclusive scan for each warp
+                parfor warp in warps {
+                    parfor _ in warp {
+                        scan_codewordlen = codewordlen
+                    };
                     for_nat k in doubled_range(16) {
-                        parfor lane in warp
-                        with _
-                        from _ {
-                            tmp_scan = shfl_up(warp, lane, scan_codewordlen, k)
-                        }
+                        parfor lane in warp {
+                            tmp_shfl_res = shfl_up(scan_codewordlen, k)
+                        };
                         par_branch split_warp::<k>(warp) {
                             inactive_lanes => { () },
                             active_lanes => {
-                                parfor _ in active_lanes
-                                with _
-                                from _ {
-                                    scan_codewordlen = scan_codewordlen + tmp_scan
+                                parfor _ in active_lanes {
+                                    scan_codewordlen = scan_codewordlen + tmp_shfl_res
                                 }
                             }
                         }
                     }
-                    par_branch split_warp::<31>(warp) {
-                        inactive_lanes => { () },
-                        active_lane => {
-                            parfor _ in active_lane
-                            with _
-                            from _ {
-                                *sm_scan_arr_item = scan_codewordlen
+                };
+
+                // write sum of all input values to shared memory for the first 7 out of 8 warps
+                // these sums are required for calculating the scan for the entire block
+                par_branch split_warp_grp::<7>(warps) {
+                    active_warps => {
+                        parfor warp in active_warps
+                        with sm_scan_arr_item
+                        from sm_scan_arr_view {
+                            par_branch split_warp::<31>(warp) {
+                                inactive_lanes => { () },
+                                active_lane => {
+                                    parfor _ in active_lane {
+                                        *sm_scan_arr_item = scan_codewordlen
+                                    }
+                                }
                             }
                         }
+                    },
+                    inactive_warp => { () }
+                };
+
+                // todo syncthreads
+
+                // aggregate the warp sums with an inclusive scan calculated by the first warp and
+                // write the results to shared memory
+                par_branch split_warp_grp::<1>(warps) {
+                    active_warp => {
+                        parfor warp in active_warp {
+                            par_branch split_warp::<7>(warp) {
+                                input_lanes => {
+                                    parfor _ in input_lanes
+                                    with sm_scan_arr_item
+                                    from sm_scan_arr_view {
+                                        tmp_scan_block = *sm_scan_arr_item
+                                    }
+                                },
+                                zero_lanes => {
+                                    parfor _ in input_lanes {
+                                        tmp_scan_block = 0u32
+                                    }
+                                }
+                            }
+                            for_nat k in doubled_range(4) {
+                                parfor lane in warp {
+                                    tmp_shfl_res = shfl_up(tmp_scan_block, k)
+                                };
+                                par_branch split_warp::<k>(warp) {
+                                    inactive_lanes => { () },
+                                    active_lanes => {
+                                        parfor _ in active_lanes {
+                                            tmp_scan_block = tmp_scan_block + tmp_shfl_res
+                                        }
+                                    }
+                                }
+                            }
+                            par_branch split_warp::<7>(warp) {
+                                active_lanes => {
+                                    parfor _ in active_lanes
+                                    with sm_scan_arr_item
+                                    from sm_scan_arr_view {
+                                        *sm_scan_arr_item = tmp_scan_block
+                                    }
+                                },
+                                inactive_lanes => { () }
+                            }
+                        }
+                    },
+                    inactive_warps => { () }
+                };
+
+                // todo syncthreads
+
+                // add sums of previous warps to each result of a warps inclusive scan
+                par_branch split_warp_grp::<1>(warps) {
+                    inactive_warp => { () },
+                    active_warps => {
+                        parfor _ in active_lanes
+                        with sm_scan_arr_item
+                        from sm_scan_arr_view {
+                            scan_codewordlen = scan_codewordlen + *sm_scan_arr_item
+                        }
                     }
-                }
+                };
 
-
+                // inclusive scan -> exclusive scan
+                parfor warp in warps {
+                    parfor _ in warp {
+                        scan_codewordlen = scan_codewordlen - codewordlen
+                    }
+                };
+                // ---------------------------------------------------------------------------------
 
                 // output the bit-index after the last codeword of the block for every block (out_idx_item)
                 // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)

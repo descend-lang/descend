@@ -382,11 +382,17 @@ peg::parser! {
                     branch.iter().map(|(i, _)| i.clone()).collect(),
                     branch.iter().map(|(_, b)| b.clone()).collect()))
             }
+            // todo unify "parfor ... with ... for ... {...}" with "parfor {...}" rules?
             decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
             "parfor" __ par_ident:maybe_ident() __ "in" __ parall_collec:expression() __
             "with" __ input_elems:ident() **<1,> (_ "," _) __
             "from" __ input:expression() **<1,> (_ "," _) _ body:block() {
                 Expr::new(ExprKind::ParForWith(decls, par_ident, Box::new(parall_collec), input_elems, input, Box::new(body)))
+            }
+            decls:("decl" _ "{" _ decls:let_uninit() **<1,> (_ ";" _) _ "}" _ { decls })?
+            "parfor" __ par_ident:maybe_ident() __ "in" __ parall_collec:expression() __
+            body:block() {
+                Expr::new(ExprKind::ParForWith(decls, par_ident, Box::new(parall_collec), Vec::new(), Vec::new(), Box::new(body)))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec:execution_resource() _ "]" _ "-" _ ">" _ ret_dty:dty() _
