@@ -58,7 +58,7 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                     for gen_arg in gen_args {
                         if let ArgKinded::Ident(ident) = gen_arg {
                             let to_be_kinded = ident.clone();
-                            match self.ident_names_to_kinds.get(&ident.name).unwrap() {
+                            match self.ident_names_to_kinds.get(&ident.name).expect(&ident.name) {
                                 Kind::Provenance => {
                                     *gen_arg =
                                         ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
@@ -590,6 +590,7 @@ peg::parser! {
             / "gpu.block" { Exec::GpuBlock }
             / "gpu.warp" { Exec::GpuWarp }
             / "gpu.thread" { Exec::GpuThread }
+            / "view" { Exec::View }
 
         pub(crate) rule kind() -> Kind
             = "nat" { Kind::Nat }

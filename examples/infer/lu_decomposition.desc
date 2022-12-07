@@ -39,27 +39,17 @@ fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat>(
             //let tile_size = *matrix.2; //als nat
             //let it = *matrix.3; //als nat
 
-            let tiles_per_dim = matrix_dim / tile_size;
+            //let tiles_per_dim = matrix_dim / tile_size;
 
             //TODO in lokalen speicher laden -> bsp reduce_shared_mem (für 1. Version irrelevant)
 
-            let mut matrix_view = tile_partition::<tile_size, tiles_per_dim>(mat); //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tiles_per_dim]]; tiles_per_dim]]
+            let mut matrix_view = tile_partition::<tile_size, (matrix_dim / tile_size)>(mat); //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tiles_per_dim]]; tiles_per_dim]]
 
-
-            //join /funktion) inverse zu group -> entfernt äußerste dimension!
-            //-> split hier nicht unbedingt notwendig TODO kommentare enfernen wenn das sicher so geht
-            //let split_mat:(&uniq [[TILES; tiles_per_dim]; it], &uniq [[TILES; tiles_per_dim]; tiles_per_dim-it]) =
-            //        split uniq it tiles(mat, mat_dim, tile_size); //split k 1-D_array: (& [T; k-1], & [T;n-k]), tiles(...) = TILES
-            //let split_row:(&uniq [TILES; it], &uniq [TILES; tiles_per_dim-it]) = split uniq it take(split_mat.1, 0);
-            //split_mat.1: &uniq [[[f64; tile_size]; tile_size]; block_size_per_grid]
-
-            //TODO Berechnung der Diagonal tiles
+            //Berechnung der Diagonal tiles
             let row_of_tiles = matrix_view[it];
             parfor block in grid with m from row_of_tiles[it] {// m: &uniq [[ [[f64; tile_size]]; tile_size]]
                 diagonal_block(m)
             }
-
-            //TODO zurück Kopieren in m -> muss das überhaupt hier schon passieren -> nein
         }
     )
 
@@ -72,75 +62,87 @@ fn diagonal_block(
 {
     for_nat i in 0..tile_size-1 {
         //disjunkte partitionierung erstellen für threads
-        let row = split uniq (i+1) m; //ab i+1-te Zeile abschneiden: (&shrd [[ [[f64; tile_size]]; i]], &shrd [[ [[f64; tile_size]]; tile_size - (i+1)]]) -> (Zeile 0..i, Zeile i+1...ende)
+        let row = split uniq (i+1) m; //ab i+1-te Zeile abschneiden: (&shrd [[ [[f64; tile_size]]; i+1]], &shrd [[ [[f64; tile_size]]; tile_size - (i+1)]]) -> (Zeile 0..i, Zeile i+1...ende)
         // -> zugriff auf row.0 mit schleifenvariable i möglich für i-te Spalte für gemeinsamen Zugriff
 
         //1.transpose von row.1 -> für das Splitten an der richtigen Stelle
         //2.split -> so splitten das 0..i in dem 1. teil des tupels sind
         //3.transpose -> damit die Zeilen passend zu den thread_elementen auf die threads verteilt werden
-        let rhs_tile_transposed = transpose_mut(row.1);
+        let rhs_tile_transposed = transpose_mut(&uniq *row.1);
         let split_column = split uniq i rhs_tile_transposed;
 
-        let thread_elements = transpose_mut(split_column.1[0]); //[[f64; tile_size-1-i]]
+        let thread_elements = transpose_mut(&uniq *split_column.1[0]); //[[f64; tile_size-1-i]]
 
         //für indiviuelle Zugriffe: -> die nicht veränderbar sein sollen
-        let indiv_access = &shrd *transpose_mut(split_column.0);
+        let transpose_split_column_0 = transpose_mut(&uniq *split_column.0);
+        let indiv_access = &shrd *transpose_split_column_0;
 
         //let outter_elements = &shrd *m; //werte splitten, dass nur Werte enthalten sind, die gelesen werden
 
         //let (mut_elements, shrd_elements) = split uniq tile_size to_view_mut(array)
         parfor thread in block with a, shrd_row from thread_elements, indiv_access { //a: &uniq f64, shrd_row: &shrd [[f64, i]]
-             diagonal_below_HD::<i>(a, shrd_row, &shrd *(take(row.0, i)));
-        } //sync am ende von parfor
+            let row_i = row.0[i];
+            diagonal_below_HD::<i>(a, shrd_row, &shrd *row_i)
+        }; //sync am ende von parfor
 
         //2. Berechnung
-        let split_column = split uniq (i+1) transpose_mut(m);
-
-
         //Elemente [i+1, i+1],..., [i+1, tile_size]
-        //let thread_elements = row.1[]
+        let row_i1 = row.1[0]; //&uniq [[f64; tile_size]]
+        let split_row_i1 = split uniq (i+1) row_i1; // &uniq ([[f64; i+1]], [[f64, tile_size-(i+1)]] -> (0..i, i+1..ende)
+        let thread_elements = split_row_i1.1; //&uniq [[f64, tile_size-(i+1]]
+
+        let row_i0_tranpose = tranpose(&shrd *row.0);
+        let split_row_i0_column = split shrd (i+1) row_i0_transpose;
+        let indiv_access = tranpose(&shrd *split_row_i0_column);
 
         parfor thread in block with a, shrd_column from thread_elements, indiv_access {
-
+            let shrd_row = split_row_i1.0; //&uniq [[f64; i]]
+            diagonal_above_HD::<i>(a, shrd_column, shrd_row)
         }
-
     }
 }
 
+fn diagonal_above_HD<i: nat>(
+    a: &uniq gpu.global f64, //verändender Zugriff
+    shrd_column: &shrd gpu.global [[f64; i]],   //individuelle Zugriffe
+    shrd_row: &shrd gpu.global [[f64; i]] //dies brauch jeder Thread zum Ausführen
+    ) -[gpu.thread]-> ()
+{
+    for_nat j in 0..i {
+        *a = *a - (*shrd_row[j] * *shrd_column[j])
+    }
+}
 
 fn diagonal_below_HD<i: nat>(
         a: &uniq gpu.global f64,
-        shrd_row: &shrd gpu.global [[f64, i]],
-        shrd_column: &shrd gpu.global [[f64, i]]  //i-te Spalte von row bekommen -> [[f64; i]] -> brauch jeder Thread
+        shrd_row: &shrd gpu.global [[f64; i]],
+        shrd_column: &shrd gpu.global [[f64; i]]  //i-te Spalte von row bekommen -> [[f64; i]] -> brauch jeder Thread
     ) -[gpu.thread]-> ()
 {
-    //let shrd_elems_view = &shrd *shrd_elements;
-
-    //borrow let shrd_elements = &shrd *outter_shrd_elements;
-    for j in 0..i-1 {//TODO macht counter bis inklusive der letzten Zahl?
-        *a = *a - (*shrd_row[j] * *shrd_column[j]);
-    }
+    for_nat j in 0..i-1 {
+        *a = *a - (*shrd_row[j] * *shrd_column[j])
+    };
 
     *a = *a / shrd_column[i]
 }
 
 
-fn tile_partition<tile_size: nat, tiles_per_dim: nat, matrix_dim: nat>(
-    m: &uniq gpu.global[[f64; matrix_dim]; matrix_dim]
-    ) -[view]-> [[ [[ [[ [[f64; tile_size]]; tile_size]]; tiles_per_dim]] tiles_per_dim]]
+fn tile_partition<tile_size: nat, tiles_per_dim: nat, matrix_dim: nat, a: prv>(
+    m: &a uniq gpu.global [[f64; matrix_dim]; matrix_dim]
+    ) -[view]-> &a uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tiles_per_dim]]; tiles_per_dim]] //im parser eingeführt
 {
-    map_mut(|g| map_mut(|x| transpose_mut(x), //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile_per_dim]]; tile_per_dim]]
+    map_mut(|g| -[view]-> () { map_mut(|x| -[view]-> () { transpose_mut(x) }, //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile_per_dim]]; tile_per_dim]]
             group_mut::<tile_size>( //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile_per_dim]]; tile_per_dim]]
-                transpose_mut(|g|) //&uniq gpu.global [[ [[ [[f64; tile_size]]; matrix_dim]]; tiles_per_dim]]
+                transpose_mut(g) //&uniq gpu.global [[ [[ [[f64; tile_size]]; matrix_dim]]; tiles_per_dim]]
             )
-        ),
+        )},
         group_mut::<tile_size>(m) //&uniq gpu.global [[ [[ [[f64; matrix_dim]]; tile_size]]; tiles_per_dim]]
     )
 }
 
 
 fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat>(
-    m: &shrd gpu.global[[f64; n]; n]
+    m: &shrd gpu.global [[f64; n]; n]
     ) -[cpu.thread]-> ()
 {
     //1-D Grid mit 1-D Threads
@@ -149,14 +151,16 @@ fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat>(
         //TODO diagonal Tile Kopieren
     //TODO Berechnung der Tiles -> unterschied zwischen peri_row und peri_col beachten
     //TODO zurück Kopieren in m
+    let a = 1
 }
 
 fn lud_internal<it:nat, tile_size: nat, matrix_dim: nat>(
-    m: &shrd gpu.global[[f64; matrix_dim]; matrix_dim]
+    m: &shrd gpu.global [[f64; matrix_dim]; matrix_dim]
     ) -[cpu.thread]-> ()
 {
     //2-D/1-D (beides möglich) grid mit 2-D Threads
     //TODO Kopieren der Blöcke/Tiles in den shared memory -> peri_col und peri_row
     //TODO summen Berechnung ausführen
     //TODO Berechnung in entsprechenden Eintrag von m schreiben-> pro Grid in einem
+    let a = 1
 }
