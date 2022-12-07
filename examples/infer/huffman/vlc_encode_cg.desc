@@ -154,7 +154,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     inactive_warp => { () }
                 };
 
-                // todo syncthreads
+                // syncthreads
 
                 // aggregate the warp sums with an inclusive scan calculated by the first warp and
                 // write the results to shared memory
@@ -170,7 +170,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                                     }
                                 },
                                 zero_lanes => {
-                                    parfor _ in input_lanes {
+                                    parfor _ in zero_lanes {
                                         tmp_scan_block = 0u32
                                     }
                                 }
@@ -203,16 +203,18 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     inactive_warps => { () }
                 };
 
-                // todo syncthreads
+                // syncthreads
 
                 // add sums of previous warps to each result of a warps inclusive scan
                 par_branch split_warp_grp::<1>(warps) {
                     inactive_warp => { () },
                     active_warps => {
-                        parfor _ in active_lanes
+                        parfor warp in active_warps
                         with sm_scan_arr_item
                         from sm_scan_arr_view {
-                            scan_codewordlen = scan_codewordlen + *sm_scan_arr_item
+                            parfor _ in warp {
+                                scan_codewordlen = scan_codewordlen + *sm_scan_arr_item
+                            }
                         }
                     }
                 };
