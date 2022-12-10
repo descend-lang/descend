@@ -2334,7 +2334,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         Data(desc::DataTy {
             dty: d::Atomic(a), ..
         }) => match a {
-            desc::AtomicTy::AtomicU32 => cu::Ty::Atomic(cu::ScalarTy::U32),
+            desc::AtomicTy::AtomicU32 => cu::Ty::Scalar(cu::ScalarTy::U32),
         },
         Data(desc::DataTy {
             dty: d::Scalar(s), ..

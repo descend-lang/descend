@@ -47,7 +47,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // create shared memory views
                 let sm_cw_view = to_view_mut(&uniq sm_cw);
                 let sm_cwl_view = to_view_mut(&uniq sm_cwl);
-                let sm_res_location_view = to_view_mut(&uniq sm_res_location);
+                let sm_res_location_view = to_view(&shrd sm_res_location);
                 let sm_block_enc_view = to_view(&shrd sm_block_enc);
                 let sm_kcmax_view = to_view_mut(&uniq sm_kcmax);
 
@@ -192,16 +192,12 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // startbit = bit-index inside of the value in the output array where the codeword of the current thread
                 //            starts
                 // set all values in sm_block_enc to 0 to use it for storing the encoded symbols for every block
-                {
-                    let foo = &shrd sm_res_location;
-                    let tmp_sm_res_location_view = to_view(&shrd *foo);
-                    parfor _ in block
-                    with sm_res_location_item, sm_block_enc_item
-                    from tmp_sm_res_location_view, sm_block_enc_view {
-                        kc = *sm_res_location_item / 32u32;
-                        startbit = *sm_res_location_item % 32u32;
-                        atomic_store(&shrd *sm_block_enc_item, 0 as u32)
-                    }
+                parfor _ in block
+                with sm_res_location_item, sm_block_enc_item
+                from sm_res_location_view, sm_block_enc_view {
+                    kc = *sm_res_location_item / 32u32;
+                    startbit = *sm_res_location_item % 32u32;
+                    atomic_store(&shrd *sm_block_enc_item, 0u32)
                 };
 
                 // todo syncthreads

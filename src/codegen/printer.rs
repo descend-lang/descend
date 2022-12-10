@@ -226,9 +226,9 @@ impl std::fmt::Display for Lit {
         match self {
             Lit::Bool(b) => write!(f, "{}", b),
             Lit::I32(i) => write!(f, "{}", i),
-            Lit::U8(uc) => write!(f, "{}", uc),
-            Lit::U32(u) => write!(f, "{}", u),
-            Lit::U64(ul) => write!(f, "{}", ul),
+            Lit::U8(uc) => write!(f, "((descend::u8){})", uc),
+            Lit::U32(u) => write!(f, "{}u", u),
+            Lit::U64(ul) => write!(f, "((descend::u64){})", ul),
             Lit::F32(fl) => {
                 // This is supposed to be a strict comparison. It is equal if fl is an integer.
                 if &fl.ceil() == fl {
@@ -345,7 +345,6 @@ impl std::fmt::Display for Ty {
                 BufferKind::Ident(name) => write!(f, "{}", name),
             },
             Scalar(sty) => write!(f, "{}", sty),
-            Atomic(at) => write!(f, "descend::atomic<{}>", at),
             Ident(name) => write!(f, "{}", name),
         }
     }
