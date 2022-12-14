@@ -2,6 +2,10 @@
 // 2 __syncthreads operations have been inserted manually
 
 #include "descend.cuh"
+// todo include cooperative groups in descend.cuh
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
+
 auto vlc_encode(const descend::u32 *const h_source_data,
                 const descend::u32 *const h_codewords,
                 const descend::u32 *const h_codewordlens,

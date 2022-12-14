@@ -121,7 +121,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     };
                     for_nat k in doubled_range(16) {
                         parfor lane in warp {
-                            tmp_shfl_res = shfl_up(scan_codewordlen, k)
+                            tmp_shfl_res = shfl_up(warp, scan_codewordlen, k)
                         };
                         par_branch split_warp::<k>(warp) {
                             inactive_lanes => { () },
@@ -177,7 +177,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                             };
                             for_nat k in doubled_range(4) {
                                 parfor lane in warp {
-                                    tmp_shfl_res = shfl_up(tmp_scan_block, k)
+                                    tmp_shfl_res = shfl_up(warp, tmp_scan_block, k)
                                 };
                                 par_branch split_warp::<k>(warp) {
                                     inactive_lanes => { () },
