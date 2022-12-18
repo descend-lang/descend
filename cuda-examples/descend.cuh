@@ -207,6 +207,9 @@ template<typename ... Types>
 using tuple = thrust::tuple<Types...>;
 
 template<typename T>
+using atomic_ref = cuda::atomic_ref<T, cuda::thread_scope_device>;
+
+template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
     return sizeof(T);
 };
@@ -449,33 +452,33 @@ auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> vo
 
 template <typename T>
 inline __device__ T atomic_load(
-        T *target,
+        atomic_ref<T> target,
         cuda::std::memory_order order = cuda::memory_order_relaxed) {
-    return cuda::atomic_ref(*target).load(order);
+    return target.load(order);
 }
 
 template <typename T>
 inline __device__ void atomic_store(
-        T *target,
+        atomic_ref<T> target,
         T val,
         cuda::std::memory_order order = cuda::memory_order_relaxed) {
-    cuda::atomic_ref(*target).store(val, order);
+    target.store(val, order);
 }
 
 template <typename T>
 inline __device__ T atomic_fetch_or(
-        T *target,
+        atomic_ref<T> target,
         T val,
         cuda::std::memory_order order = cuda::memory_order_relaxed) {
-    return cuda::atomic_ref(*target).fetch_or(val, order);
+    return target.fetch_or(val, order);
 }
 
 template <typename T>
 inline __device__ T atomic_fetch_add(
-        T *target,
+        atomic_ref<T> target,
         T val,
         cuda::std::memory_order order = cuda::memory_order_relaxed) {
-    return cuda::atomic_ref(*target).fetch_add(val, order);
+    return target.fetch_add(val, order);
 }
 
 namespace detail

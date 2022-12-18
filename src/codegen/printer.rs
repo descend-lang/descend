@@ -209,6 +209,8 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, elems, ", ")?;
                 write!(f, "}}")
             }
+            AtomicRef{expr, base_ty} =>
+                write!(f, "descend::atomic_ref<{}>({})", base_ty, expr),
             Ref(expr) => write!(f, "(&{})", expr),
             Deref(expr) => write!(f, "(*{})", expr),
             Tuple(elems) => {

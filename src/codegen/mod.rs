@@ -4,7 +4,7 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{Mutability, utils};
+use crate::ast::{DataTy, DataTyKind, Mutability, TyKind, utils};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -1320,7 +1320,7 @@ fn gen_expr(
                 ty: gen_ty(&desc::TyKind::Data(ty.dty().clone()), desc::Mutability::Mut),
             })
         }
-        Ref(_, _, pl_expr) => {
+        Ref(_, ownership, pl_expr) => {
             //match &expr.ty.as_ref().unwrap().ty {
             // desc::TyKind::Data(desc::DataTy {
             //     dty: desc::DataTyKind::Ref(_, _, desc::Memory::GpuShared, _),
@@ -1338,20 +1338,32 @@ fn gen_expr(
                     dty: desc::DataTyKind::At(_, desc::Memory::GpuShared),
                     ..
                 }) => ref_pl_expr,
+                // generate atomic_ref for a shrd borrow of an atomic type
+                desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::Atomic(at),
+                    ..
+                }) => match ownership {
+                    desc::Ownership::Shrd =>
+                        cu::Expr::AtomicRef{
+                            expr: Box::new(ref_pl_expr),
+                            base_ty: gen_ty(&pl_expr.ty.as_ref().unwrap().ty, Mutability::Mut),
+                        },
+                    _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
+                },
                 _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
             })
         }
-        BorrowIndex(_, _, pl_expr, idx) => {
-            if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
-                CheckedExpr::Expr(cu::Expr::Ref(Box::new(gen_idx_into_shape(
+        BorrowIndex(_, ownership, pl_expr, idx) => {
+            let tmp_expr = if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
+                cu::Expr::Ref(Box::new(gen_idx_into_shape(
                     pl_expr,
                     idx,
                     &codegen_ctx.shape_ctx,
                     comp_unit,
                     idx_checks,
-                ))))
+                )))
             } else {
-                CheckedExpr::Expr(cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
+                cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
                     array: Box::new(gen_pl_expr(
                         pl_expr,
                         &codegen_ctx.shape_ctx,
@@ -1359,8 +1371,33 @@ fn gen_expr(
                         idx_checks,
                     )),
                     index: idx.clone(),
-                })))
-            }
+                }))
+            };
+
+            // generate atomic_ref for a shrd borrow of an atomic type
+            CheckedExpr::Expr(
+                if let desc::TyKind::Data(desc::DataTy {
+                    dty: desc::DataTyKind::At(
+                        d1,
+                        _
+                    ),
+                    ..
+                }) = &pl_expr.ty.as_ref().unwrap().ty {
+                    if let desc::DataTyKind::Array(d2, _) = &d1.dty {
+                        if let desc::DataTyKind::Atomic(at) = &d2.dty {
+                            if let desc::Ownership::Shrd = ownership {
+                                cu::Expr::AtomicRef{
+                                    expr: Box::new(cu::Expr::Deref(Box::new(tmp_expr))),
+                                    base_ty: gen_ty(
+                                        &desc::TyKind::Data(DataTy::new(DataTyKind::Atomic(at.clone()))),
+                                        Mutability::Mut
+                                    ),
+                                }
+                            } else { tmp_expr }
+                        } else { tmp_expr }
+                    } else { tmp_expr }
+                } else { tmp_expr }
+            )
         }
         Index(pl_expr, idx) => {
             if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {

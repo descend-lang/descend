@@ -141,9 +141,11 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                             {
                                 kc = (sm_res_location[threadIdx.x] / 32u);
                                 startbit = (sm_res_location[threadIdx.x] % 32u);
-                                descend::atomic_store((&sm_block_enc[threadIdx.x]), 0u);
+                                descend::atomic_store(descend::atomic_ref<descend::u32>(
+                                                              sm_block_enc[threadIdx.x]),
+                                                      0u);
                             }
-                            __syncthreads(); // manually inserted!
+                            __syncthreads(); // manually inserted
                             {
                                 descend::u32 wrbits;
                                 if ((codewordlen > (32u - startbit))) {
@@ -154,7 +156,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                 descend::u32 tmpcw =
                                         (descend::u32)((codeword >> (codewordlen - wrbits)));
                                 descend::atomic_fetch_or(
-                                        (&sm_block_enc[kc]),
+                                        descend::atomic_ref<descend::u32>((*(&sm_block_enc[kc]))),
                                         (tmpcw << ((32u - startbit) - wrbits)));
                                 codewordlen = (codewordlen - wrbits);
                                 if ((codewordlen > 0u)) {
@@ -166,20 +168,23 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                     codewordlen = (codewordlen - wrbits);
                                     tmpcw = ((descend::u32)((codeword >> codewordlen)) &
                                              ((1u << wrbits) - 1u));
-                                    descend::atomic_fetch_or((&sm_block_enc[(kc + 1)]),
+                                    descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
+                                                                     (*(&sm_block_enc[(kc + 1)]))),
                                                              (tmpcw << (32u - wrbits)));
                                 }
                                 if ((codewordlen > 0u)) {
                                     tmpcw = (descend::u32)(
                                             (codeword & ((((descend::u64)1) << codewordlen) -
                                                          ((descend::u64)1))));
-                                    descend::atomic_fetch_or((&sm_block_enc[(kc + 2)]),
+                                    descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
+                                                                     (*(&sm_block_enc[(kc + 2)]))),
                                                              (tmpcw << (32u - codewordlen)));
                                 }
 
                                 if ((descend::thread_id_x() <= sm_kcmax[0])) {
                                     p3[((blockIdx.x * 256) + threadIdx.x)] =
-                                            descend::atomic_load((&sm_block_enc[threadIdx.x]));
+                                            descend::atomic_load(descend::atomic_ref<descend::u32>(
+                                                    sm_block_enc[threadIdx.x]));
                                 }
                             }
                         }

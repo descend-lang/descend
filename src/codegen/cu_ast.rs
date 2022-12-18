@@ -102,6 +102,10 @@ pub(super) enum Expr {
     InitializerList {
         elems: Vec<Expr>,
     },
+    AtomicRef {
+        expr: Box<Expr>,
+        base_ty: Ty,
+    },
     Ref(Box<Expr>),
     Deref(Box<Expr>),
     Tuple(Vec<Expr>),
