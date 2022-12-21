@@ -4,7 +4,7 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{DataTy, DataTyKind, Mutability, TyKind, utils};
+use crate::ast::{utils, DataTy, DataTyKind, Mutability, TyKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -905,9 +905,8 @@ fn gen_exec(
                     ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
                     is_dev_fun: true,
                 },
-                vec![]
-                // FIXME see above
-                // free_kinded_idents,
+                vec![], // FIXME see above
+                        // free_kinded_idents,
             )
         } else {
             panic!("Currently only lambdas can be passed.")
@@ -1078,11 +1077,9 @@ fn par_idx_and_sync_stmt(th_hy: &desc::ThreadHierchyTy) -> (desc::Nat, Option<cu
             })),
         ),
         desc::ThreadHierchyTy::WarpGrp(_) => (
-            desc::Nat::BinOp(
-                desc::BinOpNat::Div,
-                Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-                Box::new(desc::Nat::Lit(32)),
-            ),
+            desc::Nat::Ident(desc::Ident::new(
+                "cg::tiled_partition<32>(cg::this_thread_block()).meta_group_rank()",
+            )),
             Some(cu::Stmt::Expr(cu::Expr::FunCall {
                 fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
                 template_args: vec![],
@@ -1090,13 +1087,13 @@ fn par_idx_and_sync_stmt(th_hy: &desc::ThreadHierchyTy) -> (desc::Nat, Option<cu
             })),
         ),
         desc::ThreadHierchyTy::Warp => (
-            desc::Nat::BinOp(
-                desc::BinOpNat::Mod,
-                Box::new(desc::Nat::Ident(desc::Ident::new("threadIdx.x"))),
-                Box::new(desc::Nat::Lit(32)),
-            ),
+            desc::Nat::Ident(desc::Ident::new(
+                "cg::tiled_partition<32>(cg::this_thread_block()).thread_rank()",
+            )),
             Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident("__syncwarp()".to_string())),
+                fun: Box::new(cu::Expr::Ident(
+                    "cg::tiled_partition<32>(cg::this_thread_block()).sync()".to_string(),
+                )),
                 template_args: vec![],
                 args: vec![],
             })),
@@ -1340,14 +1337,13 @@ fn gen_expr(
                 }) => ref_pl_expr,
                 // generate atomic_ref for a shrd borrow of an atomic type
                 desc::TyKind::Data(desc::DataTy {
-                    dty: desc::DataTyKind::Atomic(at),
+                    dty: desc::DataTyKind::Atomic(_),
                     ..
                 }) => match ownership {
-                    desc::Ownership::Shrd =>
-                        cu::Expr::AtomicRef{
-                            expr: Box::new(ref_pl_expr),
-                            base_ty: gen_ty(&pl_expr.ty.as_ref().unwrap().ty, Mutability::Mut),
-                        },
+                    desc::Ownership::Shrd => cu::Expr::AtomicRef {
+                        expr: Box::new(ref_pl_expr),
+                        base_ty: gen_ty(&pl_expr.ty.as_ref().unwrap().ty, Mutability::Mut),
+                    },
                     _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
                 },
                 _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
@@ -1362,8 +1358,12 @@ fn gen_expr(
                     comp_unit,
                     idx_checks,
                 )))
-            } else {
-                cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
+            } else if let desc::TyKind::Data(desc::DataTy {
+                dty: desc::DataTyKind::Array(dty, _),
+                ..
+            }) = &pl_expr.ty.as_ref().unwrap().ty
+            {
+                let array_idx = cu::Expr::ArraySubscript {
                     array: Box::new(gen_pl_expr(
                         pl_expr,
                         &codegen_ctx.shape_ctx,
@@ -1371,33 +1371,23 @@ fn gen_expr(
                         idx_checks,
                     )),
                     index: idx.clone(),
-                }))
+                };
+                match &dty.dty {
+                    desc::DataTyKind::Atomic(at) if desc::Ownership::Shrd == *ownership => {
+                        cu::Expr::AtomicRef {
+                            expr: Box::new(array_idx),
+                            base_ty: gen_ty(
+                                &desc::TyKind::Data(DataTy::new(DataTyKind::Atomic(at.clone()))),
+                                Mutability::Mut,
+                            ),
+                        }
+                    }
+                    _ => cu::Expr::Ref(Box::new(array_idx)),
+                }
+            } else {
+                panic!("Type checking must make sure that this is an array!")
             };
-
-            // generate atomic_ref for a shrd borrow of an atomic type
-            CheckedExpr::Expr(
-                if let desc::TyKind::Data(desc::DataTy {
-                    dty: desc::DataTyKind::At(
-                        d1,
-                        _
-                    ),
-                    ..
-                }) = &pl_expr.ty.as_ref().unwrap().ty {
-                    if let desc::DataTyKind::Array(d2, _) = &d1.dty {
-                        if let desc::DataTyKind::Atomic(at) = &d2.dty {
-                            if let desc::Ownership::Shrd = ownership {
-                                cu::Expr::AtomicRef{
-                                    expr: Box::new(cu::Expr::Deref(Box::new(tmp_expr))),
-                                    base_ty: gen_ty(
-                                        &desc::TyKind::Data(DataTy::new(DataTyKind::Atomic(at.clone()))),
-                                        Mutability::Mut
-                                    ),
-                                }
-                            } else { tmp_expr }
-                        } else { tmp_expr }
-                    } else { tmp_expr }
-                } else { tmp_expr }
-            )
+            CheckedExpr::Expr(tmp_expr)
         }
         Index(pl_expr, idx) => {
             if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
@@ -2544,6 +2534,9 @@ enum ParallelityCollec {
         coll_size: desc::Nat,
         parall_expr: Box<ParallelityCollec>,
     },
+    //ToWarp {
+    //    parall_expr: Box<ParallelityCollec>,
+    //},
 }
 
 impl ParallelityCollec {
@@ -2582,6 +2575,8 @@ impl ParallelityCollec {
                             };
                         }
                         panic!("Cannot create `split` from the provided arguments.");
+                    } else if ident.name == crate::ty_check::pre_decl::TO_WARPS {
+                        unimplemented!()
                     } else {
                         unimplemented!()
                     }
@@ -2648,6 +2643,7 @@ enum ViewOrExpr {
     V(ShapeExpr),
     E(desc::Expr),
 }
+
 impl ViewOrExpr {
     fn expr(&self) -> desc::Expr {
         if let ViewOrExpr::E(expr) = self {

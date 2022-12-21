@@ -109,29 +109,29 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // exclusive scan with cooperative groups
                 // todo: introduce cooperative groups and warp level primitives
                 let mut tmp_shfl_res: u32;
-                let mut scan_codewordlen: u32;
+                //let mut scan_codewordlen: u32;
                 let mut tmp_scan_block: u32;
                 let sm_scan_arr_view = to_view_mut(&uniq sm_scan_arr);
                 let warps = to_warps(block);
 
                 // calculate inclusive scan for each warp
-                parfor warp in warps {
+                /* parfor warp in warps {
+                parfor _ in warp {
+                    scan_codewordlen = codewordlen
+                };
+                for_nat k in doubled_range(1, 16) {
                     parfor _ in warp {
-                        scan_codewordlen = codewordlen
-                    }};/*
-                    for_nat k in doubled_range(16) {
-                        parfor lane in warp {
-                            tmp_shfl_res = shfl_up(warp, scan_codewordlen, k)
-                        };
-                        par_branch split_warp::<k>(warp) {
-                            inactive_lanes => { () },
-                            active_lanes => {
-                                parfor _ in active_lanes {
-                                    scan_codewordlen = scan_codewordlen + tmp_shfl_res
-                                }
+                        0u32 //tmp_shfl_res = shfl_up(warp, scan_codewordlen, k)
+                    };
+                    par_branch split_warp::<k>(warp) {
+                        inactive_lanes => { () },
+                        active_lanes => {
+                            parfor _ in active_lanes {
+                                0u32 //scan_codewordlen = scan_codewordlen + tmp_shfl_res
                             }
                         }
                     }
+                }
                 };
 
                 // write sum of all input values to shared memory for the first 7 out of 8 warps
@@ -224,7 +224,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     parfor _ in warp {
                         scan_codewordlen = scan_codewordlen - codewordlen
                     }
-                };*/
+                }; */
                 // ---------------------------------------------------------------------------------
 
                 // output the bit-index after the last codeword of the block for every block (out_idx_item)
@@ -235,8 +235,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         parfor _ in active_thread
                         with out_idx_item, sm_kcmax_item
                         from out_idx_group, sm_kcmax_view {
-                            *out_idx_item = scan_codewordlen + codewordlen;
-                            *sm_kcmax_item = (scan_codewordlen + codewordlen) / 32u32
+                            *out_idx_item = codewordlen;
+                            *sm_kcmax_item = (codewordlen) / 32u32
                         }
                     }
                 };
@@ -250,8 +250,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 parfor _ in block
                 with sm_block_enc_item
                 from sm_block_enc_view {
-                    kc = scan_codewordlen / 32u32;
-                    startbit = scan_codewordlen % 32u32;
+                    kc = 32u32;
+                    startbit = 32u32;
                     atomic_store(&shrd *sm_block_enc_item, 0 as u32)
                 };
 

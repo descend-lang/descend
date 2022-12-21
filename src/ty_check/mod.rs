@@ -460,7 +460,7 @@ impl TyChecker {
                     return Err(TyError::String(format!(
                         "Expected reference to array data type, but found {:?}",
                         *arr_dty
-                    )))
+                    )));
                 }
             },
             TyKind::Data(DataTy {
@@ -952,13 +952,13 @@ impl TyChecker {
                 ThreadHierchyTy::Thread => {
                     return Err(TyError::String(
                         "Thread is not a parallel execution resources.".to_string(),
-                    ))
+                    ));
                 }
             },
             _ => {
                 return Err(TyError::String(
                     "Provided expression is not a parallel collection.".to_string(),
-                ))
+                ));
             }
         };
         Ok(Some(IdentTyped::new(
@@ -986,7 +986,7 @@ impl TyChecker {
                 ThreadHierchyTy::BlockGrp(_, _, _, _, _, _) => {
                     return Err(TyError::String(
                         "Cannot parallelize over multiple Grids.".to_string(),
-                    ))
+                    ));
                 }
             }
         } else {
@@ -1267,13 +1267,13 @@ impl TyChecker {
                 _ => {
                     return Err(TyError::String(
                         "Expected a reference to array view.".to_string(),
-                    ))
+                    ));
                 }
             },
             _ => {
                 return Err(TyError::String(
                     "Trying to index into non array type.".to_string(),
-                ))
+                ));
             }
         };
 
@@ -1376,14 +1376,14 @@ impl TyChecker {
                     _ => {
                         return Err(TyError::String(
                             "Expected a reference as element type of array view.".to_string(),
-                        ))
+                        ));
                     }
                 }
             }
             _ => {
                 return Err(TyError::String(
                     "Trying to index into non array type.".to_string(),
-                ))
+                ));
             }
         };
 
@@ -1460,7 +1460,7 @@ impl TyChecker {
                         | DataTyKind::Scalar(ScalarTy::U64)
                         | DataTyKind::Scalar(ScalarTy::I32),
                     ) => Ok((rhs_ty_ctx, ret)),
-                    _ =>  Err(TyError::String(format!(
+                    _ => Err(TyError::String(format!(
                         "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
                         bin_op, lhs, rhs
                     )))
@@ -1468,48 +1468,48 @@ impl TyChecker {
                 _ => Err(TyError::String(format!(
                     "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
                     bin_op, lhs, rhs
-                    ))),
+                ))),
             }
             _ => match (&lhs_ty.ty, &rhs_ty.ty) {
-                  (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
-                      (
-                          DataTyKind::Scalar(ScalarTy::F32),
-                          DataTyKind::Scalar(ScalarTy::F32),
-                      ) |
-                      (
-                          DataTyKind::Scalar(ScalarTy::U8),
-                          DataTyKind::Scalar(ScalarTy::U8),
-                      ) |
-                      (
-                          DataTyKind::Scalar(ScalarTy::U32),
-                          DataTyKind::Scalar(ScalarTy::U32),
-                      ) |
-                      (
-                          DataTyKind::Scalar(ScalarTy::U64),
-                          DataTyKind::Scalar(ScalarTy::U64),
-                      ) |
-                      (
-                          DataTyKind::Scalar(ScalarTy::F64),
-                          DataTyKind::Scalar(ScalarTy::F64)
-                      ) |
-                      (
-                          DataTyKind::Scalar(ScalarTy::I32),
-                          DataTyKind::Scalar(ScalarTy::I32),
-                      ) |
-                      (
-                          DataTyKind::Scalar(ScalarTy::Bool),
-                          DataTyKind::Scalar(ScalarTy::Bool),
-                      ) => Ok((rhs_ty_ctx, ret)),
-                      _ =>  Err(TyError::String(format!(
-                          "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                          bin_op, lhs, rhs
-                      )))
-                  }
-                  _ => Err(TyError::String(format!(
-                      "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                      bin_op, lhs, rhs
-                  ))),
-              }
+                (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
+                    (
+                        DataTyKind::Scalar(ScalarTy::F32),
+                        DataTyKind::Scalar(ScalarTy::F32),
+                    ) |
+                    (
+                        DataTyKind::Scalar(ScalarTy::U8),
+                        DataTyKind::Scalar(ScalarTy::U8),
+                    ) |
+                    (
+                        DataTyKind::Scalar(ScalarTy::U32),
+                        DataTyKind::Scalar(ScalarTy::U32),
+                    ) |
+                    (
+                        DataTyKind::Scalar(ScalarTy::U64),
+                        DataTyKind::Scalar(ScalarTy::U64),
+                    ) |
+                    (
+                        DataTyKind::Scalar(ScalarTy::F64),
+                        DataTyKind::Scalar(ScalarTy::F64)
+                    ) |
+                    (
+                        DataTyKind::Scalar(ScalarTy::I32),
+                        DataTyKind::Scalar(ScalarTy::I32),
+                    ) |
+                    (
+                        DataTyKind::Scalar(ScalarTy::Bool),
+                        DataTyKind::Scalar(ScalarTy::Bool),
+                    ) => Ok((rhs_ty_ctx, ret)),
+                    _ => Err(TyError::String(format!(
+                        "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                        bin_op, lhs, rhs
+                    )))
+                }
+                _ => Err(TyError::String(format!(
+                    "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                    bin_op, lhs, rhs
+                ))),
+            }
         }
 
         // Ok((rhs_ty_ctx, operand_ty))
@@ -1568,12 +1568,12 @@ impl TyChecker {
         let res_ctx = self.ty_check_expr(kind_ctx, ty_ctx, exec, e)?;
         let e_ty = e.ty.as_ref().unwrap();
         match &e_ty.ty {
-            TyKind::Data(DataTy{dty: DataTyKind::Scalar(ScalarTy::F32), ..})
-            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::F64), ..})
-            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::I32), ..})
-            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::U8), ..})
-            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::U32), ..})
-            | TyKind::Data(DataTy {dty: DataTyKind::Scalar(ScalarTy::U64), ..})
+            TyKind::Data(DataTy { dty: DataTyKind::Scalar(ScalarTy::F32), .. })
+            | TyKind::Data(DataTy { dty: DataTyKind::Scalar(ScalarTy::F64), .. })
+            | TyKind::Data(DataTy { dty: DataTyKind::Scalar(ScalarTy::I32), .. })
+            | TyKind::Data(DataTy { dty: DataTyKind::Scalar(ScalarTy::U8), .. })
+            | TyKind::Data(DataTy { dty: DataTyKind::Scalar(ScalarTy::U32), .. })
+            | TyKind::Data(DataTy { dty: DataTyKind::Scalar(ScalarTy::U64), .. })
             => match cty.dty().dty {
                 DataTyKind::Scalar(ScalarTy::I32)
                 | DataTyKind::Scalar(ScalarTy::U8)
@@ -1586,7 +1586,7 @@ impl TyChecker {
                     e_ty, cty
                 ))),
             },
-            TyKind::Data(DataTy {dty: Scalar(ScalarTy::Bool), ..})
+            TyKind::Data(DataTy { dty: Scalar(ScalarTy::Bool), .. })
             => match cty.dty().dty {
                 DataTyKind::Scalar(ScalarTy::I32)
                 | DataTyKind::Scalar(ScalarTy::U8)
@@ -2140,7 +2140,7 @@ impl TyChecker {
             }) => {
                 return Err(TyError::String(
                     "Trying to borrow thread hierarchy.".to_string(),
-                ))
+                ));
             }
             TyKind::Data(DataTy {
                 dty: DataTyKind::At(inner_ty, m),
@@ -2160,14 +2160,14 @@ impl TyChecker {
                 },
             ),
             TyKind::Fn(_, _, _, _) => {
-                return Err(TyError::String("Trying to borrow a function.".to_string()))
+                return Err(TyError::String("Trying to borrow a function.".to_string()));
             }
             TyKind::Ident(_) => {
                 return Err(TyError::String(
                     "Borrowing from value of unspecified type. This could be a view.\
             Therefore it is not allowed to borrow."
                         .to_string(),
-                ))
+                ));
             }
         };
         if rmem == Memory::GpuLocal {
@@ -2374,6 +2374,16 @@ impl TyChecker {
             Ok((
                 Ty::new(TyKind::Data(dty.as_ref().clone())),
                 inner_mem,
+                passed_prvs,
+            ))
+        } else if let TyKind::Data(DataTy {
+            dty: DataTyKind::At(dty, mem),
+            ..
+        }) = &borr_expr.ty.as_ref().unwrap().ty
+        {
+            Ok((
+                Ty::new(TyKind::Data(dty.as_ref().clone())),
+                vec![mem.clone()],
                 passed_prvs,
             ))
         } else {

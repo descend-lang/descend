@@ -238,7 +238,7 @@ fn split_block_grp_ty() -> Ty {
 }
 
 // FIXME deal with n2, n3 dimensions
-// to_warp_grp:
+// to_warps:
 //      <n1: nat, n2: nat, n3: nat>(ThreadGrp<n1, n2, n3>) -> WarpGrp<n1/32>
 fn to_warps_ty() -> Ty {
     let n1 = Ident::new("n1");
