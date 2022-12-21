@@ -109,49 +109,92 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // exclusive scan with cooperative groups
                 // todo: introduce cooperative groups and warp level primitives
                 let mut tmp_shfl_res: u32;
-                //let mut scan_codewordlen: u32;
+                let mut scan_codewordlen: u32;
                 let mut tmp_scan_block: u32;
-                let sm_scan_arr_view = to_view_mut(&uniq sm_scan_arr);
+                let sm_scan_arr_view = to_view(&shrd sm_scan_arr);
                 let warps = to_warps(block);
 
                 // calculate inclusive scan for each warp
-                /* parfor warp in warps {
-                parfor _ in warp {
-                    scan_codewordlen = codewordlen
-                };
-                for_nat k in doubled_range(1, 16) {
+                parfor warp in warps {
                     parfor _ in warp {
-                        0u32 //tmp_shfl_res = shfl_up(warp, scan_codewordlen, k)
+                        scan_codewordlen = codewordlen;
+                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 1)
                     };
-                    par_branch split_warp::<k>(warp) {
+                    par_branch split_warp::<1>(warp) {
                         inactive_lanes => { () },
                         active_lanes => {
                             parfor _ in active_lanes {
-                                0u32 //scan_codewordlen = scan_codewordlen + tmp_shfl_res
+                                scan_codewordlen = scan_codewordlen + tmp_shfl_res
+                            }
+                        }
+                    };
+                    parfor _ in warp {
+                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 2)
+                    };
+                    par_branch split_warp::<2>(warp) {
+                        inactive_lanes => { () },
+                        active_lanes => {
+                            parfor _ in active_lanes {
+                                scan_codewordlen = scan_codewordlen + tmp_shfl_res
+                            }
+                        }
+                    };
+                    parfor _ in warp {
+                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 4)
+                    };
+                    par_branch split_warp::<4>(warp) {
+                        inactive_lanes => { () },
+                        active_lanes => {
+                            parfor _ in active_lanes {
+                                scan_codewordlen = scan_codewordlen + tmp_shfl_res
+                            }
+                        }
+                    };
+                    parfor _ in warp {
+                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 8)
+                    };
+                    par_branch split_warp::<8>(warp) {
+                        inactive_lanes => { () },
+                        active_lanes => {
+                            parfor _ in active_lanes {
+                                scan_codewordlen = scan_codewordlen + tmp_shfl_res
+                            }
+                        }
+                    };
+                    parfor _ in warp {
+                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 16)
+                    };
+                    par_branch split_warp::<16>(warp) {
+                        inactive_lanes => { () },
+                        active_lanes => {
+                            parfor _ in active_lanes {
+                                scan_codewordlen = scan_codewordlen + tmp_shfl_res
                             }
                         }
                     }
-                }
                 };
 
                 // write sum of all input values to shared memory for the first 7 out of 8 warps
                 // these sums are required for calculating the scan for the entire block
-                par_branch split_warp_grp::<7>(warps) {
-                    active_warps => {
-                        parfor warp in active_warps
-                        with sm_scan_arr_item
-                        from sm_scan_arr_view {
-                            par_branch split_warp::<31>(warp) {
-                                inactive_lanes => { () },
-                                active_lane => {
-                                    parfor _ in active_lane {
-                                        *sm_scan_arr_item = scan_codewordlen
+                {
+                    let tmp_sm_scan_arr_view = to_view_mut(&uniq sm_scan_arr);
+                    par_branch split_warp_grp::<7>(warps) {
+                        active_warps => {
+                            parfor warp in active_warps
+                            with sm_scan_arr_item
+                            from tmp_sm_scan_arr_view {
+                                par_branch split_warp::<31>(warp) {
+                                    inactive_lanes => { () },
+                                    active_lane => {
+                                        parfor _ in active_lane {
+                                            *sm_scan_arr_item = scan_codewordlen
+                                        }
                                     }
                                 }
                             }
-                        }
-                    },
-                    inactive_warp => { () }
+                        },
+                        inactive_warp => { () }
+                    }
                 };
 
                 // syncthreads
@@ -175,28 +218,51 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                                     }
                                 }
                             };
-                            for_nat k in doubled_range(4) {
-                                parfor lane in warp {
-                                    tmp_shfl_res = 0u32 //shfl_up(warp, tmp_scan_block, k)
-                                };
-                                par_branch split_warp::<k>(warp) {
-                                    inactive_lanes => { () },
-                                    active_lanes => {
-                                        parfor _ in active_lanes {
-                                            tmp_scan_block = tmp_scan_block + tmp_shfl_res
-                                        }
+                            parfor lane in warp {
+                                tmp_shfl_res = shfl_up(warp, tmp_scan_block, 1)
+                            };
+                            par_branch split_warp::<1>(warp) {
+                                inactive_lanes => { () },
+                                active_lanes => {
+                                    parfor _ in active_lanes {
+                                        tmp_scan_block = tmp_scan_block + tmp_shfl_res
                                     }
                                 }
                             };
-                            par_branch split_warp::<7>(warp) {
+                            parfor lane in warp {
+                                tmp_shfl_res = shfl_up(warp, tmp_scan_block, 2)
+                            };
+                            par_branch split_warp::<2>(warp) {
+                                inactive_lanes => { () },
                                 active_lanes => {
-                                    parfor _ in active_lanes
-                                    with sm_scan_arr_item
-                                    from sm_scan_arr_view {
-                                        *sm_scan_arr_item = tmp_scan_block
+                                    parfor _ in active_lanes {
+                                        tmp_scan_block = tmp_scan_block + tmp_shfl_res
                                     }
-                                },
-                                inactive_lanes => { () }
+                                }
+                            };
+                            parfor lane in warp {
+                                tmp_shfl_res = shfl_up(warp, tmp_scan_block, 4)
+                            };
+                                par_branch split_warp::<4>(warp) {
+                                    inactive_lanes => { () },
+                                    active_lanes => {
+                                    parfor _ in active_lanes {
+                                        tmp_scan_block = tmp_scan_block + tmp_shfl_res
+                                    }
+                                }
+                            };
+                            {
+                                let tmp_sm_scan_arr_view = to_view_mut(&uniq sm_scan_arr);
+                                par_branch split_warp::<7>(warp) {
+                                    active_lanes => {
+                                        parfor _ in active_lanes
+                                        with sm_scan_arr_item
+                                        from tmp_sm_scan_arr_view {
+                                            *sm_scan_arr_item = tmp_scan_block
+                                        }
+                                    },
+                                    inactive_lanes => { () }
+                                }
                             }
                         }
                     },
@@ -224,7 +290,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     parfor _ in warp {
                         scan_codewordlen = scan_codewordlen - codewordlen
                     }
-                }; */
+                };
                 // ---------------------------------------------------------------------------------
 
                 // output the bit-index after the last codeword of the block for every block (out_idx_item)
@@ -235,8 +301,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         parfor _ in active_thread
                         with out_idx_item, sm_kcmax_item
                         from out_idx_group, sm_kcmax_view {
-                            *out_idx_item = codewordlen;
-                            *sm_kcmax_item = (codewordlen) / 32u32
+                            *out_idx_item = scan_codewordlen + codewordlen;
+                            *sm_kcmax_item = (scan_codewordlen + codewordlen) / 32u32
                         }
                     }
                 };
@@ -250,8 +316,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 parfor _ in block
                 with sm_block_enc_item
                 from sm_block_enc_view {
-                    kc = 32u32;
-                    startbit = 32u32;
+                    kc = scan_codewordlen / 32u32;
+                    startbit = scan_codewordlen % 32u32;
                     atomic_store(&shrd *sm_block_enc_item, 0 as u32)
                 };
 
@@ -270,7 +336,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         wrbits = codewordlen
                     };
                     let mut tmpcw: u32 = ( codeword >> ( codewordlen - wrbits ) ) as u32;
-                    atomic_fetch_or(&shrd sm_block_enc[kc], tmpcw << (32u32 - startbit - wrbits) );
+                    atomic_fetch_or(&shrd (*sm_block_enc)[kc], tmpcw << (32u32 - startbit - wrbits) );
                     codewordlen = codewordlen - wrbits;
 
                     // Part 2 (second value in shared memory)
@@ -282,14 +348,14 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         };
                         codewordlen = codewordlen - wrbits;
                         tmpcw = ( codeword >> codewordlen ) as u32 & ( ( 1u32 << wrbits ) - 1u32 );
-                        atomic_fetch_or(&shrd sm_block_enc[kc+1], tmpcw << ( 32u32 - wrbits ) );
+                        atomic_fetch_or(&shrd (*sm_block_enc)[kc+1], tmpcw << ( 32u32 - wrbits ) );
                         ()
                     };
 
                     // Part 3 (third value in shared memory)
                     if codewordlen > 0u32 {
                         tmpcw = (codeword & ( ( 1u64 << codewordlen) - 1u64) ) as u32;
-                        atomic_fetch_or(&shrd sm_block_enc[kc+2], tmpcw << ( 32u32 - codewordlen ) );
+                        atomic_fetch_or(&shrd (*sm_block_enc)[kc+2], tmpcw << ( 32u32 - codewordlen ) );
                         ()
                     };
 

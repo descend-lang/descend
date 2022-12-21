@@ -766,6 +766,18 @@ impl TyChecker {
                     n3,
                 ),
             ),
+            ThreadHierchyTy::WarpGrp(n) => (
+                ThreadHierchyTy::WarpGrp(pos.clone()),
+                ThreadHierchyTy::WarpGrp(Nat::BinOp(BinOpNat::Sub, Box::new(n), Box::new(pos))),
+            ),
+            ThreadHierchyTy::Warp => (
+                ThreadHierchyTy::ThreadGrp(pos.clone(), Nat::Lit(1), Nat::Lit(1)),
+                ThreadHierchyTy::ThreadGrp(
+                    Nat::BinOp(BinOpNat::Sub, Box::new(Nat::Lit(1)), Box::new(pos)),
+                    Nat::Lit(1),
+                    Nat::Lit(1),
+                ),
+            ),
             _ => panic!("A non-splittable parallel resource should not exist here"),
         };
         let li = IdentTyped::new(
@@ -852,7 +864,9 @@ impl TyChecker {
         let parall_collec_ty_ctx =
             self.ty_check_expr(kind_ctx, decl_ty_ctx, exec, parall_collec)?;
         let allowed_exec = to_exec(parall_collec)?;
-        if allowed_exec != exec {
+        // fixme ignores execs on warps because parfors over threadgrps in warps need to be possible
+        // fixme possible solution: intruduce lanegrp and lane as thread hierarchy types?
+        if allowed_exec != exec && exec != Exec::GpuWarp {
             return Err(TyError::String(format!(
                 "Trying to run a parallel for-loop over {:?} inside of {:?}",
                 parall_collec, exec

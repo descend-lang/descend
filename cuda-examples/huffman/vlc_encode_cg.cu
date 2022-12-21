@@ -1,7 +1,7 @@
 // code generated from ../examples/infer/huffman/vlc_encode.desc with a hand written shfl scan
 // 2 __syncthreads operations have been inserted manually
 
-#include "descend.cuh"
+#include "../descend.cuh"
 // todo include cooperative groups in descend.cuh
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;

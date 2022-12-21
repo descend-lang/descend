@@ -4,10 +4,11 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{utils, DataTy, DataTyKind, Mutability, TyKind};
+use crate::ast::{utils, DataTy, DataTyKind, Mutability, ThreadHierchyTy, TyKind};
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 // Precondition. all function definitions are successfully typechecked and
@@ -1092,7 +1093,7 @@ fn par_idx_and_sync_stmt(th_hy: &desc::ThreadHierchyTy) -> (desc::Nat, Option<cu
             )),
             Some(cu::Stmt::Expr(cu::Expr::FunCall {
                 fun: Box::new(cu::Expr::Ident(
-                    "cg::tiled_partition<32>(cg::this_thread_block()).sync()".to_string(),
+                    "cg::tiled_partition<32>(cg::this_thread_block()).sync".to_string(),
                 )),
                 template_args: vec![],
                 args: vec![],
@@ -2100,6 +2101,7 @@ fn gen_parall_cond(
                 ))
             }
         }
+        ParallelityCollec::ToWarps { parall_expr, .. } => gen_parall_cond(pid, parall_expr),
     }
 }
 
@@ -2534,9 +2536,10 @@ enum ParallelityCollec {
         coll_size: desc::Nat,
         parall_expr: Box<ParallelityCollec>,
     },
-    //ToWarp {
-    //    parall_expr: Box<ParallelityCollec>,
-    //},
+    ToWarps {
+        coll_size: desc::Nat,
+        parall_expr: Box<ParallelityCollec>,
+    },
 }
 
 impl ParallelityCollec {
@@ -2576,7 +2579,15 @@ impl ParallelityCollec {
                         }
                         panic!("Cannot create `split` from the provided arguments.");
                     } else if ident.name == crate::ty_check::pre_decl::TO_WARPS {
-                        unimplemented!()
+                        if let (desc::ArgKinded::Nat(n), Some(p)) = (&gen_args[0], args.first()) {
+                            return ParallelityCollec::ToWarps {
+                                parall_expr: Box::new(ParallelityCollec::create_from(
+                                    p, parall_ctx,
+                                )),
+                                coll_size: n.clone(),
+                            };
+                        }
+                        panic!("Cannot create warps from the provided arguments.");
                     } else {
                         unimplemented!()
                     }

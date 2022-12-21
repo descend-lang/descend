@@ -1,7 +1,8 @@
 // code generated from ../examples/infer/huffman/vlc_encode.desc
 // 3 __syncthreads operations have been inserted manually
 
-#include "descend.cuh"
+#include "../descend.cuh"
+
 auto vlc_encode(const descend::u32 *const h_source_data,
                 const descend::u32 *const h_codewords,
                 const descend::u32 *const h_codewordlens,
@@ -54,29 +55,29 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                 descend::u32 *foo = sm_res_location;
 
                                 {
-                                    codeword = ((descend::u64)0);
+                                    codeword = ((descend::u64) 0);
                                     codewordlen = 0u;
                                     const const descend::u32 tmp_d_item =
                                             p0[((blockIdx.x * 256) + threadIdx.x)];
-                                    descend::u8 tmp_d_item_i = (descend::u8)((tmp_d_item >> 24));
+                                    descend::u8 tmp_d_item_i = (descend::u8) ((tmp_d_item >> 24));
                                     descend::u32 tmpcw = sm_cw[tmp_d_item_i];
                                     descend::u32 tmpcwl = sm_cwl[tmp_d_item_i];
-                                    codeword = ((codeword << tmpcwl) | (descend::u64)(tmpcw));
+                                    codeword = ((codeword << tmpcwl) | (descend::u64) (tmpcw));
                                     codewordlen = (codewordlen + tmpcwl);
-                                    tmp_d_item_i = (descend::u8)((tmp_d_item >> 16));
+                                    tmp_d_item_i = (descend::u8) ((tmp_d_item >> 16));
                                     tmpcw = sm_cw[tmp_d_item_i];
                                     tmpcwl = sm_cwl[tmp_d_item_i];
-                                    codeword = ((codeword << tmpcwl) | (descend::u64)(tmpcw));
+                                    codeword = ((codeword << tmpcwl) | (descend::u64) (tmpcw));
                                     codewordlen = (codewordlen + tmpcwl);
-                                    tmp_d_item_i = (descend::u8)((tmp_d_item >> 8));
+                                    tmp_d_item_i = (descend::u8) ((tmp_d_item >> 8));
                                     tmpcw = sm_cw[tmp_d_item_i];
                                     tmpcwl = sm_cwl[tmp_d_item_i];
-                                    codeword = ((codeword << tmpcwl) | (descend::u64)(tmpcw));
+                                    codeword = ((codeword << tmpcwl) | (descend::u64) (tmpcw));
                                     codewordlen = (codewordlen + tmpcwl);
-                                    tmp_d_item_i = (descend::u8)(tmp_d_item);
+                                    tmp_d_item_i = (descend::u8) (tmp_d_item);
                                     tmpcw = sm_cw[tmp_d_item_i];
                                     tmpcwl = sm_cwl[tmp_d_item_i];
-                                    codeword = ((codeword << tmpcwl) | (descend::u64)(tmpcw));
+                                    codeword = ((codeword << tmpcwl) | (descend::u64) (tmpcw));
                                     codewordlen = (codewordlen + tmpcwl);
                                     (&(*foo))[threadIdx.x] = codewordlen;
                                 }
@@ -154,7 +155,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                     wrbits = codewordlen;
                                 }
                                 descend::u32 tmpcw =
-                                        (descend::u32)((codeword >> (codewordlen - wrbits)));
+                                        (descend::u32) ((codeword >> (codewordlen - wrbits)));
                                 descend::atomic_fetch_or(
                                         descend::atomic_ref<descend::u32>((*(&sm_block_enc[kc]))),
                                         (tmpcw << ((32u - startbit) - wrbits)));
@@ -166,16 +167,16 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                         wrbits = codewordlen;
                                     }
                                     codewordlen = (codewordlen - wrbits);
-                                    tmpcw = ((descend::u32)((codeword >> codewordlen)) &
+                                    tmpcw = ((descend::u32) ((codeword >> codewordlen)) &
                                              ((1u << wrbits) - 1u));
                                     descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
                                                                      (*(&sm_block_enc[(kc + 1)]))),
                                                              (tmpcw << (32u - wrbits)));
                                 }
                                 if ((codewordlen > 0u)) {
-                                    tmpcw = (descend::u32)(
-                                            (codeword & ((((descend::u64)1) << codewordlen) -
-                                                         ((descend::u64)1))));
+                                    tmpcw = (descend::u32) (
+                                            (codeword & ((((descend::u64) 1) << codewordlen) -
+                                                         ((descend::u64) 1))));
                                     descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
                                                                      (*(&sm_block_enc[(kc + 2)]))),
                                                              (tmpcw << (32u - codewordlen)));

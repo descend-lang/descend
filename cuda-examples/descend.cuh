@@ -8,6 +8,8 @@
 #include <sstream>
 #include <vector>
 #include <cuda/atomic>
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
 
 #define CHECK_CUDA_ERR(err) { check_cuda_err((err), __FILE__, __LINE__); }
 inline void check_cuda_err(const cudaError_t err, const char * const file, const int line) {
@@ -479,6 +481,14 @@ inline __device__ T atomic_fetch_add(
         T val,
         cuda::std::memory_order order = cuda::memory_order_relaxed) {
     return target.fetch_add(val, order);
+}
+
+template <typename T>
+inline __device__ T shfl_up(
+        cg::thread_block_tile<32> warp,
+        T val,
+        T delta) {
+    return warp.shfl_up(val, delta);
 }
 
 namespace detail
