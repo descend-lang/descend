@@ -107,7 +107,6 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
 
                 // ---------------------------------------------------------------------------------
                 // exclusive scan with cooperative groups
-                // todo: introduce cooperative groups and warp level primitives
                 let mut tmp_shfl_res: u32;
                 let mut scan_codewordlen: u32;
                 let mut tmp_scan_block: u32;
@@ -118,7 +117,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 parfor warp in warps {
                     parfor _ in warp {
                         scan_codewordlen = codewordlen;
-                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 1)
+                        tmp_shfl_res = shfl_up(scan_codewordlen, 1)
                     };
                     par_branch split_warp::<1>(warp) {
                         inactive_lanes => { () },
@@ -129,7 +128,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         }
                     };
                     parfor _ in warp {
-                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 2)
+                        tmp_shfl_res = shfl_up(scan_codewordlen, 2)
                     };
                     par_branch split_warp::<2>(warp) {
                         inactive_lanes => { () },
@@ -140,7 +139,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         }
                     };
                     parfor _ in warp {
-                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 4)
+                        tmp_shfl_res = shfl_up(scan_codewordlen, 4)
                     };
                     par_branch split_warp::<4>(warp) {
                         inactive_lanes => { () },
@@ -151,7 +150,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         }
                     };
                     parfor _ in warp {
-                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 8)
+                        tmp_shfl_res = shfl_up(scan_codewordlen, 8)
                     };
                     par_branch split_warp::<8>(warp) {
                         inactive_lanes => { () },
@@ -162,7 +161,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         }
                     };
                     parfor _ in warp {
-                        tmp_shfl_res = shfl_up(warp, scan_codewordlen, 16)
+                        tmp_shfl_res = shfl_up(scan_codewordlen, 16)
                     };
                     par_branch split_warp::<16>(warp) {
                         inactive_lanes => { () },
@@ -219,7 +218,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                                 }
                             };
                             parfor lane in warp {
-                                tmp_shfl_res = shfl_up(warp, tmp_scan_block, 1)
+                                tmp_shfl_res = shfl_up(tmp_scan_block, 1)
                             };
                             par_branch split_warp::<1>(warp) {
                                 inactive_lanes => { () },
@@ -229,8 +228,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                                     }
                                 }
                             };
-                            parfor lane in warp {
-                                tmp_shfl_res = shfl_up(warp, tmp_scan_block, 2)
+                            parfor _ in warp {
+                                tmp_shfl_res = shfl_up(tmp_scan_block, 2)
                             };
                             par_branch split_warp::<2>(warp) {
                                 inactive_lanes => { () },
@@ -240,8 +239,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                                     }
                                 }
                             };
-                            parfor lane in warp {
-                                tmp_shfl_res = shfl_up(warp, tmp_scan_block, 4)
+                            parfor _ in warp {
+                                tmp_shfl_res = shfl_up(tmp_scan_block, 4)
                             };
                                 par_branch split_warp::<4>(warp) {
                                     inactive_lanes => { () },
@@ -318,7 +317,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 from sm_block_enc_view {
                     kc = scan_codewordlen / 32u32;
                     startbit = scan_codewordlen % 32u32;
-                    atomic_store(&shrd *sm_block_enc_item, 0 as u32)
+                    atomic_store(&shrd *sm_block_enc_item, 0u32)
                 };
 
                 // todo syncthreads

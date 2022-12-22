@@ -1078,9 +1078,7 @@ fn par_idx_and_sync_stmt(th_hy: &desc::ThreadHierchyTy) -> (desc::Nat, Option<cu
             })),
         ),
         desc::ThreadHierchyTy::WarpGrp(_) => (
-            desc::Nat::Ident(desc::Ident::new(
-                "cg::tiled_partition<32>(cg::this_thread_block()).meta_group_rank()",
-            )),
+            desc::Nat::Ident(desc::Ident::new("descend::warp().meta_group_rank()")),
             Some(cu::Stmt::Expr(cu::Expr::FunCall {
                 fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
                 template_args: vec![],
@@ -1088,13 +1086,9 @@ fn par_idx_and_sync_stmt(th_hy: &desc::ThreadHierchyTy) -> (desc::Nat, Option<cu
             })),
         ),
         desc::ThreadHierchyTy::Warp => (
-            desc::Nat::Ident(desc::Ident::new(
-                "cg::tiled_partition<32>(cg::this_thread_block()).thread_rank()",
-            )),
+            desc::Nat::Ident(desc::Ident::new("descend::warp().thread_rank()")),
             Some(cu::Stmt::Expr(cu::Expr::FunCall {
-                fun: Box::new(cu::Expr::Ident(
-                    "cg::tiled_partition<32>(cg::this_thread_block()).sync".to_string(),
-                )),
+                fun: Box::new(cu::Expr::Ident("descend::warp().sync".to_string())),
                 template_args: vec![],
                 args: vec![],
             })),

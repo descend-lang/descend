@@ -1,12 +1,7 @@
 // code generated from ../examples/infer/huffman/vlc_encode.desc with a hand written shfl scan
 // 2 __syncthreads operations have been inserted manually
-// declaration and initialization of warp-variable has been inserted manually
 
 #include "../descend.cuh"
-// todo include cooperative groups in descend.cuh
-#include <cooperative_groups.h>
-
-namespace cg = cooperative_groups;
 
 auto vlc_encode(const descend::u32 *const h_source_data,
                 const descend::u32 *const h_codewords,
@@ -84,174 +79,154 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                     codewordlen = (codewordlen + tmpcwl);
                                 }
                             }
-
                             descend::u32 tmp_shfl_res;
                             descend::u32 scan_codewordlen;
                             descend::u32 tmp_scan_block;
-
-                            //manually inserted
-                            auto warp = cg::tiled_partition<32>(cg::this_thread_block());
 
                             {
 
                                 {
                                     scan_codewordlen = codewordlen;
                                     tmp_shfl_res =
-                                            descend::shfl_up<descend::u32>(warp, scan_codewordlen, 1);
+                                            descend::shfl_up<descend::u32>(scan_codewordlen, 1);
                                 }
-                                if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                             .thread_rank() < 1)) {
+                                if ((descend::warp().thread_rank() < 1)) {
 
                                 } else {
 
                                     { scan_codewordlen = (scan_codewordlen + tmp_shfl_res); }
                                 }
-                                cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                descend::warp().sync();
 
                                 {
                                     tmp_shfl_res =
-                                            descend::shfl_up<descend::u32>(warp, scan_codewordlen, 2);
+                                            descend::shfl_up<descend::u32>(scan_codewordlen, 2);
                                 }
-                                if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                             .thread_rank() < 2)) {
+                                if ((descend::warp().thread_rank() < 2)) {
 
                                 } else {
 
                                     { scan_codewordlen = (scan_codewordlen + tmp_shfl_res); }
                                 }
-                                cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                descend::warp().sync();
 
                                 {
                                     tmp_shfl_res =
-                                            descend::shfl_up<descend::u32>(warp, scan_codewordlen, 4);
+                                            descend::shfl_up<descend::u32>(scan_codewordlen, 4);
                                 }
-                                if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                             .thread_rank() < 4)) {
+                                if ((descend::warp().thread_rank() < 4)) {
 
                                 } else {
 
                                     { scan_codewordlen = (scan_codewordlen + tmp_shfl_res); }
                                 }
-                                cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                descend::warp().sync();
 
                                 {
                                     tmp_shfl_res =
-                                            descend::shfl_up<descend::u32>(warp, scan_codewordlen, 8);
+                                            descend::shfl_up<descend::u32>(scan_codewordlen, 8);
                                 }
-                                if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                             .thread_rank() < 8)) {
+                                if ((descend::warp().thread_rank() < 8)) {
 
                                 } else {
 
                                     { scan_codewordlen = (scan_codewordlen + tmp_shfl_res); }
                                 }
-                                cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                descend::warp().sync();
 
                                 {
-                                    tmp_shfl_res = descend::shfl_up<descend::u32>(
-                                            warp, scan_codewordlen, 16);
+                                    tmp_shfl_res =
+                                            descend::shfl_up<descend::u32>(scan_codewordlen, 16);
                                 }
-                                if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                             .thread_rank() < 16)) {
+                                if ((descend::warp().thread_rank() < 16)) {
 
                                 } else {
 
                                     { scan_codewordlen = (scan_codewordlen + tmp_shfl_res); }
                                 }
-                                cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                descend::warp().sync();
                             }
                             {
 
-                                if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                             .meta_group_rank() < 7)) {
+                                if ((descend::warp().meta_group_rank() < 7)) {
 
                                     {
-                                        if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                                     .thread_rank() < 31)) {
+                                        if ((descend::warp().thread_rank() < 31)) {
 
                                         } else {
 
                                             {
-                                                sm_scan_arr[(
-                                                        cg::tiled_partition<32>(cg::this_thread_block())
-                                                                .meta_group_rank() -
-                                                        0)] = scan_codewordlen;
+                                                sm_scan_arr[(descend::warp().meta_group_rank() - 0)] =
+                                                        scan_codewordlen;
                                             }
                                         }
-                                        cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                        descend::warp().sync();
                                     }
                                 } else {
                                 }
                                 __syncthreads();
                             }
-                            if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                         .meta_group_rank() < 1)) {
+                            if ((descend::warp().meta_group_rank() < 1)) {
 
                                 {
-                                    if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                                 .thread_rank() < 7)) {
+                                    if ((descend::warp().thread_rank() < 7)) {
 
                                         { tmp_scan_block = sm_scan_arr[(threadIdx.x - 0)]; }
                                     } else {
 
                                         { tmp_scan_block = 0u; }
                                     }
-                                    cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                    descend::warp().sync();
 
                                     {
                                         tmp_shfl_res =
-                                                descend::shfl_up<descend::u32>(warp, tmp_scan_block, 1);
+                                                descend::shfl_up<descend::u32>(tmp_scan_block, 1);
                                     }
-                                    if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                                 .thread_rank() < 1)) {
+                                    if ((descend::warp().thread_rank() < 1)) {
 
                                     } else {
 
                                         { tmp_scan_block = (tmp_scan_block + tmp_shfl_res); }
                                     }
-                                    cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                    descend::warp().sync();
 
                                     {
                                         tmp_shfl_res =
-                                                descend::shfl_up<descend::u32>(warp, tmp_scan_block, 2);
+                                                descend::shfl_up<descend::u32>(tmp_scan_block, 2);
                                     }
-                                    if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                                 .thread_rank() < 2)) {
+                                    if ((descend::warp().thread_rank() < 2)) {
 
                                     } else {
 
                                         { tmp_scan_block = (tmp_scan_block + tmp_shfl_res); }
                                     }
-                                    cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                    descend::warp().sync();
 
                                     {
                                         tmp_shfl_res =
-                                                descend::shfl_up<descend::u32>(warp, tmp_scan_block, 4);
+                                                descend::shfl_up<descend::u32>(tmp_scan_block, 4);
                                     }
-                                    if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                                 .thread_rank() < 4)) {
+                                    if ((descend::warp().thread_rank() < 4)) {
 
                                     } else {
 
                                         { tmp_scan_block = (tmp_scan_block + tmp_shfl_res); }
                                     }
-                                    cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                    descend::warp().sync();
                                     {
 
-                                        if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                                     .thread_rank() < 7)) {
+                                        if ((descend::warp().thread_rank() < 7)) {
 
                                             { sm_scan_arr[(threadIdx.x - 0)] = tmp_scan_block; }
                                         } else {
                                         }
-                                        cg::tiled_partition<32>(cg::this_thread_block()).sync();
+                                        descend::warp().sync();
                                     }
                                 }
                             } else {
                             }
                             __syncthreads();
-                            if ((cg::tiled_partition<32>(cg::this_thread_block())
-                                         .meta_group_rank() < 1)) {
+                            if ((descend::warp().meta_group_rank() < 1)) {
 
                             } else {
 
@@ -260,10 +235,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                                     {
                                         scan_codewordlen =
                                                 (scan_codewordlen +
-                                                 sm_scan_arr[(
-                                                         cg::tiled_partition<32>(cg::this_thread_block())
-                                                                 .meta_group_rank() -
-                                                         1)]);
+                                                 sm_scan_arr[(descend::warp().meta_group_rank() - 1)]);
                                     }
                                 }
                             }

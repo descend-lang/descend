@@ -864,8 +864,8 @@ impl TyChecker {
         let parall_collec_ty_ctx =
             self.ty_check_expr(kind_ctx, decl_ty_ctx, exec, parall_collec)?;
         let allowed_exec = to_exec(parall_collec)?;
-        // fixme ignores execs on warps because parfors over threadgrps in warps need to be possible
-        // fixme possible solution: intruduce lanegrp and lane as thread hierarchy types?
+        // fixme piet : ignores execs on warps because parfors over threadgrps in warps need to be possible
+        // possible solution: intruduce lanegrp and lane as thread hierarchy types?
         if allowed_exec != exec && exec != Exec::GpuWarp {
             return Err(TyError::String(format!(
                 "Trying to run a parallel for-loop over {:?} inside of {:?}",

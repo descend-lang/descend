@@ -150,9 +150,6 @@ fn shfl_up_ty() -> Ty {
     Ty::new(TyKind::Fn(
         vec![d_dty],
         vec![
-            Ty::new(TyKind::Data(DataTy::new(DataTyKind::ThreadHierchy(
-                Box::new(ThreadHierchyTy::Warp),
-            )))),
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ident(d.clone())))),
             Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
         ],
@@ -271,7 +268,7 @@ fn to_warps_ty() -> Ty {
                 Nat::Ident(n3.clone()),
             ))),
         )))],
-        Exec::GpuBlock,
+        Exec::View,
         Box::new(Ty::new(TyKind::Data(DataTy::new(
             DataTyKind::ThreadHierchy(Box::new(ThreadHierchyTy::WarpGrp(Nat::BinOp(
                 BinOpNat::Div,
