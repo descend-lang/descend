@@ -143,8 +143,7 @@ auto vlc_encode(const descend::u32 *const h_source_data,
                     }
                     __syncthreads(); //manually inserted
                     {
-                        // todo dont generate to_atomic_array call!
-                        descend::u32 *sm_result = sm_scan_and_result;
+                        descend::u32 *sm_result = descend::to_atomic_array<256>(sm_scan_and_result);
 
                         {
                             descend::u32 wrbits;
