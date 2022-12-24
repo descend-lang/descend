@@ -1,4 +1,4 @@
-// code generated from ../examples/infer/huffman/vlc_encode.desc with a hand written shfl scan
+// code generated from ../examples/infer/huffman/vlc_encode_cg.desc
 // 2 __syncthreads operations have been inserted manually
 
 #include "../descend.cuh"

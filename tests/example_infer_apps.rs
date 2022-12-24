@@ -66,6 +66,14 @@ fn vlc_encode_cg() -> Res {
 }
 
 #[test]
+fn vlc_encode_reuse() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/vlc_encode_reuse.desc")?
+    ))
+}
+
+#[test]
 fn histogram() -> Res {
     Ok(println!(
         "{}",

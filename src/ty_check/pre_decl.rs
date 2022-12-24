@@ -1,3 +1,4 @@
+use crate::ast::AtomicTy::AtomicU32;
 use crate::ast::{
     AtomicTy, BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat,
     Ownership, Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
@@ -33,6 +34,7 @@ pub static SPLIT_WARP_GRP: &str = "split_warp_grp";
 
 pub static THREAD_ID_X: &str = "thread_id_x";
 
+pub static TO_ATOMIC_ARRAY: &str = "to_atomic_array";
 pub static ATOMIC_STORE: &str = "atomic_store";
 pub static ATOMIC_LOAD: &str = "atomic_load";
 pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
@@ -67,6 +69,7 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
         (THREAD_ID_X, thread_id_x_ty()),
+        (TO_ATOMIC_ARRAY, to_atomic_array_ty()),
         (ATOMIC_STORE, atomic_store_ty()),
         (ATOMIC_LOAD, atomic_load_ty()),
         (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
@@ -139,6 +142,7 @@ fn offset_raw_ptr_ty() -> Ty {
     ))
 }
 
+// todo piet constraints (exec only on GpuLane)
 // shfl_up:
 //  <d: dty>(d, i32) -> d
 fn shfl_up_ty() -> Ty {
@@ -450,6 +454,49 @@ fn thread_id_x_ty() -> Ty {
         Exec::GpuThread,
         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
+        ))))),
+    ))
+}
+
+// todo extend atomic functions to other atomic types
+// to_atomic_array:
+//  <r: prv, m: mem, n: nat>(&r uniq m [u32; n]) -[view]-> &r uniq m [[AtomicU32; n]]
+fn to_atomic_array_ty() -> Ty {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let n = Ident::new("n");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
+    Ty::new(TyKind::Fn(
+        vec![r_prv, m_mem, n_nat],
+        vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+            Provenance::Ident(r.clone()),
+            Ownership::Uniq,
+            Memory::Ident(m.clone()),
+            Box::new(DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U32))),
+                Nat::Ident(n.clone()),
+            ))),
+        ))))],
+        Exec::View,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+            Provenance::Ident(r),
+            Ownership::Uniq,
+            Memory::Ident(m),
+            Box::new(DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32))),
+                Nat::Ident(n.clone()),
+            ))),
         ))))),
     ))
 }
