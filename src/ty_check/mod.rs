@@ -1337,7 +1337,7 @@ impl TyChecker {
         self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, pl_expr)?;
         let (elem_dty, n) = match pl_expr.ty.as_ref().unwrap().ty.clone() {
             TyKind::Data(DataTy {
-                dty: DataTyKind::Array(elem_dty, n),
+                dty: DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n),
                 ..
             }) => (*elem_dty, n),
             TyKind::Data(DataTy {

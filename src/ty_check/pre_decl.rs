@@ -2,6 +2,8 @@ use crate::ast::{
     BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
     Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
 };
+use crate::ast::Kind::Memory;
+use crate::ast::Nat::Ident;
 
 pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
@@ -26,6 +28,8 @@ pub static JOIN: &str = "join";
 pub static JOIN_MUT: &str = "join_mut";
 pub static TRANSPOSE: &str = "transpose";
 pub static TRANSPOSE_MUT: &str = "transpose_mut";
+pub static MAP: &str = "map";
+pub static MAP_MUT: &str = "map_mut";
 
 pub static SPLIT_BLOCK_GRP: &str = "split_block_grp";
 pub static GROUP_BLOCK_GRP: &str = "group_block_grp";
@@ -62,6 +66,8 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (JOIN_MUT, join_ty(Ownership::Uniq)),
         (TRANSPOSE, transpose_ty(Ownership::Shrd)),
         (TRANSPOSE_MUT, transpose_ty(Ownership::Uniq)),
+        (MAP, map_ty(Ownership::Shrd)),
+        (MAP_MUT, map_ty(Ownership::Uniq)),
         (SPLIT_BLOCK_GRP, split_block_grp_ty()),
         //        (GROUP_BLOCK_GRP, group_block_grp_ty()),
         //        (JOIN_BLOCK_GRP, join_block_grp_ty()),
@@ -1074,5 +1080,88 @@ fn transpose_ty(own: Ownership) -> Ty {
                 Nat::Ident(n),
             ))),
         ))))),
+    ))
+}
+
+//map_mut:<r: prv, d: dty, d2: dty, m: mem, n: nat>(lambda: |&r1 uniq d| -[view]-> d2, &r1 uniq m [[d;n]]) -[view]-> &r1 uniq m [[d2; n]]
+fn map_ty(own: Ownership) -> Ty {
+    let r = Ident::new("r");
+    let d = Ident::new("d");
+    let d2 = Ident::new("d2");
+    let m = Ident::new("m");
+    let n = Ident::new("n");
+    let n2 = Ident::new("n2");
+
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
+    };
+    let d2_dty = IdentKinded {
+        ident: d2.clone(),
+        kind: Kind::DataTy,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind : Kind::Nat,
+    };
+
+    Ty::new(TyKind::Fn(
+        vec![r_prv.clone(), d_dty.clone(), d2_dty.clone(), m_mem.clone(), n_nat.clone()],
+        //Parameter
+        vec![
+            //Lambda function
+            Ty::new(TyKind::Fn(
+                vec![r_prv, d_dty, d2_dty, m_mem, n_nat],
+                vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                    Provenance::Ident(r.clone()),
+                    own,
+                    Memory::Ident(m.clone()),
+                    Box::new(DataTy::new(DataTyKind::ArrayShape(
+                        Box::new(DataTy::new(DataTyKind::Ident(d))),
+                        Nat::Lit(1)
+                    ))),
+                ))))],
+                Exec::View,
+                Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                    Provenance::Ident(r.clone()),
+                    own,
+                    Memory::Ident(m.clone()),
+                    Box::new(DataTy::new(DataTyKind::ArrayShape(
+                        Box::new(DataTy::new(DataTyKind::Ident(d2))),
+                        Nat::Lit(1)
+                    ))))
+                ))))
+            )),
+        //Arrayshape
+        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+            Provenance::Ident(r.clone()),
+            own,
+            Memory::Ident(m.clone()),
+            Box::new(DataTy::new(DataTyKind::ArrayShape(
+                Box::new(DataTy::new(DataTyKind::Ident(d))),
+                Nat::Ident(n.clone())
+            ))),
+        ))))
+        ],
+        //Execution Resource
+        Exec::View,
+        //Return value -> arrayshape
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+            Provenance::Ident(r),
+            own,
+            Memory::Ident(m),
+            Box::new(DataTy::new(DataTyKind::ArrayShape(
+                Box::new(DataTy::new(DataTyKind::Ident(d2))),
+                Nat::Ident(n)
+            ))),
+        )))))
     ))
 }
