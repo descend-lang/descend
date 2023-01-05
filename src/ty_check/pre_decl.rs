@@ -12,7 +12,6 @@ pub static SHARED_ALLOC: &str = "shared_alloc";
 pub static COPY_TO_GPU: &str = "copy_to_gpu";
 pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
-pub static SHFL_UP: &str = "shfl_up";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
@@ -39,6 +38,8 @@ pub static ATOMIC_STORE: &str = "atomic_store";
 pub static ATOMIC_LOAD: &str = "atomic_load";
 pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
 pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
+
+pub static SHFL_UP: &str = "shfl_up";
 
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
@@ -460,7 +461,7 @@ fn thread_id_x_ty() -> Ty {
 
 // todo extend atomic functions to other atomic types
 // to_atomic_array:
-//  <r: prv, m: mem, n: nat>(&r uniq m [u32; n]) -[view]-> &r uniq m [[AtomicU32; n]]
+//  <r: prv, m: mem, n: nat>(&r uniq m [u32; n]) -[view]-> &r uniq m [AtomicU32; n]
 fn to_atomic_array_ty() -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -502,7 +503,7 @@ fn to_atomic_array_ty() -> Ty {
 }
 
 // atomic_store:
-//  <>(AtomicU32, u32) -[gpu.thread]-> Unit
+//  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> u32
 fn atomic_store_ty() -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -533,7 +534,7 @@ fn atomic_store_ty() -> Ty {
 }
 
 // atomic_fetch_or:
-//  <>(AtomicU32, u32) -[gpu.thread]-> u32
+//  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> u32
 fn atomic_fetch_or_ty() -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -564,7 +565,7 @@ fn atomic_fetch_or_ty() -> Ty {
 }
 
 // atomic_fetch_add:
-//  <>(AtomicU32, u32) -[gpu.thread]-> u32
+//  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> u32
 fn atomic_fetch_add_ty() -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -595,7 +596,7 @@ fn atomic_fetch_add_ty() -> Ty {
 }
 
 // atomic_load:
-//  <m: mem>(AtomicU32) -[gpu.thread]-> u32
+//  <r: prv, m: mem>(&r shrd m AtomicU32) -[gpu.thread]-> u32
 fn atomic_load_ty() -> Ty {
     let r = Ident::new("r");
     let m = Ident::new("m");
