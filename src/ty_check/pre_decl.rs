@@ -26,8 +26,11 @@ pub static SPLIT_BLOCK_GRP: &str = "split_block_grp";
 pub static GROUP_BLOCK_GRP: &str = "group_block_grp";
 pub static JOIN_BLOCK_GRP: &str = "join_block_grp";
 
-pub static TO_WARPS: &str = "to_warps";
 pub static SPLIT_THREAD_GRP: &str = "split_thread_grp";
+
+pub static TO_WARPS: &str = "to_warps";
+pub static SHFL_UP: &str = "shfl_up";
+
 pub static SPLIT_WARP: &str = "split_warp";
 pub static SPLIT_WARP_GRP: &str = "split_warp_grp";
 
@@ -38,8 +41,6 @@ pub static ATOMIC_STORE: &str = "atomic_store";
 pub static ATOMIC_LOAD: &str = "atomic_load";
 pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
 pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
-
-pub static SHFL_UP: &str = "shfl_up";
 
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
