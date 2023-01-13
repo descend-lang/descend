@@ -18,7 +18,7 @@ fn hist<i: prv, o: prv>(
         | -[gpu.grid]-> () {
             let d_in_groups = group::<1024>(to_view(inputs.0));
             let d_out_atomic = to_atomic_array(inputs.1);
-            let d_out_atomic_view = to_view_mut(d_out_atomic);
+            let d_out_atomic_view = to_view(&shrd *d_out_atomic);
 
             decl {
                 let mut sm_out: [AtomicU32; 256] @ gpu.shared
