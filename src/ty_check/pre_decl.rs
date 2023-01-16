@@ -19,6 +19,8 @@ pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
 pub static ATOMIC_SET: &str = "atomic_set";
 pub static SHUFFLE_XOR: &str = "shuffle_xor";
 
+pub static CREATE_ARRAY: &str = "create_array";
+
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
 pub static GROUP: &str = "group";
@@ -46,6 +48,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
         (ATOMIC_SET, atomic_set_ty()),
         (SHUFFLE_XOR, shuffle_xor_ty()),
+        (CREATE_ARRAY, create_array_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -58,6 +61,30 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
     ];
 
     decls.to_vec()
+}
+
+fn create_array_ty() -> FnTy {
+    let n = Ident::new("n");
+    let d = Ident::new("d");
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
+    };
+    FnTy::new(
+        vec![n_nat, d_dty],
+        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+            DataTyKind::Ident(d.clone()),
+        ))))],
+        ExecTy::new(ExecTyKind::CpuThread),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Array(
+            Box::new(DataTy::new(DataTyKind::Ident(d))),
+            Nat::Ident(n),
+        ))))),
+    )
 }
 
 // to_raw_ptr:
