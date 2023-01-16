@@ -2,8 +2,6 @@ use crate::ast::{
     BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
     Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
 };
-use crate::ast::Kind::Memory;
-use crate::ast::Nat::Ident;
 
 pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
@@ -1110,11 +1108,17 @@ fn map_ty(own: Ownership) -> Ty {
     };
     let n_nat = IdentKinded {
         ident: n.clone(),
-        kind : Kind::Nat,
+        kind: Kind::Nat,
     };
 
     Ty::new(TyKind::Fn(
-        vec![r_prv.clone(), d_dty.clone(), d2_dty.clone(), m_mem.clone(), n_nat.clone()],
+        vec![
+            r_prv.clone(),
+            d_dty.clone(),
+            d2_dty.clone(),
+            m_mem.clone(),
+            n_nat.clone(),
+        ],
         //Parameter
         vec![
             //Lambda function
@@ -1126,7 +1130,7 @@ fn map_ty(own: Ownership) -> Ty {
                     Memory::Ident(m.clone()),
                     Box::new(DataTy::new(DataTyKind::ArrayShape(
                         Box::new(DataTy::new(DataTyKind::Ident(d))),
-                        Nat::Lit(1)
+                        Nat::Lit(1),
                     ))),
                 ))))],
                 Exec::View,
@@ -1136,20 +1140,20 @@ fn map_ty(own: Ownership) -> Ty {
                     Memory::Ident(m.clone()),
                     Box::new(DataTy::new(DataTyKind::ArrayShape(
                         Box::new(DataTy::new(DataTyKind::Ident(d2))),
-                        Nat::Lit(1)
-                    ))))
-                ))))
+                        Nat::Lit(1),
+                    ))),
+                ))))),
             )),
-        //Arrayshape
-        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-            Provenance::Ident(r.clone()),
-            own,
-            Memory::Ident(m.clone()),
-            Box::new(DataTy::new(DataTyKind::ArrayShape(
-                Box::new(DataTy::new(DataTyKind::Ident(d))),
-                Nat::Ident(n.clone())
-            ))),
-        ))))
+            //Arrayshape
+            Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                Box::new(DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d))),
+                    Nat::Ident(n.clone()),
+                ))),
+            )))),
         ],
         //Execution Resource
         Exec::View,
@@ -1160,8 +1164,8 @@ fn map_ty(own: Ownership) -> Ty {
             Memory::Ident(m),
             Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::Ident(d2))),
-                Nat::Ident(n)
+                Nat::Ident(n),
             ))),
-        )))))
+        ))))),
     ))
 }

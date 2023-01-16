@@ -216,7 +216,9 @@ impl TyChecker {
                 self.ty_check_split(kind_ctx, ty_ctx, exec, r1, r2, *own, s, view_ref)?
             }
             ExprKind::Range(l, u) => self.ty_check_range(kind_ctx, ty_ctx, exec, l, u)?,
-            ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
+            ExprKind::BorrowIndex(prv_name, own, arr_expr, idx) => {
+                self.ty_check_borrow_idx(kind_ctx, ty_ctx, exec, prv_name, *own, arr_expr, idx)?
+            }
             ExprKind::Idx(_, _) => {
                 unimplemented!("This is helper syntax to index into non-place expressions.")
             }
@@ -1937,6 +1939,40 @@ impl TyChecker {
         };
 
         Ok((res_ty_ctx, pl_ty))
+    }
+
+    fn ty_check_borrow_idx(
+        &self,
+        kind_ctx: &KindCtx,
+        ty_ctx: TyCtx,
+        exec: Exec,
+        prv_val_name: &Option<String>,
+        own: Ownership,
+        arr_expr: &mut PlaceExpr,
+        idx: &Nat,
+    ) -> TyResult<(TyCtx, Ty)> {
+        let (arr_ty_ctx, ref_dty) =
+            self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv_val_name, own, arr_expr)?;
+        if let TyKind::Data(DataTy {
+            dty: DataTyKind::Ref(prv, own, mem, ref_dty),
+            ..
+        }) = &ref_dty.ty
+        {
+            match &ref_dty.as_ref().dty {
+                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => Ok((
+                    arr_ty_ctx,
+                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
+                        prv.clone(),
+                        *own,
+                        mem.clone(),
+                        Box::new(elem_dty.as_ref().clone()),
+                    )))),
+                )),
+                _ => Err(TyError::String("Expected an array or view.".to_string())),
+            }
+        } else {
+            unreachable!();
+        }
     }
 
     fn ty_check_borrow(
