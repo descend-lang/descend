@@ -218,7 +218,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // l_thread_start_value =
                 //     index of the value in the output array (32 bits per value) where the codeword
                 //     of the current thread starts
-                // thread_start_bit =
+                // l_thread_start_bit =
                 //     bit-index inside of the value in the output array where the codeword of the
                 //     current thread starts
                 // initialize all values in s_block_out with 0 to use it for storing the output for

@@ -1,0 +1,311 @@
+fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
+    h_source_data: &s shrd cpu.mem [u32; 64*256],
+    h_codewords: &c shrd cpu.mem [u32; 256],
+    h_codewordlens: &cl shrd cpu.mem [u32; 256],
+    h_out_data: &o uniq cpu.mem [u32; 64*256],
+    h_out_idx: &oi uniq cpu.mem [u32; 64]
+) -[cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let source_data = gpu_alloc_copy(&uniq gpu, &shrd *h_source_data);
+    let codewords = gpu_alloc_copy(&uniq gpu, &shrd *h_codewords);
+    let codewordlens = gpu_alloc_copy(&uniq gpu, &shrd *h_codewordlens);
+    let mut out_data = gpu_alloc_copy(&uniq gpu, &shrd *h_out_data);
+    let mut out_idx = gpu_alloc_copy(&uniq gpu, &shrd *h_out_idx);
+    exec::<64, 256>(
+        &uniq gpu,
+        (
+          &shrd source_data,
+          &shrd codewords,
+          &shrd codewordlens,
+          &uniq out_data,
+          &uniq out_idx
+        ),
+        | grid: BlockGrp<64, ThreadGrp<256>>,
+          inputs: (&shrd gpu.global [u32; 64*256],
+                   &shrd gpu.global [u32; 256],
+                   &shrd gpu.global [u32; 256],
+                   &uniq gpu.global [u32; 64*256],
+                   &uniq gpu.global [u32; 64])
+        | -[gpu.grid]-> () {
+            let d_groups = group::<256>(to_view(inputs.0));
+            let cw_view = to_view(inputs.1);
+            let cwl_view = to_view(inputs.2);
+
+            let out_data_groups = group_mut::<256>(to_view_mut(inputs.3));
+            let out_idx_groups = group_mut::<1>(to_view_mut(inputs.4));
+
+            decl {
+                let mut sm_cw: [u32; 256] @ gpu.shared;
+                let mut sm_cwl: [u32; 256] @ gpu.shared;
+                let mut sm_scan_arr: [u32; 7] @ gpu.shared;
+                let mut sm_block_enc: [AtomicU32; 256] @ gpu.shared;
+                let mut sm_kcmax: [u32; 1] @ gpu.shared
+            } parfor block in grid
+              with d_group, out_data_group, out_idx_group
+              from d_groups, out_data_groups, out_idx_groups {
+                // create shared memory views
+                let sm_cw_view = to_view_mut(&uniq sm_cw);
+                let sm_cwl_view = to_view_mut(&uniq sm_cwl);
+                let sm_block_enc_view = to_view(&shrd sm_block_enc);
+                let sm_kcmax_view = to_view_mut(&uniq sm_kcmax);
+
+                // Declare register variables for information that is needed throughout the algorithm, but can be most
+                // efficiently calculated some steps before the information is needed (e.g. codeword, codewordlen).
+                // These variables would go out of scope if declared inside "parfor _ in block"!
+                let mut codeword: u64;      // codeword for four symbols that is encoded by a single thread
+                let mut codewordlen: u32;   // length of the codeword that is encoded by a single thread (in bits)
+                let mut kc: u32;            // index of the value in the output array (32 bits per value) where the
+                                            // codeword of the current thread starts
+                let mut startbit: u32;      // bit-index inside of the value in the output array where the codeword of
+                                            // the current thread starts
+
+                // cache the codewords and their lengths (in bits) in shared memory
+                parfor _ in block
+                with cw_item, cwl_item, sm_cw_item, sm_cwl_item
+                from cw_view, cwl_view, sm_cw_view, sm_cwl_view {
+                    *sm_cw_item = *cw_item;
+                    *sm_cwl_item = *cwl_item
+                };
+
+                // todo syncthreads
+
+                // encode four input symbols per thread
+                // and save the total bit-length of the encoded symbols per thread in shared memory
+                parfor _ in block
+                with d_item
+                from d_group {
+                    codeword = 0u64;
+                    codewordlen = 0u32;
+
+                    let tmp_d_item = *d_item;
+
+                    let mut tmp_d_item_i = (tmp_d_item >> 24) as u8;
+                    let mut tmpcw = sm_cw[tmp_d_item_i];
+                    let mut tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl;
+
+                    tmp_d_item_i = (tmp_d_item >> 16) as u8;
+                    tmpcw = sm_cw[tmp_d_item_i];
+                    tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl;
+
+                    tmp_d_item_i = (tmp_d_item >> 8) as u8;
+                    tmpcw = sm_cw[tmp_d_item_i];
+                    tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl;
+
+                    tmp_d_item_i = tmp_d_item as u8;
+                    tmpcw = sm_cw[tmp_d_item_i];
+                    tmpcwl = sm_cwl[tmp_d_item_i];
+                    codeword = (codeword<<tmpcwl) | tmpcw as u64;
+                    codewordlen = codewordlen + tmpcwl
+                };
+
+                // ---------------------------------------------------------------------------------
+                // exclusive scan with cooperative groups
+                let mut tmp_shfl_res: u32;
+                let mut scan_codewordlen: u32;
+                let mut tmp_scan_block: u32;
+                let sm_scan_arr_view = to_view(&shrd sm_scan_arr);
+                let warps = to_warps(block);
+
+                // calculate inclusive scan for each warp
+                parfor warp in warps {
+                    for_nat k in doubled_range(1, 16) {
+                        parfor _ in warp {
+                            scan_codewordlen = codewordlen;
+                            tmp_shfl_res = shfl_up(scan_codewordlen, k)
+                        };
+                        par_branch split_warp::<k>(warp) {
+                            inactive_lanes => { () },
+                            active_lanes => {
+                                parfor _ in active_lanes {
+                                    scan_codewordlen = scan_codewordlen + tmp_shfl_res
+                                }
+                            }
+                        }
+                    }
+                };
+
+                // write sum of all input values to shared memory for the first 7 out of 8 warps
+                // these sums are required for calculating the scan for the entire block
+                {
+                    let tmp_sm_scan_arr_view = to_view_mut(&uniq sm_scan_arr);
+                    par_branch split_warp_grp::<7>(warps) {
+                        active_warps => {
+                            parfor warp in active_warps
+                            with sm_scan_arr_item
+                            from tmp_sm_scan_arr_view {
+                                par_branch split_warp::<31>(warp) {
+                                    inactive_lanes => { () },
+                                    active_lane => {
+                                        parfor _ in active_lane {
+                                            *sm_scan_arr_item = scan_codewordlen
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        inactive_warp => { () }
+                    }
+                };
+
+                // syncthreads
+
+                // aggregate the warp sums with an inclusive scan calculated by the first warp and
+                // write the results to shared memory
+                par_branch split_warp_grp::<1>(warps) {
+                    active_warp => {
+                        parfor warp in active_warp {
+                            par_branch split_warp::<7>(warp) {
+                                input_lanes => {
+                                    parfor _ in input_lanes
+                                    with sm_scan_arr_item
+                                    from sm_scan_arr_view {
+                                        tmp_scan_block = *sm_scan_arr_item
+                                    }
+                                },
+                                zero_lanes => {
+                                    parfor _ in zero_lanes {
+                                        tmp_scan_block = 0u32
+                                    }
+                                }
+                            };
+                            for_nat k in doubled_range(1, 4) {
+                                parfor _ in warp {
+                                    tmp_shfl_res = shfl_up(tmp_scan_block, k)
+                                };
+                                par_branch split_warp::<k>(warp) {
+                                    inactive_lanes => { () },
+                                    active_lanes => {
+                                        parfor _ in active_lanes {
+                                            tmp_scan_block = tmp_scan_block + tmp_shfl_res
+                                        }
+                                    }
+                                }
+                            };
+                            {
+                                let tmp_sm_scan_arr_view = to_view_mut(&uniq sm_scan_arr);
+                                par_branch split_warp::<7>(warp) {
+                                    active_lanes => {
+                                        parfor _ in active_lanes
+                                        with sm_scan_arr_item
+                                        from tmp_sm_scan_arr_view {
+                                            *sm_scan_arr_item = tmp_scan_block
+                                        }
+                                    },
+                                    inactive_lanes => { () }
+                                }
+                            }
+                        }
+                    },
+                    inactive_warps => { () }
+                };
+
+                // syncthreads
+
+                // add sums of previous warps to each result of a warps inclusive scan
+                par_branch split_warp_grp::<1>(warps) {
+                    inactive_warp => { () },
+                    active_warps => {
+                        parfor warp in active_warps
+                        with sm_scan_arr_item
+                        from sm_scan_arr_view {
+                            parfor _ in warp {
+                                scan_codewordlen = scan_codewordlen + *sm_scan_arr_item
+                            }
+                        }
+                    }
+                };
+
+                // inclusive scan -> exclusive scan
+                parfor warp in warps {
+                    parfor _ in warp {
+                        scan_codewordlen = scan_codewordlen - codewordlen
+                    }
+                };
+                // ---------------------------------------------------------------------------------
+
+                // output the bit-index after the last codeword of the block for every block (out_idx_item)
+                // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)
+                par_branch split_thread_grp::<255>(block) {
+                    inactive_threads => { () },
+                    active_thread => {
+                        parfor _ in active_thread
+                        with out_idx_item, sm_kcmax_item
+                        from out_idx_group, sm_kcmax_view {
+                            *out_idx_item = scan_codewordlen + codewordlen;
+                            *sm_kcmax_item = (scan_codewordlen + codewordlen) / 32u32
+                        }
+                    }
+                };
+
+                // syncthreads
+
+                // kc =       index of the value in the output array (32 bits per value) where the codeword of the
+                //            current thread starts
+                // startbit = bit-index inside of the value in the output array where the codeword of the current thread
+                //            starts
+                parfor _ in block
+                with sm_block_enc_item
+                from sm_block_enc_view {
+                    kc = scan_codewordlen / 32u32;
+                    startbit = scan_codewordlen % 32u32;
+                    atomic_store(&shrd *sm_block_enc_item, 0u32)
+                };
+
+                // todo syncthreads
+
+                // combine the encoded symbols of every thread in a block inside shared memory
+                // encoded symbols of a thread can span across 3 32-bit values in shared memory!
+                parfor _ in block
+                with out_data_item, sm_block_enc_item
+                from out_data_group, sm_block_enc_view {
+                    let mut wrbits: u32;
+                    // Part 1 (first value in shared memory)
+                    if codewordlen > (32u32 - startbit) {
+                        wrbits = (32u32 - startbit)
+                    } else {
+                        wrbits = codewordlen
+                    };
+                    let mut tmpcw: u32 = ( codeword >> ( codewordlen - wrbits ) ) as u32;
+                    atomic_fetch_or(&shrd (*sm_block_enc)[kc], tmpcw << (32u32 - startbit - wrbits) );
+                    codewordlen = codewordlen - wrbits;
+
+                    // Part 2 (second value in shared memory)
+                    if codewordlen > 0u32 {
+                        if codewordlen > 32u32 {
+                            wrbits = 32u32
+                        } else {
+                            wrbits = codewordlen
+                        };
+                        codewordlen = codewordlen - wrbits;
+                        tmpcw = ( codeword >> codewordlen ) as u32 & ( ( 1u32 << wrbits ) - 1u32 );
+                        atomic_fetch_or(&shrd (*sm_block_enc)[kc+1], tmpcw << ( 32u32 - wrbits ) );
+                        ()
+                    };
+
+                    // Part 3 (third value in shared memory)
+                    if codewordlen > 0u32 {
+                        tmpcw = (codeword & ( ( 1u64 << codewordlen) - 1u64) ) as u32;
+                        atomic_fetch_or(&shrd (*sm_block_enc)[kc+2], tmpcw << ( 32u32 - codewordlen ) );
+                        ()
+                    };
+
+                    // todo syncthreads
+
+                    // write block solution to global memory output
+                    if thread_id_x() <= sm_kcmax[0] {
+                        *out_data_item = atomic_load(&shrd *sm_block_enc_item)
+                    }
+                }
+            }
+          }
+        );
+        copy_to_host(&shrd out_data, h_out_data);
+        copy_to_host(&shrd out_idx, h_out_idx)
+}

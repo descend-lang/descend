@@ -66,6 +66,14 @@ fn vlc_encode_cg() -> Res {
 }
 
 #[test]
+fn vlc_encode_cg_for_nat() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/vlc_encode_cg_for_nat.desc")?
+    ))
+}
+
+#[test]
 fn vlc_encode_reuse() -> Res {
     Ok(println!(
         "{}",
