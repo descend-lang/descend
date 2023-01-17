@@ -1129,7 +1129,7 @@ fn map_ty(own: Ownership) -> Ty {
                     own,
                     Memory::Ident(m.clone()),
                     Box::new(DataTy::new(DataTyKind::ArrayShape(
-                        Box::new(DataTy::new(DataTyKind::Ident(d))),
+                        Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                         Nat::Lit(1),
                     ))),
                 ))))],
@@ -1139,7 +1139,7 @@ fn map_ty(own: Ownership) -> Ty {
                     own,
                     Memory::Ident(m.clone()),
                     Box::new(DataTy::new(DataTyKind::ArrayShape(
-                        Box::new(DataTy::new(DataTyKind::Ident(d2))),
+                        Box::new(DataTy::new(DataTyKind::Ident(d2.clone()))),
                         Nat::Lit(1),
                     ))),
                 ))))),
