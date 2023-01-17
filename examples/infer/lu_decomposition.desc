@@ -129,8 +129,8 @@ fn tile_partition<tile_size: nat, tiles_per_dim: nat, matrix_dim: nat, a: prv>(
     ) -[view]-> &a uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tiles_per_dim]]; tiles_per_dim]] //im parser eingeführt
 {
     //map_mut:<r1: prv, d: dty, d2: dty, m: mem, n: nat>(lambda: |&r1 uniq d| -[view]-> d2, &r1 uniq m [[d;n]]) -[view]-> &r1 uniq m [[d2; n]]
-    map_mut(|g| -[view]-> &a uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tiles_per_dim]]; tiles_per_dim]]
-            { map_mut(|x| -[view]-> &uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile_per_dim]]; tile_per_dim]]
+    map_mut(|g| -[view]-> &a uniq gpu.global [[ [[ [[f64; tile_size]]; tile_size]]; tiles_per_dim]]
+            { map_mut(|x| -[view]-> &a uniq gpu.global [[ [[f64; tile_size]]; tile_size]]
                 { transpose_mut(x) }, //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile_per_dim]]; tile_per_dim]]
             group_mut::<tile_size>( //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile_per_dim]]; tile_per_dim]]
                 transpose_mut(g) //&uniq gpu.global [[ [[ [[f64; tile_size]]; matrix_dim]]; tiles_per_dim]]
