@@ -2117,39 +2117,34 @@ impl ShapeExpr {
                             || ident.name.as_ref() == ty_check::pre_decl::TRANSPOSE_MUT
                         {
                             ShapeExpr::create_transpose_shape(args, codegen_ctx)
+                        } else if let Some(vf) = codegen_ctx
+                            .comp_unit
+                            .iter()
+                            .find(|vf| vf.ident.name == ident.name)
+                        {
+                            ShapeExpr::applied_shape_fun(
+                                vf.generic_params.iter().map(|g| g.ident.name.as_ref()),
+                                gen_args,
+                                vf.param_decls.iter().map(|p| p.ident.name.as_ref()),
+                                args,
+                                &vf.body_expr,
+                                codegen_ctx,
+                            )
                         } else {
-                            if let Some(vf) = codegen_ctx
-                                .comp_unit
-                                .iter()
-                                .find(|vf| vf.ident.name == ident.name)
-                            {
-                                let generic_substs = HashMap::from_iter(
-                                    vf.generic_params
-                                        .iter()
-                                        .map(|g| g.ident.name.as_ref())
-                                        .zip(gen_args),
-                                );
-                                let param_substs = HashMap::from_iter(
-                                    vf.param_decls
-                                        .iter()
-                                        .map(|p| p.ident.name.as_ref())
-                                        .zip(args),
-                                );
-                                let mut subst_body = vf.body_expr.clone();
-                                subst_body.subst_kinded_idents(&generic_substs);
-                                subst_body.subst_idents(&param_substs);
-                                ShapeExpr::create_from(&subst_body, codegen_ctx)
-                            } else {
-                                unimplemented!(
-                                    "There exists no implementation for this view function."
-                                )
-                            }
+                            unimplemented!("There exists no implementation for this view function.")
                         }
                     } else {
                         panic!("Non-globally defined shape functions do not exist.")
                     }
-                } else if let desc::ExprKind::Lambda(params, exec_ident, ret_dty, body) = &f.expr {
-                    todo!()
+                } else if let desc::ExprKind::Lambda(params, _, _, body) = &f.expr {
+                    ShapeExpr::applied_shape_fun(
+                        std::iter::empty(),
+                        &[],
+                        params.iter().map(|p| p.ident.name.as_ref()),
+                        args,
+                        body,
+                        codegen_ctx,
+                    )
                 } else {
                     panic!("Non-globally defined shape functions do not exist.")
                 }
@@ -2207,6 +2202,26 @@ impl ShapeExpr {
                 )
             }
         }
+    }
+
+    fn applied_shape_fun<'a, I, J>(
+        gen_idents: I,
+        gen_args: &[desc::ArgKinded],
+        param_idents: J,
+        args: &[desc::Expr],
+        body: &desc::Expr,
+        codegen_ctx: &CodegenCtx,
+    ) -> ShapeExpr
+    where
+        I: Iterator<Item = &'a str>,
+        J: Iterator<Item = &'a str>,
+    {
+        let generic_substs = HashMap::from_iter(gen_idents.zip(gen_args));
+        let param_substs = HashMap::from_iter(param_idents.zip(args));
+        let mut subst_body = body.clone();
+        subst_body.subst_kinded_idents(&generic_substs);
+        subst_body.subst_idents(&param_substs);
+        ShapeExpr::create_from(&subst_body, codegen_ctx)
     }
 
     fn create_to_shape_shape(args: &[desc::Expr]) -> ShapeExpr {
