@@ -26,7 +26,6 @@ macro_rules! matches_dty {
         }
     };
 }
-use crate::ty_check::pre_decl::EXEC;
 pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε

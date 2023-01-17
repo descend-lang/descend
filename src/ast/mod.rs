@@ -188,9 +188,9 @@ impl Expr {
         self.subst_idents(&subst_map);
     }
 
-    pub fn subst_kinded_idents(&mut self, subst_map: HashMap<&str, &ArgKinded>) {
+    pub fn subst_kinded_idents(&mut self, subst_map: &HashMap<&str, &ArgKinded>) {
         struct SubstKindedIdents<'a> {
-            subst_map: HashMap<&'a str, &'a ArgKinded>,
+            subst_map: &'a HashMap<&'a str, &'a ArgKinded>,
         }
         impl VisitMut for SubstKindedIdents<'_> {
             fn visit_nat(&mut self, nat: &mut Nat) {

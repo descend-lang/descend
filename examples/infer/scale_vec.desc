@@ -7,7 +7,8 @@ fn scale_vec<n: nat>(
         &uniq gpu,
         (&uniq a_array,),
         | vec: (&uniq gpu.global [f64; n]) | -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-            let groups = group_mut::<1024>(to_view_mut(vec.0));
+            // let groups = group_mut::<1024>(to_view_mut(vec.0));
+            let groups = create_2d_uniq(vec.0);
             sched block in grid {
                 sched thread in block {
                     let block_groups = groups[[block]];
@@ -18,4 +19,10 @@ fn scale_vec<n: nat>(
         }
     );
     copy_to_host(&shrd a_array, h_vec)
+}
+
+fn create_2d_uniq<n: nat, r: prv>(
+    array: &r uniq gpu.global [f64; n]
+) -[v: view]-> &r uniq gpu.global [[ [[f64; 1024]]; n/1024]] {
+    group_mut::<1024, r, gpu.global, n, f64>(to_view_mut::<r, gpu.global, n, f64>(array))
 }

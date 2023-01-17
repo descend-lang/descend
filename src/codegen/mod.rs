@@ -2118,11 +2118,38 @@ impl ShapeExpr {
                         {
                             ShapeExpr::create_transpose_shape(args, codegen_ctx)
                         } else {
-                            unimplemented!()
+                            if let Some(vf) = codegen_ctx
+                                .comp_unit
+                                .iter()
+                                .find(|vf| vf.ident.name == ident.name)
+                            {
+                                let generic_substs = HashMap::from_iter(
+                                    vf.generic_params
+                                        .iter()
+                                        .map(|g| g.ident.name.as_ref())
+                                        .zip(gen_args),
+                                );
+                                let param_substs = HashMap::from_iter(
+                                    vf.param_decls
+                                        .iter()
+                                        .map(|p| p.ident.name.as_ref())
+                                        .zip(args),
+                                );
+                                let mut subst_body = vf.body_expr.clone();
+                                subst_body.subst_kinded_idents(&generic_substs);
+                                subst_body.subst_idents(&param_substs);
+                                ShapeExpr::create_from(&subst_body, codegen_ctx)
+                            } else {
+                                unimplemented!(
+                                    "There exists no implementation for this view function."
+                                )
+                            }
                         }
                     } else {
                         panic!("Non-globally defined shape functions do not exist.")
                     }
+                } else if let desc::ExprKind::Lambda(params, exec_ident, ret_dty, body) = &f.expr {
+                    todo!()
                 } else {
                     panic!("Non-globally defined shape functions do not exist.")
                 }
@@ -2172,6 +2199,7 @@ impl ShapeExpr {
                 )
                 .par_distrib_shape(dim_compo, exec)
             }
+            desc::ExprKind::Block(_, body) => ShapeExpr::create_from(body, codegen_ctx),
             _ => {
                 panic!(
                     "Expected a function application, identifer or projection, but found {:?}",
