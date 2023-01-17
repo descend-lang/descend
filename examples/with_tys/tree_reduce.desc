@@ -12,15 +12,17 @@ fn reduce<n: nat, a: prv, b: prv>(
           | input: (&'r uniq gpu.global [i32; n])| -[grid: gpu.grid<X<64>, X<1024>>]-> () <>{
             let block_group = group_mut::<1024, 'r, gpu.global, n, i32>(
                 to_view_mut::<'r, gpu.global, n, i32>(input.0));
-            sched ib in block_group to block in grid <'z>{
+            sched block in grid <'z>{
+                let ib = block_group[[block]];
                 for_nat k in halved_range(512) <'r1, 'r2, 's1, 's2>{
                     let split_ib: &'r1 uniq gpu.global [[i32; 2*k]] = (split 'r1 'r2 uniq 2*k (*ib)).0;
                     let (active_half0, active_half1) = split 's1 's2 uniq k (*split_ib);
 
                     indep(X) k block {
                         active_threads => {
-                            sched fst_half, snd_half in active_half0, active_half1
-                            to _ in active_threads {
+                            sched thread in active_threads {
+                                let fst_half = active_half0[[thread]];
+                                let snd_half = active_half1[[thread]];
                                 *fst_half = *fst_half + *snd_half
                             }
                         },

@@ -694,7 +694,7 @@ peg::parser! {
         // are no follow-up symbols. But there is still "dep" left to be parsed.
         // Therefore, the rule fails, even though it should have succeeded.
         rule keyword() -> ()
-            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to" / "with" / "decl"
+            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to" / "with"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
