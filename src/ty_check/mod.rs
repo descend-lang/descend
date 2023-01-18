@@ -231,10 +231,17 @@ impl TyChecker {
                 )?;
                 (ty_ctx, fun_ty)
             }
-            ExprKind::BorrowIndex(prv, own, arr_expr, idx) => {
-                unimplemented!()
-                //self.ty_check_borrow_idx(kind_ctx, ty_ctx, exec, prv, *own, arr_expr, idx)?
-            }
+            ExprKind::BorrowIndex(prv, own, arr_expr, idx) => self.ty_check_borrow_idx(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                prv,
+                *own,
+                arr_expr,
+                idx,
+            )?,
             ExprKind::Ref(prv, own, pl_expr) => self.ty_check_borrow(
                 kind_ctx,
                 exec_borrow_ctx,
@@ -672,7 +679,7 @@ impl TyChecker {
                     return Err(TyError::String(format!(
                         "Expected reference to array data type, but found {:?}",
                         reff.dty.as_ref(),
-                    )))
+                    )));
                 }
             },
             DataTyKind::Range => DataTyKind::Scalar(ScalarTy::I32),
@@ -2361,12 +2368,14 @@ impl TyChecker {
         Ok((res_ty_ctx, pl_ty))
     }
 
-    //TODO piet
-    /*fn ty_check_borrow_idx(
+    //FIXME not yet compatible with changes from multi-dim-grid feature branch
+    fn ty_check_borrow_idx(
         &self,
         kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
         ty_ctx: TyCtx,
-        exec: Exec,
+        ident_exec: &IdentExec,
+        exec: &ExecExpr,
         prv_val_name: &Option<String>,
         own: Ownership,
         arr_expr: &mut PlaceExpr,
@@ -2374,11 +2383,11 @@ impl TyChecker {
     ) -> TyResult<(TyCtx, Ty)> {
         let (arr_ty_ctx, ref_dty) = self.ty_check_borrow(
             kind_ctx,
+            exec_borrow_ctx,
             ty_ctx,
+            ident_exec,
             exec,
             prv_val_name,
-            own,
-            arr_expr,
             own,
             arr_expr,
         )?;
@@ -2402,7 +2411,7 @@ impl TyChecker {
         } else {
             unreachable!();
         }
-    }*/
+    }
 
     fn ty_check_borrow(
         &self,
@@ -2470,7 +2479,7 @@ impl TyChecker {
                 ),
             },
             TyKind::FnTy(_) => {
-                return Err(TyError::String("Trying to borrow a function.".to_string()))
+                return Err(TyError::String("Trying to borrow a function.".to_string()));
             }
         };
         if rmem == Memory::GpuLocal {
@@ -2638,7 +2647,7 @@ impl TyChecker {
                 return Err(TyError::ExpectedTupleType(
                     TyKind::Data(Box::new(DataTy::new(dty_kind.clone()))),
                     tuple_expr.clone(),
-                ))
+                ));
             }
         }
     }
@@ -2950,7 +2959,7 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
             }
         }
         ex @ ExecTyKind::CpuThread | ex @ ExecTyKind::GpuThread | ex @ ExecTyKind::View => {
-            return Err(TyError::String(format!("Cannot schedule over {}", ex)))
+            return Err(TyError::String(format!("Cannot schedule over {}", ex)));
         }
     };
     Ok(res_ty)
@@ -3042,7 +3051,7 @@ fn ty_check_exec_split_proj(
             return Err(TyError::String(format!(
                 "Trying to split non-splittable execution resource: {}",
                 ex
-            )))
+            )));
         }
     };
     Ok(if proj == 0 { lexec_ty } else { rexec_ty })
