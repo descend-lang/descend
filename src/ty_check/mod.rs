@@ -98,13 +98,17 @@ impl TyChecker {
 
         let mut exec = ExecExpr::new(Exec::new(BaseExec::Ident(gf.exec_decl.ident.clone())));
         ty_check_exec(&kind_ctx, &ty_ctx, &gf.exec_decl, &mut exec)?;
+        let mut ty_ctx = ty_ctx.append_exec_mapping(gf.exec_decl.ident.clone(), exec.clone());
+        for prv in &gf.body.prvs {
+            ty_ctx = ty_ctx.append_prv_mapping(PrvMapping::new(prv))
+        }
         self.ty_check_expr(
             &kind_ctx,
             &mut exec_borrow_ctx,
             ty_ctx,
             &gf.exec_decl,
             &exec,
-            &mut gf.body_expr,
+            &mut gf.body.body,
         )?;
 
         // t <= t_f
@@ -117,7 +121,7 @@ impl TyChecker {
         let empty_ty_ctx = subty::check(
             &kind_ctx,
             TyCtx::new(),
-            gf.body_expr.ty.as_ref().unwrap().dty(),
+            gf.body.body.ty.as_ref().unwrap().dty(),
             &gf.ret_dty,
         )?;
 
@@ -176,15 +180,9 @@ impl TyChecker {
                     )?
                 }
             }
-            ExprKind::Block(prvs, body) => self.ty_check_block(
-                kind_ctx,
-                exec_borrow_ctx,
-                ty_ctx,
-                ident_exec,
-                exec,
-                prvs,
-                body,
-            )?,
+            ExprKind::Block(block) => {
+                self.ty_check_block(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, block)?
+            }
             ExprKind::Let(pattern, ty, e) => self.ty_check_let(
                 kind_ctx,
                 exec_borrow_ctx,
@@ -1010,18 +1008,21 @@ impl TyChecker {
         let mut body_exec = ExecExpr::new(exec.exec.clone().distrib(sched.dim));
         ty_check_exec(kind_ctx, &ty_ctx, ident_exec, &mut body_exec)?;
         let inner_ty_ctx = ty_ctx.clone().append_frame(vec![]);
-        let inner_ty_ctx = if let Some(ident) = &sched.inner_exec_ident {
+        let mut inner_ty_ctx = if let Some(ident) = &sched.inner_exec_ident {
             inner_ty_ctx.append_exec_mapping(ident.clone(), body_exec.clone())
         } else {
             inner_ty_ctx
         };
+        for prv in &sched.body.prvs {
+            inner_ty_ctx = inner_ty_ctx.append_prv_mapping(PrvMapping::new(prv))
+        }
         let body_ty_ctx = self.ty_check_expr(
             kind_ctx,
             exec_borrow_ctx,
             inner_ty_ctx,
             ident_exec,
             &body_exec,
-            &mut sched.body,
+            &mut sched.body.body,
         )?;
         let no_moves_ty_ctx = body_ty_ctx.drop_last_frame();
         if no_moves_ty_ctx != ty_ctx {
@@ -1265,11 +1266,10 @@ impl TyChecker {
         ty_ctx: TyCtx,
         ident_exec: &IdentExec,
         exec: &ExecExpr,
-        prvs: &[String],
-        body: &mut Expr,
+        block: &mut Block,
     ) -> TyResult<(TyCtx, Ty)> {
         let mut ty_ctx_with_prvs = ty_ctx.append_frame(vec![]);
-        for prv in prvs {
+        for prv in &block.prvs {
             ty_ctx_with_prvs = ty_ctx_with_prvs.append_prv_mapping(PrvMapping::new(prv))
         }
         let body_ty_ctx = self.ty_check_expr(
@@ -1278,10 +1278,10 @@ impl TyChecker {
             ty_ctx_with_prvs,
             ident_exec,
             exec,
-            body,
+            &mut block.body,
         )?;
         let res_ty_ctx = body_ty_ctx.drop_last_frame();
-        Ok((res_ty_ctx, body.ty.as_ref().unwrap().as_ref().clone()))
+        Ok((res_ty_ctx, block.body.ty.as_ref().unwrap().as_ref().clone()))
     }
 
     fn check_mutable(ty_ctx: &TyCtx, pl: &Place) -> TyResult<()> {

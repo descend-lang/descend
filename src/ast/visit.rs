@@ -31,9 +31,10 @@ pub trait Visit: Sized {
     fn visit_ident(&mut self, _ident: &Ident) {}
     fn visit_pattern(&mut self, pattern: &Pattern) { walk_pattern(self, pattern) }
     fn visit_indep(&mut self, par_branch: &Indep) { walk_indep(self, par_branch) }
-    fn visit_par_for(&mut self, par_for: &Sched) { walk_par_for(self, par_for) }
+    fn visit_par_for(&mut self, par_for: &Sched) { walk_sched(self, par_for) }
     fn visit_expr_split(&mut self, expr_split: &ExprSplit) { walk_expr_split(self, expr_split) }
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
+    fn visit_block(&mut self, block: &Block) { walk_block(self, block) }
     fn visit_split_proj(&mut self, exec_split: &SplitProj) { walk_split_proj(self, exec_split) }
     fn visit_exec_expr(&mut self, exec_expr: &ExecExpr) { walk_exec_expr(self, exec_expr) }
     fn visit_exec(&mut self, exec: &Exec) { walk_exec(self, exec) }
@@ -232,7 +233,7 @@ pub fn walk_indep<V: Visit>(visitor: &mut V, indep: &Indep) {
     walk_list!(visitor, visit_expr, branch_bodies);
 }
 
-pub fn walk_par_for<V: Visit>(visitor: &mut V, par_for: &Sched) {
+pub fn walk_sched<V: Visit>(visitor: &mut V, par_for: &Sched) {
     let Sched {
         dim,
         inner_exec_ident,
@@ -244,7 +245,7 @@ pub fn walk_par_for<V: Visit>(visitor: &mut V, par_for: &Sched) {
         visitor.visit_ident(ident)
     }
     visitor.visit_ident(sched_exec);
-    visitor.visit_expr(body);
+    visitor.visit_block(body);
 }
 
 pub fn walk_expr_split<V: Visit>(visitor: &mut V, expr_split: &ExprSplit) {
@@ -273,7 +274,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_own(own);
             visitor.visit_pl_expr(pl_expr);
         }
-        ExprKind::Block(_, expr) => visitor.visit_expr(expr),
+        ExprKind::Block(block) => visitor.visit_block(block),
         ExprKind::LetUninit(ident, ty) => {
             visitor.visit_ident(ident);
             visitor.visit_ty(ty);
@@ -380,6 +381,11 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
     }
 }
 
+pub fn walk_block<V: Visit>(visitor: &mut V, block: &Block) {
+    let Block { body, .. } = block;
+    visitor.visit_expr(body);
+}
+
 pub fn walk_split_proj<V: Visit>(visitor: &mut V, split_proj: &SplitProj) {
     let SplitProj {
         split_dim,
@@ -432,12 +438,12 @@ pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
         ret_dty,
         exec_decl,
         prv_rels,
-        body_expr,
+        body,
     } = fun_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
     walk_list!(visitor, visit_param_decl, params);
     visitor.visit_dty(ret_dty);
     visitor.visit_ident_exec(exec_decl);
     walk_list!(visitor, visit_prv_rel, prv_rels);
-    visitor.visit_expr(body_expr)
+    visitor.visit_block(body)
 }

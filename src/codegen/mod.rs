@@ -213,7 +213,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
         param_decls: params,
         ret_dty: ret_ty,
         exec_decl,
-        body_expr,
+        body,
         ..
     } = gl_fun;
 
@@ -230,8 +230,8 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
 
     cu::FnDef::new(
         fn_sig,
-        gen_stmt(
-            body_expr,
+        cu::Stmt::Block(Box::new(gen_stmt(
+            &body.body,
             !matches!(
                 ret_ty,
                 desc::DataTy {
@@ -240,7 +240,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
                 }
             ),
             codegen_ctx,
-        ),
+        ))),
     )
 }
 
@@ -287,9 +287,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                 expr: None,
             }
         }
-        Block(_, expr) => {
+        Block(block) => {
             codegen_ctx.push_scope();
-            let block_stmt = gen_stmt(expr, return_value, codegen_ctx);
+            let block_stmt = gen_stmt(&block.body, return_value, codegen_ctx);
             codegen_ctx.drop_scope();
             cu::Stmt::Block(Box::new(block_stmt))
         }
@@ -961,11 +961,11 @@ fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::
     //     let par_distrib = input_arg_shape.par_distrib_shape(sched.dim, &codegen_ctx.exec);
     //     codegen_ctx.shape_ctx.insert(&ident, par_distrib);
     // }
-    let stmt = gen_stmt(&sched.body, false, codegen_ctx);
+    let stmt = gen_stmt(&sched.body.body, false, codegen_ctx);
 
     codegen_ctx.exec = outer_exec;
     codegen_ctx.drop_scope();
-    stmt
+    cu::Stmt::Block(Box::new(stmt))
 }
 
 fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
@@ -1277,7 +1277,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
         }),
         Let(_, _, _)
         | LetUninit(_, _)
-        | Block(_, _)
+        | Block(_)
         | IfElse(_, _, _)
         | If(_, _)
         | Seq(_)
@@ -2127,7 +2127,7 @@ impl ShapeExpr {
                                 gen_args,
                                 vf.param_decls.iter().map(|p| p.ident.name.as_ref()),
                                 args,
-                                &vf.body_expr,
+                                &vf.body.body,
                                 codegen_ctx,
                             )
                         } else {
@@ -2194,7 +2194,7 @@ impl ShapeExpr {
                 )
                 .par_distrib_shape(dim_compo, exec)
             }
-            desc::ExprKind::Block(_, body) => ShapeExpr::create_from(body, codegen_ctx),
+            desc::ExprKind::Block(block) => ShapeExpr::create_from(&block.body, codegen_ctx),
             _ => {
                 panic!(
                     "Expected a function application, identifer or projection, but found {:?}",

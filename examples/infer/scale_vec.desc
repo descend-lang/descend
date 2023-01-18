@@ -24,5 +24,5 @@ fn scale_vec<n: nat>(
 fn create_2d_uniq<n: nat, r: prv>(
     array: &r uniq gpu.global [f64; n]
 ) -[v: view]-> &r uniq gpu.global [[ [[f64; 1024]]; n/1024]] {
-    group_mut::<1024, r, gpu.global, n, f64>(to_view_mut::<r, gpu.global, n, f64>(array))
+    group_mut::<1024, r>(to_view_mut::<r>(array))
 }

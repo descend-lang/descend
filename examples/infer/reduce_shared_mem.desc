@@ -4,7 +4,7 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
-    let a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
+    let a_array = gpu_alloc_copy(&uniq gpu, ha_array);
     let mut out_array = gpu_alloc_copy(&uniq gpu, &shrd *h_output);
     exec::<gs, bs>(
         &uniq gpu,

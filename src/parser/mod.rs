@@ -68,12 +68,14 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
     impl VisitMut for ReplaceArgKindedIdents {
         fn visit_expr(&mut self, expr: &mut Expr) {
             match &mut expr.expr {
-                ExprKind::Block(prvs, body) => {
+                ExprKind::Block(block) => {
                     self.ident_names_to_kinds.extend(
-                        prvs.iter()
+                        block
+                            .prvs
+                            .iter()
                             .map(|prv| (prv.clone().into_boxed_str(), Kind::Provenance)),
                     );
-                    self.visit_expr(body)
+                    self.visit_expr(&mut block.body)
                 }
                 ExprKind::DepApp(f, gen_args) => {
                     self.visit_expr(f);
@@ -182,7 +184,7 @@ peg::parser! {
             = "fn" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
             "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
-            body_expr:block() {
+            body:block() {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
                     None => vec![]
@@ -194,7 +196,7 @@ peg::parser! {
                   ret_dty,
                   exec_decl,
                   prv_rels: vec![],
-                  body_expr: Box::new(body_expr)
+                  body: Box::new(body)
                 }
             }
 
@@ -249,11 +251,11 @@ peg::parser! {
             }
             / let_uninit()
             / "for" __ ident:ident() __ "in" __ collection:expression()
-                _ body:block()
+                _ body:block_expr()
             {
                 Expr::new(ExprKind::For(ident, Box::new(collection), Box::new(body)))
             }
-            / "while" __ cond:expression() __ body:block() {
+            / "while" __ cond:expression() __ body:block_expr() {
                 Expr::new(ExprKind::While(Box::new(cond), Box::new(body)))
             }
             // Parentheses to override precedence
@@ -359,14 +361,14 @@ peg::parser! {
             "(" _ expressions:expression() **<2,> (_ "," _) _ ")" {
                 Expr::new(ExprKind::Tuple(expressions))
             }
-            "if" __ cond:expression() _ iftrue:block() _ iffalse:("else" _ iffalse:block() {
+            "if" __ cond:expression() _ iftrue:block_expr() _ iffalse:("else" _ iffalse:block_expr() {
                 iffalse })? {
                 Expr::new( match iffalse {
                     Some(false_block) => ExprKind::IfElse(Box::new(cond), Box::new(iftrue), Box::new(false_block)),
                     None => ExprKind::If(Box::new(cond), Box::new(iftrue))
                 })
             }
-            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block() {
+            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block_expr() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
             "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:ident() _ "{" _
@@ -387,10 +389,10 @@ peg::parser! {
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
-              body_expr:block() {
+              body_expr:block_expr() {
                 Expr::new(ExprKind::Lambda(params, exec_decl, Box::new(ret_dty), Box::new(body_expr)))
             }
-            block:block() { block }
+            block:block_expr() { block }
             expression: expr_helper() { expression }
         }
 
@@ -426,16 +428,17 @@ peg::parser! {
         /   "Y" { DimCompo::Y }
         /   "Z" { DimCompo::Z }
 
-        rule block() -> Expr =
+        rule block_expr() -> Expr =
+            block:block() {
+                Expr::new(ExprKind::Block(block))
+            }
+
+        rule block() -> Block =
             prov_values:("<" _ prov_values:prov_value() ** (_ "," _)  _ ">" _ { prov_values })?
                 "{" _ body:expression_seq() _ "}"
             {
-                Expr::new(
-                    ExprKind::Block(
-                        if prov_values.is_some() { prov_values.unwrap() }
-                        else { vec![] },
-                        Box::new(body))
-                )
+                    if prov_values.is_some() { Block::with_prvs(prov_values.unwrap(), body) }
+                    else { Block::new(body) }
             }
 
         rule let_uninit() -> Expr =
@@ -1615,8 +1618,14 @@ mod tests {
             descend::expression_seq("if 7<8 <>{7+8} else <>{7*8}"),
             Ok(Expr::new(ExprKind::IfElse(
                 common_expr!(BinOp::Lt),
-                Box::new(Expr::new(ExprKind::Block(vec![], common_expr!(BinOp::Add)))),
-                Box::new(Expr::new(ExprKind::Block(vec![], common_expr!(BinOp::Mul)))),
+                Box::new(Expr::new(ExprKind::Block(Block {
+                    prvs: vec![],
+                    body: common_expr!(BinOp::Add)
+                }))),
+                Box::new(Expr::new(ExprKind::Block(Block {
+                    prvs: vec![],
+                    body: common_expr!(BinOp::Mul)
+                }))),
             )))
         );
     }
@@ -1648,9 +1657,8 @@ mod tests {
                         )))))
                     )
                 ]))),
-                Box::new(Expr::new(ExprKind::Block(
-                    vec![],
-                    Box::new(Expr::new(ExprKind::Assign(
+                Box::new(Expr::new(ExprKind::Block(Block::new(Expr::new(
+                    ExprKind::Assign(
                         Box::new(PlaceExpr::new(PlaceExprKind::Ident(x.clone()))),
                         Box::new(Expr::new(ExprKind::BinOp(
                             BinOp::Add,
@@ -1664,10 +1672,10 @@ mod tests {
                                 )))))
                             ))
                         ),))
-                    ),))
-                )))
-            ),))
-        );
+                    ),
+                )))))
+            )))
+        )
     }
 
     #[test]
@@ -1911,10 +1919,7 @@ mod tests {
             param_decls: params,
             exec_decl: exec,
             prv_rels,
-            body_expr: Box::new(Expr::new(ExprKind::Block(
-                vec![],
-                Box::new(descend::expression(body).unwrap()),
-            ))),
+            body: Box::new(Block::new(descend::expression(body).unwrap())),
             generic_params,
             ret_dty,
         };
@@ -1923,7 +1928,7 @@ mod tests {
         assert_eq!(result.param_decls, intended.param_decls);
         assert_eq!(result.exec_decl, intended.exec_decl);
         assert_eq!(result.prv_rels, intended.prv_rels);
-        assert_eq!(result.body_expr, intended.body_expr);
+        assert_eq!(result.body, intended.body);
         assert_eq!(result.generic_params, intended.generic_params);
         assert_eq!(result.ret_dty, intended.ret_dty);
         assert_eq!(result, intended);
@@ -2053,9 +2058,8 @@ mod tests {
                         )))))
                     ))
                 ))),
-                Box::new(Expr::new(ExprKind::Block(
-                    vec![],
-                    Box::new(Expr::new(ExprKind::Let(
+                Box::new(Expr::new(ExprKind::Block(Block::new(Expr::new(
+                    ExprKind::Let(
                         Pattern::Ident(Mutability::Const, Ident::new("x")),
                         None,
                         Box::new(Expr::with_type(
@@ -2064,8 +2068,8 @@ mod tests {
                                 ScalarTy::I32
                             )))))
                         ))
-                    )))
-                )))
+                    )
+                )))))
             )))
         )
     }

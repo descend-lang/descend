@@ -37,7 +37,7 @@ pub struct FunDef {
     pub ret_dty: DataTy,
     pub exec_decl: IdentExec,
     pub prv_rels: Vec<PrvRel>,
-    pub body_expr: Box<Expr>,
+    pub body: Box<Block>,
 }
 
 impl FunDef {
@@ -256,7 +256,7 @@ pub struct Sched {
     pub dim: DimCompo,
     pub inner_exec_ident: Option<Ident>,
     pub sched_exec: Ident,
-    pub body: Box<Expr>,
+    pub body: Box<Block>,
 }
 
 impl Sched {
@@ -264,7 +264,7 @@ impl Sched {
         dim: DimCompo,
         inner_exec_ident: Option<Ident>,
         sched_exec: Ident,
-        body: Expr,
+        body: Block,
     ) -> Self {
         Sched {
             dim,
@@ -330,6 +330,28 @@ impl Indep {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct Block {
+    pub prvs: Vec<String>,
+    pub body: Box<Expr>,
+}
+
+impl Block {
+    pub fn new(body: Expr) -> Self {
+        Block {
+            prvs: vec![],
+            body: Box::new(body),
+        }
+    }
+
+    pub fn with_prvs(prvs: Vec<String>, body: Expr) -> Self {
+        Block {
+            prvs,
+            body: Box::new(body),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
@@ -344,7 +366,7 @@ pub enum ExprKind {
     // Borrow Expressions
     Ref(Option<String>, Ownership, Box<PlaceExpr>),
     BorrowIndex(Option<String>, Ownership, Box<PlaceExpr>, Nat),
-    Block(Vec<String>, Box<Expr>),
+    Block(Block),
     // Variable declaration
     // let mut x: ty;
     LetUninit(Ident, Box<Ty>),
