@@ -1,7 +1,7 @@
 fn hist<i: prv, o: prv>(
     h_in: &s shrd cpu.mem [u8; 64*1024],
     h_out: &o uniq cpu.mem [u32; 256]
-) -[cpu.thread]-> () {
+) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
     let d_in = gpu_alloc_copy(&uniq gpu, &shrd *h_in);
@@ -12,56 +12,46 @@ fn hist<i: prv, o: prv>(
             &shrd d_in,
             &uniq d_out
         ),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
-          inputs: (&shrd gpu.global [u8; 64*1024],
+        | inputs: (&shrd gpu.global [u8; 64*1024],
                    &uniq gpu.global [u32; 256])
-        | -[gpu.grid]-> () {
+        | -[grid: gpu.grid<X<64>, X<1024>>]-> () {
             let d_in_groups = group::<1024>(to_view(inputs.0));
             let d_out_atomic = to_atomic_array(inputs.1);
             let d_out_atomic_view = to_view(&shrd *d_out_atomic);
 
-            decl {
-                let mut sm_out: [AtomicU32; 256] @ gpu.shared
-            } parfor block in grid
-              with d_in_group
-              from d_in_groups {
-                let sm_out_view = to_view(&shrd sm_out);
-                // initialize shared memory histogram
+            // TODO shared memory
+            // let mut sm_out: [AtomicU32; 256] @ gpu.shared;
 
-                par_branch split_thread_grp::<256>(block) {
-                    active_threads => {
-                        parfor _ in active_threads
-                        with sm_out_item
-                        from sm_out_view {
+            sched block in grid {
+
+                // initialize shared memory histogram
+                /*indep(X) 256 block {
+                    active => {
+                        sched thread in active {
                             atomic_store(&shrd *sm_out_item, 0u32)
                         }
                     },
-                    inactive_threads => { () }
+                    inactive => { () }
                 };
 
-                // syncthreads
-
-                parfor _ in block
-                with d_in_item
-                from d_in_group {
+                sched thread in block {
                     let tmp = *d_in_item;
                     atomic_fetch_add(&shrd (*sm_out)[tmp], 1u32)
-                };
+                };*/
 
-                // todo syncthreads
+                sync;
 
-                par_branch split_thread_grp::<256>(block) {
-                    active_threads => {
-                        parfor _ in block
-                        with sm_out_item, d_out_atomic_item
-                        from sm_out_view, d_out_atomic_view {
+                indep(X) 256 block {
+                    active => {
+                        sched thread in active {
+                            let d_out_atomic_item = d_out_atomic_view[[thread]];
                             atomic_fetch_add(
                                 &shrd *d_out_atomic_item,
-                                atomic_load( &shrd *sm_out_item )
+                                1u32 //atomic_load( &shrd *sm_out_item )
                             )
                         }
                     },
-                    inactive_thread => { () }
+                    inactive => { () }
                 }
             }
         }

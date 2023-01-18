@@ -1,6 +1,7 @@
 use super::ctxs::{KindCtx, TyCtx};
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
+use crate::ty_check::ctxs::ExecBorrowCtx;
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::TyChecker;
 use std::collections::HashSet;
@@ -14,54 +15,50 @@ type OwnResult<T> = Result<T, BorrowingError>;
 pub(super) fn ownership_safe(
     ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
+    exec_borrow_ctx: &ExecBorrowCtx,
     ty_ctx: &TyCtx,
-    exec: Exec,
+    exec: &ExecExpr,
     reborrows: &[internal::Place],
     own: Ownership,
     p: &PlaceExpr,
 ) -> OwnResult<HashSet<Loan>> {
     if p.is_place() {
-        ownership_safe_place(ty_ctx, reborrows, own, p)
+        ownership_safe_place(exec_borrow_ctx, ty_ctx, reborrows, exec, own, p)
     } else {
         let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
         let pl_ctx_no_deref = pl_ctx.without_innermost_deref();
         // Γ(π) = &r ωπ τπ
-        match ty_ctx.place_ty(&most_spec_pl)?.ty {
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Ref(Provenance::Value(prv_val_name), ref_own, _, _),
-                ..
-            }) => ownership_safe_deref(
-                ty_checker,
-                kind_ctx,
-                ty_ctx,
-                exec,
-                reborrows,
-                own,
-                &pl_ctx_no_deref,
-                &most_spec_pl,
-                prv_val_name.as_str(),
-                ref_own,
-                &p.split_tag_path,
-            ),
-            TyKind::Data(DataTy {
-                dty: DataTyKind::Ref(Provenance::Ident(_), ref_own, _, _),
-                ..
-            }) => ownership_safe_deref_abs(
-                ty_checker,
-                kind_ctx,
-                ty_ctx,
-                exec,
-                reborrows,
-                own,
-                &pl_ctx_no_deref,
-                &most_spec_pl,
-                ref_own,
-                &p.split_tag_path,
-            ),
-            TyKind::Data(DataTy {
-                dty: DataTyKind::RawPtr(_),
-                ..
-            }) => ownership_safe_deref_raw(
+        match &ty_ctx.place_dty(&most_spec_pl)?.dty {
+            DataTyKind::Ref(reff) => match &reff.rgn {
+                Provenance::Value(prv_val_name) => ownership_safe_deref(
+                    ty_checker,
+                    kind_ctx,
+                    exec_borrow_ctx,
+                    ty_ctx,
+                    exec,
+                    reborrows,
+                    own,
+                    &pl_ctx_no_deref,
+                    &most_spec_pl,
+                    prv_val_name.as_str(),
+                    reff.own,
+                    &p.split_tag_path,
+                ),
+                Provenance::Ident(_) => ownership_safe_deref_abs(
+                    ty_checker,
+                    kind_ctx,
+                    exec_borrow_ctx,
+                    ty_ctx,
+                    exec,
+                    reborrows,
+                    own,
+                    &pl_ctx_no_deref,
+                    &most_spec_pl,
+                    reff.own,
+                    &p.split_tag_path,
+                ),
+            },
+            DataTyKind::RawPtr(_) => ownership_safe_deref_raw(
                 ty_checker,
                 kind_ctx,
                 ty_ctx,
@@ -72,18 +69,18 @@ pub(super) fn ownership_safe(
                 &most_spec_pl,
             ),
             // TODO improve error message
-            t => ownership_safe_place(ty_ctx, reborrows, own, p), //panic!("Is the type dead? `{:?}`\n {:?}", t, p),
+            t => panic!("Is the type dead? `{:?}`", t),
         }
     }
 }
 
 // TODO remove!
 fn ownership_safe_deref_raw(
-    ty_checker: &TyChecker,
-    kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
-    exec: Exec,
-    reborrows: &[internal::Place],
+    _ty_checker: &TyChecker,
+    _kind_ctx: &KindCtx,
+    _ty_ctx: &TyCtx,
+    _exec: &ExecExpr,
+    _reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
@@ -101,12 +98,14 @@ fn ownership_safe_deref_raw(
 }
 
 fn ownership_safe_place(
+    exec_borrow_ctx: &ExecBorrowCtx,
     ty_ctx: &TyCtx,
     reborrows: &[internal::Place],
+    exec: &ExecExpr,
     own: Ownership,
     p: &PlaceExpr,
 ) -> OwnResult<HashSet<Loan>> {
-    ownership_safe_under_existing_loans(ty_ctx, reborrows, own, p)?;
+    ownership_safe_under_existing_loans(exec_borrow_ctx, ty_ctx, reborrows, exec, own, p)?;
     let mut loan_set = HashSet::new();
     loan_set.insert(Loan {
         place_expr: p.clone(),
@@ -118,8 +117,9 @@ fn ownership_safe_place(
 fn ownership_safe_deref(
     ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
+    exec_borrow_ctx: &ExecBorrowCtx,
     ty_ctx: &TyCtx,
-    exec: Exec,
+    exec: &ExecExpr,
     reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
@@ -144,6 +144,7 @@ fn ownership_safe_deref(
     let mut potential_prvs_after_subst = subst_pl_with_potential_prvs_ownership_safe(
         ty_checker,
         kind_ctx,
+        exec_borrow_ctx,
         ty_ctx,
         exec,
         &extended_reborrows,
@@ -158,8 +159,10 @@ fn ownership_safe_deref(
     ));
     currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
     ownership_safe_under_existing_loans(
+        exec_borrow_ctx,
         ty_ctx,
         &extended_reborrows,
+        exec,
         own,
         &currently_checked_pl_expr,
     )?;
@@ -173,8 +176,9 @@ fn ownership_safe_deref(
 fn subst_pl_with_potential_prvs_ownership_safe(
     ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
+    exec_borrow_ctx: &ExecBorrowCtx,
     ty_ctx: &TyCtx,
-    exec: Exec,
+    exec: &ExecExpr,
     reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
@@ -190,6 +194,7 @@ fn subst_pl_with_potential_prvs_ownership_safe(
         let loans_for_possible_prv_pl_expr = ownership_safe(
             ty_checker,
             kind_ctx,
+            exec_borrow_ctx,
             ty_ctx,
             exec,
             reborrows,
@@ -204,8 +209,9 @@ fn subst_pl_with_potential_prvs_ownership_safe(
 fn ownership_safe_deref_abs(
     ty_checker: &TyChecker,
     kind_ctx: &KindCtx,
+    exec_borrow_ctx: &ExecBorrowCtx,
     ty_ctx: &TyCtx,
-    exec: Exec,
+    exec: &ExecExpr,
     reborrows: &[internal::Place],
     own: Ownership,
     pl_ctx_no_deref: &PlaceCtx,
@@ -225,7 +231,14 @@ fn ownership_safe_deref_abs(
         &mut currently_checked_pl_expr,
     )?;
     new_own_weaker_equal(own, ref_own)?;
-    ownership_safe_under_existing_loans(ty_ctx, reborrows, own, &currently_checked_pl_expr)?;
+    ownership_safe_under_existing_loans(
+        exec_borrow_ctx,
+        ty_ctx,
+        reborrows,
+        exec,
+        own,
+        &currently_checked_pl_expr,
+    )?;
     let mut passed_through_prvs = HashSet::new();
     passed_through_prvs.insert(Loan {
         place_expr: currently_checked_pl_expr,
@@ -252,18 +265,27 @@ fn new_own_weaker_equal(checked_own: Ownership, ref_own: Ownership) -> OwnResult
 }
 
 fn ownership_safe_under_existing_loans(
+    exec_borrow_ctx: &ExecBorrowCtx,
     ty_ctx: &TyCtx,
     reborrows: &[internal::Place],
+    exec: &ExecExpr,
     own: Ownership,
     pl_expr: &PlaceExpr,
 ) -> OwnResult<()> {
+    // TODO am I allowed to borrow the place from this exec (place must be from same distrib-level in exec)
+    //  for select:
+
     for prv_mapping in ty_ctx.prv_mappings() {
         let PrvMapping { prv, loans } = prv_mapping;
         let no_uniq_overlap = no_uniq_loan_overlap(own, pl_expr, loans);
         if !no_uniq_overlap {
-            at_least_one_borrowing_place_and_all_in_reborrow(ty_ctx, prv, reborrows)?;
+            return at_least_one_borrowing_place_and_all_in_reborrow(ty_ctx, prv, reborrows);
         }
     }
+    // for (_, loans) in exec_borrow_ctx.iter() {
+    //     no_uniq_loan_overlap(own, pl_expr, loans);
+    // }
+
     Ok(())
 }
 

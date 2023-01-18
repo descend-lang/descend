@@ -7,7 +7,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies.peg]
-version = "0.6.3"
+version = "0.8.0"
 
 [dependencies.annotate-snippets]
 version = "0.9.0"

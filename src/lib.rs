@@ -1,8 +1,6 @@
 use crate::error::ErrorReported;
 
-#[macro_use]
 mod ast;
-#[macro_use]
 mod codegen;
 pub mod error;
 mod parser;

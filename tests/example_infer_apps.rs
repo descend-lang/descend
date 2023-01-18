@@ -13,7 +13,8 @@ fn scale_vec() -> Res {
 }
 
 #[ignore]
-fn bitonic_sort_split_blocks() -> Res {
+#[test]
+fn bitonic_sort() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc")?
@@ -21,14 +22,6 @@ fn bitonic_sort_split_blocks() -> Res {
 }
 
 #[ignore]
-fn bitonic_sort_shrd_mem() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/bitonic_sort/bitonic_sort_shrd_mem.desc")?
-    ))
-}
-
-#[test]
 fn scan() -> Res {
     eprintln!(
         "Breaks because there are name clashes between nats and type variables.\n \
@@ -107,15 +100,6 @@ fn vector_add() -> Res {
 
 #[ignore]
 #[test]
-fn warp_reduce() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/warp_reduce.desc")?
-    ))
-}
-
-#[ignore]
-#[test]
 fn bfs() -> Res {
     Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
 }
@@ -125,13 +109,5 @@ fn computed_indexing() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/infer/computed_indexing.desc")?
-    ))
-}
-
-#[test]
-fn vec_add_inplace() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/vec_add_inplace.desc")?
     ))
 }

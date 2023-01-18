@@ -1,6 +1,5 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Ident, IdentKinded, Memory, Nat, Provenance, ThreadHierchyTy,
-    Ty, TyKind,
+    ArgKinded, DataTy, DataTyKind, Ident, IdentKinded, Memory, Nat, Provenance, Ty, TyKind,
 };
 use std::collections::HashMap;
 
@@ -14,15 +13,15 @@ pub fn infer_kinded_args_from_mono_ty(
     subst_ret_ty: &Ty,
     mono_ty: &Ty,
 ) -> Vec<ArgKinded> {
-    if let TyKind::Fn(_, mono_param_tys, _, mono_ret_ty) = &mono_ty.ty {
-        if mono_param_tys.len() != subst_param_tys.len() {
+    if let TyKind::FnTy(mono_fn_ty) = &mono_ty.ty {
+        if mono_fn_ty.param_tys.len() != subst_param_tys.len() {
             panic!("Unexpected difference in amount of paramters.")
         }
         let mut res_map = HashMap::new();
-        for (subst_ty, mono_ty) in subst_param_tys.iter().zip(mono_param_tys) {
+        for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
             infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
         }
-        infer_kargs_tys(&mut res_map, subst_ret_ty, mono_ret_ty);
+        infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
         let mut res_vec = Vec::new();
         for gen_arg in remain_gen_args {
             let res_karg = res_map.get(&gen_arg.ident).unwrap();
@@ -73,20 +72,15 @@ macro_rules! panic_if_neq {
 
 fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &Ty) {
     match (&poly_ty.ty, &mono_ty.ty) {
-        (TyKind::Ident(id), _) => insert_checked!(map, ArgKinded::Ty, id, mono_ty),
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
-        (
-            TyKind::Fn(gen_params1, params1, exec1, ret_ty1),
-            TyKind::Fn(gen_params2, params2, exec2, ret_ty2),
-        ) => {
-            if !gen_params1.is_empty() || !gen_params2.is_empty() {
+        (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
+            if !fn_ty1.generics.is_empty() || !fn_ty2.generics.is_empty() {
                 panic!("Unexpected top-level function type.")
             }
-            infer_from_lists!(infer_kargs_tys, map, params1, params2);
-            panic_if_neq!(exec1, exec2);
-            infer_kargs_tys(map, ret_ty1, ret_ty2)
+            infer_from_lists!(infer_kargs_tys, map, &fn_ty1.param_tys, &fn_ty2.param_tys);
+            panic_if_neq!(fn_ty1.exec_ty, fn_ty2.exec_ty);
+            infer_kargs_tys(map, &fn_ty1.ret_ty, &fn_ty2.ret_ty)
         }
-        (TyKind::Dead(ty1), TyKind::Dead(ty2)) => infer_kargs_tys(map, ty1, ty2),
         _ => panic_no_inst!(),
     }
 }
@@ -99,16 +93,6 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         }
         (DataTyKind::Atomic(sty1), DataTyKind::Atomic(sty2)) => {
             panic_if_neq!(sty1, sty2);
-        }
-        (DataTyKind::ThreadHierchy(th_hy1), DataTyKind::ThreadHierchy(th_hy2)) => {
-            infer_kargs_th_hierchies(map, th_hy1, th_hy2)
-        }
-        (
-            DataTyKind::SplitThreadHierchy(th_hy1, n1),
-            DataTyKind::SplitThreadHierchy(th_hy2, n2),
-        ) => {
-            infer_kargs_th_hierchies(map, th_hy1, th_hy2);
-            infer_kargs_nats(map, n1, n2);
         }
         (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
             infer_from_lists!(infer_kargs_dtys, map, elem_dtys1, elem_dtys2)
@@ -125,11 +109,11 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
             infer_kargs_dtys(map, dty1, dty2);
             infer_kargs_mems(map, mem1, mem2);
         }
-        (DataTyKind::Ref(prv1, own1, mem1, dty1), DataTyKind::Ref(prv2, own2, mem2, dty2)) => {
-            infer_kargs_prvs(map, prv1, prv2);
-            panic_if_neq!(own1, own2);
-            infer_kargs_mems(map, mem1, mem2);
-            infer_kargs_dtys(map, dty1, dty2);
+        (DataTyKind::Ref(reff1), DataTyKind::Ref(reff2)) => {
+            infer_kargs_prvs(map, &reff1.rgn, &reff2.rgn);
+            panic_if_neq!(reff1.own, reff2.own);
+            infer_kargs_mems(map, &reff1.mem, &reff2.mem);
+            infer_kargs_dtys(map, &reff1.dty, &reff2.dty);
         }
         (DataTyKind::RawPtr(dty1), DataTyKind::RawPtr(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         (DataTyKind::Range, DataTyKind::Range) => (),
@@ -138,36 +122,26 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
     }
 }
 
-fn infer_kargs_th_hierchies(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_hierchy: &ThreadHierchyTy,
-    mono_hierchy: &ThreadHierchyTy,
-) {
-    match (poly_hierchy, mono_hierchy) {
-        (
-            ThreadHierchyTy::BlockGrp(ln1, ln2, ln3, lm1, lm2, lm3),
-            ThreadHierchyTy::BlockGrp(rn1, rn2, rn3, rm1, rm2, rm3),
-        ) => {
-            infer_kargs_nats(map, ln1, rn1);
-            infer_kargs_nats(map, ln2, rn2);
-            infer_kargs_nats(map, ln3, rn3);
-            infer_kargs_nats(map, lm1, rm1);
-            infer_kargs_nats(map, lm2, rm2);
-            infer_kargs_nats(map, lm3, rm3);
-        }
-        (ThreadHierchyTy::ThreadGrp(ln1, ln2, ln3), ThreadHierchyTy::ThreadGrp(rn1, rn2, rn3)) => {
-            infer_kargs_nats(map, ln1, rn1);
-            infer_kargs_nats(map, ln2, rn2);
-            infer_kargs_nats(map, ln3, rn3);
-        }
-        (ThreadHierchyTy::WarpGrp(n1), ThreadHierchyTy::WarpGrp(n2)) => {
-            infer_kargs_nats(map, n1, n2)
-        }
-        (ThreadHierchyTy::Warp, ThreadHierchyTy::Warp) => {}
-        (ThreadHierchyTy::Thread, ThreadHierchyTy::Thread) => {}
-        _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
-    }
-}
+// TODO remove? or is this required somewhere?
+// fn infer_dim(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
+//     match (poly_dim, mono_dim) {
+//         (Dim::XYZ(diml), Dim::XYZ(dimr)) => {
+//             infer_kargs_nats(map, &diml.0, &dimr.0);
+//             infer_kargs_nats(map, &diml.1, &dimr.1);
+//             infer_kargs_nats(map, &diml.2, &dimr.2);
+//         }
+//         (Dim::XY(diml), Dim::XY(dimr))
+//         | (Dim::XZ(diml), Dim::XZ(dimr))
+//         | (Dim::YZ(diml), Dim::YZ(dimr)) => {
+//             infer_kargs_nats(map, &diml.0, &dimr.0);
+//             infer_kargs_nats(map, &diml.1, &dimr.1);
+//         }
+//         (Dim::X(diml), Dim::X(dimr))
+//         | (Dim::Y(diml), Dim::Y(dimr))
+//         | (Dim::Z(diml), Dim::Z(dimr)) => infer_kargs_nats(map, &diml.0, &dimr.0),
+//         _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
+//     }
+// }
 
 fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_nat: &Nat) {
     match (poly_nat, mono_nat) {
@@ -192,7 +166,7 @@ fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_na
         (Nat::Lit(l1), Nat::Lit(l2)) => panic_if_neq!(l1, l2),
         (Nat::App(func1, args1), Nat::App(func2, args2)) => {
             panic_if_neq!(func1, func2);
-            infer_from_lists!(infer_kargs_nats, map, args1, args2);
+            infer_from_lists!(infer_kargs_nats, map, args1, args2.iter());
         }
         _ => panic_no_inst!(),
     }

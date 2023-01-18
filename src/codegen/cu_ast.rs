@@ -1,18 +1,51 @@
 use crate::ast::Nat;
 
-pub(super) type CuProgram = Vec<Item>;
+pub(super) type CuProgram<'a> = Vec<Item<'a>>;
 
-// TODO big difference in sizes beteween variants
-pub(super) enum Item {
+pub(super) enum Item<'a> {
     Include(String),
-    FunDef {
+    FunDecl(&'a FnSig),
+    FnDef(Box<FnDef>),
+    MultiLineComment(String),
+}
+
+#[derive(Clone)]
+pub(super) struct FnSig {
+    pub(super) name: String,
+    pub(super) templ_params: Vec<TemplParam>,
+    pub(super) params: Vec<ParamDecl>,
+    pub(super) ret_ty: Ty,
+    pub(super) is_dev_fn: bool,
+}
+
+impl FnSig {
+    pub(super) fn new(
         name: String,
         templ_params: Vec<TemplParam>,
         params: Vec<ParamDecl>,
         ret_ty: Ty,
-        body: Stmt,
-        is_dev_fun: bool,
-    },
+        is_dev_fn: bool,
+    ) -> Self {
+        FnSig {
+            name,
+            templ_params,
+            params,
+            ret_ty,
+            is_dev_fn,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct FnDef {
+    pub(super) fn_sig: FnSig,
+    pub(super) body: Stmt,
+}
+
+impl FnDef {
+    pub(super) fn new(fn_sig: FnSig, body: Stmt) -> Self {
+        FnDef { fn_sig, body }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -58,7 +91,6 @@ pub(super) enum Stmt {
 
 #[derive(Clone, Debug)]
 pub(super) enum Expr {
-    // TODO Is there a better way to represent Unit values in C++?
     Empty,
     Ident(String),
     Lit(Lit),
@@ -152,6 +184,7 @@ pub(super) enum BinOp {
     BitAnd,
 }
 
+#[derive(Clone)]
 pub(super) enum TemplParam {
     Value { param_name: String, ty: Ty },
     TyName { name: String },
@@ -161,12 +194,6 @@ pub(super) enum TemplParam {
 pub(super) enum TemplateArg {
     Expr(Expr),
     Ty(Ty),
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum Exec {
-    Host,
-    Device,
 }
 
 #[derive(Clone, Debug)]
@@ -188,10 +215,6 @@ pub(super) enum Ty {
     Ptr(Box<Ty>, Option<GpuAddrSpace>),
     // The pointer itself is mutable, but the underlying data is not.
     PtrConst(Box<Ty>, Option<GpuAddrSpace>),
-    // TODO In C++ const is a type qualifier (as opposed to qualifying an identifier).
-    //  However the way we generate code let's us treat const as an identifier qualifier (we would
-    //  not return a const value from a function for example, but e.g., a non-const const pointer).
-    //  Should the AST be changed to reflect this?
     // const in a parameter declaration changes the parameter type in a definition but not
     // "necessarily" the function signature ... https://abseil.io/tips/109
     // Top-level const
@@ -200,7 +223,6 @@ pub(super) enum Ty {
     Ident(String),
 }
 
-// TODO this is not really a Cuda type and should maybe be represented by a generic type construct
 #[derive(Clone, Debug)]
 pub(super) enum BufferKind {
     CpuMem,

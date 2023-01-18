@@ -1,6 +1,9 @@
+use crate::ast::visit::walk_list;
 use crate::ast::visit::Visit;
+
 use crate::ast::{
-    visit, Expr, ExprKind, Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    visit, DataTy, DataTyKind, Expr, ExprKind, FunDef, Ident, IdentKinded, Kind, Memory, Nat,
+    Provenance, Ty, TyKind,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -50,8 +53,7 @@ impl Visit for FreeKindedIdents {
             Nat::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Nat);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    self.set
-                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Nat)))
+                    self.set.extend(std::iter::once(ident_kinded))
                 }
             }
             _ => visit::walk_nat(self, nat),
@@ -63,8 +65,7 @@ impl Visit for FreeKindedIdents {
             Memory::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Memory);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    self.set
-                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Memory)))
+                    self.set.extend(std::iter::once(ident_kinded))
                 }
             }
             _ => visit::walk_mem(self, mem),
@@ -76,30 +77,34 @@ impl Visit for FreeKindedIdents {
             Provenance::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Provenance);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    self.set
-                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Provenance)))
+                    self.set.extend(std::iter::once(ident_kinded))
                 }
             }
             _ => visit::walk_prv(self, prv),
         }
     }
 
-    fn visit_ty(&mut self, ty: &Ty) {
-        match &ty.ty {
-            TyKind::Ident(ident) => {
-                let ident_kinded = IdentKinded::new(ident, Kind::Ty);
+    fn visit_dty(&mut self, dty: &DataTy) {
+        match &dty.dty {
+            DataTyKind::Ident(ident) => {
+                let ident_kinded = IdentKinded::new(ident, Kind::DataTy);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    self.set
-                        .extend(std::iter::once(IdentKinded::new(ident, Kind::Ty)))
+                    self.set.extend(std::iter::once(ident_kinded))
                 }
             }
-            TyKind::Fn(idents_kinded, param_tys, _, ret_ty) => {
-                if !idents_kinded.is_empty() {
+            _ => visit::walk_dty(self, dty),
+        }
+    }
+
+    fn visit_ty(&mut self, ty: &Ty) {
+        match &ty.ty {
+            TyKind::FnTy(fn_ty) => {
+                if !fn_ty.generics.is_empty() {
                     panic!("Generic function types can not appear, only their instatiated counter parts.")
                 }
 
-                walk_list!(self, visit_ty, param_tys);
-                self.visit_ty(ret_ty)
+                walk_list!(self, visit_ty, &fn_ty.param_tys);
+                self.visit_ty(fn_ty.ret_ty.as_ref())
             }
             _ => visit::walk_ty(self, ty),
         }
@@ -118,5 +123,28 @@ impl Visit for FreeKindedIdents {
             }
             _ => visit::walk_expr(self, expr),
         }
+    }
+}
+
+pub fn implicit_idents_without_rgns(f: &FunDef) -> Option<HashSet<Ident>> {
+    struct ImplicitIdents(HashSet<Ident>);
+    impl Visit for ImplicitIdents {
+        fn visit_prv(&mut self, _prv: &Provenance) {
+            // ignore
+        }
+
+        fn visit_ident(&mut self, ident: &Ident) {
+            if ident.is_implicit {
+                self.0.insert(ident.clone());
+            }
+        }
+    }
+
+    let mut impl_idents = ImplicitIdents(HashSet::new());
+    impl_idents.visit_fun_def(f);
+    if impl_idents.0.is_empty() {
+        None
+    } else {
+        Some(impl_idents.0)
     }
 }
