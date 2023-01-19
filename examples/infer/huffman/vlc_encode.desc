@@ -79,7 +79,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     *s_codewordlen_item = *g_codewordlen_item
                 };
 
-                // todo syncthreads
+                sync;
 
                 // encode four input symbols per thread and save the total bit-length of the encoded
                 // symbols per thread in shared memory
@@ -132,7 +132,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     }
                 };
 
-                // todo syncthreads
+                sync;
 
                 // calculate prefix sum (scan) of thread output lengths
                 // (required for position of encoded symbols in output)
@@ -231,7 +231,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     atomic_store(&shrd *s_block_out_item, 0u32)
                 };
 
-                // todo syncthreads
+                sync;
 
                 // combine the output of every thread in a block inside gpu.shared
                 // output of a thread can span across 3 32-bit values in gpu.shared!

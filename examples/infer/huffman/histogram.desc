@@ -19,25 +19,33 @@ fn hist<i: prv, o: prv>(
             let d_out_atomic = to_atomic_array(inputs.1);
             let d_out_atomic_view = to_view(&shrd *d_out_atomic);
 
-            // TODO shared memory
-            // let mut sm_out: [AtomicU32; 256] @ gpu.shared;
+            // TODO shared memory declaration
+            // let mut s_block_out: [AtomicU32; 256] @ gpu.shared;
 
             sched block in grid {
 
+                let d_in_group = d_in_groups[[block]];
+
                 // initialize shared memory histogram
-                /*indep(X) 256 block {
+                indep(X) 256 block {
                     active => {
                         sched thread in active {
-                            atomic_store(&shrd *sm_out_item, 0u32)
+                            // let s_block_out_item = s_block_out_view[[thread]];
+                            // atomic_store(&shrd *s_block_out_item, 0u32)
+                            9000u32
                         }
                     },
                     inactive => { () }
                 };
 
+                sync;
+
                 sched thread in block {
+                    let d_in_item = d_in_group[[thread]];
                     let tmp = *d_in_item;
-                    atomic_fetch_add(&shrd (*sm_out)[tmp], 1u32)
-                };*/
+                    // atomic_fetch_add(&shrd (*s_block_out)[tmp], 1u32)
+                    9000u32
+                };
 
                 sync;
 
@@ -47,7 +55,8 @@ fn hist<i: prv, o: prv>(
                             let d_out_atomic_item = d_out_atomic_view[[thread]];
                             atomic_fetch_add(
                                 &shrd *d_out_atomic_item,
-                                1u32 //atomic_load( &shrd *sm_out_item )
+                                //atomic_load( &shrd *sm_out_item )
+                                9000u32
                             )
                         }
                     },
