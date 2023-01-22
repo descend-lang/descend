@@ -451,8 +451,8 @@ auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> vo
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
 }
 
-template <unsigned int N>
-inline __device__ descend::u32* to_atomic_array(descend::u32* array) {
+template <unsigned int N, typename T>
+inline __device__ T* to_atomic_array(T* array) {
     return array;
 }
 

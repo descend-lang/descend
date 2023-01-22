@@ -261,7 +261,7 @@ fn to_atomic_array_ty() -> FnTy {
 }
 
 // atomic_store:
-//  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> u32
+//  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> ()
 fn atomic_store_ty() -> FnTy {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -290,7 +290,7 @@ fn atomic_store_ty() -> FnTy {
         ],
         ExecTy::new(ExecTyKind::GpuThread),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::U32,
+            ScalarTy::Unit,
         ))))),
     )
 }
