@@ -2391,20 +2391,18 @@ impl TyChecker {
             own,
             arr_expr,
         )?;
-        if let TyKind::Data(DataTy {
-            dty: DataTyKind::Ref(prv, own, mem, ref_dty),
-            ..
-        }) = &ref_dty.ty
-        {
-            match &ref_dty.as_ref().dty {
+        if let DataTyKind::Ref(ref_dty) = &ref_dty.dty().dty {
+            match &ref_dty.dty.dty {
                 DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => Ok((
                     arr_ty_ctx,
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-                        prv.clone(),
-                        *own,
-                        mem.clone(),
-                        Box::new(elem_dty.as_ref().clone()),
-                    )))),
+                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                        Box::new(RefDty::new(
+                            ref_dty.rgn.clone(),
+                            ref_dty.own,
+                            ref_dty.mem.clone(),
+                            elem_dty.as_ref().clone(),
+                        )),
+                    ))))),
                 )),
                 _ => Err(TyError::String("Expected an array or view.".to_string())),
             }
