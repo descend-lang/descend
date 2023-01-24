@@ -614,6 +614,7 @@ peg::parser! {
             / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { 0 }/ "1" { 1 }) _ ">" {
                 ExecPathElem::SplitProj(Box::new(SplitProj::new(dim_compo, pos, proj)))
             }
+            / "to_warps" {ExecPathElem::ToWarps}
 
         rule exec_ty() -> ExecTy =
             begin:position!() exec:exec_ty_kind() end:position!() {
@@ -635,6 +636,12 @@ peg::parser! {
             }
             / "gpu.block_grp" _ "<" _ g_dim:dim() _ "," _ b_dim:dim() _ ">" {
                 ExecTyKind::GpuBlockGrp(g_dim, b_dim)
+            }
+            / "gpu.warp_grp" _ "<" _ wg_dim:nat() _ ">" {
+                ExecTyKind::GpuWarpGrp(wg_dim)
+            }
+            / "gpu.warp" {
+                ExecTyKind::GpuWarp
             }
             / "gpu.thread_grp" _ "<" _ t_dim:dim() _ ">" {
                 ExecTyKind::GpuThreadGrp(t_dim)

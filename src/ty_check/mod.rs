@@ -2602,6 +2602,8 @@ impl TyChecker {
             ExecTyKind::GpuBlockGrp(_, _) => Some(Memory::GpuLocal),
             ExecTyKind::GpuThreadGrp(_) => Some(Memory::GpuLocal),
             ExecTyKind::GpuBlock(_) => Some(Memory::GpuLocal),
+            ExecTyKind::GpuWarpGrp(_) => Some(Memory::GpuLocal),
+            ExecTyKind::GpuWarp => Some(Memory::GpuLocal),
             ExecTyKind::View => None,
         }
     }
@@ -2705,7 +2707,9 @@ impl TyChecker {
             | ExecTyKind::GpuGrid(_, _)
             | ExecTyKind::GpuBlock(_)
             | ExecTyKind::GpuBlockGrp(_, _)
-            | ExecTyKind::GpuThreadGrp(_) => {
+            | ExecTyKind::GpuThreadGrp(_)
+            | ExecTyKind::GpuWarpGrp(_)
+            | ExecTyKind::GpuWarp => {
                 vec![Memory::GpuGlobal, Memory::GpuShared, Memory::GpuLocal]
             }
             ExecTyKind::GpuGlobalThreads(_) => vec![Memory::GpuGlobal, Memory::GpuLocal],
@@ -2876,6 +2880,12 @@ fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
             gdim.proj_size(dim_compo)
         }
         ExecTyKind::GpuBlock(dim) | ExecTyKind::GpuThreadGrp(dim) => dim.proj_size(dim_compo),
+        ExecTyKind::GpuWarpGrp(wgdim) => Nat::BinOp(
+            BinOpNat::Mul,
+            Box::new(wgdim.clone()),
+            Box::new(Nat::Lit(32)),
+        ),
+        ExecTyKind::GpuWarp => Nat::Lit(32),
         ExecTyKind::GpuGlobalThreads(_) => todo!(),
         ExecTyKind::View => unreachable!(),
     }
@@ -2913,6 +2923,9 @@ fn ty_check_exec(
                     &exec_ty,
                 )?
             }
+            ExecPathElem::ToWarps => {
+                todo!()
+            }
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
@@ -2948,6 +2961,12 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
                 Some(dim) => ExecTyKind::GpuThreadGrp(dim),
                 None => ExecTyKind::GpuThread,
             }
+        }
+        ExecTyKind::GpuWarpGrp(wgdim) => {
+            todo!()
+        }
+        ExecTyKind::GpuWarp => {
+            todo!()
         }
         ExecTyKind::GpuGlobalThreads(gdim) => {
             let inner_dim = remove_dim(gdim, d)?;

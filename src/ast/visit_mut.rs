@@ -12,7 +12,7 @@ pub trait VisitMut: Sized {
     fn visit_prv(&mut self, prv: &mut Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
     fn visit_atomic_ty(&mut self, _aty: &mut AtomicTy) {}
-    fn visit_dim_compo(&mut self, _dim_compo: &mut DimCompo) { }
+    fn visit_dim_compo(&mut self, _dim_compo: &mut DimCompo) {}
     fn visit_dim(&mut self, dim: &mut Dim) { walk_dim(self, dim) }
     fn visit_dim3d(&mut self, dim3d: &mut Dim3d) { walk_dim3d(self, dim3d) }
     fn visit_dim2d(&mut self, dim2d: &mut Dim2d) { walk_dim2d(self, dim2d) }
@@ -61,7 +61,12 @@ pub fn walk_nat<V: VisitMut>(visitor: &mut V, n: &mut Nat) {
             visitor.visit_nat(l);
             visitor.visit_nat(r)
         }
-        Nat::GridIdx | Nat::BlockIdx(_) | Nat::BlockDim(_) | Nat::ThreadIdx(_) | Nat::Lit(_) => {}
+        Nat::GridIdx
+        | Nat::BlockIdx(_)
+        | Nat::BlockDim(_)
+        | Nat::ThreadIdx(_)
+        | Nat::WarpIdx(_)
+        | Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
             walk_list!(visitor, visit_nat, args.as_mut())
@@ -423,6 +428,7 @@ pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut Exec) {
         match e {
             ExecPathElem::SplitProj(split_proj) => visitor.visit_split_proj(split_proj),
             ExecPathElem::Distrib(dim_compo) => visitor.visit_dim_compo(dim_compo),
+            ExecPathElem::ToWarps => {}
         }
     }
 }

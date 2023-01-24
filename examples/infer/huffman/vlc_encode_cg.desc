@@ -53,8 +53,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // Declare register variables for information that is needed throughout the algorithm, but can be most
                 // efficiently calculated some steps before the information is needed (e.g. codeword, codewordlen).
                 // These variables would go out of scope if declared inside "parfor _ in block"!
-                let mut codeword: u64;      // codeword for four symbols that is encoded by a single thread
-                let mut codewordlen: u32;   // length of the codeword that is encoded by a single thread (in bits)
+                let mut codeword: u64 = 0u64;      // codeword for four symbols that is encoded by a single thread
+                let mut codewordlen: u32 = 0u32;   // length of the codeword that is encoded by a single thread (in bits)
                 let mut kc: u32;            // index of the value in the output array (32 bits per value) where the
                                             // codeword of the current thread starts
                 let mut startbit: u32;      // bit-index inside of the value in the output array where the codeword of
@@ -75,8 +75,6 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 parfor _ in block
                 with d_item
                 from d_group {
-                    codeword = 0u64;
-                    codewordlen = 0u32;
 
                     let tmp_d_item = *d_item;
 

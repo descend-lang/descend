@@ -60,7 +60,12 @@ pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
             visitor.visit_nat(l);
             visitor.visit_nat(r)
         }
-        Nat::GridIdx | Nat::BlockIdx(_) | Nat::BlockDim(_) | Nat::ThreadIdx(_) | Nat::Lit(_) => {}
+        Nat::GridIdx
+        | Nat::BlockIdx(_)
+        | Nat::BlockDim(_)
+        | Nat::ThreadIdx(_)
+        | Nat::WarpIdx(_)
+        | Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
             walk_list!(visitor, visit_nat, args.as_ref())
@@ -422,6 +427,7 @@ pub fn walk_exec<V: Visit>(visitor: &mut V, exec: &Exec) {
         match e {
             ExecPathElem::SplitProj(split_proj) => visitor.visit_split_proj(split_proj),
             ExecPathElem::Distrib(dim_compo) => visitor.visit_dim_compo(dim_compo),
+            ExecPathElem::ToWarps => {}
         }
     }
 }

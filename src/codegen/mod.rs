@@ -1481,6 +1481,9 @@ fn stringify_exec(exec: &desc::ExecExpr) -> String {
                 );
                 str.push_str(&s);
             }
+            desc::ExecPathElem::ToWarps => {
+                str.push_str("to_warps");
+            }
         }
     }
     str
@@ -2067,7 +2070,9 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
         | desc::ExecTyKind::GpuGlobalThreads(_)
         | desc::ExecTyKind::GpuBlockGrp(_, _)
         | desc::ExecTyKind::GpuThreadGrp(_)
-        | desc::ExecTyKind::GpuThread => true,
+        | desc::ExecTyKind::GpuThread
+        | desc::ExecTyKind::GpuWarpGrp(_)
+        | desc::ExecTyKind::GpuWarp => true,
         desc::ExecTyKind::CpuThread | desc::ExecTyKind::View => false,
     }
 }

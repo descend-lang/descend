@@ -9,7 +9,7 @@ pub static GPU_ALLOC: &str = "gpu_alloc_copy";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static EXEC: &str = "exec";
 pub static EXEC_XY: &str = "exec_xy";
-// pub static SHARED_ALLOC: &str = "shared_alloc";
+pub static SHARED_ALLOC: &str = "shared_alloc";
 pub static COPY_TO_GPU: &str = "copy_to_gpu";
 pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
@@ -44,7 +44,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (COPY_TO_HOST, copy_to_host_ty()),
         (EXEC, exec_x_ty()),
         (EXEC_XY, exec_xy_ty()),
-        // (SHARED_ALLOC, shared_alloc_ty()),
+        (SHARED_ALLOC, shared_alloc_ty()),
         (COPY_TO_GPU, copy_to_gpu_ty()),
         (TO_RAW_PTR, to_raw_ptr_ty()),
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
@@ -637,23 +637,23 @@ fn exec_ty(mut kinded_idents: Vec<IdentKinded>, (b_dim, t_dim): (Dim, Dim)) -> F
 }
 
 // shared_alloc:
-//  <t: ty>() -> t @ gpu.shared
-// fn shared_alloc_ty() -> Ty {
-//     let t = Ident::new("t");
-//     let t_ty = IdentKinded {
-//         ident: t.clone(),
-//         kind: Kind::Ty,
-//     };
-//     Ty::new(TyKind::Fn(
-//         vec![t_ty],
-//         vec![],
-//         ExecTy::new(ExecTyKind::GpuGrid(Dim::X(n.clone()))),
-//         Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::At(
-//             Box::new(DataTy::new(DataTyKind::Ident(t))),
-//             Memory::GpuShared,
-//         ))))),
-//     ))
-// }
+//  <t: dty>() -> t @ gpu.shared
+fn shared_alloc_ty() -> FnTy {
+    let t = Ident::new("t");
+    let t_ty = IdentKinded {
+        ident: t.clone(),
+        kind: Kind::DataTy,
+    };
+    FnTy::new(
+        vec![t_ty],
+        vec![],
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::At(
+            Box::new(DataTy::new(DataTyKind::Ident(t))),
+            Memory::GpuShared,
+        ))))),
+    )
+}
 
 // TODO FIX Error: t: ty is too general this means it could contain functions
 //  (which is not well-kinded).

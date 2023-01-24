@@ -487,7 +487,7 @@ inline __device__ T atomic_fetch_add(
     return target.fetch_add(val, order);
 }
 
-inline __device__ cooperative_groups::thread_block_tile<32> warp() {
+inline __device__ cooperative_groups::thread_block_tile<32> to_warps() {
     return cooperative_groups::tiled_partition<32>(cooperative_groups::this_thread_block());
 }
 

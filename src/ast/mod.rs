@@ -893,6 +893,7 @@ impl fmt::Display for BaseExec {
 pub enum ExecPathElem {
     SplitProj(Box<SplitProj>),
     Distrib(DimCompo),
+    ToWarps,
     // ToThreadGrp(Box<ExecExpr>),
 }
 
@@ -905,6 +906,7 @@ impl fmt::Display for ExecPathElem {
                 split_proj.proj, split_proj.split_dim, split_proj.pos
             ),
             Self::Distrib(dim_compo) => write!(f, "distrib({})", dim_compo),
+            Self::ToWarps => write!(f, "to_warps()"),
         }
     }
 }
@@ -1508,6 +1510,8 @@ pub enum ExecTyKind {
     GpuBlock(Dim),
     GpuGlobalThreads(Dim),
     GpuBlockGrp(Dim, Dim),
+    GpuWarpGrp(Nat),
+    GpuWarp,
     GpuThreadGrp(Dim),
     GpuThread,
     View,
@@ -1519,6 +1523,9 @@ impl fmt::Display for ExecTyKind {
             ExecTyKind::CpuThread => write!(f, "cpu.thread"),
             ExecTyKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
             ExecTyKind::GpuGlobalThreads(size) => write!(f, "gpu.global_threads<{}>", size),
+            ExecTyKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
+            ExecTyKind::GpuWarpGrp(wgsize) => write!(f, "gpu.warp_grp<{}>", wgsize),
+            ExecTyKind::GpuWarp => write!(f, "gpu.warp"),
             ExecTyKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
             ExecTyKind::GpuThread => write!(f, "gpu.thread"),
             ExecTyKind::GpuBlockGrp(gsize, bsize) => {
@@ -1560,6 +1567,7 @@ pub enum Nat {
     ThreadIdx(DimCompo),
     BlockIdx(DimCompo),
     BlockDim(DimCompo),
+    WarpIdx(Box<Nat>),
     // Dummy that is always 0, i.e. equivalent to Lit(0)
     GridIdx,
     BinOp(BinOpNat, Box<Nat>, Box<Nat>),
@@ -1601,7 +1609,8 @@ impl Nat {
             | Nat::GridIdx
             | Nat::BlockIdx(_)
             | Nat::BlockDim(_)
-            | Nat::ThreadIdx(_) => Err("Cannot evaluate.".to_string()),
+            | Nat::ThreadIdx(_)
+            | Nat::WarpIdx(_) => Err("Cannot evaluate.".to_string()),
             Nat::Lit(n) => Ok(*n),
             Nat::BinOp(op, l, r) => match op {
                 BinOpNat::Add => Ok(l.eval()? + r.eval()?),
@@ -1701,6 +1710,7 @@ impl fmt::Display for Nat {
             Self::BlockIdx(d) => write!(f, "blockIdx.{}", d),
             Self::BlockDim(d) => write!(f, "blockDim.{}", d),
             Self::ThreadIdx(d) => write!(f, "threadIdx.{}", d),
+            Self::WarpIdx(_) => write!(f, "descend::to_warps.meta_group_rank()"),
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Self::App(func, args) => {
@@ -1758,8 +1768,8 @@ mod size_asserts {
     static_assert_size!(ExecExpr, 32);
     static_assert_size!(Exec, 64);
     static_assert_size!(ExecPathElem, 16);
-    static_assert_size!(ExecTy, 56);
-    static_assert_size!(ExecTyKind, 40);
+    static_assert_size!(ExecTy, 80);
+    static_assert_size!(ExecTyKind, 64);
     static_assert_size!(Expr, 128);
     static_assert_size!(ExprKind, 104);
     static_assert_size!(FunDef, 264);
