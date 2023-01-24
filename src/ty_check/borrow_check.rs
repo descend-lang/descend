@@ -69,7 +69,7 @@ pub(super) fn ownership_safe(
                 &most_spec_pl,
             ),
             // TODO improve error message
-            t => panic!("Is the type dead? `{:?}`", t),
+            t => ownership_safe_place(exec_borrow_ctx, ty_ctx, reborrows, exec, own, p), //panic!("Is the type dead? `{:?}`\n {:?}", t, p),
         }
     }
 }

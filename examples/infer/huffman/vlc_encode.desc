@@ -4,7 +4,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
     h_codewordlens: &cl shrd cpu.mem [u32; 256],
     h_out: &o uniq cpu.mem [u32; 64*256],
     h_out_idx: &oi uniq cpu.mem [u32; 64]
-) -[cpu.thread]-> () {
+) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
     let g_source_data = gpu_alloc_copy(&uniq gpu, &shrd *h_source_data);
@@ -21,13 +21,12 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
           &uniq g_out,
           &uniq g_out_idx
         ),
-        | grid: BlockGrp<64, ThreadGrp<256>>,
-          inputs: (&shrd gpu.global [u32; 64*256],
+        | inputs: (&shrd gpu.global [u32; 64*256],
                    &shrd gpu.global [u32; 256],
                    &shrd gpu.global [u32; 256],
                    &uniq gpu.global [u32; 64*256],
                    &uniq gpu.global [u32; 64])
-        | -[gpu.grid]-> () {
+        | -[grid: gpu.grid<X<64>, X<256>>]-> () {
             let g_source_data_block_groups = group::<256>(to_view(inputs.0));
             let g_codewords_view = to_view(inputs.1);
             let g_codewordlens_view = to_view(inputs.2);
@@ -35,16 +34,18 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
             let g_out_block_groups = group_mut::<256>(to_view_mut(inputs.3));
             let g_out_idx_block_groups = group_mut::<1>(to_view_mut(inputs.4));
 
-            decl {
-                let mut s_codewords: [u32; 256] @ gpu.shared;
-                let mut s_codewordlens: [u32; 256] @ gpu.shared;
-                let mut s_result_locations: [u32; 256] @ gpu.shared;
-                let mut s_block_out: [AtomicU32; 256] @ gpu.shared;
-                let mut s_last_index_to_copy: [u32; 1] @ gpu.shared
-            }
-            parfor block in grid
-            with g_source_data_block_group, g_out_block_group, g_out_idx_block_group
-            from g_source_data_block_groups, g_out_block_groups, g_out_idx_block_groups {
+            let mut s_codewords: [u32; 256] @ gpu.shared = shared_alloc::<[u32; 256]>();
+            let mut s_codewordlens: [u32; 256] @ gpu.shared = shared_alloc::<[u32; 256]>();
+            let mut s_result_locations: [u32; 256] @ gpu.shared = shared_alloc::<[u32; 256]>();
+            let mut s_block_out: [AtomicU32; 256] @ gpu.shared = shared_alloc::<[AtomicU32; 256]>();
+            let mut s_last_index_to_copy: [u32; 1] @ gpu.shared = shared_alloc::<[u32; 1]>();
+
+            sched block in grid {
+                // distribute groups to blocks
+                let g_source_data_block_group = g_source_data_block_groups[[block]];
+                let g_out_block_group = g_out_block_groups[[block]];
+                let g_out_idx_block_group = g_out_idx_block_groups[[block]];
+
                 // create shared memory views
                 let s_codewords_view = to_view_mut(&uniq s_codewords);
                 let s_codewordlens_view = to_view_mut(&uniq s_codewordlens);
@@ -58,23 +59,26 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // These variables would go out of scope if declared inside "parfor _ in block"!
 
                 // output that is encoded by a single thread
-                let mut l_thread_out: u64;
+                let mut l_thread_out: u64 = 0u64;
 
                 // length of the output that is encoded by a single thread (in bits)
-                let mut l_thread_out_len: u32;
+                let mut l_thread_out_len: u32 = 0u32;
 
                 // index of the value in the output array (32 bits per value) where the output of
                 // the current thread starts
-                let mut l_thread_start_value: u32;
+                let mut l_thread_start_value: u32 = 0u32; // does not need to be initialized here
 
                 // bit-index inside of the value in the output array where the codeword of the
                 // current thread starts
-                let mut l_thread_start_bit: u32;
+                let mut l_thread_start_bit: u32 = 0u32; // does not need to be initialized here
 
                 // cache the codewords and their lengths (in bits) in shared memory
-                parfor _ in block
-                with g_codeword_item, g_codewordlen_item, s_codeword_item, s_codewordlen_item
-                from g_codewords_view, g_codewordlens_view, s_codewords_view, s_codewordlens_view {
+                sched thread in block {
+                    let g_codeword_item = g_codewords_view[[thread]];
+                    let g_codewordlen_item = g_codewordlens_view[[thread]];
+                    let s_codeword_item = s_codewords_view[[thread]];
+                    let s_codewordlen_item = s_codewordlens_view[[thread]];
+
                     *s_codeword_item = *g_codeword_item;
                     *s_codewordlen_item = *g_codewordlen_item
                 };
@@ -86,11 +90,9 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 {
                     let mut s_result_locations_ref = &uniq s_result_locations;
                     let tmp_s_result_locations_view = to_view_mut(&uniq *s_result_locations_ref);
-                    parfor _ in block
-                    with g_source_data_item , s_result_location_item
-                    from g_source_data_block_group , tmp_s_result_locations_view {
-                        l_thread_out = 0u64;
-                        l_thread_out_len = 0u32;
+                    sched thread in block {
+                        let g_source_data_item = g_source_data_block_group[[thread]];
+                        let s_result_location_item = tmp_s_result_locations_view[[thread]];
 
                         // four symbols are stored in g_source_data_item
                         let tmp_source_data_item = *g_source_data_item;
@@ -142,35 +144,37 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                     let mut s_result_locations_ref = &uniq s_result_locations;
                     for_nat d in halved_range(128) <'a>{
                         let tmp_up_sweep_view = group_mut::<256/d, 'a, gpu.shared, 256, u32>(
-                            to_view_mut(&uniq *s_result_locations_ref
-                        ));
-                        par_branch split_thread_grp::<d>(block) {
-                            active_threads =>
-                            parfor _ in active_threads
-                            with arr
-                            from tmp_up_sweep_view {
-                                arr[256/d-1] = arr[256/d-1] + arr[128/d-1]
+                            to_view_mut(&uniq *s_result_locations_ref)
+                        );
+                        indep(X) d block {
+                            active_threads => {
+                                sched thread in active_threads {
+                                    let arr = tmp_up_sweep_view[[thread]]
+                                    // TODO arr[256 / d - 1] = arr[256 / d - 1] + arr[128 / d - 1]
+                                }
                             },
                             rest => { () }
-                        }
-                        // syncthreads
+                        };
+                        sync
                     }
                 };
 
                 // step 2: set last value to zero
                 let tmp_view2 = to_view_mut(&uniq s_result_locations);
                 let tmp_last = (split uniq (256 - 1) (*tmp_view2)).1;
-                par_branch split_thread_grp::<1>(block) {
-                    active_thread =>
-                    parfor _ in active_thread
-                    with last
-                    from &uniq *tmp_last {
-                        *last = 0u32
+                indep(X) 1 block {
+                    active_thread => {
+                        sched thread in active_thread {
+                            let tmp_last_borrow = &uniq *tmp_last;
+                            let last = tmp_last_borrow[[thread]];
+
+                            *last = 0u32
+                        }
                     },
                     rest => { () }
                 };
 
-                // syncthreads
+                sync;
 
                 // step 3: down-sweep phase
                 {
@@ -180,18 +184,19 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                             to_view_mut::<'b, gpu.shared, 256, u32 > (
                                 &'b uniq *s_result_locations_ref
                         ));
-                        par_branch split_thread_grp::<d>(block) {
-                            active_threads =>
-                            parfor _ in active_threads
-                            with arr
-                            from tmp_down_sweep_view {
-                                let t = arr[128/d-1];
-                                arr[128/d-1] = arr[256/d-1];
-                                arr[256/d-1] = arr[256/d-1] + t
+                        indep(X) d block {
+                            active_threads => {
+                                sched thread in active_threads {
+                                    let arr = tmp_down_sweep_view[[thread]];
+
+                                    let t = arr[128/d-1]
+                                    // TODO arr[128/d-1] = arr[256/d-1];
+                                    // TODO arr[256/d-1] = arr[256/d-1] + t
+                                }
                             },
                             rest => { () }
-                        }
-                        // syncthreads
+                        };
+                        sync
                     }
                 };
 
@@ -200,12 +205,13 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // store the last index of the output that is needed to store the output of the
                 // block to reduce the amount of copy operations from gpu.shared to gpu.global
                 // (s_last_index_to_copy_item)
-                par_branch split_thread_grp::<255>(block) {
+                indep(X) 255 block {
                     inactive_threads => { () },
                     active_thread => {
-                        parfor _ in active_thread
-                        with g_out_idx_block_item, s_last_index_to_copy_item
-                        from g_out_idx_block_group, s_last_index_to_copy_view {
+                        sched thread in active_thread {
+                            let g_out_idx_block_item = g_out_idx_block_group[[thread]];
+                            let s_last_index_to_copy_item = s_last_index_to_copy_view[[thread]];
+
                             *g_out_idx_block_item = s_result_locations[255] + l_thread_out_len;
                             *s_last_index_to_copy_item =
                                 (s_result_locations[255] + l_thread_out_len) / 32u32
@@ -223,9 +229,10 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 //     current thread starts
                 // initialize all values in s_block_out with 0 to use it for storing the output for
                 // each block
-                parfor _ in block
-                with s_result_locations_item, s_block_out_item
-                from s_result_locations_view, s_block_out_view {
+                sched thread in block {
+                    let s_result_locations_item = s_result_locations_view[[thread]];
+                    let s_block_out_item = s_block_out_view[[thread]];
+
                     l_thread_start_value = *s_result_locations_item / 32u32;
                     l_thread_start_bit = *s_result_locations_item % 32u32;
                     atomic_store(&shrd *s_block_out_item, 0u32)
@@ -235,9 +242,10 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
 
                 // combine the output of every thread in a block inside gpu.shared
                 // output of a thread can span across 3 32-bit values in gpu.shared!
-                parfor _ in block
-                with g_out_item, s_block_out_item
-                from g_out_block_group, s_block_out_view {
+                sched thread in block {
+                    let g_out_item = g_out_block_group[[thread]];
+                    let s_block_out_item = s_block_out_view[[thread]];
+
                     let mut wrbits: u32;
                     // Part 1 (first value in gpu.shared)
                     if l_thread_out_len > (32u32 - l_thread_start_bit) {
@@ -279,7 +287,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         ()
                     };
 
-                    // todo syncthreads
+                    sync;
 
                     // copy block outputs from gpu.shared to gpu.global
                     if thread_id_x() <= s_last_index_to_copy[0] {

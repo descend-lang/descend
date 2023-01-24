@@ -2493,6 +2493,9 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                     _ => unreachable!(),
                 },
             },
+            desc::ExecPathElem::ToWarps => {
+                todo!()
+            }
             // desc::ExecPathElem::ToThreadGrp(grid) => {
             //     assert!(matches!(&grid.exec, desc::ExecPathElem::GpuGrid(_, _)));
             //     let global_idx = |d| {

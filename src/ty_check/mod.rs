@@ -2694,6 +2694,11 @@ impl TyChecker {
                     passed_prvs,
                 ))
             }
+            DataTyKind::At(dty, mem) => Ok((
+                Ty::new(TyKind::Data(Box::new(dty.as_ref().clone()))),
+                vec![mem.clone()],
+                passed_prvs,
+            )),
             _ => Err(TyError::String(
                 "Trying to dereference non reference type.".to_string(),
             )),
@@ -2962,12 +2967,8 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
                 None => ExecTyKind::GpuThread,
             }
         }
-        ExecTyKind::GpuWarpGrp(wgdim) => {
-            todo!()
-        }
-        ExecTyKind::GpuWarp => {
-            todo!()
-        }
+        ExecTyKind::GpuWarpGrp(_) => ExecTyKind::GpuWarp,
+        ExecTyKind::GpuWarp => ExecTyKind::GpuThread,
         ExecTyKind::GpuGlobalThreads(gdim) => {
             let inner_dim = remove_dim(gdim, d)?;
             match inner_dim {

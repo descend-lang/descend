@@ -161,7 +161,6 @@ fn offset_raw_ptr_ty() -> FnTy {
     )
 }
 
-// todo piet constraints (exec only on GpuLane)
 // shfl_up:
 //  <d: dty>(d, i32) -> d
 fn shfl_up_ty() -> FnTy {
@@ -637,7 +636,7 @@ fn exec_ty(mut kinded_idents: Vec<IdentKinded>, (b_dim, t_dim): (Dim, Dim)) -> F
 }
 
 // shared_alloc:
-//  <t: dty>() -> t @ gpu.shared
+//  <t: dty>() -[view]-> t @ gpu.shared
 fn shared_alloc_ty() -> FnTy {
     let t = Ident::new("t");
     let t_ty = IdentKinded {
