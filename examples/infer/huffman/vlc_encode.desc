@@ -56,7 +56,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                 // Declare register variables for information that is relevant throughout the entire
                 // algorithm, but can be most efficiently calculated some steps before the
                 // information is required.
-                // These variables would go out of scope if declared inside "parfor _ in block"!
+                // These variables would go out of scope if declared inside "sched thread in block"!
 
                 // output that is encoded by a single thread
                 let mut l_thread_out: u64 = 0u64;

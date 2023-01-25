@@ -2,258 +2,301 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
     h_source_data: &s shrd cpu.mem [u32; 64*256],
     h_codewords: &c shrd cpu.mem [u32; 256],
     h_codewordlens: &cl shrd cpu.mem [u32; 256],
-    h_out_data: &o uniq cpu.mem [u32; 64*256],
+    h_out: &o uniq cpu.mem [u32; 64*256],
     h_out_idx: &oi uniq cpu.mem [u32; 64]
-) -[cpu.thread]-> () {
+) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
-    let source_data = gpu_alloc_copy(&uniq gpu, &shrd *h_source_data);
-    let codewords = gpu_alloc_copy(&uniq gpu, &shrd *h_codewords);
-    let codewordlens = gpu_alloc_copy(&uniq gpu, &shrd *h_codewordlens);
-    let mut out_data = gpu_alloc_copy(&uniq gpu, &shrd *h_out_data);
-    let mut out_idx = gpu_alloc_copy(&uniq gpu, &shrd *h_out_idx);
+    let g_source_data = gpu_alloc_copy(&uniq gpu, &shrd *h_source_data);
+    let g_codewords = gpu_alloc_copy(&uniq gpu, &shrd *h_codewords);
+    let g_codewordlens = gpu_alloc_copy(&uniq gpu, &shrd *h_codewordlens);
+    let mut g_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
+    let mut g_out_idx = gpu_alloc_copy(&uniq gpu, &shrd *h_out_idx);
     exec::<64, 256>(
         &uniq gpu,
         (
-          &shrd source_data,
-          &shrd codewords,
-          &shrd codewordlens,
-          &uniq out_data,
-          &uniq out_idx
+          &shrd g_source_data,
+          &shrd g_codewords,
+          &shrd g_codewordlens,
+          &uniq g_out,
+          &uniq g_out_idx
         ),
-        | grid: BlockGrp<64, ThreadGrp<256>>,
-          inputs: (&shrd gpu.global [u32; 64*256],
+        | inputs: (&shrd gpu.global [u32; 64*256],
                    &shrd gpu.global [u32; 256],
                    &shrd gpu.global [u32; 256],
                    &uniq gpu.global [u32; 64*256],
                    &uniq gpu.global [u32; 64])
-        | -[gpu.grid]-> () {
-            let d_groups = group::<256>(to_view(inputs.0));
-            let cw_view = to_view(inputs.1);
-            let cwl_view = to_view(inputs.2);
+        | -[grid: gpu.grid<X<64>, X<256>>]-> () {
+            let g_source_data_block_groups = group::<256>(to_view(inputs.0));
+            let g_codewords_view = to_view(inputs.1);
+            let g_codewordlens_view = to_view(inputs.2);
 
-            let out_data_groups = group_mut::<256>(to_view_mut(inputs.3));
-            let out_idx_groups = group_mut::<1>(to_view_mut(inputs.4));
+            let g_out_block_groups = group_mut::<256>(to_view_mut(inputs.3));
+            let g_out_idx_block_groups = group_mut::<1>(to_view_mut(inputs.4));
 
-            decl {
-                let mut sm_cw: [u32; 256] @ gpu.shared;
-                let mut sm_cwl: [u32; 256] @ gpu.shared;
-                let mut sm_scan_and_result: [u32; 256] @ gpu.shared;
-                let mut sm_kcmax: [u32; 1] @ gpu.shared
-            } parfor block in grid
-              with d_group, out_data_group, out_idx_group
-              from d_groups, out_data_groups, out_idx_groups {
+            let mut s_codewords: [u32; 256] @ gpu.shared = shared_alloc::<[u32; 256]>();
+            let mut s_codewordlens: [u32; 256] @ gpu.shared = shared_alloc::<[u32; 256]>();
+            let mut s_scan_and_block_out: [u32; 256] @ gpu.shared = shared_alloc::<[u32; 256]>();
+            let mut s_last_index_to_copy: [u32; 1] @ gpu.shared = shared_alloc::<[u32; 1]>();
+
+            sched block in grid {
+                // distribute groups to blocks
+                let g_source_data_block_group = g_source_data_block_groups[[block]];
+                let g_out_block_group = g_out_block_groups[[block]];
+                let g_out_idx_block_group = g_out_idx_block_groups[[block]];
+
                 // create shared memory views
-                let sm_cw_view = to_view_mut(&uniq sm_cw);
-                let sm_cwl_view = to_view_mut(&uniq sm_cwl);
-                let sm_scan_and_result_view = to_view(&shrd sm_scan_and_result);
-                let sm_kcmax_view = to_view_mut(&uniq sm_kcmax);
+                let s_codewords_view = to_view_mut(&uniq s_codewords);
+                let s_codewordlens_view = to_view_mut(&uniq s_codewordlens);
+                let s_scan_and_block_out_view = to_view_mut(&uniq s_scan_and_block_out);
+                let s_last_index_to_copy_view = to_view_mut(&uniq s_last_index_to_copy);
 
-                // Declare register variables for information that is needed throughout the algorithm, but can be most
-                // efficiently calculated some steps before the information is needed (e.g. codeword, codewordlen).
-                // These variables would go out of scope if declared inside "parfor _ in block"!
-                let mut codeword: u64;      // codeword for four symbols that is encoded by a single thread
-                let mut codewordlen: u32;   // length of the codeword that is encoded by a single thread (in bits)
-                let mut kc: u32;            // index of the value in the output array (32 bits per value) where the
-                                            // codeword of the current thread starts
-                let mut startbit: u32;      // bit-index inside of the value in the output array where the codeword of
-                                            // the current thread starts
+                // Declare register variables for information that is relevant throughout the entire
+                // algorithm, but can be most efficiently calculated some steps before the
+                // information is required.
+                // These variables would go out of scope if declared inside "sched thread in block"!
+
+                // output that is encoded by a single thread
+                let mut l_thread_out: u64 = 0u64;
+
+                // length of the output that is encoded by a single thread (in bits)
+                let mut l_thread_out_len: u32 = 0u32;
+
+                // index of the value in the output array (32 bits per value) where the output of
+                // the current thread starts
+                let mut l_thread_start_value: u32 = 0u32; // does not need to be initialized here
+
+                // bit-index inside of the value in the output array where the codeword of the
+                // current thread starts
+                let mut l_thread_start_bit: u32 = 0u32; // does not need to be initialized here
 
                 // cache the codewords and their lengths (in bits) in shared memory
-                parfor _ in block
-                with cw_item, cwl_item, sm_cw_item, sm_cwl_item
-                from cw_view, cwl_view, sm_cw_view, sm_cwl_view {
-                    *sm_cw_item = *cw_item;
-                    *sm_cwl_item = *cwl_item
+                sched thread in block {
+                    let g_codeword_item = g_codewords_view[[thread]];
+                    let g_codewordlen_item = g_codewordlens_view[[thread]];
+                    let s_codeword_item = s_codewords_view[[thread]];
+                    let s_codewordlen_item = s_codewordlens_view[[thread]];
+
+                    *s_codeword_item = *g_codeword_item;
+                    *s_codewordlen_item = *g_codewordlen_item
                 };
 
-                // todo syncthreads
+                sync;
 
-                // encode four input symbols per thread
-                // and save the total bit-length of the encoded symbols per thread in shared memory
+                // encode four input symbols per thread and save the total bit-length of the encoded
+                // symbols per thread in shared memory
                 {
-                    let mut foo = &uniq sm_scan_and_result;
-                    let tmp_sm_scan_view = to_view_mut(&uniq *foo);
-                    parfor _ in block
-                    with d_item , sm_scan_item
-                    from d_group , tmp_sm_scan_view {
-                        codeword = 0u64;
-                        codewordlen = 0u32;
+                    let mut s_scan_ref = &uniq s_scan_and_block_out;
+                    let tmp_s_scan_view = to_view_mut(&uniq *s_scan_ref);
+                    sched thread in block {
+                        let g_source_data_item = g_source_data_block_group[[thread]];
+                        let s_scan_item = tmp_s_scan_view[[thread]];
 
-                        let tmp_d_item = *d_item;
+                        // four symbols are stored in g_source_data_item
+                        let tmp_source_data_item = *g_source_data_item;
 
-                        let mut tmp_d_item_i = (tmp_d_item >> 24) as u8;
-                        let mut tmpcw = sm_cw[tmp_d_item_i];
-                        let mut tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
+                        // declare temporary variables
+                        let mut tmp_source_data_item_i: u8;
+                        let mut tmp_cw: u32;
+                        let mut tmp_cwl: u32;
 
-                        tmp_d_item_i = (tmp_d_item >> 16) as u8;
-                        tmpcw = sm_cw[tmp_d_item_i];
-                        tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
+                        // encode first symbol
+                        tmp_source_data_item_i = (tmp_source_data_item >> 24) as u8;
+                        tmp_cw = s_codewords[tmp_source_data_item_i];
+                        tmp_cwl = s_codewordlens[tmp_source_data_item_i];
+                        l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
+                        l_thread_out_len = l_thread_out_len + tmp_cwl;
 
-                        tmp_d_item_i = (tmp_d_item >> 8) as u8;
-                        tmpcw = sm_cw[tmp_d_item_i];
-                        tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
+                        // encode second symbol
+                        tmp_source_data_item_i = (tmp_source_data_item >> 16) as u8;
+                        tmp_cw = s_codewords[tmp_source_data_item_i];
+                        tmp_cwl = s_codewordlens[tmp_source_data_item_i];
+                        l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
+                        l_thread_out_len = l_thread_out_len + tmp_cwl;
 
-                        tmp_d_item_i = tmp_d_item as u8;
-                        tmpcw = sm_cw[tmp_d_item_i];
-                        tmpcwl = sm_cwl[tmp_d_item_i];
-                        codeword = (codeword<<tmpcwl) | tmpcw as u64;
-                        codewordlen = codewordlen + tmpcwl;
+                        // encode third symbol
+                        tmp_source_data_item_i = (tmp_source_data_item >> 8) as u8;
+                        tmp_cw = s_codewords[tmp_source_data_item_i];
+                        tmp_cwl = s_codewordlens[tmp_source_data_item_i];
+                        l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
+                        l_thread_out_len = l_thread_out_len + tmp_cwl;
 
-                        *sm_scan_item = codewordlen
+                        // encode fourth symbol
+                        tmp_source_data_item_i = tmp_source_data_item as u8;
+                        tmp_cw = s_codewords[tmp_source_data_item_i];
+                        tmp_cwl = s_codewordlens[tmp_source_data_item_i];
+                        l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
+                        l_thread_out_len = l_thread_out_len + tmp_cwl;
+
+                        *s_scan_item = l_thread_out_len
                     }
                 };
 
-                // todo syncthreads
+                sync;
 
-                // calculate prefix sum (scan) of codeword lengths
+                // calculate exclusive prefix sum (scan) of thread output lengths
                 // (required for position of encoded symbols in output)
-                // work-efficient shared memory implementation (optimization possible when using shuffle instructions!)
+                // work-efficient shared memory implementation
                 // step 1: up-sweep phase
                 {
-                    let mut foo = &uniq sm_scan_and_result;
+                    let mut s_scan_ref = &uniq s_scan_and_block_out;
                     for_nat d in halved_range(128) <'a>{
-                        let tmp_up_view = group_mut::<256/d, 'a, gpu.shared, 256, u32>(to_view_mut(&uniq *foo));
-                        par_branch split_thread_grp::<d>(block) {
-                            active_threads =>
-                            parfor _ in active_threads
-                            with arr
-                            from tmp_up_view {
-                                arr[256/d-1] = arr[256/d-1] + arr[128/d-1]
+                        let tmp_up_sweep_view = group_mut::<256/d, 'a, gpu.shared, 256, u32>(
+                            to_view_mut(&uniq *s_scan_ref)
+                        );
+                        indep(X) d block {
+                            active_threads => {
+                                sched thread in active_threads {
+                                    let arr = tmp_up_sweep_view[[thread]]
+                                    // TODO arr[256 / d - 1] = arr[256 / d - 1] + arr[128 / d - 1]
+                                }
                             },
                             rest => { () }
-                        }
-                        // syncthreads
+                        };
+                        sync
                     }
                 };
 
                 // step 2: set last value to zero
-                let tmp_view2 = to_view_mut(&uniq sm_scan_and_result);
+                let tmp_view2 = to_view_mut(&uniq s_scan_and_block_out);
                 let tmp_last = (split uniq (256 - 1) (*tmp_view2)).1;
-                par_branch split_thread_grp::<1>(block) {
-                    active_thread =>
-                    parfor _ in active_thread
-                    with last
-                    from &uniq *tmp_last {
-                        *last = 0u32
+                indep(X) 1 block {
+                    active_thread => {
+                        sched thread in active_thread {
+                            let tmp_last_borrow = &uniq *tmp_last;
+                            let last = tmp_last_borrow[[thread]];
+
+                            *last = 0u32
+                        }
                     },
                     rest => { () }
                 };
 
-                // syncthreads
+                sync;
 
                 // step 3: down-sweep phase
                 {
-                    let mut foo = &uniq sm_scan_and_result;
+                    let mut s_scan_ref = &uniq s_scan_and_block_out;
                     for_nat d in doubled_range(1, 128) <'b>{
-                        let tmp_down_view = group_mut::<256 / d, 'b, gpu.shared, 256, u32>(
-                            to_view_mut::<'b, gpu.shared, 256, u32 > (&'b uniq *foo));
-                        par_branch split_thread_grp::<d>(block) {
-                            active_threads =>
-                            parfor _ in active_threads
-                            with arr
-                            from tmp_down_view {
-                                let t = arr[128/d-1];
-                                arr[128/d-1] = arr[256/d-1];
-                                arr[256/d-1] = arr[256/d-1] + t
+                        let tmp_down_sweep_view = group_mut::<256 / d, 'b, gpu.shared, 256, u32>(
+                            to_view_mut::<'b, gpu.shared, 256, u32 > (
+                                &'b uniq *s_scan_ref
+                        ));
+                        indep(X) d block {
+                            active_threads => {
+                                sched thread in active_threads {
+                                    let arr = tmp_down_sweep_view[[thread]];
+
+                                    let t = arr[128/d-1]
+                                    // TODO arr[128/d-1] = arr[256/d-1];
+                                    // TODO arr[256/d-1] = arr[256/d-1] + t
+                                }
                             },
                             rest => { () }
-                        }
-                        // syncthreads
+                        };
+                        sync
                     }
                 };
 
-                // output the bit-index after the last codeword of the block for every block (out_idx_item)
-                // store the max index that is needed to store all of the encoded symbols for a block (sm_kcmax_item)
-                par_branch split_thread_grp::<255>(block) {
+                // output the bit-index after the last codeword of the block for every block
+                // (g_out_idx_block_item)
+                // store the last index of the output that is needed to store the output of the
+                // block to reduce the amount of copy operations from gpu.shared to gpu.global
+                // (s_last_index_to_copy_item)
+                indep(X) 255 block {
                     inactive_threads => { () },
                     active_thread => {
-                        parfor _ in active_thread
-                        with out_idx_item, sm_kcmax_item
-                        from out_idx_group, sm_kcmax_view {
-                            *out_idx_item = sm_scan_and_result[255] + codewordlen;
-                            *sm_kcmax_item = (sm_scan_and_result[255] + codewordlen) / 32u32
+                        sched thread in active_thread {
+                            let g_out_idx_block_item = g_out_idx_block_group[[thread]];
+                            let s_last_index_to_copy_item = s_last_index_to_copy_view[[thread]];
+
+                            *g_out_idx_block_item = s_scan_and_block_out[255] + l_thread_out_len;
+                            *s_last_index_to_copy_item =
+                                (s_scan_and_block_out[255] + l_thread_out_len) / 32u32
                         }
                     }
                 };
 
                 // syncthreads
 
-                // kc =       index of the value in the output array (32 bits per value) where the codeword of the
-                //            current thread starts
-                // startbit = bit-index inside of the value in the output array where the codeword of the current thread
-                //            starts
-                // set all values in sm_block_enc to 0 to use it for storing the encoded symbols for every block
-                {
-                    let sm_scan_and_result_view = to_view_mut(&uniq sm_scan_and_result);
-                    parfor _ in block
-                    with sm_scan_and_result_item
-                    from sm_scan_and_result_view {
-                        kc = *sm_scan_and_result_item / 32u32;
-                        startbit = *sm_scan_and_result_item % 32u32;
-                        *sm_scan_and_result_item = 0u32
-                    }
+                // l_thread_start_value =
+                //     index of the value in the output array (32 bits per value) where the codeword
+                //     of the current thread starts
+                // l_thread_start_bit =
+                //     bit-index inside of the value in the output array where the codeword of the
+                //     current thread starts
+                // initialize all values in s_scan_and_block_out with 0 to use it for storing the
+                // output for each block
+                sched thread in block {
+                    let s_scan_and_block_out_item = s_scan_and_block_out_view[[thread]];
+
+                    l_thread_start_value = *s_scan_and_block_out_item / 32u32;
+                    l_thread_start_bit = *s_scan_and_block_out_item % 32u32;
+                    *s_scan_and_block_out_item = 0u32
                 };
 
-                // todo syncthreads
+                sync;
 
-                // combine the encoded symbols of every thread in a block inside shared memory
-                // encoded symbols of a thread can span across 3 32-bit values in shared memory!
+                // combine the output of every thread in a block inside gpu.shared
+                // output of a thread can span across 3 32-bit values in gpu.shared!
                 {
-                    let mut sm_result = to_atomic_array(&uniq sm_scan_and_result);
-                    parfor _ in block {
+                    let mut s_block_out = to_atomic_array(&uniq s_scan_and_block_out);
+                    sched thread in block {
                         let mut wrbits: u32;
-                        // Part 1 (first value in shared memory)
-                        if codewordlen > (32u32 - startbit) {
-                            wrbits = (32u32 - startbit)
+                        // Part 1 (first value in gpu.shared)
+                        if l_thread_out_len > (32u32 - l_thread_start_bit) {
+                            wrbits = (32u32 - l_thread_start_bit)
                         } else {
-                            wrbits = codewordlen
+                            wrbits = l_thread_out_len
                         };
-                        let mut tmpcw: u32 = ( codeword >> ( codewordlen - wrbits ) ) as u32;
-                        atomic_fetch_or( & shrd (*sm_result)[kc], tmpcw << (32u32 - startbit - wrbits) );
-                        codewordlen = codewordlen - wrbits;
+                        let mut tmpcw: u32 = ( l_thread_out >> ( l_thread_out_len - wrbits ) ) as u32;
+                        atomic_fetch_or(
+                            &shrd (*s_block_out)[l_thread_start_value],
+                            tmpcw << (32u32 - l_thread_start_bit - wrbits)
+                        );
+                        l_thread_out_len = l_thread_out_len - wrbits;
 
-                        // Part 2 (second value in shared memory)
-                        if codewordlen > 0u32 {
-                            if codewordlen > 32u32 {
+                        // Part 2 (second value in gpu.shared)
+                        if l_thread_out_len > 0u32 {
+                            if l_thread_out_len > 32u32 {
                                 wrbits = 32u32
                             } else {
-                                wrbits = codewordlen
+                                wrbits = l_thread_out_len
                             };
-                            codewordlen = codewordlen - wrbits;
-                            tmpcw = ( codeword >> codewordlen ) as u32 & ( ( 1u32 << wrbits ) - 1u32 );
-                            atomic_fetch_or( & shrd (*sm_result)[kc +1], tmpcw << ( 32u32 - wrbits ) );
+                            l_thread_out_len = l_thread_out_len - wrbits;
+                            tmpcw = ( l_thread_out >> l_thread_out_len ) as u32
+                                    & ( ( 1u32 << wrbits ) - 1u32 );
+                            atomic_fetch_or(
+                                &shrd (*s_block_out)[l_thread_start_value+1],
+                                tmpcw << ( 32u32 - wrbits )
+                            );
                             ()
                         };
 
-                        // Part 3 (third value in shared memory)
-                        if codewordlen > 0u32 {
-                            tmpcw = (codeword & ( ( 1u64 << codewordlen) - 1u64) ) as u32;
-                            atomic_fetch_or( & shrd (*sm_result)[kc +2], tmpcw << ( 32u32 - codewordlen ) );
+                        // Part 3 (third value in gpu.shared)
+                        if l_thread_out_len > 0u32 {
+                            tmpcw = (l_thread_out & ( ( 1u64 << l_thread_out_len) - 1u64) ) as u32;
+                            atomic_fetch_or(
+                                &shrd (*s_block_out)[l_thread_start_value+2],
+                                tmpcw << ( 32u32 - l_thread_out_len )
+                            );
                             ()
                         }
                     }
                 };
+                sync;
 
-                // todo syncthreads
-
-                parfor _ in block
-                with out_data_item, sm_result_item
-                from out_data_group, sm_scan_and_result_view {
-                    // write block solution to global memory output
-                    if thread_id_x() <= sm_kcmax[0] {
-                        *out_data_item = *sm_result_item
+                sched thread in block {
+                    let g_out_item = g_out_block_group[[thread]];
+                    let s_block_out_item = s_scan_and_block_out_view[[thread]];
+                    // copy block outputs from gpu.shared to gpu.global
+                    if thread_id_x() <= s_last_index_to_copy[0] {
+                        *g_out_item = *s_block_out_item
                     }
                 }
             }
-          }
+        }
         );
-        copy_to_host(&shrd out_data, h_out_data);
-        copy_to_host(&shrd out_idx, h_out_idx)
+        copy_to_host(&shrd g_out, h_out);
+        copy_to_host(&shrd g_out_idx, h_out_idx)
 }
