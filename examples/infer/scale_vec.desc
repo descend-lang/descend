@@ -3,22 +3,21 @@ fn scale_vec<n: nat>(
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
-    exec::<64, 1024>(
-        &uniq gpu,
-        (&uniq a_array,),
-        | vec: (&uniq gpu.global [f64; n]) | -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-            // let groups = group_mut::<1024>(to_view_mut(vec.0));
-            let groups = create_2d_uniq(vec.0);
-            sched block in grid {
-                sched thread in block {
-                    let block_groups = groups[[block]];
-                    let v = block_groups[[thread]];
-                    *v = *v * 3.0
-                }
-            }
-        }
-    );
+    par_scale_vec::<<<X<64>, X<1024>>>>(&uniq a_array);
     copy_to_host(&shrd a_array, h_vec)
+}
+
+fn par_scale_vec<n: nat, r: prv>(
+    vec: &r uniq gpu.global [f64; n]
+) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
+    let groups = create_2d_uniq(vec);
+    sched block in grid {
+        sched thread in block {
+            let block_groups = groups[[block]];
+            let v = block_groups[[thread]];
+            *v = *v * 3.0
+        }
+    }
 }
 
 fn create_2d_uniq<n: nat, r: prv>(

@@ -308,8 +308,8 @@ peg::parser! {
                 Expr::new(ExprKind::Split(Box::new(ExprSplit::new(r1, r2, o, s, view))))
             }
             begin:position!() func:ident() place_end:position!() _
-                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" _ { k })?
-                "(" _ args:expression() ** (_ "," _) _ ")" end:position!()
+                kind_args:kind_args()?
+                args:args() end:position!()
             {
                 Expr::new(
                     ExprKind::App(
@@ -322,9 +322,7 @@ peg::parser! {
                     )
                 )
             }
-            begin:position!() func:ident() end:position!() _
-                kind_args:("::<" _ k:kind_argument() ** (_ "," _) _ ">" { k })
-            {
+            begin:position!() func:ident() end:position!() _ kind_args:kind_args() {
                 Expr::new(
                     ExprKind::DepApp(
                         Box::new(Expr::with_span(
@@ -334,6 +332,29 @@ peg::parser! {
                         kind_args
                 ))
             }
+            func:ident() _ "::<<<" _ grid_dim:dim() _ "," _ block_dim:dim()
+                mshrd:(_ ";" _ shrd_mem_dtys: dty() ** (_ "," _)
+                    mprvs:(_ ";" _ prvs:prov_value() ** (_ "," _) { prvs })? {
+                        (shrd_mem_dtys, mprvs)
+                })? _ ">>>"
+                mkind_arg_list:(_ klist:kind_args() { klist })?
+                args:args() {
+                    let (shared_mem_dtys, shared_mem_prvs) = if let Some((dtys, prvs)) = mshrd {
+                        let prvs = if let Some(prvs) = prvs { prvs } else { vec![] };
+                        (dtys, prvs)
+                    } else { (vec![], vec![]) };
+                    let gen_args = if let Some(gen_args) = mkind_arg_list { gen_args }
+                    else { vec![] };
+                    Expr::new(ExprKind::AppKernel(Box::new(AppKernel {
+                        grid_dim, block_dim, shared_mem_dtys, shared_mem_prvs,
+                        fun: Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(
+                                PlaceExpr::new(PlaceExprKind::Ident(func))))
+                            )),
+                        gen_args,
+                        args,
+                    })))
+            }
+
             l:literal() {
                 Expr::with_type(
                     ExprKind::Lit(l),
@@ -450,7 +471,8 @@ peg::parser! {
                     Span::new(begin, end)
                 )
             }
-
+        rule args() -> Vec<Expr> = "(" _ args:expression() ** (_ "," _) _ ")" { args }
+        rule kind_args() -> Vec<ArgKinded> = "::<" _ k:kind_argument() ** (_ "," _) _ ">" { k }
         // TODO make nat expressions aside from literals parsable.
         //  the current problem is, that a nat expression cannot be recognized as such, if it starts
         //  with an identifier, because identifiers are parsed generically. Just assuming the ident

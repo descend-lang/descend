@@ -15,7 +15,7 @@ pub(super) struct FnSig {
     pub(super) templ_params: Vec<TemplParam>,
     pub(super) params: Vec<ParamDecl>,
     pub(super) ret_ty: Ty,
-    pub(super) is_dev_fn: bool,
+    pub(super) exec_kind: ExecKind,
 }
 
 impl FnSig {
@@ -24,16 +24,23 @@ impl FnSig {
         templ_params: Vec<TemplParam>,
         params: Vec<ParamDecl>,
         ret_ty: Ty,
-        is_dev_fn: bool,
+        exec_kind: ExecKind,
     ) -> Self {
         FnSig {
             name,
             templ_params,
             params,
             ret_ty,
-            is_dev_fn,
+            exec_kind,
         }
     }
+}
+
+#[derive(Clone)]
+pub(super) enum ExecKind {
+    Host,
+    Global,
+    Device,
 }
 
 #[derive(Clone)]
@@ -86,7 +93,18 @@ pub(super) enum Stmt {
         stmt: Box<Stmt>,
     },
     Return(Option<Expr>),
+    ExecKernel(Box<ExecKernel>),
     Label(String),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ExecKernel {
+    pub fun_name: String,
+    pub template_args: Vec<TemplateArg>,
+    pub grid_dim: Box<Expr>,
+    pub block_dim: Box<Expr>,
+    pub shared_mem_bytes: usize,
+    pub args: Vec<Expr>,
 }
 
 #[derive(Clone, Debug)]
@@ -105,11 +123,7 @@ pub(super) enum Expr {
         ret_ty: Ty,
         is_dev_fun: bool,
     },
-    FunCall {
-        fun: Box<Expr>,
-        template_args: Vec<TemplateArg>,
-        args: Vec<Expr>,
-    },
+    FnCall(FnCall),
     UnOp {
         op: UnOp,
         arg: Box<Expr>,
@@ -136,6 +150,23 @@ pub(super) enum Expr {
     // The current plan for Nats is to simply print them with C syntax.
     // Instead generate a C/Cuda expression?
     Nat(Nat),
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct FnCall {
+    pub fun: Box<Expr>,
+    pub template_args: Vec<TemplateArg>,
+    pub args: Vec<Expr>,
+}
+
+impl FnCall {
+    pub fn new(fun: Expr, template_args: Vec<TemplateArg>, args: Vec<Expr>) -> Self {
+        FnCall {
+            fun: Box::new(fun),
+            template_args,
+            args,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

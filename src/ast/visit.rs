@@ -34,6 +34,7 @@ pub trait Visit: Sized {
     fn visit_par_for(&mut self, par_for: &Sched) { walk_sched(self, par_for) }
     fn visit_expr_split(&mut self, expr_split: &ExprSplit) { walk_expr_split(self, expr_split) }
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
+    fn visit_app_kernel(&mut self, app_kernel: &AppKernel) { walk_app_kernel(self, app_kernel) }
     fn visit_block(&mut self, block: &Block) { walk_block(self, block) }
     fn visit_split_proj(&mut self, exec_split: &SplitProj) { walk_split_proj(self, exec_split) }
     fn visit_exec_expr(&mut self, exec_expr: &ExecExpr) { walk_exec_expr(self, exec_expr) }
@@ -320,6 +321,9 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_expr(f);
             walk_list!(visitor, visit_arg_kinded, gen_args);
         }
+        ExprKind::AppKernel(app_kernel) => {
+            visitor.visit_app_kernel(app_kernel);
+        }
         ExprKind::IfElse(cond, tt, ff) => {
             visitor.visit_expr(cond);
             visitor.visit_expr(tt);
@@ -378,6 +382,30 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
         }
         ExprKind::Deref(expr) => visitor.visit_expr(expr),
         ExprKind::Range(_, _) | ExprKind::Sync => (),
+    }
+}
+
+pub fn walk_app_kernel<V: Visit>(visitor: &mut V, app_kernel: &AppKernel) {
+    let AppKernel {
+        grid_dim,
+        block_dim,
+        shared_mem_dtys,
+        shared_mem_prvs: _,
+        fun,
+        gen_args,
+        args,
+    } = app_kernel;
+    visitor.visit_dim(grid_dim);
+    visitor.visit_dim(block_dim);
+    for dty in shared_mem_dtys {
+        visitor.visit_dty(dty);
+    }
+    visitor.visit_expr(fun);
+    for garg in gen_args {
+        visitor.visit_arg_kinded(garg);
+    }
+    for arg in args {
+        visitor.visit_expr(arg);
     }
 }
 

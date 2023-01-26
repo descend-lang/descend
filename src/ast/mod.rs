@@ -352,6 +352,17 @@ impl Block {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct AppKernel {
+    pub grid_dim: Dim,
+    pub block_dim: Dim,
+    pub shared_mem_dtys: Vec<DataTy>,
+    pub shared_mem_prvs: Vec<String>,
+    pub fun: Box<Expr>,
+    pub gen_args: Vec<ArgKinded>,
+    pub args: Vec<Expr>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
@@ -387,6 +398,7 @@ pub enum ExprKind {
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
     // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
+    AppKernel(Box<AppKernel>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>),
     // For-each loop.

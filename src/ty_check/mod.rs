@@ -231,6 +231,14 @@ impl TyChecker {
                 )?;
                 (ty_ctx, fun_ty)
             }
+            ExprKind::AppKernel(app_kernel) => self.ty_check_app_kernel(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                app_kernel,
+            )?,
             ExprKind::Ref(prv, own, pl_expr) => self.ty_check_borrow(
                 kind_ctx,
                 exec_borrow_ctx,
@@ -1877,6 +1885,102 @@ impl TyChecker {
                 expected, kv
             )))
         }
+    }
+    fn ty_check_app_kernel(
+        &mut self,
+        kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
+        ty_ctx: TyCtx,
+        ident_exec: &IdentExec,
+        exec: &ExecExpr,
+        app_kernel: &mut AppKernel,
+    ) -> TyResult<(TyCtx, Ty)> {
+        // current exec = cpu.thread
+        if !matches!(exec.ty.as_ref().unwrap().ty, ExecTyKind::CpuThread) {
+            return Err(TyError::String(
+                "A kernel must be called from a CPU thread.".to_string(),
+            ));
+        }
+        // new scope with gpu.grid<DIM, DIM> execution resource
+        let mut kernel_ty_ctx = ty_ctx.append_frame(vec![]);
+        let mut kernel_exec = ExecExpr::new(Exec::new(BaseExec::GpuGrid(
+            app_kernel.grid_dim.clone(),
+            app_kernel.block_dim.clone(),
+        )));
+        ty_check_exec(kind_ctx, &kernel_ty_ctx, ident_exec, &mut kernel_exec)?;
+        // add explicit provenances to typing context (see block)
+        for prv in &app_kernel.shared_mem_prvs {
+            kernel_ty_ctx = kernel_ty_ctx.append_prv_mapping(PrvMapping::new(prv))
+        }
+        // generate internal shared memory identifier with provided dtys @ shared
+        let shared_mem_idents_ty = app_kernel
+            .shared_mem_dtys
+            .iter()
+            .map(|dty| {
+                IdentTyped::new(
+                    Ident::new_impli("shared_mem"),
+                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::At(
+                        Box::new(dty.clone()),
+                        Memory::GpuShared,
+                    ))))),
+                    Mutability::Mut,
+                    kernel_exec.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        // and add shared mem idents to scope
+        for it in &shared_mem_idents_ty {
+            kernel_ty_ctx = kernel_ty_ctx.append_ident_typed(it.clone());
+        }
+        // references to shared memory identifiers
+        let refs_to_shrd = shared_mem_idents_ty.iter().enumerate().map(|(i, idt)| {
+            let prv = if i < app_kernel.shared_mem_prvs.len() {
+                Some(app_kernel.shared_mem_prvs[i].clone())
+            } else {
+                None
+            };
+            Expr::new(ExprKind::Ref(
+                prv,
+                Ownership::Uniq,
+                Box::new(PlaceExpr::new(PlaceExprKind::Ident(idt.ident.clone()))),
+            ))
+        });
+        // type check argument list
+        for arg in app_kernel.args.iter_mut() {
+            kernel_ty_ctx = self.ty_check_expr(
+                kind_ctx,
+                exec_borrow_ctx,
+                kernel_ty_ctx,
+                ident_exec,
+                exec,
+                arg,
+            )?;
+        }
+        // create extended argument list with references to shared memory
+        let mut extended_args = app_kernel
+            .args
+            .iter()
+            .cloned()
+            .chain(refs_to_shrd)
+            .collect::<Vec<_>>();
+        // type check function application for generic args and extended argument list
+        self.ty_check_app(
+            kind_ctx,
+            exec_borrow_ctx,
+            kernel_ty_ctx.clone(),
+            ident_exec,
+            &kernel_exec,
+            &mut app_kernel.fun,
+            &mut app_kernel.gen_args,
+            &mut extended_args,
+        )?;
+        kernel_ty_ctx = kernel_ty_ctx.drop_last_frame();
+        Ok((
+            kernel_ty_ctx,
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            ))))),
+        ))
     }
 
     fn ty_check_tuple(

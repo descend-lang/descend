@@ -1,9 +1,9 @@
 use super::cu_ast::{
-    BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
+    BinOp, BufferKind, ExecKind, Expr, FnDef, FnSig, GpuAddrSpace, Item, Lit, ParamDecl, ScalarTy,
+    Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::codegen::cu_ast::{FnDef, FnSig, GpuAddrSpace, Lit};
-use std::fmt::Formatter;
 use std::env;
+use std::fmt::Formatter;
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
@@ -27,7 +27,7 @@ fn clang_format(code: &str) -> String {
     //If clang-format is not available for user, it's path can be set in this env Variable (e.g. in .cargo/config.toml)
     let clang_format_path = match env::var("CLANG_FORMAT_PATH") {
         Ok(path) => path,
-        Err(_) => String::from("clang-format")
+        Err(_) => String::from("clang-format"),
     };
 
     use std::io::Write;
@@ -66,7 +66,7 @@ impl std::fmt::Display for FnSig {
             templ_params,
             params,
             ret_ty,
-            is_dev_fn,
+            exec_kind,
         } = self;
 
         if !templ_params.is_empty() {
@@ -74,12 +74,7 @@ impl std::fmt::Display for FnSig {
             fmt_vec(f, templ_params, ", ")?;
             writeln!(f, ">")?;
         }
-        writeln!(
-            f,
-            "{}auto {}(",
-            if *is_dev_fn { "__device__ " } else { "" },
-            name
-        )?;
+        writeln!(f, "{} auto {}(", exec_kind, name)?;
         fmt_vec(f, params, ",\n")?;
         writeln!(f, "\n) -> {}", ret_ty)
     }
@@ -90,6 +85,16 @@ impl std::fmt::Display for FnDef {
         let FnDef { fn_sig, body } = self;
         write!(f, "{}", fn_sig)?;
         write!(f, "{}", body)
+    }
+}
+
+impl std::fmt::Display for ExecKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecKind::Host => write!(f, "__host__"),
+            ExecKind::Global => write!(f, "__global__"),
+            ExecKind::Device => write!(f, "__device__"),
+        }
     }
 }
 
@@ -157,7 +162,6 @@ impl std::fmt::Display for Stmt {
                 iter,
                 stmt,
             } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
-            Label(l) => write!(f, "{}:", l),
             Return(expr) => {
                 write!(f, "return")?;
                 if let Some(e) = expr {
@@ -165,6 +169,22 @@ impl std::fmt::Display for Stmt {
                 }
                 write!(f, ";")
             }
+            ExecKernel(exec_kernel) => {
+                write!(f, "{}", exec_kernel.fun_name)?;
+                if !exec_kernel.template_args.is_empty() {
+                    write!(f, "<")?;
+                    fmt_vec(f, &exec_kernel.template_args, ", ")?;
+                    write!(f, ">")?;
+                }
+                write!(f, "<<<{}, {}", exec_kernel.grid_dim, exec_kernel.block_dim)?;
+                if exec_kernel.shared_mem_bytes > 0 {
+                    write!(f, ", {}", exec_kernel.shared_mem_bytes)?;
+                }
+                write!(f, ">>>(")?;
+                fmt_vec(f, &exec_kernel.args, ", ")?;
+                write!(f, ");")
+            }
+            Label(l) => write!(f, "{}:", l),
         }
     }
 }
@@ -195,19 +215,15 @@ impl std::fmt::Display for Expr {
                 writeln!(f, ") -> {}", ret_ty)?;
                 write!(f, "{}", &body)
             }
-            FunCall {
-                fun,
-                template_args,
-                args,
-            } => {
-                write!(f, "{}", fun)?;
-                if !template_args.is_empty() {
+            FnCall(fn_call) => {
+                write!(f, "{}", fn_call.fun)?;
+                if !fn_call.template_args.is_empty() {
                     write!(f, "<")?;
-                    fmt_vec(f, template_args, ", ")?;
+                    fmt_vec(f, &fn_call.template_args, ", ")?;
                     write!(f, ">")?;
                 }
                 write!(f, "(")?;
-                fmt_vec(f, args, ", ")?;
+                fmt_vec(f, &fn_call.args, ", ")?;
                 write!(f, ")")
             }
             UnOp { op, arg } => write!(f, "{}{}", op, arg),
