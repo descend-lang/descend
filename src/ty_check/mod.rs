@@ -7,7 +7,7 @@ mod subty;
 pub(crate) mod unify;
 
 use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
-use crate::ast::utils::fresh_name;
+use crate::ast::utils::{fresh_ident, fresh_name};
 use crate::ast::visit::{walk_dty, Visit};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::DataTyKind::Scalar;
@@ -3381,8 +3381,6 @@ impl TyChecker {
                 own,
                 pl_expr,
             )?;
-            mems.iter()
-                .try_for_each(|mem| Self::accessible_memory(exec, mem))?;
 
             let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
             let (reffed_ty, rmem) = match &pl_expr_ty.ty {
@@ -3683,6 +3681,8 @@ impl TyChecker {
                 ))
             }
         } else {
+            // TODO what TODO here
+            // inner_mem.push(fresh_ident("mem", Memory::Ident));
             if let TyKind::Data(dty) = &borr_expr.ty.as_ref().unwrap().ty {
                 Ok((
                     Ty::new(TyKind::Data(deref_dty(
@@ -3920,6 +3920,11 @@ impl TyChecker {
                 self.nat_well_formed(kind_ctx, n)?;
             }
             DataTyKind::Tuple(elem_dtys) => {
+                for elem_dty in elem_dtys {
+                    self.dty_well_formed(kind_ctx, ty_ctx, exec, elem_dty)?;
+                }
+            }
+            DataTyKind::TupleUnknownSize(_, elem_dtys) => {
                 for elem_dty in elem_dtys {
                     self.dty_well_formed(kind_ctx, ty_ctx, exec, elem_dty)?;
                 }
@@ -4173,6 +4178,45 @@ pub fn proj_elem_ty(ty: &Ty, proj: &ProjEntry) -> TyResult<Ty> {
                 dtys.len()
             ))),
         },
+        (
+            TyKind::Data(DataTy {
+                dty: DataTyKind::TupleUnknownSize(_, dtys),
+                ..
+            }),
+            ProjEntry::TupleAccess(i),
+        ) => {
+            // TODO Extend TupleUnknownSize
+            // while dtys.get(*i).is_none() {
+            //     dtys.push(DataTy::new(fresh_ident("dty", DataTyKind::Ident)))
+            // }
+            // TODO Substitute TupleUnknownSize with extended TupleUnknownSize
+            match dtys.get(*i) {
+                Some(dty) => Ok(Ty::new(TyKind::Data(dty.clone()))),
+                None => panic!("This cannot happen"),
+            }
+        }
+        (
+            TyKind::Data(DataTy {
+                dty: DataTyKind::Ident(id),
+                ..
+            }),
+            ProjEntry::TupleAccess(i),
+        ) => {
+            let mut tuple_types = Vec::new();
+            for j in 0..*i {
+                tuple_types.push(DataTy::new(fresh_ident("dty", DataTyKind::Ident)));
+            }
+
+            let elem_dty = tuple_types.last().unwrap().clone();
+
+            let tuple = DataTy::new(DataTyKind::TupleUnknownSize(
+                Ident::new_impli(&fresh_name("dtyTuple")),
+                tuple_types,
+            ));
+            //TODO replace ident by tuple
+
+            Ok(Ty::new(TyKind::Data(elem_dty)))
+        }
         (
             TyKind::Data(DataTy {
                 dty: DataTyKind::Struct(struct_ty),

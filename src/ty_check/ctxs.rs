@@ -240,6 +240,20 @@ impl TyCtx {
                     place_frame
                 }
                 TyKind::Data(DataTy {
+                    dty: d::TupleUnknownSize(_, tys),
+                    ..
+                }) => {
+                    let mut place_frame = vec![(pl.clone(), ty.clone())];
+                    for (index, proj_ty) in tys.iter().enumerate() {
+                        let mut exploded_index = explode(
+                            pl.clone().proj(&ProjEntry::TupleAccess(index)),
+                            Ty::new(TyKind::Data(proj_ty.clone())),
+                        );
+                        place_frame.append(&mut exploded_index);
+                    }
+                    place_frame
+                }
+                TyKind::Data(DataTy {
                     dty: d::Struct(struct_ty),
                     ..
                 }) => {

@@ -5,7 +5,7 @@ fn inplace_vector_add<n: nat, a: prv, b: prv>(
 ) -[cpu.thread]-> () <'r, 's, 'c, 'd, 'e, 'f, 'i, 'g, 'h>{
     let mut gpu = gpu_device(0);
 
-    let mut a_array: _ @ gpu.global =
+    let mut a_array: [i32; n] @ gpu.global =
         gpu_alloc_copy::<'c, 'd, [i32; n]>(&'c uniq gpu, &'d shrd *ha_array);
     let b_array: [i32; n] @ gpu.global =
         gpu_alloc_copy::<'f, 'i, [i32; n]>(&'f uniq gpu, &'i shrd *hb_array);

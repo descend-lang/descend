@@ -412,6 +412,18 @@ impl Constrainable for DataTy {
             (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
                 Self::constrain_vec(elem_dtys1, elem_dtys2, constr_map, prv_rels)
             }
+            (
+                DataTyKind::TupleUnknownSize(id1, elem_dtys1),
+                DataTyKind::TupleUnknownSize(id2, elem_dtys2),
+            ) => {
+                todo!("TODO")
+            }
+            (DataTyKind::Tuple(elem_dtys1), DataTyKind::TupleUnknownSize(id2, elem_dtys2)) => {
+                todo!("TODO")
+            }
+            (DataTyKind::TupleUnknownSize(id1, elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
+                todo!("TODO")
+            }
             (DataTyKind::Struct(struct_1), DataTyKind::Struct(struct_2)) => {
                 if struct_1.name != struct_2.name {
                     return Err(TyError::CannotUnify);

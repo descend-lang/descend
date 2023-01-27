@@ -1371,6 +1371,7 @@ pub enum DataTyKind {
     // [[ dty; n ]]
     ArrayShape(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
+    TupleUnknownSize(Ident, Vec<DataTy>),
     Struct(StructDataType),
     At(Box<DataTy>, Memory),
     Ref(Provenance, Ownership, Memory, Box<DataTy>),
@@ -1483,6 +1484,9 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .fold(true, |acc, ty| acc & ty.is_fully_alive()),
+            TupleUnknownSize(_, elem_tys) => elem_tys
+                .iter()
+                .fold(true, |acc, ty| acc & ty.is_fully_alive()),
             Struct(struct_ty) =>
                 struct_ty.struct_fields.iter()
                 .fold(true, |acc, field| acc & field.dty.is_fully_alive()),
@@ -1505,6 +1509,13 @@ impl DataTy {
             DataTyKind::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
             DataTyKind::RawPtr(elem_dty) => self.occurs_in(elem_dty),
             DataTyKind::Tuple(elem_dtys) => {
+                let mut found = false;
+                for elem_dty in elem_dtys {
+                    found = self.occurs_in(elem_dty);
+                }
+                found
+            }
+            DataTyKind::TupleUnknownSize(_, elem_dtys) => {
                 let mut found = false;
                 for elem_dty in elem_dtys {
                     found = self.occurs_in(elem_dty);
@@ -1543,6 +1554,9 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
+            TupleUnknownSize(_, elem_tys) => elem_tys
+                .iter()
+                .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
             Struct(struct_ty) => struct_ty
                 .struct_fields
                 .iter()
@@ -1567,6 +1581,25 @@ impl SubstKindedIdents for DataTy {
                     }
                 } else {
                     self.clone()
+                }
+            }
+            TupleUnknownSize(id, elem_tys) => {
+                if ident_kinded.ident == *id && ident_kinded.kind == Kind::DataTy {
+                    match with {
+                        ArgKinded::Ident(idk) => DataTy::new(Ident(idk.clone())),
+                        ArgKinded::DataTy(dty) => dty.clone(),
+                        _ => {
+                            panic!("Trying to substitute data type identifier with non-type value.")
+                        }
+                    }
+                } else {
+                    DataTy::new(TupleUnknownSize(
+                        id.clone(),
+                        elem_tys
+                            .iter()
+                            .map(|ty| ty.subst_ident_kinded(ident_kinded, with))
+                            .collect(),
+                    ))
                 }
             }
             ThreadHierchy(th_hy) => DataTy::new(ThreadHierchy(Box::new(

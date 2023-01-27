@@ -1163,6 +1163,9 @@ impl NameGenerator {
                     NameGenerator::dty_to_string(dty)
                 ))
             ),
+            DataTyKind::TupleUnknownSize(_, _) => {
+                panic!("This should only exists in typeinference!")
+            }
             DataTyKind::Struct(sdty) => {
                 if sdty.generic_args.len() > 0 {
                     format!(

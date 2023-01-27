@@ -119,6 +119,10 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
             visitor.visit_nat(n);
         }
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
+        DataTyKind::TupleUnknownSize(ident, elem_dtys) => {
+            visitor.visit_ident(ident);
+            walk_list!(visitor, visit_dty, elem_dtys)
+        }
         DataTyKind::Struct(struct_ty) => {
             struct_ty
                 .struct_fields

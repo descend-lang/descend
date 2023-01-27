@@ -1,33 +1,87 @@
-fn matrix_multiply_naiv<n: nat, m: nat, k: nat>(
+fn matrix_multiply_naivV1<n: nat, m: nat, k: nat>(
     ha_matrix: &shrd cpu.mem [[f32; k]; m],
-    hb_matrix: &shrd cpu.mem [[f32; n]; k],
+    hb_matrix: &shrd cpu.mem [f32; n * k], // hb_matrix: &shrd cpu.mem [[f32; n]; k],
     mut h_result_matrix: [[f32; n]; m]
 ) -[cpu.thread]-> [[f32; n]; m] {
     let mut gpu = gpu_device(0);
 
     let a_matrix = gpu_alloc_copy(&uniq gpu, ha_matrix);
     let b_matrix = gpu_alloc_copy(&uniq gpu, hb_matrix);
-    // let mut result_matrix = gpu_alloc(&uniq gpu);
-    let mut result_matrix = gpu_alloc_copy(&uniq gpu, &shrd h_result_matrix);
+    let mut result_matrix = gpu_alloc_copy(&uniq gpu, &shrd h_result_matrix); // let mut result_matrix = gpu_alloc(&uniq gpu);
 
     exec::<64, 1024>(
         &uniq gpu,
-        (&shrd a_matrix, &shrd b_matrix , &uniq result_matrix),
+        (&shrd a_matrix, &shrd b_matrix, &uniq result_matrix),
         | grid, input | -[gpu.grid]-> () {
             let view_a = to_view(input.0);
             let mut view_res = to_view_mut(input.2);
             parfor block in grid with a_row, res_row from view_a, view_res {
-                let view_bT = to_view(input.1);
-                // let view_bT = transpose(to_view(input.1));
+                let view_bT = transpose(group::<n>(to_view(input.1)));
                 let mut view_res_row = to_view_mut(res_row);
-                parfor thread in block with b_column, res from view_bT, view_res_row {
-                    let mut scalar_product = a_row[0] + b_column[0];
-                    for i in 1 .. 10 {
-                        scalar_product = scalar_product + a_row[i] + b_column[i]
-                    };
-                    *res = scalar_product
-                    // *res = a_row * b_column
-                    // *res = a_row * a_row
+                parfor _ in block with b_column, res from view_bT, view_res_row {
+                    *res = to_view(a_row) * b_column
+                }
+            }
+        }
+    );
+
+    copy_to_host(&shrd result_matrix, &uniq h_result_matrix);
+    h_result_matrix
+}
+
+fn matrix_multiply_naivV2<n: nat, m: nat, k: nat, T>(
+    ha_matrix: &shrd cpu.mem [[T; k]; m],
+    hb_matrix: &shrd cpu.mem [T; n * k], // hb_matrix: &shrd cpu.mem [[f32; n]; k],
+    mut h_result_matrix: [[T; n]; m]
+) -[cpu.thread]-> [[T; n]; m] where T: Number {
+    let mut gpu = gpu_device(0);
+
+    let a_matrix = gpu_alloc_copy(&uniq gpu, ha_matrix);
+    let b_matrix = gpu_alloc_copy(&uniq gpu, hb_matrix);
+let mut result_matrix = gpu_alloc_copy(&uniq gpu, &shrd h_result_matrix); // let mut result_matrix = gpu_alloc(&uniq gpu);
+
+    exec::<64, 1024>(
+        &uniq gpu,
+        (&shrd a_matrix, &shrd b_matrix, &uniq result_matrix),
+        | grid, input | -[gpu.grid]-> () {
+            let view_a = to_view(input.0);
+            let mut view_res = to_view_mut(input.2);
+            parfor block in grid with a_row, res_row from view_a, view_res {
+                let view_bT = transpose(group::<n>(to_view(input.1)));
+                let mut view_res_row = to_view_mut(res_row);
+                parfor _ in block with b_column, res from view_bT, view_res_row {
+                    *res = to_view(a_row) * b_column
+                }
+            }
+        }
+    );
+
+    copy_to_host(&shrd result_matrix, &uniq h_result_matrix);
+    h_result_matrix
+}
+
+fn matrix_multiply_naivV3<n: nat, m: nat, k: nat, A, B, C>(
+    ha_matrix: &shrd cpu.mem [[A; k]; m],
+    hb_matrix: &shrd cpu.mem [B; n * k], // hb_matrix: &shrd cpu.mem [[f32; n]; k],
+    mut h_result_matrix: [[C; n]; m]
+) -[cpu.thread]-> [[C; n]; m] where A: Copy + Mul<B, C>, B: Copy, C: Add<C, C> {
+    let mut gpu = gpu_device(0);
+
+    let a_matrix = gpu_alloc_copy(&uniq gpu, ha_matrix);
+    let b_matrix = gpu_alloc_copy(&uniq gpu, hb_matrix);
+    let mut result_matrix = gpu_alloc_copy(&uniq gpu, &shrd h_result_matrix); // let mut result_matrix = gpu_alloc(&uniq gpu);
+
+    exec::<64, 1024>(
+        &uniq gpu,
+        (&shrd a_matrix, &shrd b_matrix, &uniq result_matrix),
+        | grid, input | -[gpu.grid]-> () {
+            let view_a = to_view(input.0);
+            let mut view_res = to_view_mut(input.2);
+            parfor block in grid with a_row, res_row from view_a, view_res {
+                let view_bT = transpose(group::<n>(to_view(input.1)));
+                let mut view_res_row = to_view_mut(res_row);
+                parfor _ in block with b_column, res from view_bT, view_res_row {
+                    *res = to_view(a_row) * b_column
                 }
             }
         }
@@ -41,11 +95,29 @@ impl<k: nat, T, R, O> Mul<&shrd gpu.global [[R; k]], O> for &shrd gpu.global [[T
         where T: Copy + Mul<R, O>, R: Copy, O: Add<O, O> {
     fn mul(self, other: &shrd gpu.global [[R; k]]) -[gpu.thread]-> O {
         let mut scalar_product = self[0] * other[0];
-        for i in 1 .. 10 {
+        // for_nat i in 0 .. k {
+        for i in 0 .. 10 {
             scalar_product = scalar_product + (self[i] * other[i])
         };
         scalar_product
     }
+}
+
+fn call__mm<n: nat, m: nat, k: nat>(
+    ha_matrix1: &shrd cpu.mem [[f32; k]; m],
+    ha_matrix2: &shrd cpu.mem [[f64; k]; m],
+    hb_matrix1: &shrd cpu.mem [f32; n * k],
+    hb_matrix2: &shrd cpu.mem [f64; n * k],
+    mut h_result_matrix1: [[f32; n]; m],
+    mut h_result_matrix2: [[f64; n]; m]
+) -[cpu.thread]-> () {
+    let res_f32 = matrix_multiply_naivV1(ha_matrix1, hb_matrix1, h_result_matrix1);
+
+    let res_f32 = matrix_multiply_naivV2(ha_matrix1, hb_matrix1, h_result_matrix1);
+    let res_f64 = matrix_multiply_naivV2(ha_matrix2, hb_matrix2, h_result_matrix2);
+
+    let res_f32 = matrix_multiply_naivV3(ha_matrix1, hb_matrix1, h_result_matrix1);
+    let res_f64 = matrix_multiply_naivV3(ha_matrix2, hb_matrix2, h_result_matrix2)
 }
 
 impl<k: nat, T, R, O> Mul<&shrd gpu.global [R; k], O> for &shrd gpu.global [T; k]

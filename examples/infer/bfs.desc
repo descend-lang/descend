@@ -58,7 +58,7 @@ fn bfs<n:nat, m:nat>(
         }
     };
 
-    let mut gpu: Gpu = gpu_device(0);
+    let mut gpu = gpu_device(0);
     let mut stop = gpu_alloc_copy(&uniq gpu, &shrd *h_stop);
     let nodes = gpu_alloc_copy(&uniq gpu, h_nodes);
     let edges = gpu_alloc_copy(&uniq gpu, h_edges);

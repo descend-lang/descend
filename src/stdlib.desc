@@ -33,8 +33,6 @@ impl Copy for () {}
 impl Copy for Atomic<i32> {}
 impl Copy for Atomic<bool> {}
 impl<T, a: prv, m: mem> Copy for &a shrd m T {}
-// FIXME thread hierarchies and their splits should be non-copyable!
-impl<T, n: nat> Copy for [T; n] where T: Copy {}
 impl<n1: nat, n2: nat, n3: nat, n4: nat, n5: nat, n6: nat> Copy for BlockGrp<n1, n2, n3, ThreadGrp<n4, n5, n6>> {}
 impl<n1: nat, n2: nat, n3: nat> Copy for ThreadGrp<n1, n2, n3> {}
 impl<n: nat> Copy for WarpGrp<n> {}
