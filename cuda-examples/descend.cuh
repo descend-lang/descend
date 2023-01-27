@@ -390,6 +390,7 @@ __global__ void launch(F f, Args... args)
     f(args...);
 }
 
+template <typename F, typename... Args>
 auto exec(dim3 num_blocks, dim3 num_threads, std::size_t shared_mem_bytes, F &&f, Args... args) -> void {
     CHECK_CUDA_ERR( cudaSetDevice(gpu_device(0)) );
 #ifdef BENCH

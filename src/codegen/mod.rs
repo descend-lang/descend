@@ -41,10 +41,16 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         .chain(initial_fns.into_iter())
         // mark kernel functions global
         .map(|mut f| {
-            if codegen_ctx.kernel_fn_names.contains(&f.fn_sig.name) {
-                f.fn_sig.exec_kind = cu::ExecKind::Global
+            if let Some(ki) = codegen_ctx
+                .kernel_infos
+                .iter()
+                .find(|ki| &ki.name == &f.fn_sig.name)
+            {
+                f.fn_sig.exec_kind = cu::ExecKind::Global;
+                mv_shrd_mem_params_into_decls(f, &ki.unnamed_shrd_mem_decls)
+            } else {
+                f
             }
-            f
         })
         .map(|f| cu::Item::FnDef(Box::new(f)))
         .collect::<Vec<_>>();
@@ -86,6 +92,27 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         .collect::<Vec<desc::FunDef>>()
 }
 
+fn mv_shrd_mem_params_into_decls(
+    mut f: cu::FnDef,
+    unnamed_shrd_mem_decls: &[Box<dyn Fn(String) -> cu::Stmt>],
+) -> cu::FnDef {
+    if let cu::Stmt::Block(stmt) = f.body {
+        let shrd_mem_params = f
+            .fn_sig
+            .params
+            .drain(f.fn_sig.params.len() - unnamed_shrd_mem_decls.len()..);
+        let mut with_shrd_mem_decls = vec![];
+        for (param, decl_f) in shrd_mem_params.zip(unnamed_shrd_mem_decls) {
+            with_shrd_mem_decls.push(decl_f(param.name.clone()));
+        }
+        with_shrd_mem_decls.push(*stmt);
+        f.body = cu::Stmt::Block(Box::new(cu::Stmt::Seq(with_shrd_mem_decls)));
+    } else {
+        panic!("CUDA function was unexpectedly generated without an outer block.")
+    };
+    f
+}
+
 fn collect_fn_decls<'a>(items: &'a [cu::Item<'a>]) -> Vec<cu::Item<'a>> {
     items
         .iter()
@@ -105,7 +132,7 @@ struct CodegenCtx<'a> {
     exec_mapping: ExecMapping,
     exec: desc::ExecExpr,
     comp_unit: &'a [desc::FunDef],
-    kernel_fn_names: Vec<String>,
+    kernel_infos: Vec<KernelInfo>,
     idx_checks: bool,
 }
 
@@ -117,7 +144,7 @@ impl<'a> CodegenCtx<'a> {
             exec_mapping: ExecMapping::new(),
             exec,
             comp_unit,
-            kernel_fn_names: vec![],
+            kernel_infos: vec![],
             idx_checks: false,
         }
     }
@@ -131,6 +158,11 @@ impl<'a> CodegenCtx<'a> {
         self.shape_ctx.drop_scope();
         self.exec_mapping.drop_scope();
     }
+}
+
+struct KernelInfo {
+    name: String,
+    unnamed_shrd_mem_decls: Vec<Box<dyn Fn(String) -> cu::Stmt>>,
 }
 
 type ShapeCtx = ScopeCtx<ShapeExpr>;
@@ -292,7 +324,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             cu::Stmt::VarDecl {
                 name: ident.name.to_string(),
                 ty,
-                addr_space,
+                is_extern: false,
                 expr: None,
             }
         }
@@ -325,7 +357,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let init_decl = cu::Stmt::VarDecl {
                                 name: ident.name.to_string(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                addr_space: None,
+                                is_extern: false,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
                             };
                             let cond = cu::Expr::BinOp {
@@ -347,7 +379,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let init_decl = cu::Stmt::VarDecl {
                                 name: ident.name.to_string(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                addr_space: None,
+                                is_extern: false,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
                             };
                             let cond = cu::Expr::BinOp {
@@ -369,7 +401,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let init_decl = cu::Stmt::VarDecl {
                                 name: ident.name.to_string(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                addr_space: None,
+                                is_extern: false,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
                             };
                             let cond = cu::Expr::BinOp {
@@ -507,32 +539,6 @@ fn gen_decl_init(
             .insert(&ident.name, ShapeExpr::create_from(e, &codegen_ctx));
         cu::Stmt::Skip
         // Let Expression
-    } else if let desc::DataTy {
-        dty: desc::DataTyKind::At(dty, desc::Memory::GpuShared),
-        ..
-    } = &e.ty.as_ref().unwrap().dty()
-    {
-        let cu_ty = if let desc::DataTy {
-            dty: desc::DataTyKind::Array(elem_dty, n),
-            ..
-        } = dty.as_ref()
-        {
-            cu::Ty::CArray(
-                Box::new(gen_ty(
-                    &desc::TyKind::Data(Box::new(elem_dty.as_ref().clone())),
-                    mutbl,
-                )),
-                n.clone(),
-            )
-        } else {
-            gen_ty(&desc::TyKind::Data(Box::new(dty.as_ref().clone())), mutbl)
-        };
-        cu::Stmt::VarDecl {
-            name: ident.name.to_string(),
-            ty: cu_ty,
-            addr_space: Some(cu::GpuAddrSpace::Shared),
-            expr: None,
-        }
     } else {
         let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
         let (init_expr, cu_ty, checks) = match gened_ty {
@@ -562,7 +568,7 @@ fn gen_decl_init(
         let var_decl = cu::Stmt::VarDecl {
             name: ident.name.to_string(),
             ty: cu_ty,
-            addr_space: None,
+            is_extern: false,
             expr: Some(init_expr),
         };
         if !codegen_ctx.idx_checks || checks.is_none() {
@@ -607,7 +613,7 @@ fn gen_for_each(
     let i_decl = cu::Stmt::VarDecl {
         name: i_name.clone(),
         ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-        addr_space: None,
+        is_extern: false,
         expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
     };
     let i = cu::Expr::Ident(i_name.to_string());
@@ -664,7 +670,7 @@ fn gen_for_range(
         let i_decl = cu::Stmt::VarDecl {
             name: i_name.to_string(),
             ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-            addr_space: None,
+            is_extern: false,
             expr: Some(lower.expr().clone()),
         };
         let i = cu::Expr::Ident(i_name.to_string());
@@ -703,15 +709,19 @@ fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) ->
                 let tmp_global_fn_call =
                     gen_global_fn_call(fn_def, &app_kernel.gen_args, &app_kernel.args, codegen_ctx);
                 let fun_name = convert_to_fn_name(&tmp_global_fn_call.fun);
-                let shared_mem_bytes = 0;
-                codegen_ctx.kernel_fn_names.push(fun_name.clone());
+                let (unnamed_shrd_mem_decls, shared_mem_bytes) =
+                    shared_mem_decls_and_size(&app_kernel.shared_mem_dtys);
+                codegen_ctx.kernel_infos.push(KernelInfo {
+                    name: fun_name.clone(),
+                    unnamed_shrd_mem_decls,
+                });
                 cu::ExecKernel {
                     fun_name,
                     template_args: tmp_global_fn_call.template_args.clone(),
                     grid_dim: Box::new(gen_dim3(&app_kernel.grid_dim)),
                     block_dim: Box::new(gen_dim3(&app_kernel.block_dim)),
                     // TODO implement shared memory
-                    shared_mem_bytes,
+                    shared_mem_bytes: Box::new(shared_mem_bytes),
                     // TODO remove references to shared memory
                     args: tmp_global_fn_call.args.clone(),
                 }
@@ -733,6 +743,59 @@ fn convert_to_fn_name(f_expr: &cu::Expr) -> String {
     match f_expr {
         cu::Expr::Ident(f_name) => f_name.clone(),
         _ => panic!("The expression does not refer to a function by its identifier."),
+    }
+}
+
+fn shared_mem_decls_and_size(
+    dtys: &[desc::DataTy],
+) -> (Vec<Box<dyn Fn(String) -> cu::Stmt>>, cu::Expr) {
+    // TODO Multiple shared memory arrays and Alignments:
+    //  Vectors -> vector length times base-type size
+    //  all PTX instructions that access memory require that the address be aligned to a multiple of the access size
+    //  The access size of a memory instruction is the total number of bytes accessed in memory.
+    //  then return declaration expressons with dummy names (with correct alignment etc.).
+    let mut unnamed_shrd_mem_decls: Vec<Box<dyn Fn(String) -> cu::Stmt>> = vec![];
+    let mut num_bytes_expr = desc::Nat::Lit(0);
+    for dty in dtys {
+        num_bytes_expr = desc::Nat::BinOp(
+            desc::BinOpNat::Add,
+            Box::new(num_bytes_expr),
+            Box::new(get_shared_mem_bytes(dty)),
+        );
+        // TODO separate struct for VarDecl, then return only the struct, so that size is known
+        //   => no Box required in Vec<Box<dyn Fn(String) -> cu::Stmt>>
+        let ty = desc::TyKind::Data(Box::new(desc::DataTy::new(desc::DataTyKind::At(
+            Box::new(dty.clone()),
+            desc::Memory::GpuShared,
+        ))));
+        let unnamed_shrd_mem_decl = move |name: String| cu::Stmt::VarDecl {
+            name,
+            ty: gen_ty(&ty, desc::Mutability::Mut),
+            is_extern: true,
+            expr: None,
+        };
+        unnamed_shrd_mem_decls.push(Box::new(unnamed_shrd_mem_decl));
+    }
+    (unnamed_shrd_mem_decls, cu::Expr::Nat(num_bytes_expr))
+}
+
+fn get_shared_mem_bytes(dty: &desc::DataTy) -> desc::Nat {
+    match &dty.dty {
+        desc::DataTyKind::Scalar(desc::ScalarTy::Bool) => desc::Nat::Lit(1),
+        desc::DataTyKind::Scalar(desc::ScalarTy::U32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F32) => desc::Nat::Lit(4),
+        desc::DataTyKind::Scalar(desc::ScalarTy::U64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F64) => desc::Nat::Lit(8),
+        desc::DataTyKind::Array(elem_dty, n) => desc::Nat::BinOp(
+            desc::BinOpNat::Mul,
+            Box::new(get_shared_mem_bytes(&elem_dty)),
+            Box::new(n.clone()),
+        ),
+        desc::DataTyKind::Scalar(desc::ScalarTy::Unit)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::Gpu) => unimplemented!(),
+        _ => todo!(),
     }
 }
 
@@ -1920,8 +1983,10 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             match &dty.dty {
                 d::Atomic(a) => match a {
                     desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
-                    desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
                     desc::ScalarTy::U32 => cu::Ty::Atomic(cu::ScalarTy::U32),
+                    desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
+                    desc::ScalarTy::U64 => cu::Ty::Atomic(cu::ScalarTy::U64),
+                    desc::ScalarTy::I64 => cu::Ty::Atomic(cu::ScalarTy::I64),
                     desc::ScalarTy::F32 => cu::Ty::Atomic(cu::ScalarTy::F32),
                     desc::ScalarTy::F64 => cu::Ty::Atomic(cu::ScalarTy::F64),
                     desc::ScalarTy::Bool => cu::Ty::Atomic(cu::ScalarTy::Bool),
@@ -1929,8 +1994,10 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 },
                 d::Scalar(s) => match s {
                     desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
-                    desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
                     desc::ScalarTy::U32 => cu::Ty::Scalar(cu::ScalarTy::U32),
+                    desc::ScalarTy::U64 => cu::Ty::Scalar(cu::ScalarTy::U64),
+                    desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
+                    desc::ScalarTy::I64 => cu::Ty::Scalar(cu::ScalarTy::I64),
                     desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
                     desc::ScalarTy::F64 => cu::Ty::Scalar(cu::ScalarTy::F64),
                     desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
@@ -1954,7 +2021,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                             } => dty.clone(),
                             _ => dt.clone(),
                         };
-                        cu::Ty::Ptr(
+                        cu::Ty::CArray(
                             Box::new(gen_ty(&Data(dty), mutbl)),
                             Some(cu::GpuAddrSpace::Shared),
                         )

@@ -67,7 +67,7 @@ pub(super) enum Stmt {
     VarDecl {
         name: String,
         ty: Ty,
-        addr_space: Option<GpuAddrSpace>,
+        is_extern: bool,
         expr: Option<Expr>,
     },
     Block(Box<Stmt>),
@@ -103,7 +103,7 @@ pub(super) struct ExecKernel {
     pub template_args: Vec<TemplateArg>,
     pub grid_dim: Box<Expr>,
     pub block_dim: Box<Expr>,
-    pub shared_mem_bytes: usize,
+    pub shared_mem_bytes: Box<Expr>,
     pub args: Vec<Expr>,
 }
 
@@ -252,8 +252,10 @@ pub(super) enum BufferKind {
 pub(super) enum ScalarTy {
     Auto,
     Void,
-    I32,
     U32,
+    U64,
+    I32,
+    I64,
     F32,
     F64,
     Bool,

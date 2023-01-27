@@ -106,11 +106,11 @@ impl std::fmt::Display for Stmt {
             VarDecl {
                 name,
                 ty,
-                addr_space,
+                is_extern,
                 expr,
             } => {
-                if let Some(addrs) = addr_space {
-                    write!(f, "{} ", addrs)?;
+                if *is_extern {
+                    write!(f, "extern ")?;
                 }
                 write!(f, "{} {}", ty, name)?;
                 if let Ty::CArray(_, n) = ty {
@@ -177,9 +177,7 @@ impl std::fmt::Display for Stmt {
                     write!(f, ">")?;
                 }
                 write!(f, "<<<{}, {}", exec_kernel.grid_dim, exec_kernel.block_dim)?;
-                if exec_kernel.shared_mem_bytes > 0 {
-                    write!(f, ", {}", exec_kernel.shared_mem_bytes)?;
-                }
+                write!(f, ", {}", exec_kernel.shared_mem_bytes)?;
                 write!(f, ">>>(")?;
                 fmt_vec(f, &exec_kernel.args, ", ")?;
                 write!(f, ");")
@@ -376,8 +374,10 @@ impl std::fmt::Display for ScalarTy {
         match self {
             Auto => write!(f, "auto"),
             Void => write!(f, "void"),
-            I32 => write!(f, "descend::i32"),
             U32 => write!(f, "descend::u32"),
+            U64 => write!(f, "descend::u64"),
+            I32 => write!(f, "descend::i32"),
+            I64 => write!(f, "descend::i64"),
             F32 => write!(f, "descend::f32"),
             F64 => write!(f, "descend::f64"),
             SizeT => write!(f, "std::size_t"),

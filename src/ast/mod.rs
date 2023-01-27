@@ -1380,8 +1380,10 @@ pub enum DataTyKind {
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ScalarTy {
     Unit,
-    I32,
     U32,
+    U64,
+    I32,
+    I64,
     F32,
     F64,
     Bool,
@@ -1474,14 +1476,6 @@ impl ExecTy {
         ExecTy {
             ty: exec,
             span: None,
-        }
-    }
-
-    pub fn callable_in(&self, exec_ty: &Self) -> bool {
-        if &self.ty == &ExecTyKind::View {
-            true
-        } else {
-            self == exec_ty
         }
     }
 }

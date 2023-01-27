@@ -1759,11 +1759,12 @@ impl TyChecker {
                 k_args,
             )?;
         let exec_f = if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
-            if !fn_ty.exec_ty.callable_in(exec.ty.as_ref().unwrap()) {
+            if !callable_in(&fn_ty.exec_ty, exec.ty.as_ref().unwrap()) {
                 return Err(TyError::String(format!(
                     "Trying to apply function for execution resource `{}` \
                 under execution resource `{}`",
-                    &fn_ty.exec_ty, &ident_exec.ty.ty
+                    &fn_ty.exec_ty,
+                    &exec.ty.as_ref().unwrap()
                 )));
             }
             fn_ty.exec_ty.clone()
@@ -1886,6 +1887,7 @@ impl TyChecker {
             )))
         }
     }
+
     fn ty_check_app_kernel(
         &mut self,
         kind_ctx: &KindCtx,
@@ -2796,15 +2798,24 @@ impl TyChecker {
     }
 }
 
-fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
-    match &exec_ty.ty {
-        ExecTyKind::CpuThread | ExecTyKind::GpuThread => Nat::Lit(1),
-        ExecTyKind::GpuGrid(gdim, _) | ExecTyKind::GpuBlockGrp(gdim, _) => {
-            gdim.proj_size(dim_compo)
-        }
-        ExecTyKind::GpuBlock(dim) | ExecTyKind::GpuThreadGrp(dim) => dim.proj_size(dim_compo),
-        ExecTyKind::GpuGlobalThreads(_) => todo!(),
-        ExecTyKind::View => unreachable!(),
+// fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
+//     match &exec_ty.ty {
+//         ExecTyKind::CpuThread | ExecTyKind::GpuThread => Nat::Lit(1),
+//         ExecTyKind::GpuGrid(gdim, _) | ExecTyKind::GpuBlockGrp(gdim, _) => {
+//             gdim.proj_size(dim_compo)
+//         }
+//         ExecTyKind::GpuBlock(dim) | ExecTyKind::GpuThreadGrp(dim) => dim.proj_size(dim_compo),
+//         ExecTyKind::GpuGlobalThreads(_) => todo!(),
+//         ExecTyKind::View => unreachable!(),
+//     }
+// }
+
+pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
+    if &callee_exec_ty.ty == &ExecTyKind::View {
+        true
+    } else {
+        let res = unify::unify(&mut callee_exec_ty.clone(), &mut caller_exec_ty.clone());
+        res.is_ok()
     }
 }
 

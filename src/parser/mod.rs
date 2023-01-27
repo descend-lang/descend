@@ -602,7 +602,7 @@ peg::parser! {
                     None => Provenance::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("r")))
                 }, own, mem, dty)))
             }
-            / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("$d"))) }
+            / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("d"))) }
 
         rule exec_expr() -> ExecExpr =
             begin:position!() exec:exec() end:position!() {
