@@ -525,30 +525,10 @@ fn gen_decl_init(
             expr: None,
         }
     } else {
-        let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
-        let (init_expr, cu_ty, checks) = match gened_ty {
-            cu::Ty::Array(_, _) => {
-                let (ex, ch) = match gen_expr(e, codegen_ctx) {
-                    CheckedExpr::Expr(e) => (e, None),
-                    CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
-                };
-                (ex, gened_ty, ch)
-            }
-            _ => {
-                let (ex, ch) = match gen_expr(e, codegen_ctx) {
-                    CheckedExpr::Expr(e) => (e, None),
-                    CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
-                };
-                (
-                    ex,
-                    if mutbl == desc::Mutability::Mut {
-                        gened_ty
-                    } else {
-                        cu::Ty::Const(Box::new(gened_ty))
-                    },
-                    ch,
-                )
-            }
+        let cu_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
+        let (init_expr, checks) = match gen_expr(e, codegen_ctx) {
+            CheckedExpr::Expr(e) => (e, None),
+            CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
         };
         let var_decl = cu::Stmt::VarDecl {
             name: ident.name.to_string(),
