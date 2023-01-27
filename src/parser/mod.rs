@@ -384,7 +384,7 @@ peg::parser! {
             "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block_expr() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:ident() _ "{" _
+            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:exec_expr() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
@@ -394,7 +394,7 @@ peg::parser! {
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
             }
             "sched" sched:(_ "(" _ dim:dim_component() _ ")" { dim })? __
-                inner_exec_ident:maybe_ident() __ "in" __ sched_exec:ident() _ body:block() {
+                inner_exec_ident:maybe_ident() __ "in" __ sched_exec:exec_expr() _ body:block() {
                 Expr::new(ExprKind::Sched(Box::new(Sched::new(match sched {
                     Some(d) => d,
                     None => DimCompo::X,
@@ -602,7 +602,10 @@ peg::parser! {
             }
 
         rule exec() -> Exec =
-            base:base_exec() _ "." _  exec_path_elem: exec_path_elem() { Exec::new(base) }
+            base:base_exec() _ "." _  exec_path_elem:exec_path_elem() {
+                Exec::with_path(base, vec![exec_path_elem])
+            }
+            / base:base_exec() { Exec::new(base) }
 
         rule base_exec() -> BaseExec =
             ident:ident() { BaseExec::Ident(ident) }
@@ -614,7 +617,7 @@ peg::parser! {
             / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { 0 }/ "1" { 1 }) _ ">" {
                 ExecPathElem::SplitProj(Box::new(SplitProj::new(dim_compo, pos, proj)))
             }
-            / "to_warps" {ExecPathElem::ToWarps}
+            / "to_warps" { ExecPathElem::ToWarps }
 
         rule exec_ty() -> ExecTy =
             begin:position!() exec:exec_ty_kind() end:position!() {
@@ -718,7 +721,7 @@ peg::parser! {
         // are no follow-up symbols. But there is still "dep" left to be parsed.
         // Therefore, the rule fails, even though it should have succeeded.
         rule keyword() -> ()
-            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to" / "with"
+            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to_warps" / "to" / "with"
                 / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "AtomicU32" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"

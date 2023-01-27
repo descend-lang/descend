@@ -228,13 +228,13 @@ pub fn walk_indep<V: Visit>(visitor: &mut V, indep: &Indep) {
     let Indep {
         dim_compo,
         pos,
-        split_exec_ident: split_exec,
+        split_exec,
         branch_idents,
         branch_bodies,
     } = indep;
     visitor.visit_dim_compo(dim_compo);
     visitor.visit_nat(pos);
-    visitor.visit_ident(split_exec);
+    visitor.visit_exec_expr(split_exec);
     walk_list!(visitor, visit_ident, branch_idents);
     walk_list!(visitor, visit_expr, branch_bodies);
 }
@@ -250,7 +250,7 @@ pub fn walk_sched<V: Visit>(visitor: &mut V, par_for: &Sched) {
     for ident in inner_exec_ident {
         visitor.visit_ident(ident)
     }
-    visitor.visit_ident(sched_exec);
+    visitor.visit_exec_expr(sched_exec);
     visitor.visit_block(body);
 }
 

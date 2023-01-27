@@ -952,10 +952,10 @@ impl TyChecker {
         exec: &ExecExpr,
         indep: &mut Indep,
     ) -> TyResult<(TyCtx, Ty)> {
-        if exec != ty_ctx.get_exec_expr(&indep.split_exec_ident)? {
+        if *exec != expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, &indep.split_exec)? {
             return Err(TyError::String(format!(
                 "illegal execution resource: {}",
-                &indep.split_exec_ident
+                &indep.split_exec
             )));
         }
         if indep.branch_idents.len() != indep.branch_bodies.len() {
@@ -1018,7 +1018,7 @@ impl TyChecker {
         exec: &ExecExpr,
         sched: &mut Sched,
     ) -> TyResult<(TyCtx, Ty)> {
-        if exec != ty_ctx.get_exec_expr(&sched.sched_exec)? {
+        if *exec != expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, &sched.sched_exec)? {
             return Err(TyError::String(format!(
                 "illegal execution resource: {}",
                 &sched.sched_exec
@@ -2893,6 +2893,27 @@ fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
         ExecTyKind::GpuWarp => Nat::Lit(32),
         ExecTyKind::GpuGlobalThreads(_) => todo!(),
         ExecTyKind::View => unreachable!(),
+    }
+}
+
+fn expand_exec_expr(
+    kind_ctx: &KindCtx,
+    ty_ctx: &TyCtx,
+    ident_exec: &IdentExec,
+    exec_expr: &ExecExpr,
+) -> TyResult<ExecExpr> {
+    match &exec_expr.exec.base {
+        BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => Ok(exec_expr.clone()),
+        BaseExec::Ident(ident) => {
+            let inner_exec_expr = ty_ctx.get_exec_expr(ident)?;
+            let new_base = inner_exec_expr.exec.base.clone();
+            let mut new_exec_path = inner_exec_expr.exec.path.clone();
+            new_exec_path.append(&mut exec_expr.exec.path.clone());
+            let mut expanded_exec_expr: ExecExpr =
+                ExecExpr::new(Exec::with_path(new_base, new_exec_path));
+            ty_check_exec(kind_ctx, ty_ctx, ident_exec, &mut expanded_exec_expr)?;
+            Ok(expanded_exec_expr)
+        }
     }
 }
 

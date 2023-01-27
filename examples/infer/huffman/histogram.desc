@@ -26,6 +26,11 @@ fn hist<i: prv, o: prv>(
             sched block in grid {
                 let d_in_group = d_in_groups[[block]];
 
+                indep(X) 1 block.to_warps {
+                    active => { () },
+                    inactive => { () }
+                };
+
                 // initialize shared memory histogram
                 indep(X) 256 block {
                     active => {

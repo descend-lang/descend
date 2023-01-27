@@ -179,7 +179,7 @@ fn shfl_up_ty() -> FnTy {
                 ScalarTy::I32,
             ))))),
         ],
-        ExecTy::new(ExecTyKind::GpuThread),
+        ExecTy::new(ExecTyKind::GpuWarp),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(d))))),
     )
 }

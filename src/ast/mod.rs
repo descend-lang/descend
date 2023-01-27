@@ -55,6 +55,7 @@ impl FunDef {
         }
     }
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdentExec {
     pub ident: Ident,
@@ -255,7 +256,7 @@ impl Expr {
 pub struct Sched {
     pub dim: DimCompo,
     pub inner_exec_ident: Option<Ident>,
-    pub sched_exec: Ident,
+    pub sched_exec: Box<ExecExpr>,
     pub body: Box<Block>,
 }
 
@@ -263,13 +264,13 @@ impl Sched {
     pub fn new(
         dim: DimCompo,
         inner_exec_ident: Option<Ident>,
-        sched_exec: Ident,
+        sched_exec: ExecExpr,
         body: Block,
     ) -> Self {
         Sched {
             dim,
             inner_exec_ident,
-            sched_exec,
+            sched_exec: Box::new(sched_exec),
             body: Box::new(body),
         }
     }
@@ -306,7 +307,7 @@ impl ExprSplit {
 pub struct Indep {
     pub dim_compo: DimCompo,
     pub pos: Nat,
-    pub split_exec_ident: Ident,
+    pub split_exec: Box<ExecExpr>,
     pub branch_idents: Vec<Ident>,
     pub branch_bodies: Vec<Expr>,
 }
@@ -315,14 +316,14 @@ impl Indep {
     pub fn new(
         dim_compo: DimCompo,
         pos: Nat,
-        split_exec_ident: Ident,
+        split_exec: ExecExpr,
         branch_idents: Vec<Ident>,
         branch_bodies: Vec<Expr>,
     ) -> Self {
         Indep {
             dim_compo,
             pos,
-            split_exec_ident,
+            split_exec: Box::new(split_exec),
             branch_idents,
             branch_bodies,
         }
@@ -829,11 +830,11 @@ impl Exec {
     pub fn new(base: BaseExec) -> Self {
         Exec { base, path: vec![] }
     }
-    //
-    // pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
-    //     Exec { base, path }
-    // }
-    //
+
+    pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
+        Exec { base, path }
+    }
+
     // pub fn append(mut self, path: Vec<ExecPathElem>) -> Self {
     //     self.path.append(&mut path);
     //     self
@@ -1035,13 +1036,16 @@ impl Ty {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Dim1d(pub Nat);
+
 impl Dim1d {
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         Dim1d(self.0.subst_ident_kinded(ident_kinded, with))
     }
 }
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Dim2d(pub Nat, pub Nat);
+
 impl Dim2d {
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         Dim2d(
@@ -1050,8 +1054,10 @@ impl Dim2d {
         )
     }
 }
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Dim3d(pub Nat, pub Nat, pub Nat);
+
 impl Dim3d {
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         Dim3d(
