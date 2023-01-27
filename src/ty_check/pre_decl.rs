@@ -2,6 +2,7 @@ use crate::ast::{
     BinOp, BinOpNat, DataTy, DataTyKind, Exec, Ident, IdentKinded, Kind, Memory, Nat, Ownership,
     Provenance, ScalarTy, ThreadHierchyTy, Ty, TyKind,
 };
+use crate::ast::TyKind::Data;
 
 pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
@@ -38,6 +39,12 @@ pub static SPLIT_THREAD_GRP: &str = "split_thread_grp";
 pub static SPLIT_WARP: &str = "split_warp";
 pub static SPLIT_WARP_GRP: &str = "split_warp_grp";
 
+pub static AS_I32_CPU: &str = "as_i32_cpu";
+pub static AS_I32_THREAD: &str = "as_i32_thread";
+pub static AS_I32_BLOCK: &str = "as_i32_block";
+pub static AS_I32_GRID: &str = "as_i32_grid";
+pub static AS_I32_WARP: &str = "as_i32_warp";
+
 pub fn fun_decls() -> Vec<(&'static str, Ty)> {
     let decls = [
         // Built-in functions
@@ -73,6 +80,11 @@ pub fn fun_decls() -> Vec<(&'static str, Ty)> {
         (SPLIT_WARP_GRP, split_warp_grp_ty()),
         (SPLIT_THREAD_GRP, split_thread_grp_ty()),
         (SPLIT_WARP, split_warp_ty()),
+        (AS_I32_THREAD, as_i32(Exec::GpuThread)),
+        (AS_I32_WARP, as_i32(Exec::GpuWarp)),
+        (AS_I32_BLOCK, as_i32(Exec::GpuBlock)),
+        (AS_I32_GRID, as_i32(Exec::GpuGrid)),
+        (AS_I32_CPU, as_i32(Exec::CpuThread)),
     ];
 
     decls.to_vec()
@@ -1081,14 +1093,13 @@ fn transpose_ty(own: Ownership) -> Ty {
     ))
 }
 
-//map_mut:<r: prv, d: dty, d2: dty, m: mem, n: nat>(lambda: |&r1 uniq d| -[view]-> d2, &r1 uniq m [[d;n]]) -[view]-> &r1 uniq m [[d2; n]]
+//map_mut:<r1: prv, d: dty, d2: dty, m: mem, n: nat>(lambda: |&r1 uniq d| -[view]-> d2, &r1 uniq m [[d;n]]) -[view]-> &r1 uniq m [[d2; n]]
 fn map_ty(own: Ownership) -> Ty {
     let r = Ident::new("r");
     let d = Ident::new("d");
     let d2 = Ident::new("d2");
     let m = Ident::new("m");
     let n = Ident::new("n");
-    let n2 = Ident::new("n2");
 
     let r_prv = IdentKinded {
         ident: r.clone(),
@@ -1123,14 +1134,12 @@ fn map_ty(own: Ownership) -> Ty {
         vec![
             //Lambda function
             Ty::new(TyKind::Fn(
-                vec![r_prv, d_dty, d2_dty, m_mem, n_nat],
+                vec![],
                 vec![Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
                     Provenance::Ident(r.clone()),
                     own,
                     Memory::Ident(m.clone()),
-                    Box::new(DataTy::new(DataTyKind::ArrayShape(
-                        Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-                        Nat::Lit(1),
+                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()
                     ))),
                 ))))],
                 Exec::View,
@@ -1138,9 +1147,7 @@ fn map_ty(own: Ownership) -> Ty {
                     Provenance::Ident(r.clone()),
                     own,
                     Memory::Ident(m.clone()),
-                    Box::new(DataTy::new(DataTyKind::ArrayShape(
-                        Box::new(DataTy::new(DataTyKind::Ident(d2.clone()))),
-                        Nat::Lit(1),
+                    Box::new(DataTy::new(DataTyKind::Ident(d2.clone()
                     ))),
                 ))))),
             )),
@@ -1169,3 +1176,28 @@ fn map_ty(own: Ownership) -> Ty {
         ))))),
     ))
 }
+
+//converts nat to Type i32
+fn as_i32(exec: Exec) -> Ty
+{
+    let n = Ident::new("n");
+
+    let n_nat = IdentKinded {
+        ident: n,
+        kind: Kind::Nat
+    };
+
+    Ty::new(
+        TyKind::Fn(
+            vec![n_nat.clone()],
+            vec![],
+            exec,
+        Box::new(Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))))
+        )
+    )
+}
+
+
+
+
+

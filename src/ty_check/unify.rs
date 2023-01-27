@@ -323,7 +323,7 @@ impl Constrainable for DataTy {
             (DataTyKind::Dead(_), _) => {
                 panic!()
             }
-            _ => Err(TyError::CannotUnify),
+            (expected, actual) => {println!("{:?}\n{:?}", expected, actual); Err(TyError::CannotUnify)},
         }
     }
 

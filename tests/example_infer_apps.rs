@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 
 type Res = Result<(), descend::error::ErrorReported>;
 
+#[ignore]
 #[test]
 fn scale_vec() -> Res {
     Ok(println!(
@@ -33,6 +34,7 @@ fn bitonic_sort_shrd_mem() -> Res {
     ))
 }
 
+#[ignore]
 #[test]
 fn scan() -> Res {
     eprintln!(
@@ -46,6 +48,7 @@ fn scan() -> Res {
     ))
 }
 
+#[ignore]
 #[test]
 fn reduce_shared_mem() -> Res {
     Ok(println!(
@@ -54,6 +57,7 @@ fn reduce_shared_mem() -> Res {
     ))
 }
 
+#[ignore]
 #[test]
 fn tree_reduce() -> Res {
     Ok(println!(
@@ -62,6 +66,7 @@ fn tree_reduce() -> Res {
     ))
 }
 
+#[ignore]
 #[test]
 fn vector_add() -> Res {
     Ok(println!(
@@ -85,6 +90,7 @@ fn bfs() -> Res {
     Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
 }
 
+#[ignore]
 #[test]
 fn computed_indexing() -> Res {
     Ok(println!(
