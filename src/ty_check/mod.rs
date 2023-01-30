@@ -1077,45 +1077,49 @@ impl TyChecker {
         self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, p)?;
 
         if let DataTyKind::Ref(ref_dty) = &p.ty.as_ref().unwrap().dty().dty {
-            if let DataTyKind::ArrayShape(elem_dty, n) = &ref_dty.dty.dty {
-                // TODO
-                // if n != distrib_exec.active_distrib_size() {
-                //     return Err(TyError::String("There must be as many elements in the view as there exist execution resources that select from it.".to_string()));
-                // }
-                let (impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx.clone(), prv_val_name);
-                if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
-                    return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
-                }
-                let loans = borrow_check::ownership_safe(
-                    self,
-                    kind_ctx,
-                    exec_borrow_ctx,
-                    &impl_ctx,
-                    exec,
-                    &[],
-                    ref_dty.own,
-                    p,
-                )
-                .map_err(|err| TyError::ConflictingBorrow(Box::new(p.clone()), ref_dty.own, err))?;
-                // TODO store_reborrow_for_exec(distrib_exec, p);
-
-                let res_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                    Box::new(RefDty::new(
-                        Provenance::Value(prv_val_name.clone()),
+            match &ref_dty.dty.dty {
+                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
+                    // TODO
+                    // if n != distrib_exec.active_distrib_size() {
+                    //     return Err(TyError::String("There must be as many elements in the view
+                    //  as there exist execution resources that select from it.".to_string()));
+                    // }
+                    let (impl_ctx, prv_val_name) =
+                        TyChecker::infer_prv(ty_ctx.clone(), prv_val_name);
+                    if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
+                        return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
+                    }
+                    let loans = borrow_check::ownership_safe(
+                        self,
+                        kind_ctx,
+                        exec_borrow_ctx,
+                        &impl_ctx,
+                        exec,
+                        &[],
                         ref_dty.own,
-                        ref_dty.mem.clone(),
-                        elem_dty.as_ref().clone(),
-                    )),
-                )))));
-                exec_borrow_ctx.insert(distrib_exec, loans.clone());
-                let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
-                Ok((res_ty_ctx, res_dty))
-            } else {
-                Err(TyError::String("Expected a view.".to_string()))
+                        p,
+                    )
+                    .map_err(|err| {
+                        TyError::ConflictingBorrow(Box::new(p.clone()), ref_dty.own, err)
+                    })?;
+                    // TODO store_reborrow_for_exec(distrib_exec, p);
+                    let res_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                        Box::new(RefDty::new(
+                            Provenance::Value(prv_val_name.clone()),
+                            ref_dty.own,
+                            ref_dty.mem.clone(),
+                            elem_dty.as_ref().clone(),
+                        )),
+                    )))));
+                    exec_borrow_ctx.insert(distrib_exec, loans.clone());
+                    let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
+                    Ok((res_ty_ctx, res_dty))
+                }
+                _ => Err(TyError::String("Expected an array or view.".to_string())),
             }
         } else {
             Err(TyError::String(
-                "Expected a reference to a view.".to_string(),
+                "Expected a reference to an array or view.".to_string(),
             ))
         }
     }
@@ -2849,12 +2853,24 @@ fn ty_check_exec(
                     &exec_split.pos,
                     exec_split.proj,
                     &exec_ty,
-                )?
+                )?;
+            }
+            ExecPathElem::ToThreads(d) => {
+                exec_ty = ty_check_exec_to_threads(*d, &exec_ty)?;
             }
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
     Ok(())
+}
+
+fn ty_check_exec_to_threads(dim: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    let result_ty = if let ExecTyKind::GpuGrid(gdim, bdim) = exec_ty {
+        // match (gdim, bdim) {
+        // }
+        ()
+    };
+    todo!()
 }
 
 fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
@@ -2900,22 +2916,6 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
     };
     Ok(res_ty)
 }
-
-// fn ty_check_exec_to_thread_grp(
-//     kind_ctx: &KindCtx,
-//     ident_exec: &IdentExec,
-//     exec_expr: &mut ExecExpr,
-// ) -> TyResult<ExecTyKind> {
-//     ty_check_exec(kind_ctx, ident_exec, exec_expr)?;
-//     if let ExecTyKind::GpuGrid(gdim, bdim) = &exec_expr.ty.as_ref().unwrap().ty {
-//         Ok(ExecTyKind::GpuGlobalThreads(gdim * bdim))
-//     } else {
-//         Err(TyError::String(format!(
-//             "expected grid but found {}",
-//             exec_expr.ty.as_ref().unwrap().ty
-//         )))
-//     }
-// }
 
 pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
     match (dim, dim_compo) {

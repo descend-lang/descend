@@ -1,0 +1,16 @@
+fn reverse_block_elems<m: nat, n: nat, k: nat>(
+    vec: &uniq gpu.global [f64; k]
+) -[grid: gpu.grid<X<m>, X<n>>]-> () {
+    let rev_block_view = rev_mut(group_mut::<n>(to_view_mut(&uniq *vec)));
+    sched block in grid {
+        let block_group = rev_block_view[[block]];
+        sched thread in block {
+            let rev_elem_ref = block_group[[thread]];
+            let tmp = *rev_elem_ref;
+            sync // TODO must be enforced!
+            // TODO
+            // let elem_ref = vec[[thread]];
+            // *elem_ref = tmp // ERROR: vec is already borrowed
+        }
+    }
+}

@@ -892,7 +892,7 @@ impl fmt::Display for BaseExec {
 pub enum ExecPathElem {
     SplitProj(Box<SplitProj>),
     Distrib(DimCompo),
-    // ToThreadGrp(Box<ExecExpr>),
+    ToThreads(DimCompo),
 }
 
 impl fmt::Display for ExecPathElem {
@@ -904,6 +904,7 @@ impl fmt::Display for ExecPathElem {
                 split_proj.proj, split_proj.split_dim, split_proj.pos
             ),
             Self::Distrib(dim_compo) => write!(f, "distrib({})", dim_compo),
+            Self::ToThreads(dim_compo) => write!(f, "to_threads({})", dim_compo),
         }
     }
 }

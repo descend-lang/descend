@@ -444,6 +444,7 @@ pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut Exec) {
         match e {
             ExecPathElem::SplitProj(split_proj) => visitor.visit_split_proj(split_proj),
             ExecPathElem::Distrib(dim_compo) => visitor.visit_dim_compo(dim_compo),
+            ExecPathElem::ToThreads(dim_compo) => visitor.visit_dim_compo(dim_compo),
         }
     }
 }

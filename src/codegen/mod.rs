@@ -1435,6 +1435,7 @@ fn basis_ref(view: &ShapeExpr) -> desc::Expr {
     match view {
         ShapeExpr::ToView { ref_expr } => ref_expr.as_ref().clone(),
         ShapeExpr::SplitAt { shape, .. } => basis_ref(shape),
+        ShapeExpr::Reverse { shape, .. } => basis_ref(shape),
         ShapeExpr::Group { shape, .. } => basis_ref(shape),
         ShapeExpr::Join { shape, .. } => basis_ref(shape),
         ShapeExpr::Transpose { shape, .. } => basis_ref(shape),
@@ -1510,6 +1511,11 @@ fn stringify_exec(exec: &desc::ExecExpr) -> String {
                 );
                 str.push_str(&s);
             }
+            desc::ExecPathElem::ToThreads(dim) => {
+                str.push('T');
+                str.push_str(&format!("{}", dim));
+                str.push('_');
+            }
         }
     }
     str
@@ -1541,6 +1547,10 @@ fn stringify_view(view: &ShapeExpr, c: u8) -> String {
         }
         ShapeExpr::Idx { shape, .. } => {
             let s = format!("I{}_", &stringify_view(shape.as_ref(), c));
+            str.push_str(&s);
+        }
+        ShapeExpr::Reverse { shape, .. } => {
+            let s = format!("R{}", &stringify_view(shape.as_ref(), c));
             str.push_str(&s);
         }
         ShapeExpr::Group { shape, .. } => {
@@ -1902,6 +1912,20 @@ fn gen_shape(
                 _ => panic!("Cannot generate Transpose shape. One or more indices missing."),
             }
         }
+        (ShapeExpr::Reverse { size, shape }, _) => {
+            let i = path.pop();
+            match i {
+                Some(i) => {
+                    path.push(desc::Nat::BinOp(
+                        desc::BinOpNat::Sub,
+                        Box::new(size.clone()),
+                        Box::new(i),
+                    ));
+                    gen_shape(shape, path, codegen_ctx)
+                }
+                None => panic!("Cannot generate Reverse shape. Index missing."),
+            }
+        }
         ve => panic!("unexpected, found: {:?}", ve),
     }
 }
@@ -2021,7 +2045,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                             } => dty.clone(),
                             _ => dt.clone(),
                         };
-                        cu::Ty::CArray(
+                        cu::Ty::Ptr(
                             Box::new(gen_ty(&Data(dty), mutbl)),
                             Some(cu::GpuAddrSpace::Shared),
                         )
@@ -2156,6 +2180,10 @@ enum ShapeExpr {
         pos: desc::Nat,
         shape: Box<ShapeExpr>,
     },
+    Reverse {
+        size: desc::Nat,
+        shape: Box<ShapeExpr>,
+    },
     Group {
         size: desc::Nat,
         shape: Box<ShapeExpr>,
@@ -2193,6 +2221,10 @@ impl ShapeExpr {
                             || ident.name.as_ref() == ty_check::pre_decl::TRANSPOSE_MUT
                         {
                             ShapeExpr::create_transpose_shape(args, codegen_ctx)
+                        } else if ident.name.as_ref() == ty_check::pre_decl::REVERSE
+                            || ident.name.as_ref() == ty_check::pre_decl::REVERSE_MUT
+                        {
+                            ShapeExpr::create_reverse_shape(gen_args, args, codegen_ctx)
                         } else if let Some(vf) = codegen_ctx
                             .comp_unit
                             .iter()
@@ -2364,6 +2396,20 @@ impl ShapeExpr {
         }
     }
 
+    fn create_reverse_shape(
+        gen_args: &[desc::ArgKinded],
+        args: &[desc::Expr],
+        codegen_ctx: &CodegenCtx,
+    ) -> ShapeExpr {
+        if let (desc::ArgKinded::Nat(n), Some(v)) = (&gen_args[0], args.first()) {
+            return ShapeExpr::Reverse {
+                size: n.clone(),
+                shape: Box::new(ShapeExpr::create_from(v, codegen_ctx)),
+            };
+        }
+        panic!("Cannot create `reverse` from the provided arguments.");
+    }
+
     fn create_group_shape(
         gen_args: &[desc::ArgKinded],
         args: &[desc::Expr],
@@ -2417,18 +2463,6 @@ impl ShapeExpr {
                     *count += 1;
                     vec
                 }
-                ShapeExpr::SplitAt { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Group { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Join { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Transpose { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
                 ShapeExpr::Tuple { shapes: elems } => {
                     let mut renamed = vec;
                     for e in elems {
@@ -2449,10 +2483,13 @@ impl ShapeExpr {
                     }
                     renamed
                 }
-                ShapeExpr::Idx { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Proj { shape, .. } => {
+                ShapeExpr::SplitAt { shape, .. }
+                | ShapeExpr::Reverse { shape, .. }
+                | ShapeExpr::Group { shape, .. }
+                | ShapeExpr::Join { shape, .. }
+                | ShapeExpr::Transpose { shape, .. }
+                | ShapeExpr::Idx { shape, .. }
+                | ShapeExpr::Proj { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
             }

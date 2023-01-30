@@ -1,0 +1,180 @@
+// __global__ void write_to_fixed_pos(
+//   int *out_vec, int *in_vec) {
+//   int globalIdx =
+//     blockIdx.x * blockDim.x + threadIdx.x;
+//   // All threads write to same location. Data Race.
+//   out_vec[0] = in_vec[globalIdx];
+// }
+fn write_to_fixed_pos(
+  out_vec: &uniq gpu.global [i32; 6], in_vec: &shrd gpu.global [i32; 6]
+) -[grid: gpu.grid<X<1>, X<6>> () {
+  sched thread in grid.to_threads {
+    out_vec[0] = in_vec[[thread]]; // cannot be written atm, requires a view
+  }
+}
+
+// __global__ void write_to_computed_pos(
+//   double *out_vec, int vec_size) {
+//   int globalIdx =
+//     blockIdx.x * blockDim.x + threadIdx.x;
+//   out_vec[globalIdx * 2 % (vec_size - 1)] = ...;
+// }
+fn write_to_computed_pos(
+  out_vec: &uniq gpu.global [i32; 6]
+) -[grid: gpu.grid<X<1>, X<6>> () {
+  sched thread in grid.to_threads {
+    // vec_size = 6
+    out_vec[thread * 2 % (6-1)] = ...;
+  }
+}
+
+// __device__ void mem_assign(double *vec_part) {
+//   vec_part[threadIdx.x] = ...;
+// }
+//
+// __global__ void block_partitioned_ptr(double *vec) {
+//   double *ptr = vec + blockIdx.x * blockDim.x;
+//   mem_assign(ptr);
+// }
+//
+// __global__ void global_ptr(double *vec) {
+//   mem_assign(vec);
+// }
+fn mem_assign(vec_part_view: &uniq gpu.global [[f64; 2]]) -[block: gpu.block<X<2>>]-> () {
+  sched thread in block {
+    let elem_ref = vec_part_view[[thread]];
+    *elem_ref = ...;
+  }
+}
+fn block_partitioned_ptr(vec: &uniq gpu.global [f64; 6]) -[grid: gpu.grid<X<3>, X<2>>]-> () {
+  let partitioned_vec_view = group_uniq::<2>(to_view_uniq(vec));
+  sched block in grid {
+    let vec_part = partitioned_vec_view[[block]];
+    mem_assign(vec_part_view)
+  }
+} // passes type checking
+
+fn global_ptr(vec: &uniq gpu.global [f64; 6]) -[grid: gpu.grid<X<3>, X<2>>]-> () {
+  let non_partitioned_vec_view = to_view_uniq(vec);
+  mem_assign(non_partitioned_vec)
+  // ERRORs: mem_assign called by grid instead of block + vector is not partitioned.
+}
+
+// __global__ void reverse_kernel(double *vec) {
+//   int globalIdx =
+//     blockIdx.x * blockDim.x + threadIdx.x;
+//   double tmp = vec[5 - globalIdx];
+//   // Missing synchronization. Data Race.
+//   vec[globalIdx] = tmp;
+// }
+fn reverse_kernel(vec: &uniq gpu.global [f64; 6]) -[grid: gpu.grid<X<3>, X<2>>]-> () {
+  let rev_view = rev_uniq(to_view_uniq(vec));
+  sched thread in grid.to_threads {
+    let tmp = rev_view[[thread]];
+    let elem_ref = vec[[thread]];
+    *elem_ref = tmp; // ERROR: vec is already borrowed
+  }
+}
+// Another attempt releases the borrow first
+fn reverse_kernel2(vec: &uniq gpu.global [f64; 6]) -[grid: gpu.grid<X<3>, X<2>>]-> () {
+  let tmp: f64;
+  {
+    sched thread in grid.to_threads {
+        let rev_view = rev_uniq(to_view_uniq(vec));
+        let elem_ref = rev_view[[thread]];
+        tmp = *elem_ref;
+    }
+  }
+  sched thread in grid.to_threads {
+    let elem_ref = vec[[thread]];
+    *elem_ref = tmp;
+    // ERROR: vec is still borrowed. previously borrowed at: let rev_view ...
+  }
+}
+
+// __global__ void kernel() {
+//   if (threadIdx.x < 16) {
+//     __syncthreads();
+//   }
+// }
+fn kernel3() -[grid: gpu.grid<<X<3>, X<2>>]-> () {
+  sched thread in grid.to_threads {
+    if to_usize(thread) < 16 {
+      sync // Not allowed in branch
+    }
+  }
+}
+
+// void host_fun() {
+//   double *ptr = alloc_and_init(sizeof(double) * 6, 0.0);
+//   init_kernel<<<M, N>>>(ptr);
+// }
+//
+// __global__ void init_kernel(double *ptr) {
+//   // Attempting to dereference host pointer from device.
+//   ptr[globalIdx.x] = 1.0;
+// }
+fn host_fun1() -[t: cpu.thread]-> () {
+  let ptr = new_cpu_heap::<[f64; 6]>(0.0);
+  // ERROR: wrong type: expected &uniq gpu.global [f64; 6], but found &uniq cpu.mem [f64;6]
+  init_kernel1<<<X<M>, X<N>>>>(ptr);
+  init_kernel2<<<X<M>, X<N>>>>(ptr);
+}
+fn init_kernel1(ptr: &uniq gpu.global [f64; 6]) -[grid: gpu.grid<X<M>, X<N>>]-> () {
+  sched thread in grid.to_threads {
+    let elem_ref = ptr[[thread]];
+    *elem_ref = 1.0
+  }
+}
+// Another attempt: allow the function to take a cpu.mem reference
+fn init_kernel2(ptr: &uniq cpu.mem [f64; 6]) -[grid: gpu.grid<X<M>, X<N>>]-> () {
+  sched thread in grid.to_threads {
+    let elem_ref = ptr[[thread]];
+    *elem_ref = 1.0 // trying to access CPU memory from GPU
+  }
+}
+
+
+// void host_fun() {
+//   double *device_ptr;
+//   double* h_ptr = allocate_and_init_host_mem();
+//   cudaMalloc(&device_ptr, num_bytes);
+//   // Misuse of memory API: device and host pointer must be swapped.
+//   cudaMemcpy(
+//     d_ptr, h_ptr, num_bytes, cudaMemcpyHostToDevice);
+// }
+fn host_fun2() -[t: cpu.thread]-> () {
+  let h_ptr = allocate_and_init_host_mem();
+  let g_ptr = gpu_alloc_copy(&shrd h_vec) // Impossible to misuse
+}
+
+// THE FOLLOWING CANNOT BE CHECKED RIGHT NOW
+// QUICK SOLUTION: store CONSTRAINTS IN FUNCTION TYPE AND CHECK STATICALLY OR FAIL
+// __global__ scale_vec(double *vec) {
+//   vec[globalIdx.x] = vec[globalIdx.x] * 3.0;
+// }
+//
+// void host(double * h_ptr, size_t size) {
+//   double *d_ptr;
+//   size_t num_bytes = size * sizeof(double);
+//   cudaMalloc(&d_ptr, num_bytes);
+//   cudaMemcpy(h_ptr, d_ptr, num_bytes, cudaMemcpyHostToDevice);
+//   // Start kernel in one block with NUM_THREADS many threads.
+//   // If size < NUM_THREADS: Out-of-bounds accesses in kernel.
+//   // If size > NUM_THREADS: Incomplete computation.
+//   scale_vec_kernel<<<1, NUM_THREADS>>>(d_ptr);
+//   cudaMemcpy(d_ptr, h_ptr, num_bytes, cudaMemcpyDeviceToHost);
+// }
+fn scale_vec<num_threads: nat>(
+  vec: &uniq gpu.global [f64; n]
+) -[grid: gpu.grid<X<1>, X<num_threads>>]-> {
+  sched thread in grid.to_threads {
+    let elem_ref = vec[[thread]]; // requires n == 1*num_threads
+    *elem_ref = *elem_ref * 3.0;
+  }
+}
+fn host<n: nat, num_threads: nat>(h_ptr: &uniq cpu.mem [f64; n]) -[t: cpu.thread]-> () {
+  let d_ptr = gpu_alloc_copy(h_ptr);
+  scale_vec::<<<X<1>, X<num_threads>>>>(d_ptr);
+  copy_to_host(&shrd d_ptr, h_ptr)
+}

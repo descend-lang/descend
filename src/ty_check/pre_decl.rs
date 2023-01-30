@@ -23,6 +23,8 @@ pub static CREATE_ARRAY: &str = "create_array";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
+pub static REVERSE: &str = "rev";
+pub static REVERSE_MUT: &str = "rev_mut";
 pub static GROUP: &str = "group";
 pub static GROUP_MUT: &str = "group_mut";
 pub static JOIN: &str = "join";
@@ -52,6 +54,8 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
+        (REVERSE, reverse_ty(Ownership::Shrd)),
+        (REVERSE_MUT, reverse_ty(Ownership::Uniq)),
         (GROUP, group_ty(Ownership::Shrd)),
         (GROUP_MUT, group_ty(Ownership::Uniq)),
         (JOIN, join_ty(Ownership::Shrd)),
@@ -663,6 +667,57 @@ fn to_view_ty(own: Ownership) -> FnTy {
                 DataTy::new(DataTyKind::ArrayShape(
                     Box::new(DataTy::new(DataTyKind::Ident(d))),
                     Nat::Ident(n),
+                )),
+            )),
+        ))))),
+    )
+}
+
+// rev/rev_mut:
+// <n: nat, r: prv, m: mem, d: dty>(&r W m [[d; n]]) -> &r W m [[d; n]]
+fn reverse_ty(own: Ownership) -> FnTy {
+    let n = Ident::new("n");
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let d = Ident::new("d");
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let d_ty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
+    };
+    FnTy::new(
+        vec![n_nat, r_prv, m_mem, d_ty],
+        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+            DataTyKind::Ref(Box::new(RefDty::new(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+                    Nat::Ident(n.clone()),
+                )),
+            ))),
+        ))))],
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+            Box::new(RefDty::new(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+                    Nat::Ident(n.clone()),
                 )),
             )),
         ))))),

@@ -12,6 +12,14 @@ fn scale_vec() -> Res {
     ))
 }
 
+#[test]
+fn reverse_vec() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/reverse_vec.desc")?
+    ))
+}
+
 #[ignore]
 #[test]
 fn bitonic_sort() -> Res {
