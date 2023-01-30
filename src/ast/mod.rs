@@ -907,7 +907,7 @@ impl fmt::Display for ExecPathElem {
                 split_proj.proj, split_proj.split_dim, split_proj.pos
             ),
             Self::Distrib(dim_compo) => write!(f, "distrib({})", dim_compo),
-            Self::ToWarps => write!(f, "to_warps()"),
+            Self::ToWarps => write!(f, "to_warps"),
         }
     }
 }

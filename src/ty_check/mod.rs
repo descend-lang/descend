@@ -14,6 +14,7 @@ use ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
 use std::ops::Deref;
+use std::thread::current;
 
 type TyResult<T> = Result<T, TyError>;
 
@@ -26,6 +27,7 @@ macro_rules! matches_dty {
         }
     };
 }
+use crate::ast::ExecTyKind::GpuWarpGrp;
 pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -952,12 +954,8 @@ impl TyChecker {
         exec: &ExecExpr,
         indep: &mut Indep,
     ) -> TyResult<(TyCtx, Ty)> {
-        if *exec != expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, &indep.split_exec)? {
-            return Err(TyError::String(format!(
-                "illegal execution resource: {}",
-                &indep.split_exec
-            )));
-        }
+        legal_exec_under_current(kind_ctx, &ty_ctx, exec, ident_exec, &indep.split_exec)?;
+        let expanded_exec_expr = expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, exec)?;
         if indep.branch_idents.len() != indep.branch_bodies.len() {
             panic!(
                 "Amount of branch identifiers and amount of branches do not match:\
@@ -975,7 +973,7 @@ impl TyChecker {
 
         let mut indep_ctx = ty_ctx;
         for i in 0..indep.branch_bodies.len() {
-            let mut branch_exec = ExecExpr::new(exec.exec.clone().split_proj(
+            let mut branch_exec = ExecExpr::new(expanded_exec_expr.exec.clone().split_proj(
                 indep.dim_compo,
                 indep.pos.clone(),
                 i as u8,
@@ -1018,12 +1016,7 @@ impl TyChecker {
         exec: &ExecExpr,
         sched: &mut Sched,
     ) -> TyResult<(TyCtx, Ty)> {
-        if *exec != expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, &sched.sched_exec)? {
-            return Err(TyError::String(format!(
-                "illegal execution resource: {}",
-                &sched.sched_exec
-            )));
-        }
+        legal_exec_under_current(kind_ctx, &ty_ctx, exec, ident_exec, &sched.sched_exec)?;
         let mut body_exec = ExecExpr::new(exec.exec.clone().distrib(sched.dim));
         ty_check_exec(kind_ctx, &ty_ctx, ident_exec, &mut body_exec)?;
         let inner_ty_ctx = ty_ctx.clone().append_frame(vec![]);
@@ -2917,6 +2910,31 @@ fn expand_exec_expr(
     }
 }
 
+fn legal_exec_under_current(
+    kind_ctx: &KindCtx,
+    ty_ctx: &TyCtx,
+    current_exec: &ExecExpr,
+    ident_exec: &IdentExec,
+    exec: &ExecExpr,
+) -> TyResult<()> {
+    let expanded_exec_expr = expand_exec_expr(kind_ctx, ty_ctx, ident_exec, exec)?;
+    if *current_exec != expanded_exec_expr {
+        let current_exec_ty = &current_exec.ty.as_ref().unwrap().ty;
+        let expanded_exec_ty = expanded_exec_expr.ty.unwrap().ty;
+        match (current_exec_ty, expanded_exec_ty) {
+            // FIXME this does not guarantee that the GpuWarpGrp was created from the GpuBlock
+            (ExecTyKind::GpuBlock(..), ExecTyKind::GpuWarpGrp(..)) => (),
+            _ => {
+                return Err(TyError::String(format!(
+                    "illegal execution resource: {}",
+                    exec
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn ty_check_exec(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
@@ -2949,9 +2967,8 @@ fn ty_check_exec(
                     &exec_ty,
                 )?
             }
-            ExecPathElem::ToWarps => {
-                todo!()
-            }
+            // todo blockdim(x) / 32
+            ExecPathElem::ToWarps => exec_ty = ExecTyKind::GpuWarpGrp(Nat::Lit(32)),
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));

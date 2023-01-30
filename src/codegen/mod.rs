@@ -2531,6 +2531,7 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
             match n {
                 desc::Nat::GridIdx => self.par_idx = Some(n.clone()),
                 desc::Nat::BlockIdx(_) => self.par_idx = Some(n.clone()),
+                desc::Nat::WarpIdx(_) => self.par_idx = Some(n.clone()),
                 _ => desc::visit::walk_nat(self, n),
             }
         }
