@@ -1918,7 +1918,11 @@ fn gen_shape(
                 Some(i) => {
                     path.push(desc::Nat::BinOp(
                         desc::BinOpNat::Sub,
-                        Box::new(size.clone()),
+                        Box::new(desc::Nat::BinOp(
+                            desc::BinOpNat::Sub,
+                            Box::new(size.clone()),
+                            Box::new(desc::Nat::Lit(1)),
+                        )),
                         Box::new(i),
                     ));
                     gen_shape(shape, path, codegen_ctx)
