@@ -190,10 +190,10 @@ public:
 #endif
 
 
-// TODO cuda::std::int32_t
 using i32 = std::int32_t;
 extern const i32 NO_ERROR = -1;
 using u32 = std::uint32_t;
+using byte = std::uint8_t;
 // FIXME there is no way to guarantee that float holds 32 bits
 using f32 = float;
 using f64 = double;

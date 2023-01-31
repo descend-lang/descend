@@ -67,8 +67,9 @@ pub(super) enum Stmt {
     VarDecl {
         name: String,
         ty: Ty,
-        is_extern: bool,
+        addr_space: Option<GpuAddrSpace>,
         expr: Option<Expr>,
+        is_extern: bool,
     },
     Block(Box<Stmt>),
     Seq(Vec<Stmt>),
@@ -103,7 +104,7 @@ pub(super) struct ExecKernel {
     pub template_args: Vec<TemplateArg>,
     pub grid_dim: Box<Expr>,
     pub block_dim: Box<Expr>,
-    pub shared_mem_bytes: Box<Expr>,
+    pub shared_mem_bytes: Box<Nat>,
     pub args: Vec<Expr>,
 }
 
@@ -147,6 +148,7 @@ pub(super) enum Expr {
     Ref(Box<Expr>),
     Deref(Box<Expr>),
     Tuple(Vec<Expr>),
+    Cast(Ty, Box<Expr>),
     // The current plan for Nats is to simply print them with C syntax.
     // Instead generate a C/Cuda expression?
     Nat(Nat),
@@ -215,7 +217,7 @@ pub(super) enum TemplateArg {
 
 #[derive(Clone, Debug)]
 pub(super) enum GpuAddrSpace {
-    Global,
+    Device,
     Shared,
     Constant,
 }
@@ -226,13 +228,13 @@ pub(super) enum Ty {
     Atomic(ScalarTy),
     Tuple(Vec<Ty>),
     Array(Box<Ty>, Nat),
-    CArray(Box<Ty>, Nat),
+    CArray(Box<Ty>, Option<Nat>),
     Buffer(Box<Ty>, BufferKind),
     // for now assume every pointer to be __restrict__ qualified
     // http://www.open-std.org/JTC1/SC22/WG14/www/docs/n1256.pdf#page=122&zoom=auto,-205,535
-    Ptr(Box<Ty>, Option<GpuAddrSpace>),
+    Ptr(Box<Ty>),
     // The pointer itself is mutable, but the underlying data is not.
-    PtrConst(Box<Ty>, Option<GpuAddrSpace>),
+    PtrConst(Box<Ty>),
     // const in a parameter declaration changes the parameter type in a definition but not
     // "necessarily" the function signature ... https://abseil.io/tips/109
     // Top-level const
@@ -252,6 +254,7 @@ pub(super) enum BufferKind {
 pub(super) enum ScalarTy {
     Auto,
     Void,
+    Byte,
     U32,
     U64,
     I32,

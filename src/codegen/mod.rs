@@ -47,7 +47,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
                 .find(|ki| &ki.name == &f.fn_sig.name)
             {
                 f.fn_sig.exec_kind = cu::ExecKind::Global;
-                mv_shrd_mem_params_into_decls(f, &ki.unnamed_shrd_mem_decls)
+                mv_shrd_mem_params_into_decls(f, &ki.unnamed_shrd_mem_decls, ki.num_shrd_mem_decls)
             } else {
                 f
             }
@@ -94,17 +94,19 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
 
 fn mv_shrd_mem_params_into_decls(
     mut f: cu::FnDef,
-    unnamed_shrd_mem_decls: &[Box<dyn Fn(String) -> cu::Stmt>],
+    unnamed_shrd_mem_decls: &dyn Fn(&[String]) -> cu::Stmt,
+    num_shared_mem_decls: usize,
 ) -> cu::FnDef {
     if let cu::Stmt::Block(stmt) = f.body {
         let shrd_mem_params = f
             .fn_sig
             .params
-            .drain(f.fn_sig.params.len() - unnamed_shrd_mem_decls.len()..);
-        let mut with_shrd_mem_decls = vec![];
-        for (param, decl_f) in shrd_mem_params.zip(unnamed_shrd_mem_decls) {
-            with_shrd_mem_decls.push(decl_f(param.name.clone()));
-        }
+            .drain(f.fn_sig.params.len() - num_shared_mem_decls..)
+            .into_iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>();
+        let decl_seq = unnamed_shrd_mem_decls(&shrd_mem_params);
+        let mut with_shrd_mem_decls = vec![decl_seq];
         with_shrd_mem_decls.push(*stmt);
         f.body = cu::Stmt::Block(Box::new(cu::Stmt::Seq(with_shrd_mem_decls)));
     } else {
@@ -162,7 +164,8 @@ impl<'a> CodegenCtx<'a> {
 
 struct KernelInfo {
     name: String,
-    unnamed_shrd_mem_decls: Vec<Box<dyn Fn(String) -> cu::Stmt>>,
+    unnamed_shrd_mem_decls: Box<dyn Fn(&[String]) -> cu::Stmt>,
+    num_shrd_mem_decls: usize,
 }
 
 type ShapeCtx = ScopeCtx<ShapeExpr>;
@@ -308,7 +311,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                                         &desc::TyKind::Data(Box::new(d.as_ref().clone())),
                                         desc::Mutability::Mut,
                                     )),
-                                    n.clone(),
+                                    Some(n.clone()),
                                 )
                             } else {
                                 gen_ty(&ty.as_ref().ty, desc::Mutability::Mut)
@@ -324,8 +327,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             cu::Stmt::VarDecl {
                 name: ident.name.to_string(),
                 ty,
-                is_extern: false,
+                addr_space: None,
                 expr: None,
+                is_extern: false,
             }
         }
         Block(block) => {
@@ -357,8 +361,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let init_decl = cu::Stmt::VarDecl {
                                 name: ident.name.to_string(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                is_extern: false,
+                                addr_space: None,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
+                                is_extern: false,
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Lt,
@@ -379,8 +384,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let init_decl = cu::Stmt::VarDecl {
                                 name: ident.name.to_string(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                is_extern: false,
+                                addr_space: None,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
+                                is_extern: false,
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Gt,
@@ -401,8 +407,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let init_decl = cu::Stmt::VarDecl {
                                 name: ident.name.to_string(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                is_extern: false,
+                                addr_space: None,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
+                                is_extern: false,
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Le,
@@ -568,8 +575,9 @@ fn gen_decl_init(
         let var_decl = cu::Stmt::VarDecl {
             name: ident.name.to_string(),
             ty: cu_ty,
-            is_extern: false,
+            addr_space: None,
             expr: Some(init_expr),
+            is_extern: false,
         };
         if !codegen_ctx.idx_checks || checks.is_none() {
             var_decl
@@ -613,8 +621,9 @@ fn gen_for_each(
     let i_decl = cu::Stmt::VarDecl {
         name: i_name.clone(),
         ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-        is_extern: false,
+        addr_space: None,
         expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
+        is_extern: false,
     };
     let i = cu::Expr::Ident(i_name.to_string());
     codegen_ctx.push_scope();
@@ -670,8 +679,9 @@ fn gen_for_range(
         let i_decl = cu::Stmt::VarDecl {
             name: i_name.to_string(),
             ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-            is_extern: false,
+            addr_space: None,
             expr: Some(lower.expr().clone()),
+            is_extern: false,
         };
         let i = cu::Expr::Ident(i_name.to_string());
 
@@ -709,21 +719,22 @@ fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) ->
                 let tmp_global_fn_call =
                     gen_global_fn_call(fn_def, &app_kernel.gen_args, &app_kernel.args, codegen_ctx);
                 let fun_name = convert_to_fn_name(&tmp_global_fn_call.fun);
-                let (unnamed_shrd_mem_decls, shared_mem_bytes) =
-                    shared_mem_decls_and_size(&app_kernel.shared_mem_dtys);
+                let unnamed_shrd_mem_decls =
+                    unnamed_shared_mem_decls(app_kernel.shared_mem_dtys.clone());
+                let num_shrd_mem_decls = app_kernel.shared_mem_dtys.len();
                 codegen_ctx.kernel_infos.push(KernelInfo {
                     name: fun_name.clone(),
                     unnamed_shrd_mem_decls,
+                    num_shrd_mem_decls,
                 });
+                let shared_mem_bytes = count_bytes(&app_kernel.shared_mem_dtys);
                 cu::ExecKernel {
                     fun_name,
                     template_args: tmp_global_fn_call.template_args.clone(),
                     grid_dim: Box::new(gen_dim3(&app_kernel.grid_dim)),
                     block_dim: Box::new(gen_dim3(&app_kernel.block_dim)),
-                    // TODO implement shared memory
                     shared_mem_bytes: Box::new(shared_mem_bytes),
-                    // TODO remove references to shared memory
-                    args: tmp_global_fn_call.args.clone(),
+                    args: tmp_global_fn_call.args,
                 }
             } else {
                 panic!("Unexpected syntactical construct with function type.")
@@ -746,57 +757,123 @@ fn convert_to_fn_name(f_expr: &cu::Expr) -> String {
     }
 }
 
-fn shared_mem_decls_and_size(
-    dtys: &[desc::DataTy],
-) -> (Vec<Box<dyn Fn(String) -> cu::Stmt>>, cu::Expr) {
-    // TODO Multiple shared memory arrays and Alignments:
-    //  Vectors -> vector length times base-type size
-    //  all PTX instructions that access memory require that the address be aligned to a multiple of the access size
-    //  The access size of a memory instruction is the total number of bytes accessed in memory.
-    //  then return declaration expressons with dummy names (with correct alignment etc.).
-    let mut unnamed_shrd_mem_decls: Vec<Box<dyn Fn(String) -> cu::Stmt>> = vec![];
-    let mut num_bytes_expr = desc::Nat::Lit(0);
-    for dty in dtys {
-        num_bytes_expr = desc::Nat::BinOp(
-            desc::BinOpNat::Add,
-            Box::new(num_bytes_expr),
-            Box::new(get_shared_mem_bytes(dty)),
-        );
-        // TODO separate struct for VarDecl, then return only the struct, so that size is known
-        //   => no Box required in Vec<Box<dyn Fn(String) -> cu::Stmt>>
-        let ty = desc::TyKind::Data(Box::new(desc::DataTy::new(desc::DataTyKind::At(
-            Box::new(dty.clone()),
-            desc::Memory::GpuShared,
-        ))));
-        let unnamed_shrd_mem_decl = move |name: String| cu::Stmt::VarDecl {
-            name,
-            ty: gen_ty(&ty, desc::Mutability::Mut),
-            is_extern: true,
+fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) -> cu::Stmt> {
+    // Multiple shared memory arrays and Alignments:
+    // Memory accesses require that the address be aligned to a multiple of the access size.
+    // The access size of a memory instruction is the total number of bytes accessed in memory.
+    // There are several ways to make sure the alignment is correct:
+    // Pointer P_i for i-th Type T_i based on Base-type B_i, is calculated by
+    //     (only works for Arrays and base types):
+    //   P_0 = shared_mem_ptr;
+    //   P_i = div_rounded_up(P_{i-1} + size(T_{i-1}), size(B_i)) * size(B_i)
+    //     where div_rounded_up(A, B) = (A+B-1)/B
+    // Faster alignment computation, that works for unsigned offsets and alignments that are
+    //  powers of 2:
+    // padding = (align - (offset & (align - 1))) & (align - 1)
+    //         = -offset & (align - 1)
+    // aligned = (offset + (align - 1)) & ~(align - 1)
+    //         = (offset + (align - 1)) & -align
+    //
+    // However, if it is possible to sort the declarations by decreasing natural alignment, then no
+    // padding is necessary. The assumption is that the initial pointer is correctly aligned for
+    // every data type and that all natural alignments are a power of 2.
+    //  https://forums.developer.nvidia.com/t/dynamic-shared-memory-allocation/21671/2
+    // Choose the last approach.
+    Box::new(move |param_names: &[String]| {
+        let buffer_name = "$buffer";
+        let extern_shrd_mem_decl = cu::Stmt::VarDecl {
+            name: buffer_name.to_string(),
+            ty: cu::Ty::CArray(Box::new(cu::Ty::Scalar(cu::ScalarTy::Byte)), None),
+            addr_space: Some(cu::GpuAddrSpace::Shared),
             expr: None,
+            is_extern: true,
         };
-        unnamed_shrd_mem_decls.push(Box::new(unnamed_shrd_mem_decl));
-    }
-    (unnamed_shrd_mem_decls, cu::Expr::Nat(num_bytes_expr))
+        let mut prev_amount = desc::Nat::Lit(0);
+        let mut prev_param_name = buffer_name.to_string();
+        let mut decls_with_natural_align = vec![];
+        for (counter, dty) in dtys.iter().enumerate() {
+            let (elem_ty, amount) = get_elem_ty_and_amount(dty);
+            let current_ptr = cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
+                array: Box::new(cu::Expr::Ident(prev_param_name.clone())),
+                index: prev_amount.clone(),
+            }));
+
+            let cu_ty = cu::Ty::Ptr(Box::new(gen_ty(&elem_ty.ty, desc::Mutability::Mut)));
+            let cast_current_ptr = cu::Expr::Cast(cu_ty.clone(), Box::new(current_ptr));
+            let ptr_decl = cu::Stmt::VarDecl {
+                name: param_names[counter].clone(),
+                ty: cu::Ty::Const(Box::new(cu_ty)),
+                addr_space: None,
+                expr: Some(cast_current_ptr),
+                is_extern: false,
+            };
+            let size_of_elem_dty = size_of_dty(elem_ty.dty());
+            decls_with_natural_align.push((ptr_decl, size_of_elem_dty));
+            prev_amount = amount;
+        }
+        decls_with_natural_align.sort_unstable_by(|(_, al), (_, ar)| al.cmp(ar));
+        let mut decls = vec![extern_shrd_mem_decl];
+        decls.append(
+            &mut decls_with_natural_align
+                .iter()
+                .map(|(decl, _)| decl)
+                .cloned()
+                .collect(),
+        );
+        cu::Stmt::Seq(decls)
+    })
 }
 
-fn get_shared_mem_bytes(dty: &desc::DataTy) -> desc::Nat {
+fn size_of_dty(dty: &desc::DataTy) -> usize {
     match &dty.dty {
-        desc::DataTyKind::Scalar(desc::ScalarTy::Bool) => desc::Nat::Lit(1),
+        desc::DataTyKind::Scalar(desc::ScalarTy::Bool) => 1,
         desc::DataTyKind::Scalar(desc::ScalarTy::U32)
         | desc::DataTyKind::Scalar(desc::ScalarTy::I32)
-        | desc::DataTyKind::Scalar(desc::ScalarTy::F32) => desc::Nat::Lit(4),
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F32) => 4,
         desc::DataTyKind::Scalar(desc::ScalarTy::U64)
         | desc::DataTyKind::Scalar(desc::ScalarTy::I64)
-        | desc::DataTyKind::Scalar(desc::ScalarTy::F64) => desc::Nat::Lit(8),
-        desc::DataTyKind::Array(elem_dty, n) => desc::Nat::BinOp(
-            desc::BinOpNat::Mul,
-            Box::new(get_shared_mem_bytes(&elem_dty)),
-            Box::new(n.clone()),
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F64) => 8,
+        _ => panic!("unexpected data type"),
+    }
+}
+
+fn get_elem_ty_and_amount(dty: &desc::DataTy) -> (desc::Ty, desc::Nat) {
+    let nat_1 = desc::Nat::Lit(1);
+    match &dty.dty {
+        desc::DataTyKind::Scalar(desc::ScalarTy::Bool)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::U32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::U64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F64) => (
+            desc::Ty::new(desc::TyKind::Data(Box::new(dty.clone()))),
+            nat_1,
         ),
+        desc::DataTyKind::Array(arr_elem_dty, n) => {
+            let (elem_ty, amount) = get_elem_ty_and_amount(&arr_elem_dty);
+            let multiplied_amount =
+                desc::Nat::BinOp(desc::BinOpNat::Mul, Box::new(amount), Box::new(n.clone()));
+            (elem_ty, multiplied_amount)
+        }
         desc::DataTyKind::Scalar(desc::ScalarTy::Unit)
-        | desc::DataTyKind::Scalar(desc::ScalarTy::Gpu) => unimplemented!(),
+        | desc::DataTyKind::Scalar(desc::ScalarTy::Gpu) => panic!(),
         _ => todo!(),
     }
+}
+
+fn count_bytes(dtys: &[desc::DataTy]) -> desc::Nat {
+    let mut bytes = desc::Nat::Lit(0);
+    for dty in dtys {
+        let (elem_ty, amount) = get_elem_ty_and_amount(dty);
+        let mul = desc::Nat::BinOp(
+            desc::BinOpNat::Mul,
+            Box::new(desc::Nat::Lit(size_of_dty(elem_ty.dty()))),
+            Box::new(amount),
+        );
+        bytes = desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(bytes), Box::new(mul));
+    }
+    bytes
 }
 
 fn gen_exec(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
@@ -824,10 +901,7 @@ fn gen_exec(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> Check
             0,
             cu::ParamDecl {
                 name: "global_failure".to_string(),
-                ty: cu::Ty::Ptr(
-                    Box::new(cu::Ty::Scalar(cu::ScalarTy::I32)),
-                    Some(cu::GpuAddrSpace::Global),
-                ),
+                ty: cu::Ty::Ptr(Box::new(cu::Ty::Scalar(cu::ScalarTy::I32))),
             },
         );
     }
@@ -2049,10 +2123,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                             } => dty.clone(),
                             _ => dt.clone(),
                         };
-                        cu::Ty::Ptr(
-                            Box::new(gen_ty(&Data(dty), mutbl)),
-                            Some(cu::GpuAddrSpace::Shared),
-                        )
+                        cu::Ty::Ptr(Box::new(gen_ty(&Data(dty), mutbl)))
                     } else {
                         let buff_kind = match mem {
                             desc::Memory::CpuMem => cu::BufferKind::CpuMem,
@@ -2080,9 +2151,9 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                         m,
                     ));
                     if matches!(reff.own, desc::Ownership::Uniq) {
-                        cu::Ty::Ptr(tty, None)
+                        cu::Ty::Ptr(tty)
                     } else {
-                        cu::Ty::PtrConst(tty, None)
+                        cu::Ty::PtrConst(tty)
                     }
                 }
                 d::RawPtr(dt) => {
@@ -2093,7 +2164,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                         }),
                         desc::Mutability::Mut,
                     ));
-                    cu::Ty::Ptr(tty, None)
+                    cu::Ty::Ptr(tty)
                 }
                 // TODO is this correct. I guess we want to generate type identifiers in generic functions.
                 d::Ident(ident) => cu::Ty::Ident(ident.name.to_string()),

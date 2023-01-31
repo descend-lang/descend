@@ -106,15 +106,23 @@ impl std::fmt::Display for Stmt {
             VarDecl {
                 name,
                 ty,
-                is_extern,
+                addr_space,
                 expr,
+                is_extern,
             } => {
                 if *is_extern {
                     write!(f, "extern ")?;
                 }
+                if let Some(addr_space) = addr_space {
+                    write!(f, "{} ", addr_space)?;
+                }
                 write!(f, "{} {}", ty, name)?;
                 if let Ty::CArray(_, n) = ty {
-                    write!(f, "[{}]", n)?;
+                    write!(f, "[")?;
+                    if let Some(n) = n {
+                        write!(f, "{}", n)?
+                    }
+                    write!(f, "]")?;
                 }
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
@@ -240,6 +248,7 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, elems, ", ")?;
                 write!(f, "}}")
             }
+            Cast(ty, expr) => write!(f, "({}){}", ty, expr),
             Nat(n) => write!(f, "{}", n),
         }
     }
@@ -327,7 +336,7 @@ impl std::fmt::Display for BinOp {
 impl std::fmt::Display for GpuAddrSpace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            GpuAddrSpace::Global => write!(f, ""),
+            GpuAddrSpace::Device => write!(f, "__device__"),
             GpuAddrSpace::Shared => write!(f, "__shared__"),
             GpuAddrSpace::Constant => write!(f, "__constant__"),
         }
@@ -338,13 +347,11 @@ impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
-            Ptr(ty, Some(addr_space)) => write!(f, "{} {} *", addr_space, ty),
-            Ptr(ty, None) => write!(f, "{} *", ty),
-            PtrConst(ty, Some(addr_space)) => write!(f, "{} const {} *", addr_space, ty),
-            PtrConst(ty, None) => write!(f, "const {} *", ty),
+            Ptr(ty) => write!(f, "{} *", ty),
+            PtrConst(ty) => write!(f, "const {} *", ty),
             Const(ty) => match ty.as_ref() {
-                Ptr(_, _) => write!(f, "{} const", ty),
-                PtrConst(_, _) => write!(f, "{} const", ty),
+                Ptr(_) => write!(f, "{} const", ty),
+                PtrConst(_) => write!(f, "{} const", ty),
                 _ => write!(f, "const {}", ty),
             },
             Array(ty, size) => write!(f, "descend::array<{}, {}>", ty, size),
@@ -374,6 +381,7 @@ impl std::fmt::Display for ScalarTy {
         match self {
             Auto => write!(f, "auto"),
             Void => write!(f, "void"),
+            Byte => write!(f, "descend::byte"),
             U32 => write!(f, "descend::u32"),
             U64 => write!(f, "descend::u64"),
             I32 => write!(f, "descend::i32"),
