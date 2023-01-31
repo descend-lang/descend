@@ -19,16 +19,20 @@ fn hist<i: prv, o: prv>(
             let d_out_atomic = to_atomic_array(inputs.1);
             let d_out_atomic_view = to_view(&shrd *d_out_atomic);
 
-            // TODO shared memory declaration
             let s_block_out: [AtomicU32; 256] @ gpu.shared = shared_alloc::<[AtomicU32; 256]>();
             let s_block_out_view = to_view(&shrd s_block_out);
 
             sched block in grid {
                 let d_in_group = d_in_groups[[block]];
 
-                indep(X) 1 block.to_warps {
-                    active => { () },
-                    inactive => { () }
+                indep(X) 16 block.to_warps {
+                    active_warps => {
+                        indep(X) 8 active_warps {
+                            active_lanes => { () },
+                            inactive_lanes => { () }
+                        }
+                    },
+                    inactive_warps => { () }
                 };
 
                 // initialize shared memory histogram

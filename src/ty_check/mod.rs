@@ -1437,10 +1437,12 @@ impl TyChecker {
         idx: &Nat,
         e: &mut Expr,
     ) -> TyResult<(TyCtx, Ty)> {
-        if ident_exec.ty.ty != ExecTyKind::CpuThread && ident_exec.ty.ty != ExecTyKind::GpuThread {
+        if &exec.ty.as_ref().unwrap().ty != &ExecTyKind::CpuThread
+            && &exec.ty.as_ref().unwrap().ty != &ExecTyKind::GpuThread
+        {
             return Err(TyError::String(format!(
                 "Trying to assign to memory from {}.",
-                &ident_exec.ty.ty
+                &exec.ty.as_ref().unwrap().ty
             )));
         }
 
@@ -2941,7 +2943,7 @@ fn ty_check_exec(
     ident_exec: &IdentExec,
     exec_expr: &mut ExecExpr,
 ) -> TyResult<()> {
-    let mut exec_ty = match &exec_expr.exec.base {
+    let base_exec_ty = match &exec_expr.exec.base {
         BaseExec::Ident(ident) => {
             if ident == &ident_exec.ident {
                 ident_exec.ty.ty.clone()
@@ -2953,6 +2955,8 @@ fn ty_check_exec(
         BaseExec::CpuThread => ExecTyKind::CpuThread,
         BaseExec::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid(gdim.clone(), bdim.clone()),
     };
+
+    let mut exec_ty = base_exec_ty.clone();
 
     for e in &exec_expr.exec.path {
         match &e {
@@ -2967,7 +2971,7 @@ fn ty_check_exec(
                     &exec_ty,
                 )?
             }
-            ExecPathElem::ToWarps => exec_ty = ty_check_exec_to_warps(&exec_ty)?,
+            ExecPathElem::ToWarps => exec_ty = ty_check_exec_to_warps(&exec_ty, &base_exec_ty)?,
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
@@ -3073,7 +3077,17 @@ pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
     }
 }
 
-fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+fn ty_check_exec_to_warps(exec_ty: &ExecTyKind, base_exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    match base_exec_ty {
+        ExecTyKind::GpuGrid(_, bdim) => match bdim.clone() {
+            Dim::X(_) => (),
+            _ => return Err(TyError::String(format!(
+                "GpuBlocks in GpuGrid need to be one-dimensional to create warps from a GpuBlock, instead got: {}",
+                base_exec_ty
+            ))),
+        },
+        _ => {}
+    };
     match exec_ty {
         ExecTyKind::GpuBlock(dim) => match dim.clone() {
             Dim::X(d) => {
@@ -3081,7 +3095,7 @@ fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
                     != Nat::Lit(0)
                 {
                     Err(TyError::String(format!(
-                        "Size of GpuBlock needs to be divisible by 32 to create warps, instead got: {}",
+                        "Size of GpuBlock needs to be evenly divisible by 32 to create warps, instead got: {}",
                         exec_ty
                     )))
                 } else {

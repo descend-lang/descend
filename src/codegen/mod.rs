@@ -3,6 +3,7 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit::Visit;
+use crate::ast::{BinOpNat, DimCompo, Nat};
 use crate::ty_check;
 use crate::ty_check::matches_dty;
 use cu_ast as cu;
@@ -416,7 +417,13 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                 gen_for_each(ident, coll_expr, body, codegen_ctx)
             }
         }
-        Indep(pb) => gen_indep(pb.dim_compo, &pb.pos, &pb.branch_bodies, codegen_ctx),
+        Indep(pb) => gen_indep(
+            pb.dim_compo,
+            &pb.pos,
+            &pb.branch_bodies,
+            &pb.split_exec,
+            codegen_ctx,
+        ),
         Sched(pf) => gen_sched(pf, codegen_ctx),
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => match gen_expr(cond, codegen_ctx) {
@@ -863,11 +870,12 @@ fn gen_indep(
     dim_compo: desc::DimCompo,
     pos: &desc::Nat,
     branch_bodies: &[desc::Expr],
+    split_exec: &Box<desc::ExecExpr>,
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
     let outer_exec = codegen_ctx.exec.clone();
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().split_proj(
+    codegen_ctx.exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         0,
@@ -875,7 +883,7 @@ fn gen_indep(
     let fst_branch = gen_stmt(&branch_bodies[0], false, codegen_ctx);
     codegen_ctx.drop_scope();
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().split_proj(
+    codegen_ctx.exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         1,
@@ -2427,10 +2435,10 @@ impl ShapeExpr {
 
 fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat) {
     let mut indices = match &exec.exec.base {
-        desc::BaseExec::GpuGrid(_, _) => {
+        desc::BaseExec::Ident(_) | desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
         }
-        desc::BaseExec::Ident(_) | desc::BaseExec::CpuThread => unreachable!(),
+        desc::BaseExec::CpuThread => unreachable!(),
     };
     for e in &exec.exec.path {
         match e {
@@ -2456,6 +2464,7 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::X => {
                         indices.0 = desc::Nat::ThreadIdx(d)
                     }
+                    Some(desc::Nat::WarpIdx) => indices.0 = desc::Nat::LaneIdx,
                     _ => unreachable!(),
                 },
                 desc::DimCompo::Y => match contained_par_idx(&indices.1) {
@@ -2474,7 +2483,8 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                 },
             },
             desc::ExecPathElem::ToWarps => {
-                todo!()
+                // FIXME indices.0 is still GridIdx for some reason?
+                indices.0 = desc::Nat::WarpIdx;
             }
             // desc::ExecPathElem::ToThreadGrp(grid) => {
             //     assert!(matches!(&grid.exec, desc::ExecPathElem::GpuGrid(_, _)));
@@ -2511,7 +2521,7 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
             match n {
                 desc::Nat::GridIdx => self.par_idx = Some(n.clone()),
                 desc::Nat::BlockIdx(_) => self.par_idx = Some(n.clone()),
-                desc::Nat::WarpIdx(_) => self.par_idx = Some(n.clone()),
+                desc::Nat::WarpIdx => self.par_idx = Some(n.clone()),
                 _ => desc::visit::walk_nat(self, n),
             }
         }

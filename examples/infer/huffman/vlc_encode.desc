@@ -149,8 +149,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                         indep(X) d block {
                             active_threads => {
                                 sched thread in active_threads {
-                                    let arr = tmp_up_sweep_view[[thread]]
-                                    // TODO arr[256 / d - 1] = arr[256 / d - 1] + arr[128 / d - 1]
+                                    let arr = tmp_up_sweep_view[[thread]];
+                                    arr[256 / d - 1] = arr[256 / d - 1] + arr[128 / d - 1]
                                 }
                             },
                             rest => { () }
@@ -190,8 +190,8 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv>(
                                     let arr = tmp_down_sweep_view[[thread]];
 
                                     let t = arr[128/d-1]
-                                    // TODO arr[128/d-1] = arr[256/d-1];
-                                    // TODO arr[256/d-1] = arr[256/d-1] + t
+                                    arr[128/d-1] = arr[256/d-1];
+                                    arr[256/d-1] = arr[256/d-1] + t
                                 }
                             },
                             rest => { () }

@@ -1573,7 +1573,8 @@ pub enum Nat {
     ThreadIdx(DimCompo),
     BlockIdx(DimCompo),
     BlockDim(DimCompo),
-    WarpIdx(Box<Nat>),
+    WarpIdx,
+    LaneIdx,
     // Dummy that is always 0, i.e. equivalent to Lit(0)
     GridIdx,
     BinOp(BinOpNat, Box<Nat>, Box<Nat>),
@@ -1616,7 +1617,8 @@ impl Nat {
             | Nat::BlockIdx(_)
             | Nat::BlockDim(_)
             | Nat::ThreadIdx(_)
-            | Nat::WarpIdx(_) => Err("Cannot evaluate.".to_string()),
+            | Nat::WarpIdx
+            | Nat::LaneIdx => Err("Cannot evaluate.".to_string()),
             Nat::Lit(n) => Ok(*n),
             Nat::BinOp(op, l, r) => match op {
                 BinOpNat::Add => Ok(l.eval()? + r.eval()?),
@@ -1716,7 +1718,8 @@ impl fmt::Display for Nat {
             Self::BlockIdx(d) => write!(f, "blockIdx.{}", d),
             Self::BlockDim(d) => write!(f, "blockDim.{}", d),
             Self::ThreadIdx(d) => write!(f, "threadIdx.{}", d),
-            Self::WarpIdx(_) => write!(f, "descend::to_warps.meta_group_rank()"),
+            Self::WarpIdx => write!(f, "descend::to_warps.meta_group_rank()"),
+            Self::LaneIdx => write!(f, "descend::to_warps.thread_rank()"),
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Self::App(func, args) => {
