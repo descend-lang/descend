@@ -27,7 +27,7 @@ macro_rules! matches_dty {
         }
     };
 }
-use crate::ast::ExecTyKind::GpuWarpGrp;
+
 pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -2922,7 +2922,7 @@ fn legal_exec_under_current(
         let current_exec_ty = &current_exec.ty.as_ref().unwrap().ty;
         let expanded_exec_ty = expanded_exec_expr.ty.unwrap().ty;
         match (current_exec_ty, expanded_exec_ty) {
-            // FIXME this does not guarantee that the GpuWarpGrp was created from the GpuBlock
+            // FIXME Piet: this does not guarantee that the GpuWarpGrp was created from the GpuBlock
             (ExecTyKind::GpuBlock(..), ExecTyKind::GpuWarpGrp(..)) => (),
             _ => {
                 return Err(TyError::String(format!(
@@ -2967,8 +2967,7 @@ fn ty_check_exec(
                     &exec_ty,
                 )?
             }
-            // todo blockdim(x) / 32
-            ExecPathElem::ToWarps => exec_ty = ExecTyKind::GpuWarpGrp(Nat::Lit(32)),
+            ExecPathElem::ToWarps => exec_ty = ty_check_exec_to_warps(&exec_ty)?,
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
@@ -3071,6 +3070,37 @@ pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
         }
         (Dim::X(_), DimCompo::X) | (Dim::Y(_), DimCompo::Y) | (Dim::Z(_), DimCompo::Z) => Ok(None),
         _ => Err(TyError::IllegalDimension),
+    }
+}
+
+fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    match exec_ty {
+        ExecTyKind::GpuBlock(dim) => match dim.clone() {
+            Dim::X(d) => {
+                if Nat::BinOp(BinOpNat::Mod, Box::new(d.0.clone()), Box::new(Nat::Lit(32)))
+                    != Nat::Lit(0)
+                {
+                    Err(TyError::String(format!(
+                        "Size of GpuBlock needs to be divisible by 32 to create warps, instead got: {}",
+                        exec_ty
+                    )))
+                } else {
+                    Ok(ExecTyKind::GpuWarpGrp(Nat::BinOp(
+                        BinOpNat::Div,
+                        Box::new(d.0),
+                        Box::new(Nat::Lit(32)),
+                    )))
+                }
+            }
+            _ => Err(TyError::String(format!(
+                "GpuBlock needs to be one-dimensional to create warps, instead got: {}",
+                exec_ty
+            ))),
+        },
+        _ => Err(TyError::String(format!(
+            "Trying to create warps from {}",
+            exec_ty
+        ))),
     }
 }
 
