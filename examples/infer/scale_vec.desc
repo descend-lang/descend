@@ -14,7 +14,7 @@ fn par_scale_vec<n: nat, r: prv>(
         |v: &r uniq gpu.global [[f64; 1024]]| -[v: view]-> &r uniq gpu.global [[f64; 1024]] {
             rev_mut::<1024, r>(v)
         },
-        create_2d_uniq(vec)
+        create_2d_uniq::<1024>(vec)
     );
     sched block in grid {
         sched thread in block {
@@ -25,8 +25,8 @@ fn par_scale_vec<n: nat, r: prv>(
     }
 }
 
-fn create_2d_uniq<n: nat, r: prv>(
+fn create_2d_uniq<k: nat, n: nat, r: prv>(
     array: &r uniq gpu.global [f64; n]
-) -[v: view]-> &r uniq gpu.global [[ [[f64; 1024]]; n/1024]] {
-    group_mut::<1024, r>(to_view_mut::<r>(array))
+) -[v: view]-> &r uniq gpu.global [[ [[f64; k]]; n/k]] {
+    group_mut::<k>(to_view_mut(array))
 }

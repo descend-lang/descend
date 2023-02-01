@@ -27,7 +27,8 @@ pub(super) fn check(
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
         (sub, sup) if sub == sup => Ok(ty_ctx),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
-        (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size)) if sub_size == sup_size => {
+        (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size))
+        | (ArrayShape(sub_elem_ty, sub_size), ArrayShape(sup_elem_ty, sup_size)) => {
             check(kind_ctx, ty_ctx, sub_elem_ty, sup_elem_ty)
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′

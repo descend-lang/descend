@@ -34,7 +34,6 @@ fn gpu_reduce<gs: nat, bs: nat>(
         };
 
         for_nat k in halved_range(bs/2) {
-            let tmp_view = to_view_mut(&uniq *tmp);
             let split_tmp_view = (split uniq 2*k (*tmp_view)).0;
             let active_halves = split uniq k (*split_tmp_view);
 
