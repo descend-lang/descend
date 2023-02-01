@@ -788,38 +788,43 @@ fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) ->
             expr: None,
             is_extern: true,
         };
+        if param_names.len() != dtys.len() {
+            panic!("Exepcted as many shared memory parameter names as data types.")
+        }
+        let mut names_with_natural_align = param_names
+            .iter()
+            .zip(&dtys)
+            .map(|(name, dty)| {
+                let (elem_ty, amount) = get_elem_ty_and_amount(&dty);
+                let size_of_elem_dty = size_of_dty(elem_ty.dty());
+                (size_of_elem_dty, name, elem_ty, amount)
+            })
+            .collect::<Vec<_>>();
+        names_with_natural_align.sort_unstable_by(
+            // sort descending
+            |(elem_sizel, _, _, _), (elem_sizer, _, _, _)| elem_sizer.cmp(elem_sizel),
+        );
         let mut prev_amount = desc::Nat::Lit(0);
         let mut prev_param_name = buffer_name.to_string();
-        let mut decls_with_natural_align = vec![];
-        for (counter, dty) in dtys.iter().enumerate() {
-            let (elem_ty, amount) = get_elem_ty_and_amount(dty);
+        let mut decls = vec![extern_shrd_mem_decl];
+        for (_, param_name, elem_ty, amount) in names_with_natural_align {
             let current_ptr = cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
                 array: Box::new(cu::Expr::Ident(prev_param_name.clone())),
                 index: prev_amount.clone(),
             }));
-
             let cu_ty = cu::Ty::Ptr(Box::new(gen_ty(&elem_ty.ty, desc::Mutability::Mut)));
             let cast_current_ptr = cu::Expr::Cast(cu_ty.clone(), Box::new(current_ptr));
             let ptr_decl = cu::Stmt::VarDecl {
-                name: param_names[counter].clone(),
+                name: param_name.clone(),
                 ty: cu::Ty::Const(Box::new(cu_ty)),
                 addr_space: None,
                 expr: Some(cast_current_ptr),
                 is_extern: false,
             };
-            let size_of_elem_dty = size_of_dty(elem_ty.dty());
-            decls_with_natural_align.push((ptr_decl, size_of_elem_dty));
+            decls.push(ptr_decl);
             prev_amount = amount;
+            prev_param_name = param_name.clone();
         }
-        decls_with_natural_align.sort_unstable_by(|(_, al), (_, ar)| al.cmp(ar));
-        let mut decls = vec![extern_shrd_mem_decl];
-        decls.append(
-            &mut decls_with_natural_align
-                .iter()
-                .map(|(decl, _)| decl)
-                .cloned()
-                .collect(),
-        );
         cu::Stmt::Seq(decls)
     })
 }

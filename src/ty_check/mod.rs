@@ -26,6 +26,7 @@ macro_rules! matches_dty {
         }
     };
 }
+use crate::ast::utils::fresh_ident;
 pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -1924,7 +1925,7 @@ impl TyChecker {
             .iter()
             .map(|dty| {
                 IdentTyped::new(
-                    Ident::new_impli("shared_mem"),
+                    Ident::new_impli(&utils::fresh_name("shared_mem")),
                     Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::At(
                         Box::new(dty.clone()),
                         Memory::GpuShared,
