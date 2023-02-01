@@ -303,6 +303,7 @@ impl Constrainable for ExecTy {
         match (&mut self.ty, &mut other.ty) {
             (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
             | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
+            | (ExecTyKind::GpuWarp, ExecTyKind::GpuWarp)
             | (ExecTyKind::View, ExecTyKind::View) => Ok(()),
             (ExecTyKind::GpuGrid(lgdim, lbdim), ExecTyKind::GpuGrid(rgdim, rbdim))
             | (ExecTyKind::GpuBlockGrp(lgdim, lbdim), ExecTyKind::GpuBlockGrp(rgdim, rbdim)) => {

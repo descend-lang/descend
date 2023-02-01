@@ -955,7 +955,8 @@ impl TyChecker {
         indep: &mut Indep,
     ) -> TyResult<(TyCtx, Ty)> {
         legal_exec_under_current(kind_ctx, &ty_ctx, exec, ident_exec, &indep.split_exec)?;
-        let expanded_exec_expr = expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, exec)?;
+        let expanded_exec_expr =
+            expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, &indep.split_exec)?;
         if indep.branch_idents.len() != indep.branch_bodies.len() {
             panic!(
                 "Amount of branch identifiers and amount of branches do not match:\
@@ -1017,7 +1018,8 @@ impl TyChecker {
         sched: &mut Sched,
     ) -> TyResult<(TyCtx, Ty)> {
         legal_exec_under_current(kind_ctx, &ty_ctx, exec, ident_exec, &sched.sched_exec)?;
-        let mut body_exec = ExecExpr::new(exec.exec.clone().distrib(sched.dim));
+        let expanded_exec_expr = expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, exec)?;
+        let mut body_exec = ExecExpr::new(expanded_exec_expr.exec.distrib(sched.dim));
         ty_check_exec(kind_ctx, &ty_ctx, ident_exec, &mut body_exec)?;
         let inner_ty_ctx = ty_ctx.clone().append_frame(vec![]);
         let mut inner_ty_ctx = if let Some(ident) = &sched.inner_exec_ident {
@@ -3145,6 +3147,27 @@ fn ty_check_exec_split_proj(
             (
                 ExecTyKind::GpuGlobalThreads(ldim),
                 ExecTyKind::GpuGlobalThreads(rdim),
+            )
+        }
+        ExecTyKind::GpuWarpGrp(n) => {
+            let (ldim, rdim) = split_dim(d, n.clone(), Dim::X(Box::new(Dim1d(n.clone()))))?;
+            match (ldim, rdim) {
+                (Dim::X(ln), Dim::X(rn)) => (
+                    ExecTyKind::GpuWarpGrp(ln.clone().0),
+                    ExecTyKind::GpuWarpGrp(rn.clone().0),
+                ),
+                _ => {
+                    return Err(TyError::String(format!(
+                        "Trying to split a multi-dimensional WarpGrp"
+                    )));
+                }
+            }
+        }
+        ExecTyKind::GpuWarp => {
+            let (ldim, rdim) = split_dim(d, n.clone(), Dim::X(Box::new(Dim1d(Nat::Lit(32)))))?;
+            (
+                ExecTyKind::GpuThreadGrp(ldim),
+                ExecTyKind::GpuThreadGrp(rdim),
             )
         }
         ex => {

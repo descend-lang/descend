@@ -3,7 +3,7 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit::Visit;
-use crate::ast::{BinOpNat, DimCompo, Nat};
+use crate::ast::{BinOpNat, DimCompo, Exec, ExecExpr, ExecTyKind, Expr, Ident, Nat};
 use crate::ty_check;
 use crate::ty_check::matches_dty;
 use cu_ast as cu;
@@ -420,6 +420,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
         Indep(pb) => gen_indep(
             pb.dim_compo,
             &pb.pos,
+            &pb.branch_idents,
             &pb.branch_bodies,
             &pb.split_exec,
             codegen_ctx,
@@ -869,30 +870,41 @@ fn gen_exec(
 fn gen_indep(
     dim_compo: desc::DimCompo,
     pos: &desc::Nat,
+    branch_idents: &Vec<Ident>,
     branch_bodies: &[desc::Expr],
     split_exec: &Box<desc::ExecExpr>,
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
     let outer_exec = codegen_ctx.exec.clone();
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
+
+    let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         0,
     ));
+    codegen_ctx
+        .exec_mapping
+        .insert(&branch_idents[0].name, inner_exec.clone());
+    codegen_ctx.exec = inner_exec;
     let fst_branch = gen_stmt(&branch_bodies[0], false, codegen_ctx);
     codegen_ctx.drop_scope();
+
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
+    let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
-        1,
+        0,
     ));
+    codegen_ctx
+        .exec_mapping
+        .insert(&branch_idents[0].name, inner_exec.clone());
+    codegen_ctx.exec = inner_exec;
     let snd_branch = gen_stmt(&branch_bodies[1], false, codegen_ctx);
     codegen_ctx.drop_scope();
-    codegen_ctx.exec = outer_exec;
 
-    let split_cond = gen_indep_branch_cond(dim_compo, pos, &codegen_ctx.exec.exec);
+    codegen_ctx.exec = outer_exec;
+    let split_cond = gen_indep_branch_cond(dim_compo, pos, &split_exec.exec, codegen_ctx);
     cu::Stmt::Seq(vec![
         cu::Stmt::IfElse {
             cond: split_cond,
@@ -1715,6 +1727,7 @@ fn gen_indep_branch_cond(
     dim_compo: desc::DimCompo,
     pos: &desc::Nat,
     exec: &desc::Exec,
+    codegen_ctx: &CodegenCtx,
 ) -> cu::Expr {
     cu::Expr::BinOp {
         op: cu::BinOp::Lt,
@@ -1723,6 +1736,7 @@ fn gen_indep_branch_cond(
             // The condition must range over the elements within the execution resource.
             // Use Distrib to indicate this.
             &desc::ExecExpr::new(exec.clone().distrib(dim_compo)),
+            codegen_ctx,
         ))),
         rhs: Box::new(cu::Expr::Nat(pos.clone())),
     }
@@ -2231,7 +2245,7 @@ impl ShapeExpr {
                     &desc::Expr::new(desc::ExprKind::PlaceExpr(pl_expr.clone())),
                     codegen_ctx,
                 )
-                .par_distrib_shape(dim_compo, exec)
+                .par_distrib_shape(dim_compo, exec, codegen_ctx)
             }
             desc::ExprKind::Block(block) => ShapeExpr::create_from(&block.body, codegen_ctx),
             _ => {
@@ -2425,18 +2439,29 @@ impl ShapeExpr {
         collect_and_rename_input_exprs_rec(self, &mut count, vec)
     }
 
-    fn par_distrib_shape(&self, dim: desc::DimCompo, exec: &desc::ExecExpr) -> Self {
+    fn par_distrib_shape(
+        &self,
+        dim: desc::DimCompo,
+        exec: &desc::ExecExpr,
+        codegen_ctx: &CodegenCtx,
+    ) -> Self {
         ShapeExpr::Idx {
-            idx: parall_idx(dim, exec),
+            idx: parall_idx(dim, exec, codegen_ctx),
             shape: Box::new(self.clone()),
         }
     }
 }
 
-fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat) {
+fn to_parall_indices(
+    exec: &desc::ExecExpr,
+    codegen_ctx: &CodegenCtx,
+) -> (desc::Nat, desc::Nat, desc::Nat) {
     let mut indices = match &exec.exec.base {
-        desc::BaseExec::Ident(_) | desc::BaseExec::GpuGrid(_, _) => {
+        desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
+        }
+        desc::BaseExec::Ident(i) => {
+            to_parall_indices(codegen_ctx.exec_mapping.get(&i.name), codegen_ctx)
         }
         desc::BaseExec::CpuThread => unreachable!(),
     };
@@ -2464,6 +2489,7 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::X => {
                         indices.0 = desc::Nat::ThreadIdx(d)
                     }
+                    Some(desc::Nat::WarpGrpIdx) => indices.0 = desc::Nat::WarpIdx,
                     Some(desc::Nat::WarpIdx) => indices.0 = desc::Nat::LaneIdx,
                     _ => unreachable!(),
                 },
@@ -2482,10 +2508,12 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                     _ => unreachable!(),
                 },
             },
-            desc::ExecPathElem::ToWarps => {
-                // FIXME indices.0 is still GridIdx for some reason?
-                indices.0 = desc::Nat::WarpIdx;
-            }
+            desc::ExecPathElem::ToWarps => match contained_par_idx(&indices.0) {
+                Some(desc::Nat::BlockIdx(DimCompo::X)) => {
+                    indices.0 = desc::Nat::WarpGrpIdx;
+                }
+                _ => unreachable!(),
+            },
             // desc::ExecPathElem::ToThreadGrp(grid) => {
             //     assert!(matches!(&grid.exec, desc::ExecPathElem::GpuGrid(_, _)));
             //     let global_idx = |d| {
@@ -2521,6 +2549,7 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
             match n {
                 desc::Nat::GridIdx => self.par_idx = Some(n.clone()),
                 desc::Nat::BlockIdx(_) => self.par_idx = Some(n.clone()),
+                desc::Nat::WarpGrpIdx => self.par_idx = Some(n.clone()),
                 desc::Nat::WarpIdx => self.par_idx = Some(n.clone()),
                 _ => desc::visit::walk_nat(self, n),
             }
@@ -2531,11 +2560,11 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
     contained.par_idx
 }
 
-fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr) -> desc::Nat {
+fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr, codegen_ctx: &CodegenCtx) -> desc::Nat {
     match dim {
-        desc::DimCompo::X => to_parall_indices(exec).0,
-        desc::DimCompo::Y => to_parall_indices(exec).1,
-        desc::DimCompo::Z => to_parall_indices(exec).2,
+        desc::DimCompo::X => to_parall_indices(exec, codegen_ctx).0,
+        desc::DimCompo::Y => to_parall_indices(exec, codegen_ctx).1,
+        desc::DimCompo::Z => to_parall_indices(exec, codegen_ctx).2,
     }
 }
 

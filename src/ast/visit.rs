@@ -64,6 +64,7 @@ pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
         | Nat::BlockIdx(_)
         | Nat::BlockDim(_)
         | Nat::ThreadIdx(_)
+        | Nat::WarpGrpIdx
         | Nat::WarpIdx
         | Nat::LaneIdx
         | Nat::Lit(_) => {}

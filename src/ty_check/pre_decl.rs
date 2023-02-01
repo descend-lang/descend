@@ -162,25 +162,22 @@ fn offset_raw_ptr_ty() -> FnTy {
 }
 
 // shfl_up:
-//  <d: dty>(d, i32) -> d
+//  <>(u32, i32) -> u32
 fn shfl_up_ty() -> FnTy {
-    let d = Ident::new("d");
-    let d_dty = IdentKinded {
-        ident: d.clone(),
-        kind: Kind::DataTy,
-    };
     FnTy::new(
-        vec![d_dty],
+        vec![],
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
-                d.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::U32,
             ))))),
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
                 ScalarTy::I32,
             ))))),
         ],
         ExecTy::new(ExecTyKind::GpuWarp),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(d))))),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))),
     )
 }
 
