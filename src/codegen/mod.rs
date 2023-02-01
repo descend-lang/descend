@@ -1498,7 +1498,7 @@ fn gen_fn_call_args(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> Vec<cu
         .map(|arg| {
             if is_view_dty(arg.ty.as_ref().unwrap()) {
                 gen_expr(
-                    &basis_ref(&ShapeExpr::create_from(arg, &codegen_ctx)),
+                    &basis_ref(&ShapeExpr::create_from(arg, &codegen_ctx), &codegen_ctx),
                     codegen_ctx,
                 )
                 .expr()
@@ -1510,20 +1510,24 @@ fn gen_fn_call_args(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> Vec<cu
         .collect()
 }
 
-fn basis_ref(view: &ShapeExpr) -> desc::Expr {
+fn basis_ref(view: &ShapeExpr, codegen_ctx: &CodegenCtx) -> desc::Expr {
     match view {
         ShapeExpr::ToView { ref_expr } => ref_expr.as_ref().clone(),
-        ShapeExpr::SplitAt { shape, .. } => basis_ref(shape),
-        ShapeExpr::Reverse { shape, .. } => basis_ref(shape),
-        ShapeExpr::Group { shape, .. } => basis_ref(shape),
-        ShapeExpr::Join { shape, .. } => basis_ref(shape),
-        ShapeExpr::Transpose { shape, .. } => basis_ref(shape),
+        ShapeExpr::SplitAt { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Reverse { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Group { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Join { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Transpose { shape, .. } => basis_ref(shape, codegen_ctx),
         ShapeExpr::Tuple { shapes: elems } => {
             // maybe untrue
             todo!("this case should be removed")
         }
-        ShapeExpr::Idx { shape, .. } => basis_ref(shape),
-        ShapeExpr::Proj { shape, .. } => basis_ref(shape),
+        ShapeExpr::Idx { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Proj { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Map { shape_expr, .. } => basis_ref(
+            &ShapeExpr::create_from(shape_expr, codegen_ctx),
+            codegen_ctx,
+        ),
     }
 }
 
@@ -1642,7 +1646,11 @@ fn stringify_view(view: &ShapeExpr, c: u8) -> String {
         }
         ShapeExpr::Transpose { shape } => {
             str.push_str("T_");
-            str.push_str(&stringify_view(shape.as_ref(), c))
+            str.push_str(&stringify_view(shape.as_ref(), c));
+        }
+        ShapeExpr::Map { .. } => {
+            str.push_str(&desc::utils::fresh_name("M"));
+            str.push('_');
         }
         ShapeExpr::SplitAt { .. } | ShapeExpr::Tuple { .. } => {
             unimplemented!("Maybe proj can contain tuples as well")
@@ -1746,7 +1754,7 @@ fn gen_idx_into_shape(
 ) -> cu::Expr {
     let collec_shape = ShapeExpr::create_from(
         &desc::Expr::new(desc::ExprKind::PlaceExpr(Box::new(pl_expr.clone()))),
-        &codegen_ctx,
+        codegen_ctx,
     );
     gen_shape(
         &ShapeExpr::Idx {
@@ -1825,11 +1833,6 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, codegen_ctx: &mut CodegenCtx) -> cu::E
             }
         }
     }
-}
-
-enum ParallRange {
-    Range(desc::Nat, desc::Nat),
-    SplitRange(desc::Nat, desc::Nat, desc::Nat),
 }
 
 fn gen_indep_branch_cond(
@@ -2007,6 +2010,61 @@ fn gen_shape(
                     gen_shape(shape, path, codegen_ctx)
                 }
                 None => panic!("Cannot generate Reverse shape. Index missing."),
+            }
+        }
+        (ShapeExpr::Map { f, shape_expr }, _) => {
+            let i = path.pop();
+            match i {
+                Some(i) => {
+                    let idx = desc::Expr::new(desc::ExprKind::Idx(
+                        Box::new(shape_expr.as_ref().clone()),
+                        i,
+                    ));
+                    match &f.expr {
+                        desc::ExprKind::PlaceExpr(pl_expr) => {
+                            if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
+                                if let Some(vf) = codegen_ctx
+                                    .comp_unit
+                                    .iter()
+                                    .find(|vf| vf.ident.name == ident.name)
+                                {
+                                    let app_f = ShapeExpr::applied_shape_fun(
+                                        std::iter::empty(),
+                                        &[],
+                                        vf.param_decls.iter().map(|p| p.ident.name.as_ref()),
+                                        &[idx],
+                                        &vf.body.body,
+                                        codegen_ctx,
+                                    );
+                                    gen_shape(&app_f, path, codegen_ctx)
+                                } else {
+                                    panic!("Function definition not found.")
+                                }
+                            } else {
+                                panic!(
+                                    "Unexpected syntax construct,\
+                                        that should not have a function type."
+                                )
+                            }
+                        }
+                        desc::ExprKind::Lambda(param_decl, _, _, body) => {
+                            let app_f = ShapeExpr::applied_shape_fun(
+                                std::iter::empty(),
+                                &[],
+                                param_decl.iter().map(|p| p.ident.name.as_ref()),
+                                &[idx],
+                                body,
+                                codegen_ctx,
+                            );
+                            gen_shape(&app_f, path, codegen_ctx)
+                        }
+                        _ => panic!(
+                            "Unexpected syntax construct,\
+                                that should not have a function type."
+                        ),
+                    }
+                }
+                None => panic!("Cannot generate Map shape. Index missing."),
             }
         }
         ve => panic!("unexpected, found: {:?}", ve),
@@ -2275,6 +2333,10 @@ enum ShapeExpr {
     Transpose {
         shape: Box<ShapeExpr>,
     },
+    Map {
+        f: Box<desc::Expr>,
+        shape_expr: Box<desc::Expr>,
+    },
 }
 
 impl ShapeExpr {
@@ -2305,6 +2367,10 @@ impl ShapeExpr {
                             || ident.name.as_ref() == ty_check::pre_decl::REVERSE_MUT
                         {
                             ShapeExpr::create_reverse_shape(gen_args, args, codegen_ctx)
+                        } else if ident.name.as_ref() == ty_check::pre_decl::MAP
+                            || ident.name.as_ref() == ty_check::pre_decl::MAP_MUT
+                        {
+                            ShapeExpr::create_map_shape(args)
                         } else if let Some(vf) = codegen_ctx
                             .comp_unit
                             .iter()
@@ -2372,6 +2438,10 @@ impl ShapeExpr {
                     &desc::Expr::new(desc::ExprKind::PlaceExpr(pl_expr.clone())),
                     codegen_ctx,
                 )),
+            },
+            desc::ExprKind::Idx(expr, idx) => ShapeExpr::Idx {
+                idx: idx.clone(),
+                shape: Box::new(ShapeExpr::create_from(expr, codegen_ctx)),
             },
             desc::ExprKind::Select(_, pl_expr, ident_exec) => {
                 let exec = codegen_ctx.exec_mapping.get(&ident_exec.name);
@@ -2527,6 +2597,16 @@ impl ShapeExpr {
         panic!("Cannot create `to_shape` from the provided arguments.");
     }
 
+    fn create_map_shape(args: &[desc::Expr]) -> ShapeExpr {
+        if let (Some(f), Some(shape_expr)) = (args.first(), args.get(1)) {
+            return ShapeExpr::Map {
+                f: Box::new(f.clone()),
+                shape_expr: Box::new(shape_expr.clone()),
+            };
+        }
+        panic!("Cannot create `map` from provided arguments.");
+    }
+
     fn collect_and_rename_input_exprs(&mut self) -> Vec<(String, desc::Expr)> {
         fn collect_and_rename_input_exprs_rec(
             v: &mut ShapeExpr,
@@ -2572,6 +2652,7 @@ impl ShapeExpr {
                 | ShapeExpr::Proj { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
+                ShapeExpr::Map { .. } => unimplemented!(),
             }
         }
         let vec = vec![];
