@@ -26,33 +26,33 @@ fn gpu_reduce<gs: nat, bs: nat>(
     sched block in grid {
         let ib = block_group[[block]];
         let out_elem = view_out[[block]];
-        let tmp_view = to_view_mut(&uniq *tmp);
-        sched thread in block {
-            let inp = ib[[thread]];
-            let tmp_in = tmp_view[[thread]];
-            *tmp_in = *inp
-        };
+            let tmp_view = to_view_mut(&uniq *tmp);
+            sched thread in block {
+                let inp = ib[[thread]];
+                let tmp_in = tmp_view[[thread]];
+                *tmp_in = *inp
+            };
 
-        for_nat k in halved_range(bs/2) {
-            let split_tmp_view = (split uniq 2*k (*tmp_view)).0;
-            let active_halves = split uniq k (*split_tmp_view);
+            for_nat k in halved_range(bs/2) {
+                let split_tmp_view = (split uniq 2*k (*tmp_view)).0;
+                let active_halves = split uniq k (*split_tmp_view);
 
-            let active_half0 = active_halves.0;
-            let active_half1 = active_halves.1;
+                let active_half0 = active_halves.0;
+                let active_half1 = active_halves.1;
 
-            // Fixme: At this point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
-            indep(X) k block {
-                active =>
-                    sched thread in active {
-                        let a = active_half0[[thread]];
-                        let b = active_half1[[thread]];
-                        *a = *a + *b
-                    },
-                inactive => { () }
-            }
-        };
-        let tmp_view2 = to_view_mut(&uniq *tmp);
-        let tmp_res = (split uniq 1 (*tmp_view2)).0;
+                // Fixme: At this point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
+                indep(X) k block {
+                    active =>
+                        sched thread in active {
+                            let a = active_half0[[thread]];
+                            let b = active_half1[[thread]];
+                            *a = *a + *b
+                        },
+                    inactive => { () }
+                }
+            };
+
+        let tmp_res = (split uniq 1 (*tmp_view)).0;
         indep(X) 1 block {
             single_thread =>
                 sched thread in single_thread {

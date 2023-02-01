@@ -12,7 +12,7 @@ fn par_scale_vec<n: nat, r: prv>(
 ) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
     let groups = map_mut(
         |v: &r uniq gpu.global [[f64; 1024]]| -[v: view]-> &r uniq gpu.global [[f64; 1024]] {
-            rev_mut::<1024, r>(v)
+            rev_mut(v)
         },
         create_2d_uniq::<1024>(vec)
     );
