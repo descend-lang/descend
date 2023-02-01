@@ -40,12 +40,21 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let cu_fn_defs = codegen_ctx
         .inst_fn_ctx
         .into_values()
+        .chain(initial_fns.into_iter())
+        // mark kernel functions global
+        .map(|mut f| {
+            if let Some(ki) = codegen_ctx
+                .kernel_infos
+                .iter()
+                .find(|ki| &ki.name == &f.fn_sig.name)
+            {
+                f.fn_sig.exec_kind = cu::ExecKind::Global;
+                mv_shrd_mem_params_into_decls(f, &ki.unnamed_shrd_mem_decls, ki.num_shrd_mem_decls)
+            } else {
+                f
+            }
+        })
         .map(|f| cu::Item::FnDef(Box::new(f)))
-        .chain(
-            initial_fns
-                .into_iter()
-                .map(|f| cu::Item::FnDef(Box::new(f))),
-        )
         .collect::<Vec<_>>();
     let fn_decls = collect_fn_decls(&cu_fn_defs);
     let include = cu::Item::Include("descend.cuh".to_string());
@@ -85,6 +94,29 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         .collect::<Vec<desc::FunDef>>()
 }
 
+fn mv_shrd_mem_params_into_decls(
+    mut f: cu::FnDef,
+    unnamed_shrd_mem_decls: &dyn Fn(&[String]) -> cu::Stmt,
+    num_shared_mem_decls: usize,
+) -> cu::FnDef {
+    if let cu::Stmt::Block(stmt) = f.body {
+        let shrd_mem_params = f
+            .fn_sig
+            .params
+            .drain(f.fn_sig.params.len() - num_shared_mem_decls..)
+            .into_iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>();
+        let decl_seq = unnamed_shrd_mem_decls(&shrd_mem_params);
+        let mut with_shrd_mem_decls = vec![decl_seq];
+        with_shrd_mem_decls.push(*stmt);
+        f.body = cu::Stmt::Block(Box::new(cu::Stmt::Seq(with_shrd_mem_decls)));
+    } else {
+        panic!("CUDA function was unexpectedly generated without an outer block.")
+    };
+    f
+}
+
 fn collect_fn_decls<'a>(items: &'a [cu::Item<'a>]) -> Vec<cu::Item<'a>> {
     items
         .iter()
@@ -104,6 +136,7 @@ struct CodegenCtx<'a> {
     exec_mapping: ExecMapping,
     exec: desc::ExecExpr,
     comp_unit: &'a [desc::FunDef],
+    kernel_infos: Vec<KernelInfo>,
     idx_checks: bool,
 }
 
@@ -115,6 +148,7 @@ impl<'a> CodegenCtx<'a> {
             exec_mapping: ExecMapping::new(),
             exec,
             comp_unit,
+            kernel_infos: vec![],
             idx_checks: false,
         }
     }
@@ -128,6 +162,12 @@ impl<'a> CodegenCtx<'a> {
         self.shape_ctx.drop_scope();
         self.exec_mapping.drop_scope();
     }
+}
+
+struct KernelInfo {
+    name: String,
+    unnamed_shrd_mem_decls: Box<dyn Fn(&[String]) -> cu::Stmt>,
+    num_shrd_mem_decls: usize,
 }
 
 type ShapeCtx = ScopeCtx<ShapeExpr>;
@@ -227,7 +267,11 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
             &desc::TyKind::Data(Box::new(ret_ty.clone())),
             desc::Mutability::Mut,
         ),
-        is_dev_fun(&exec_decl.ty),
+        if is_dev_fun(&exec_decl.ty) {
+            cu::ExecKind::Device
+        } else {
+            cu::ExecKind::Host
+        },
     );
 
     cu::FnDef::new(
@@ -269,7 +313,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                                         &desc::TyKind::Data(Box::new(d.as_ref().clone())),
                                         desc::Mutability::Mut,
                                     )),
-                                    n.clone(),
+                                    Some(n.clone()),
                                 )
                             } else {
                                 gen_ty(&ty.as_ref().ty, desc::Mutability::Mut)
@@ -285,8 +329,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             cu::Stmt::VarDecl {
                 name: ident.name.to_string(),
                 ty,
-                addr_space,
+                addr_space: None,
                 expr: None,
+                is_extern: false,
             }
         }
         Block(block) => {
@@ -320,6 +365,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
                                 addr_space: None,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
+                                is_extern: false,
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Lt,
@@ -342,6 +388,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
                                 addr_space: None,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
+                                is_extern: false,
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Gt,
@@ -364,6 +411,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
                                 addr_space: None,
                                 expr: Some(cu::Expr::Nat(input[0].clone())),
+                                is_extern: false,
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Le,
@@ -425,6 +473,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             &pb.split_exec,
             codegen_ctx,
         ),
+        AppKernel(app_kernel) => gen_app_kernel(app_kernel, codegen_ctx),
         Sched(pf) => gen_sched(pf, codegen_ctx),
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => match gen_expr(cond, codegen_ctx) {
@@ -506,32 +555,6 @@ fn gen_decl_init(
             .insert(&ident.name, ShapeExpr::create_from(e, &codegen_ctx));
         cu::Stmt::Skip
         // Let Expression
-    } else if let desc::DataTy {
-        dty: desc::DataTyKind::At(dty, desc::Memory::GpuShared),
-        ..
-    } = &e.ty.as_ref().unwrap().dty()
-    {
-        let cu_ty = if let desc::DataTy {
-            dty: desc::DataTyKind::Array(elem_dty, n),
-            ..
-        } = dty.as_ref()
-        {
-            cu::Ty::CArray(
-                Box::new(gen_ty(
-                    &desc::TyKind::Data(Box::new(elem_dty.as_ref().clone())),
-                    mutbl,
-                )),
-                n.clone(),
-            )
-        } else {
-            gen_ty(&desc::TyKind::Data(Box::new(dty.as_ref().clone())), mutbl)
-        };
-        cu::Stmt::VarDecl {
-            name: ident.name.to_string(),
-            ty: cu_ty,
-            addr_space: Some(cu::GpuAddrSpace::Shared),
-            expr: None,
-        }
     } else {
         let cu_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
         let (init_expr, checks) = match gen_expr(e, codegen_ctx) {
@@ -543,6 +566,7 @@ fn gen_decl_init(
             ty: cu_ty,
             addr_space: None,
             expr: Some(init_expr),
+            is_extern: false,
         };
         if !codegen_ctx.idx_checks || checks.is_none() {
             var_decl
@@ -588,6 +612,7 @@ fn gen_for_each(
         ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
         addr_space: None,
         expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
+        is_extern: false,
     };
     let i = cu::Expr::Ident(i_name.to_string());
     codegen_ctx.push_scope();
@@ -645,6 +670,7 @@ fn gen_for_range(
             ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
             addr_space: None,
             expr: Some(lower.expr().clone()),
+            is_extern: false,
         };
         let i = cu::Expr::Ident(i_name.to_string());
 
@@ -670,18 +696,197 @@ fn gen_for_range(
     }
 }
 
-fn gen_exec(
-    grid_dims: usize,
-    blocks: Vec<desc::ArgKinded>,
-    threads: Vec<desc::ArgKinded>,
-    gpu_expr: &desc::Expr,
-    input_expr: &desc::Expr,
-    fun: &desc::Expr,
-    codegen_ctx: &mut CodegenCtx,
-) -> CheckedExpr {
+fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+    let exec_kernel = match &app_kernel.fun.expr {
+        desc::ExprKind::PlaceExpr(pl_expr) => {
+            if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
+                let fn_def = codegen_ctx
+                    .comp_unit
+                    .iter()
+                    .find(|f| &f.ident == ident)
+                    .unwrap();
+                let tmp_global_fn_call =
+                    gen_global_fn_call(fn_def, &app_kernel.gen_args, &app_kernel.args, codegen_ctx);
+                let fun_name = convert_to_fn_name(&tmp_global_fn_call.fun);
+                let unnamed_shrd_mem_decls =
+                    unnamed_shared_mem_decls(app_kernel.shared_mem_dtys.clone());
+                let num_shrd_mem_decls = app_kernel.shared_mem_dtys.len();
+                codegen_ctx.kernel_infos.push(KernelInfo {
+                    name: fun_name.clone(),
+                    unnamed_shrd_mem_decls,
+                    num_shrd_mem_decls,
+                });
+                let shared_mem_bytes = count_bytes(&app_kernel.shared_mem_dtys);
+                cu::ExecKernel {
+                    fun_name,
+                    template_args: tmp_global_fn_call.template_args.clone(),
+                    grid_dim: Box::new(gen_dim3(&app_kernel.grid_dim)),
+                    block_dim: Box::new(gen_dim3(&app_kernel.block_dim)),
+                    shared_mem_bytes: Box::new(shared_mem_bytes),
+                    args: tmp_global_fn_call.args,
+                }
+            } else {
+                panic!("Unexpected syntactical construct with function type.")
+            }
+        }
+        desc::ExprKind::Lambda(_, _, _, _) => {
+            todo!("Is it really necessary and sensible to allow kernel execution of lambdas?")
+            // If yes: use exec instead of cu::ExecKernel
+            // create_named_fn_call("descend::exec".to_string(), vec![], full_arg_list)
+        }
+        _ => panic!("Unexpected syntactical construct with function type."),
+    };
+    cu::Stmt::ExecKernel(Box::new(exec_kernel))
+}
+
+fn convert_to_fn_name(f_expr: &cu::Expr) -> String {
+    match f_expr {
+        cu::Expr::Ident(f_name) => f_name.clone(),
+        _ => panic!("The expression does not refer to a function by its identifier."),
+    }
+}
+
+fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) -> cu::Stmt> {
+    // Multiple shared memory arrays and Alignments:
+    // Memory accesses require that the address be aligned to a multiple of the access size.
+    // The access size of a memory instruction is the total number of bytes accessed in memory.
+    // There are several ways to make sure the alignment is correct:
+    // Pointer P_i for i-th Type T_i based on Base-type B_i, is calculated by
+    //     (only works for Arrays and base types):
+    //   P_0 = shared_mem_ptr;
+    //   P_i = div_rounded_up(P_{i-1} + size(T_{i-1}), size(B_i)) * size(B_i)
+    //     where div_rounded_up(A, B) = (A+B-1)/B
+    // Faster alignment computation, that works for unsigned offsets and alignments that are
+    //  powers of 2:
+    // padding = (align - (offset & (align - 1))) & (align - 1)
+    //         = -offset & (align - 1)
+    // aligned = (offset + (align - 1)) & ~(align - 1)
+    //         = (offset + (align - 1)) & -align
+    //
+    // However, if it is possible to sort the declarations by decreasing natural alignment, then no
+    // padding is necessary. The assumption is that the initial pointer is correctly aligned for
+    // every data type and that all natural alignments are a power of 2.
+    //  https://forums.developer.nvidia.com/t/dynamic-shared-memory-allocation/21671/2
+    // Choose the last approach.
+    Box::new(move |param_names: &[String]| {
+        let buffer_name = "$buffer";
+        let extern_shrd_mem_decl = cu::Stmt::VarDecl {
+            name: buffer_name.to_string(),
+            ty: cu::Ty::CArray(Box::new(cu::Ty::Scalar(cu::ScalarTy::Byte)), None),
+            addr_space: Some(cu::GpuAddrSpace::Shared),
+            expr: None,
+            is_extern: true,
+        };
+        if param_names.len() != dtys.len() {
+            panic!("Exepcted as many shared memory parameter names as data types.")
+        }
+        let mut names_with_natural_align = param_names
+            .iter()
+            .zip(&dtys)
+            .map(|(name, dty)| {
+                let (elem_ty, amount) = get_elem_ty_and_amount(&dty);
+                let size_of_elem_dty = size_of_dty(elem_ty.dty());
+                (size_of_elem_dty, name, elem_ty, amount)
+            })
+            .collect::<Vec<_>>();
+        names_with_natural_align.sort_unstable_by(
+            // sort descending
+            |(elem_sizel, _, _, _), (elem_sizer, _, _, _)| elem_sizer.cmp(elem_sizel),
+        );
+        let mut prev_amount = desc::Nat::Lit(0);
+        let mut prev_param_name = buffer_name.to_string();
+        let mut decls = vec![extern_shrd_mem_decl];
+        for (_, param_name, elem_ty, amount) in names_with_natural_align {
+            let current_ptr = cu::Expr::Ref(Box::new(cu::Expr::ArraySubscript {
+                array: Box::new(cu::Expr::Ident(prev_param_name.clone())),
+                index: prev_amount.clone(),
+            }));
+            let cu_ty = cu::Ty::Ptr(Box::new(gen_ty(&elem_ty.ty, desc::Mutability::Mut)));
+            let cast_current_ptr = cu::Expr::Cast {
+                expr: Box::new(current_ptr),
+                ty: cu_ty.clone(),
+            };
+            let ptr_decl = cu::Stmt::VarDecl {
+                name: param_name.clone(),
+                ty: cu::Ty::Const(Box::new(cu_ty)),
+                addr_space: None,
+                expr: Some(cast_current_ptr),
+                is_extern: false,
+            };
+            decls.push(ptr_decl);
+            prev_amount = amount;
+            prev_param_name = param_name.clone();
+        }
+        cu::Stmt::Seq(decls)
+    })
+}
+
+fn size_of_dty(dty: &desc::DataTy) -> usize {
+    match &dty.dty {
+        desc::DataTyKind::Scalar(desc::ScalarTy::Bool) => 1,
+        desc::DataTyKind::Scalar(desc::ScalarTy::U32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F32)
+        | desc::DataTyKind::Atomic(desc::AtomicTy::AtomicU32) => 4,
+        desc::DataTyKind::Scalar(desc::ScalarTy::U64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F64) => 8,
+        _ => panic!("unexpected data type"),
+    }
+}
+
+fn get_elem_ty_and_amount(dty: &desc::DataTy) -> (desc::Ty, desc::Nat) {
+    let nat_1 = desc::Nat::Lit(1);
+    match &dty.dty {
+        desc::DataTyKind::Scalar(desc::ScalarTy::Bool)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::U8)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::U32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F32)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::U64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::I64)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F64)
+        | desc::DataTyKind::Atomic(desc::AtomicTy::AtomicU32) => (
+            desc::Ty::new(desc::TyKind::Data(Box::new(dty.clone()))),
+            nat_1,
+        ),
+        desc::DataTyKind::Array(arr_elem_dty, n) => {
+            let (elem_ty, amount) = get_elem_ty_and_amount(&arr_elem_dty);
+            let multiplied_amount =
+                desc::Nat::BinOp(desc::BinOpNat::Mul, Box::new(amount), Box::new(n.clone()));
+            (elem_ty, multiplied_amount)
+        }
+        desc::DataTyKind::Scalar(desc::ScalarTy::Unit)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::Gpu) => panic!(),
+        _ => todo!(),
+    }
+}
+
+fn count_bytes(dtys: &[desc::DataTy]) -> desc::Nat {
+    let mut bytes = desc::Nat::Lit(0);
+    for dty in dtys {
+        let (elem_ty, amount) = get_elem_ty_and_amount(dty);
+        let mul = desc::Nat::BinOp(
+            desc::BinOpNat::Mul,
+            Box::new(desc::Nat::Lit(size_of_dty(elem_ty.dty()))),
+            Box::new(amount),
+        );
+        bytes = desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(bytes), Box::new(mul));
+    }
+    bytes
+}
+
+fn gen_exec(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
     // Prepare parameter declarations for inputs
-    let mut cu_input_expr = ShapeExpr::create_from(input_expr, &codegen_ctx);
-    let name_to_exprs = cu_input_expr.collect_and_rename_input_exprs();
+    let mut cu_input_exprs = app_kernel
+        .args
+        .iter()
+        .map(|arg| ShapeExpr::create_from(arg, &codegen_ctx))
+        .collect::<Vec<_>>();
+    let name_to_exprs = cu_input_exprs
+        .iter_mut()
+        .flat_map(|ie| ie.collect_and_rename_input_exprs())
+        .collect::<Vec<_>>();
     let mut param_decls: Vec<_> = name_to_exprs
         .iter()
         .map(|(name, expr)| cu::ParamDecl {
@@ -696,24 +901,21 @@ fn gen_exec(
             0,
             cu::ParamDecl {
                 name: "global_failure".to_string(),
-                ty: cu::Ty::Ptr(
-                    Box::new(cu::Ty::Scalar(cu::ScalarTy::I32)),
-                    Some(cu::GpuAddrSpace::Global),
-                ),
+                ty: cu::Ty::Ptr(Box::new(cu::Ty::Scalar(cu::ScalarTy::I32))),
             },
         );
     }
     // GPU argument
-    let gpu = match gen_expr(gpu_expr, codegen_ctx) {
-        CheckedExpr::Expr(e) => e,
-        CheckedExpr::ExprIdxCheck(_, _) => {
-            panic!("Did not expect to check a condition for GPU")
-        }
-    };
+    // let gpu = match gen_expr(gpu_expr, codegen_ctx) {
+    //     CheckedExpr::Expr(e) => e,
+    //     CheckedExpr::ExprIdxCheck(_, _) => {
+    //         panic!("Did not expect to check a condition for GPU")
+    //     }
+    // };
 
     // FIXME only allows Lambdas
     let (dev_fun, free_kinded_idents): (cu::Expr, Vec<desc::IdentKinded>) =
-        if let desc::ExprKind::Lambda(params, ident_exec, _, body) = &fun.expr {
+        if let desc::ExprKind::Lambda(params, ident_exec, _, body) = &app_kernel.fun.expr {
             codegen_ctx.push_scope();
             let (gdim, bdim) = if let desc::ExecTyKind::GpuGrid(gdim, bdim) = &ident_exec.ty.ty {
                 (gdim.clone(), bdim.clone())
@@ -728,7 +930,9 @@ fn gen_exec(
 
             // Remember to inline input shape expression
             let in_name = &params[0].ident.name.clone();
-            codegen_ctx.shape_ctx.insert(in_name, cu_input_expr);
+            for ie in cu_input_exprs {
+                codegen_ctx.shape_ctx.insert(in_name, ie);
+            }
 
             let gpu_fun_body = gen_stmt(body, false, codegen_ctx);
             let mut global_failure_init = vec![
@@ -742,11 +946,11 @@ fn gen_exec(
                     },
                     body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Return(None)))),
                 },
-                cu::Stmt::Expr(cu::Expr::FunCall {
+                cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
                     fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
                     template_args: vec![],
                     args: vec![],
-                }),
+                })),
             ];
 
             // FIXME reintroduce, but differentiate between statically computed and runtime computed
@@ -809,23 +1013,8 @@ fn gen_exec(
             CheckedExpr::Expr(expr) => expr,
         })
         .collect();
-    let template_args = if grid_dims == 1 {
-        gen_args_kinded(vec![blocks[0].clone(), threads[0].clone()].as_slice())
-    } else if grid_dims == 2 {
-        gen_args_kinded(
-            vec![
-                blocks[0].clone(),
-                blocks[1].clone(),
-                threads[0].clone(),
-                threads[1].clone(),
-            ]
-            .as_slice(),
-        )
-    } else {
-        unimplemented!()
-    };
 
-    let mut args: Vec<cu::Expr> = vec![gpu, dev_fun];
+    let mut args: Vec<cu::Expr> = vec![dev_fun];
     args.append(&mut input);
     let mut nat_input_idents = free_kinded_idents
         .iter()
@@ -839,30 +1028,23 @@ fn gen_exec(
         .collect::<Vec<_>>();
     args.append(&mut nat_input_idents);
 
-    let exec_name = if grid_dims == 1 {
-        "descend::exec".to_string()
-    } else if grid_dims == 2 {
-        "descend::exec_xy".to_string()
-    } else {
-        unimplemented!()
-    };
-
+    let exec_name = "descend::exec".to_string();
     codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(desc::BaseExec::CpuThread));
 
     if checks.is_empty() {
-        CheckedExpr::Expr(cu::Expr::FunCall {
+        CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall {
             fun: Box::new(cu::Expr::Ident(exec_name.to_string())),
-            template_args,
+            template_args: vec![],
             args,
-        })
+        }))
     } else {
         CheckedExpr::ExprIdxCheck(
             cu::Stmt::Seq(checks),
-            cu::Expr::FunCall {
+            cu::Expr::FnCall(cu::FnCall {
                 fun: Box::new(cu::Expr::Ident(exec_name.to_string())),
-                template_args,
+                template_args: vec![],
                 args,
-            },
+            }),
         )
     }
 }
@@ -916,11 +1098,11 @@ fn gen_indep(
 }
 
 fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
-    let sync = cu::Stmt::Expr(cu::Expr::FunCall {
+    let sync = cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
         fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
         template_args: vec![],
         args: vec![],
-    });
+    }));
     unimplemented!()
     // match exec {
     //     ParallelityCollec::Split { parall_collec, .. } => gen_sync_stmt(parall_collec),
@@ -942,7 +1124,7 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
 
 fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().distrib(sched.dim));
+    let inner_exec = desc::ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
     let outer_exec = codegen_ctx.exec.clone();
     if let Some(id) = &sched.inner_exec_ident {
         codegen_ctx
@@ -1000,7 +1182,7 @@ fn gen_check_idx_stmt(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::St
                     rhs: Box::new(cu::Expr::Nat(n.clone())),
                 },
                 body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
-                    cu::Stmt::Expr(cu::Expr::FunCall {
+                    cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
                         fun: Box::new(cu::Expr::Ident("descend::atomic_set".to_string())),
                         template_args: gen_args_kinded(&vec![ArgKinded::DataTy(DataTy::new(
                             DataTyKind::Scalar(ScalarTy::I32),
@@ -1009,7 +1191,7 @@ fn gen_check_idx_stmt(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::St
                             cu::Expr::Ident("global_failure".to_string()),
                             cu::Expr::Lit(cu::Lit::I32(incr_idx_check_counter())),
                         ],
-                    }),
+                    })),
                     cu::Stmt::Expr(cu::Expr::Ident(format!("goto sync_{}", unsafe {
                         LABEL_COUNTER.load(Ordering::SeqCst)
                     }))),
@@ -1203,48 +1385,22 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
         }),
         App(fun, kinded_args, args) => match &fun.expr {
             PlaceExpr(pl_expr) => match &pl_expr.pl_expr {
-                desc::PlaceExprKind::Ident(name)
-                    if name.name.as_ref() == ty_check::pre_decl::EXEC =>
-                {
-                    gen_exec(
-                        1,
-                        vec![kinded_args[0].clone()],
-                        vec![kinded_args[1].clone()],
-                        &args[0],
-                        &args[1],
-                        &args[2],
-                        codegen_ctx,
-                    )
-                }
-                desc::PlaceExprKind::Ident(name)
-                    if name.name.as_ref() == ty_check::pre_decl::EXEC_XY =>
-                {
-                    gen_exec(
-                        2,
-                        vec![kinded_args[0].clone(), kinded_args[1].clone()],
-                        vec![kinded_args[2].clone(), kinded_args[3].clone()],
-                        &args[0],
-                        &args[1],
-                        &args[2],
-                        codegen_ctx,
-                    )
-                }
                 desc::PlaceExprKind::Ident(ident)
                     if ty_check::pre_decl::fun_decls()
                         .iter()
                         .any(|(name, _)| &ident.name.as_ref() == name) =>
                 {
                     let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
-                    CheckedExpr::Expr(create_fn_call(
+                    CheckedExpr::Expr(cu::Expr::FnCall(create_fn_call(
                         cu::Expr::Ident(pre_decl_ident.name.to_string()),
                         gen_args_kinded(kinded_args),
                         gen_fn_call_args(args, codegen_ctx),
-                    ))
+                    )))
                 }
                 desc::PlaceExprKind::Ident(ident)
                     if codegen_ctx.comp_unit.iter().any(|f| &f.ident == ident) =>
                 {
-                    CheckedExpr::Expr(gen_global_fn_call(
+                    CheckedExpr::Expr(cu::Expr::FnCall(gen_global_fn_call(
                         codegen_ctx
                             .comp_unit
                             .iter()
@@ -1253,7 +1409,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
                         kinded_args,
                         args,
                         codegen_ctx,
-                    ))
+                    )))
                 }
                 _ => panic!("Unexpected functions cannot be stored in memory."),
             },
@@ -1313,11 +1469,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
             }),
             index: i.clone(),
         }),
-        Sync => CheckedExpr::Expr(cu::Expr::FunCall {
+        Sync => CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall {
             fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
             template_args: vec![],
             args: vec![],
-        }),
+        })),
         Let(_, _, _)
         | LetUninit(_, _)
         | Block(_)
@@ -1328,7 +1484,8 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
         | For(_, _, _)
         | ForNat(_, _, _)
         | Indep(_)
-        | Sched(_) => panic!(
+        | Sched(_)
+        | AppKernel(_) => panic!(
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),
@@ -1347,9 +1504,9 @@ fn gen_lambda_call(
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Expr {
     unimplemented!(
-        "The only case in which this has to be generated is, when a lambda is called right\
+        "The only case for which this would have to be generated is, when a lambda is called right\
     where it is created. There is no way to bind a lambda with let.\
-    And no way for users to write a function that has function paramteres."
+    And no way for users to write a function that has function parameters."
     )
 }
 
@@ -1358,7 +1515,7 @@ fn gen_global_fn_call(
     gen_args: &[desc::ArgKinded],
     args: &[desc::Expr],
     codegen_ctx: &mut CodegenCtx,
-) -> cu::Expr {
+) -> cu::FnCall {
     // Make sure that we do not accidentally add views conflicting to fun,
     // because during type checking the order is: check fun first then do the arguments.
     codegen_ctx.push_scope();
@@ -1390,7 +1547,7 @@ fn gen_fn_call_args(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> Vec<cu
         .map(|arg| {
             if is_view_dty(arg.ty.as_ref().unwrap()) {
                 gen_expr(
-                    &basis_ref(&ShapeExpr::create_from(arg, &codegen_ctx)),
+                    &basis_ref(&ShapeExpr::create_from(arg, &codegen_ctx), &codegen_ctx),
                     codegen_ctx,
                 )
                 .expr()
@@ -1402,19 +1559,24 @@ fn gen_fn_call_args(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> Vec<cu
         .collect()
 }
 
-fn basis_ref(view: &ShapeExpr) -> desc::Expr {
+fn basis_ref(view: &ShapeExpr, codegen_ctx: &CodegenCtx) -> desc::Expr {
     match view {
         ShapeExpr::ToView { ref_expr } => ref_expr.as_ref().clone(),
-        ShapeExpr::SplitAt { shape, .. } => basis_ref(shape),
-        ShapeExpr::Group { shape, .. } => basis_ref(shape),
-        ShapeExpr::Join { shape, .. } => basis_ref(shape),
-        ShapeExpr::Transpose { shape, .. } => basis_ref(shape),
+        ShapeExpr::SplitAt { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Reverse { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Group { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Join { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Transpose { shape, .. } => basis_ref(shape, codegen_ctx),
         ShapeExpr::Tuple { shapes: elems } => {
             // maybe untrue
             todo!("this case should be removed")
         }
-        ShapeExpr::Idx { shape, .. } => basis_ref(shape),
-        ShapeExpr::Proj { shape, .. } => basis_ref(shape),
+        ShapeExpr::Idx { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Proj { shape, .. } => basis_ref(shape, codegen_ctx),
+        ShapeExpr::Map { shape_expr, .. } => basis_ref(
+            &ShapeExpr::create_from(shape_expr, codegen_ctx),
+            codegen_ctx,
+        ),
     }
 }
 
@@ -1484,6 +1646,11 @@ fn stringify_exec(exec: &desc::ExecExpr) -> String {
             desc::ExecPathElem::ToWarps => {
                 str.push_str("to_warps");
             }
+            desc::ExecPathElem::ToThreads(dim) => {
+                str.push('T');
+                str.push_str(&format!("{}", dim));
+                str.push('_');
+            }
         }
     }
     str
@@ -1517,6 +1684,10 @@ fn stringify_view(view: &ShapeExpr, c: u8) -> String {
             let s = format!("I{}_", &stringify_view(shape.as_ref(), c));
             str.push_str(&s);
         }
+        ShapeExpr::Reverse { shape, .. } => {
+            let s = format!("R{}", &stringify_view(shape.as_ref(), c));
+            str.push_str(&s);
+        }
         ShapeExpr::Group { shape, .. } => {
             let s = format!("G{}", &stringify_view(shape.as_ref(), c));
             str.push_str(&s);
@@ -1527,7 +1698,11 @@ fn stringify_view(view: &ShapeExpr, c: u8) -> String {
         }
         ShapeExpr::Transpose { shape } => {
             str.push_str("T_");
-            str.push_str(&stringify_view(shape.as_ref(), c))
+            str.push_str(&stringify_view(shape.as_ref(), c));
+        }
+        ShapeExpr::Map { .. } => {
+            str.push_str(&desc::utils::fresh_name("M"));
+            str.push('_');
         }
         ShapeExpr::SplitAt { .. } | ShapeExpr::Tuple { .. } => {
             unimplemented!("Maybe proj can contain tuples as well")
@@ -1540,7 +1715,7 @@ fn create_named_fn_call(
     name: String,
     gen_args: Vec<cu::TemplateArg>,
     args: Vec<cu::Expr>,
-) -> cu::Expr {
+) -> cu::FnCall {
     create_fn_call(cu::Expr::Ident(name), gen_args, args)
 }
 
@@ -1548,8 +1723,8 @@ fn create_fn_call(
     fun: cu::Expr,
     gen_args: Vec<cu::TemplateArg>,
     params: Vec<cu::Expr>,
-) -> cu::Expr {
-    cu::Expr::FunCall {
+) -> cu::FnCall {
+    cu::FnCall {
         fun: Box::new(fun),
         template_args: gen_args,
         args: params,
@@ -1635,7 +1810,7 @@ fn gen_idx_into_shape(
 ) -> cu::Expr {
     let collec_shape = ShapeExpr::create_from(
         &desc::Expr::new(desc::ExprKind::PlaceExpr(Box::new(pl_expr.clone()))),
-        &codegen_ctx,
+        codegen_ctx,
     );
     gen_shape(
         &ShapeExpr::Idx {
@@ -1716,11 +1891,6 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, codegen_ctx: &mut CodegenCtx) -> cu::E
             }
         }
     }
-}
-
-enum ParallRange {
-    Range(desc::Nat, desc::Nat),
-    SplitRange(desc::Nat, desc::Nat, desc::Nat),
 }
 
 fn gen_indep_branch_cond(
@@ -1884,6 +2054,79 @@ fn gen_shape(
                 _ => panic!("Cannot generate Transpose shape. One or more indices missing."),
             }
         }
+        (ShapeExpr::Reverse { size, shape }, _) => {
+            let i = path.pop();
+            match i {
+                Some(i) => {
+                    path.push(desc::Nat::BinOp(
+                        desc::BinOpNat::Sub,
+                        Box::new(desc::Nat::BinOp(
+                            desc::BinOpNat::Sub,
+                            Box::new(size.clone()),
+                            Box::new(desc::Nat::Lit(1)),
+                        )),
+                        Box::new(i),
+                    ));
+                    gen_shape(shape, path, codegen_ctx)
+                }
+                None => panic!("Cannot generate Reverse shape. Index missing."),
+            }
+        }
+        (ShapeExpr::Map { f, shape_expr }, _) => {
+            let i = path.pop();
+            match i {
+                Some(i) => {
+                    let idx = desc::Expr::new(desc::ExprKind::Idx(
+                        Box::new(shape_expr.as_ref().clone()),
+                        i,
+                    ));
+                    match &f.expr {
+                        desc::ExprKind::PlaceExpr(pl_expr) => {
+                            if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
+                                if let Some(vf) = codegen_ctx
+                                    .comp_unit
+                                    .iter()
+                                    .find(|vf| vf.ident.name == ident.name)
+                                {
+                                    let app_f = ShapeExpr::applied_shape_fun(
+                                        std::iter::empty(),
+                                        &[],
+                                        vf.param_decls.iter().map(|p| p.ident.name.as_ref()),
+                                        &[idx],
+                                        &vf.body.body,
+                                        codegen_ctx,
+                                    );
+                                    gen_shape(&app_f, path, codegen_ctx)
+                                } else {
+                                    panic!("Function definition not found.")
+                                }
+                            } else {
+                                panic!(
+                                    "Unexpected syntax construct,\
+                                        that should not have a function type."
+                                )
+                            }
+                        }
+                        desc::ExprKind::Lambda(param_decl, _, _, body) => {
+                            let app_f = ShapeExpr::applied_shape_fun(
+                                std::iter::empty(),
+                                &[],
+                                param_decl.iter().map(|p| p.ident.name.as_ref()),
+                                &[idx],
+                                body,
+                                codegen_ctx,
+                            );
+                            gen_shape(&app_f, path, codegen_ctx)
+                        }
+                        _ => panic!(
+                            "Unexpected syntax construct,\
+                                that should not have a function type."
+                        ),
+                    }
+                }
+                None => panic!("Cannot generate Map shape. Index missing."),
+            }
+        }
         ve => panic!("unexpected, found: {:?}", ve),
     }
 }
@@ -1972,6 +2215,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                     desc::ScalarTy::U8 => cu::Ty::Scalar(cu::ScalarTy::U8),
                     desc::ScalarTy::U32 => cu::Ty::Scalar(cu::ScalarTy::U32),
                     desc::ScalarTy::U64 => cu::Ty::Scalar(cu::ScalarTy::U64),
+                    desc::ScalarTy::I64 => cu::Ty::Scalar(cu::ScalarTy::I64),
                     desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
                     desc::ScalarTy::F64 => cu::Ty::Scalar(cu::ScalarTy::F64),
                     desc::ScalarTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
@@ -1995,10 +2239,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                             } => dty.clone(),
                             _ => dt.clone(),
                         };
-                        cu::Ty::Ptr(
-                            Box::new(gen_ty(&Data(dty), mutbl)),
-                            Some(cu::GpuAddrSpace::Shared),
-                        )
+                        cu::Ty::Ptr(Box::new(gen_ty(&Data(dty), mutbl)))
                     } else {
                         let buff_kind = match mem {
                             desc::Memory::CpuMem => cu::BufferKind::CpuMem,
@@ -2026,9 +2267,9 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                         m,
                     ));
                     if matches!(reff.own, desc::Ownership::Uniq) {
-                        cu::Ty::Ptr(tty, None)
+                        cu::Ty::Ptr(tty)
                     } else {
-                        cu::Ty::PtrConst(tty, None)
+                        cu::Ty::PtrConst(tty)
                     }
                 }
                 d::RawPtr(dt) => {
@@ -2039,7 +2280,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                         }),
                         desc::Mutability::Mut,
                     ));
-                    cu::Ty::Ptr(tty, None)
+                    cu::Ty::Ptr(tty)
                 }
                 // TODO is this correct. I guess we want to generate type identifiers in generic functions.
                 d::Ident(ident) => cu::Ty::Ident(ident.name.to_string()),
@@ -2133,6 +2374,10 @@ enum ShapeExpr {
         pos: desc::Nat,
         shape: Box<ShapeExpr>,
     },
+    Reverse {
+        size: desc::Nat,
+        shape: Box<ShapeExpr>,
+    },
     Group {
         size: desc::Nat,
         shape: Box<ShapeExpr>,
@@ -2143,6 +2388,10 @@ enum ShapeExpr {
     },
     Transpose {
         shape: Box<ShapeExpr>,
+    },
+    Map {
+        f: Box<desc::Expr>,
+        shape_expr: Box<desc::Expr>,
     },
 }
 
@@ -2170,6 +2419,14 @@ impl ShapeExpr {
                             || ident.name.as_ref() == ty_check::pre_decl::TRANSPOSE_MUT
                         {
                             ShapeExpr::create_transpose_shape(args, codegen_ctx)
+                        } else if ident.name.as_ref() == ty_check::pre_decl::REVERSE
+                            || ident.name.as_ref() == ty_check::pre_decl::REVERSE_MUT
+                        {
+                            ShapeExpr::create_reverse_shape(gen_args, args, codegen_ctx)
+                        } else if ident.name.as_ref() == ty_check::pre_decl::MAP
+                            || ident.name.as_ref() == ty_check::pre_decl::MAP_MUT
+                        {
+                            ShapeExpr::create_map_shape(args)
                         } else if let Some(vf) = codegen_ctx
                             .comp_unit
                             .iter()
@@ -2237,6 +2494,10 @@ impl ShapeExpr {
                     &desc::Expr::new(desc::ExprKind::PlaceExpr(pl_expr.clone())),
                     codegen_ctx,
                 )),
+            },
+            desc::ExprKind::Idx(expr, idx) => ShapeExpr::Idx {
+                idx: idx.clone(),
+                shape: Box::new(ShapeExpr::create_from(expr, codegen_ctx)),
             },
             desc::ExprKind::Select(_, pl_expr, ident_exec) => {
                 let exec = codegen_ctx.exec_mapping.get(&ident_exec.name);
@@ -2341,6 +2602,20 @@ impl ShapeExpr {
         }
     }
 
+    fn create_reverse_shape(
+        gen_args: &[desc::ArgKinded],
+        args: &[desc::Expr],
+        codegen_ctx: &CodegenCtx,
+    ) -> ShapeExpr {
+        if let (desc::ArgKinded::Nat(n), Some(v)) = (&gen_args[0], args.first()) {
+            return ShapeExpr::Reverse {
+                size: n.clone(),
+                shape: Box::new(ShapeExpr::create_from(v, codegen_ctx)),
+            };
+        }
+        panic!("Cannot create `reverse` from the provided arguments.");
+    }
+
     fn create_group_shape(
         gen_args: &[desc::ArgKinded],
         args: &[desc::Expr],
@@ -2378,6 +2653,16 @@ impl ShapeExpr {
         panic!("Cannot create `to_shape` from the provided arguments.");
     }
 
+    fn create_map_shape(args: &[desc::Expr]) -> ShapeExpr {
+        if let (Some(f), Some(shape_expr)) = (args.first(), args.get(1)) {
+            return ShapeExpr::Map {
+                f: Box::new(f.clone()),
+                shape_expr: Box::new(shape_expr.clone()),
+            };
+        }
+        panic!("Cannot create `map` from provided arguments.");
+    }
+
     fn collect_and_rename_input_exprs(&mut self) -> Vec<(String, desc::Expr)> {
         fn collect_and_rename_input_exprs_rec(
             v: &mut ShapeExpr,
@@ -2393,18 +2678,6 @@ impl ShapeExpr {
                     )));
                     *count += 1;
                     vec
-                }
-                ShapeExpr::SplitAt { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Group { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Join { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Transpose { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
                 ShapeExpr::Tuple { shapes: elems } => {
                     let mut renamed = vec;
@@ -2426,12 +2699,16 @@ impl ShapeExpr {
                     }
                     renamed
                 }
-                ShapeExpr::Idx { shape, .. } => {
+                ShapeExpr::SplitAt { shape, .. }
+                | ShapeExpr::Reverse { shape, .. }
+                | ShapeExpr::Group { shape, .. }
+                | ShapeExpr::Join { shape, .. }
+                | ShapeExpr::Transpose { shape, .. }
+                | ShapeExpr::Idx { shape, .. }
+                | ShapeExpr::Proj { shape, .. } => {
                     collect_and_rename_input_exprs_rec(shape, count, vec)
                 }
-                ShapeExpr::Proj { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
+                ShapeExpr::Map { .. } => unimplemented!(),
             }
         }
         let vec = vec![];
@@ -2566,6 +2843,25 @@ fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr, codegen_ctx: &CodegenC
         desc::DimCompo::Y => to_parall_indices(exec, codegen_ctx).1,
         desc::DimCompo::Z => to_parall_indices(exec, codegen_ctx).2,
     }
+}
+
+fn gen_dim3(dim: &desc::Dim) -> cu::Expr {
+    let one = desc::Nat::Lit(1);
+    let (nx, ny, nz) = match dim {
+        desc::Dim::X(n) => (n.0.clone(), one.clone(), one),
+        desc::Dim::Y(n) => (one.clone(), n.0.clone(), one),
+        desc::Dim::Z(n) => (one.clone(), one, n.0.clone()),
+        desc::Dim::XY(n) => (n.0.clone(), n.1.clone(), one),
+        desc::Dim::XZ(n) => (n.0.clone(), one, n.1.clone()),
+        desc::Dim::YZ(n) => (one, n.0.clone(), n.1.clone()),
+        desc::Dim::XYZ(n) => (n.0.clone(), n.1.clone(), n.2.clone()),
+    };
+    let args = vec![cu::Expr::Nat(nx), cu::Expr::Nat(ny), cu::Expr::Nat(nz)];
+    cu::Expr::FnCall(cu::FnCall {
+        fun: Box::new(cu::Expr::Ident("dim3".to_string())),
+        template_args: vec![],
+        args,
+    })
 }
 
 fn is_view_dty(ty: &desc::Ty) -> bool {

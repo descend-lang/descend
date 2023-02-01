@@ -1,9 +1,9 @@
 use super::cu_ast::{
-    BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
+    BinOp, BufferKind, ExecKind, Expr, FnDef, FnSig, GpuAddrSpace, Item, Lit, ParamDecl, ScalarTy,
+    Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::codegen::cu_ast::{FnDef, FnSig, GpuAddrSpace, Lit};
-use std::fmt::Formatter;
 use std::env;
+use std::fmt::Formatter;
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
@@ -27,7 +27,7 @@ fn clang_format(code: &str) -> String {
     //If clang-format is not available for user, it's path can be set in this env Variable (e.g. in .cargo/config.toml)
     let clang_format_path = match env::var("CLANG_FORMAT_PATH") {
         Ok(path) => path,
-        Err(_) => String::from("clang-format")
+        Err(_) => String::from("clang-format"),
     };
 
     use std::io::Write;
@@ -66,7 +66,7 @@ impl std::fmt::Display for FnSig {
             templ_params,
             params,
             ret_ty,
-            is_dev_fn,
+            exec_kind,
         } = self;
 
         if !templ_params.is_empty() {
@@ -74,12 +74,7 @@ impl std::fmt::Display for FnSig {
             fmt_vec(f, templ_params, ", ")?;
             writeln!(f, ">")?;
         }
-        writeln!(
-            f,
-            "{}auto {}(",
-            if *is_dev_fn { "__device__ " } else { "" },
-            name
-        )?;
+        writeln!(f, "{} auto {}(", exec_kind, name)?;
         fmt_vec(f, params, ",\n")?;
         writeln!(f, "\n) -> {}", ret_ty)
     }
@@ -93,6 +88,16 @@ impl std::fmt::Display for FnDef {
     }
 }
 
+impl std::fmt::Display for ExecKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecKind::Host => write!(f, "__host__"),
+            ExecKind::Global => write!(f, "__global__"),
+            ExecKind::Device => write!(f, "__device__"),
+        }
+    }
+}
+
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Stmt::*;
@@ -103,13 +108,21 @@ impl std::fmt::Display for Stmt {
                 ty,
                 addr_space,
                 expr,
+                is_extern,
             } => {
-                if let Some(addrs) = addr_space {
-                    write!(f, "{} ", addrs)?;
+                if *is_extern {
+                    write!(f, "extern ")?;
+                }
+                if let Some(addr_space) = addr_space {
+                    write!(f, "{} ", addr_space)?;
                 }
                 write!(f, "{} {}", ty, name)?;
                 if let Ty::CArray(_, n) = ty {
-                    write!(f, "[{}]", n)?;
+                    write!(f, "[")?;
+                    if let Some(n) = n {
+                        write!(f, "{}", n)?
+                    }
+                    write!(f, "]")?;
                 }
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
@@ -157,7 +170,6 @@ impl std::fmt::Display for Stmt {
                 iter,
                 stmt,
             } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
-            Label(l) => write!(f, "{}:", l),
             Return(expr) => {
                 write!(f, "return")?;
                 if let Some(e) = expr {
@@ -165,6 +177,20 @@ impl std::fmt::Display for Stmt {
                 }
                 write!(f, ";")
             }
+            ExecKernel(exec_kernel) => {
+                write!(f, "{}", exec_kernel.fun_name)?;
+                if !exec_kernel.template_args.is_empty() {
+                    write!(f, "<")?;
+                    fmt_vec(f, &exec_kernel.template_args, ", ")?;
+                    write!(f, ">")?;
+                }
+                write!(f, "<<<{}, {}", exec_kernel.grid_dim, exec_kernel.block_dim)?;
+                write!(f, ", {}", exec_kernel.shared_mem_bytes)?;
+                write!(f, ">>>(")?;
+                fmt_vec(f, &exec_kernel.args, ", ")?;
+                write!(f, ");")
+            }
+            Label(l) => write!(f, "{}:", l),
         }
     }
 }
@@ -196,24 +222,20 @@ impl std::fmt::Display for Expr {
                 writeln!(f, ") -> {}", ret_ty)?;
                 write!(f, "{}", &body)
             }
-            FunCall {
-                fun,
-                template_args,
-                args,
-            } => {
-                write!(f, "{}", fun)?;
-                if !template_args.is_empty() {
+            FnCall(fn_call) => {
+                write!(f, "{}", fn_call.fun)?;
+                if !fn_call.template_args.is_empty() {
                     write!(f, "<")?;
-                    fmt_vec(f, template_args, ", ")?;
+                    fmt_vec(f, &fn_call.template_args, ", ")?;
                     write!(f, ">")?;
                 }
                 write!(f, "(")?;
-                fmt_vec(f, args, ", ")?;
+                fmt_vec(f, &fn_call.args, ", ")?;
                 write!(f, ")")
             }
             UnOp { op, arg } => write!(f, "({}{})", op, arg),
             BinOp { op, lhs, rhs } => write!(f, "({} {} {})", lhs, op, rhs),
-            Cast { expr, ty} => write!(f, "({})({})", ty, expr),
+            Cast { expr, ty } => write!(f, "({})({})", ty, expr),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
             Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
             InitializerList { elems } => {
@@ -221,8 +243,7 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, elems, ", ")?;
                 write!(f, "}}")
             }
-            AtomicRef{expr, base_ty} =>
-                write!(f, "descend::atomic_ref<{}>({})", base_ty, expr),
+            AtomicRef { expr, base_ty } => write!(f, "descend::atomic_ref<{}>({})", base_ty, expr),
             Ref(expr) => write!(f, "(&{})", expr),
             Deref(expr) => write!(f, "(*{})", expr),
             Tuple(elems) => {
@@ -323,7 +344,7 @@ impl std::fmt::Display for BinOp {
 impl std::fmt::Display for GpuAddrSpace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            GpuAddrSpace::Global => write!(f, ""),
+            GpuAddrSpace::Device => write!(f, "__device__"),
             GpuAddrSpace::Shared => write!(f, "__shared__"),
             GpuAddrSpace::Constant => write!(f, "__constant__"),
         }
@@ -334,13 +355,11 @@ impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
-            Ptr(ty, Some(addr_space)) => write!(f, "{} {} *", addr_space, ty),
-            Ptr(ty, None) => write!(f, "{} *", ty),
-            PtrConst(ty, Some(addr_space)) => write!(f, "{} const {} *", addr_space, ty),
-            PtrConst(ty, None) => write!(f, "const {} *", ty),
+            Ptr(ty) => write!(f, "{} *", ty),
+            PtrConst(ty) => write!(f, "const {} *", ty),
             Const(ty) => match ty.as_ref() {
-                Ptr(_, _) => write!(f, "{} const", ty),
-                PtrConst(_, _) => write!(f, "{} const", ty),
+                Ptr(_) => write!(f, "{} const", ty),
+                PtrConst(_) => write!(f, "{} const", ty),
                 _ => write!(f, "const {}", ty),
             },
             Array(ty, size) => write!(f, "descend::array<{}, {}>", ty, size),
@@ -369,10 +388,12 @@ impl std::fmt::Display for ScalarTy {
         match self {
             Auto => write!(f, "auto"),
             Void => write!(f, "void"),
-            I32 => write!(f, "descend::i32"),
             U8 => write!(f, "descend::u8"),
             U32 => write!(f, "descend::u32"),
             U64 => write!(f, "descend::u64"),
+            Byte => write!(f, "descend::byte"),
+            I32 => write!(f, "descend::i32"),
+            I64 => write!(f, "descend::i64"),
             F32 => write!(f, "descend::f32"),
             F64 => write!(f, "descend::f64"),
             SizeT => write!(f, "std::size_t"),

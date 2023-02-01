@@ -18,12 +18,16 @@ pub static CREATE_ARRAY: &str = "create_array";
 
 pub static TO_VIEW: &str = "to_view";
 pub static TO_VIEW_MUT: &str = "to_view_mut";
+pub static REVERSE: &str = "rev";
+pub static REVERSE_MUT: &str = "rev_mut";
 pub static GROUP: &str = "group";
 pub static GROUP_MUT: &str = "group_mut";
 pub static JOIN: &str = "join";
 pub static JOIN_MUT: &str = "join_mut";
 pub static TRANSPOSE: &str = "transpose";
 pub static TRANSPOSE_MUT: &str = "transpose_mut";
+pub static MAP: &str = "map";
+pub static MAP_MUT: &str = "map_mut";
 
 //pub static TO_WARPS: &str = "to_warps";
 pub static SHFL_UP: &str = "shfl_up";
@@ -52,6 +56,10 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
+        (REVERSE, reverse_ty(Ownership::Shrd)),
+        (REVERSE_MUT, reverse_ty(Ownership::Uniq)),
+        (MAP, map_ty(Ownership::Shrd)),
+        (MAP_MUT, map_ty(Ownership::Uniq)),
         (GROUP, group_ty(Ownership::Shrd)),
         (GROUP_MUT, group_ty(Ownership::Uniq)),
         (JOIN, join_ty(Ownership::Shrd)),
@@ -699,6 +707,147 @@ fn to_view_ty(own: Ownership) -> FnTy {
                 Memory::Ident(m),
                 DataTy::new(DataTyKind::ArrayShape(
                     Box::new(DataTy::new(DataTyKind::Ident(d))),
+                    Nat::Ident(n),
+                )),
+            )),
+        ))))),
+    )
+}
+
+// rev/rev_mut:
+// <n: nat, r: prv, m: mem, d: dty>(&r W m [[d; n]]) -> &r W m [[d; n]]
+fn reverse_ty(own: Ownership) -> FnTy {
+    let n = Ident::new("n");
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let d = Ident::new("d");
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let d_ty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
+    };
+    FnTy::new(
+        vec![n_nat, r_prv, m_mem, d_ty],
+        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+            DataTyKind::Ref(Box::new(RefDty::new(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+                    Nat::Ident(n.clone()),
+                )),
+            ))),
+        ))))],
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+            Box::new(RefDty::new(
+                Provenance::Ident(r.clone()),
+                own,
+                Memory::Ident(m.clone()),
+                DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+                    Nat::Ident(n.clone()),
+                )),
+            )),
+        ))))),
+    )
+}
+
+//map_mut:<r1: prv, d: dty, d2: dty, m: mem, n: nat>(lambda: |&r1 uniq d| -[view]-> d2, &r1 uniq m [[d;n]]) -[view]-> &r1 uniq m [[d2; n]]
+fn map_ty(own: Ownership) -> FnTy {
+    let r = Ident::new("r");
+    let d = Ident::new("d");
+    let d2 = Ident::new("d2");
+    let m = Ident::new("m");
+    let n = Ident::new("n");
+
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let d_dty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
+    };
+    let d2_dty = IdentKinded {
+        ident: d2.clone(),
+        kind: Kind::DataTy,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
+
+    FnTy::new(
+        vec![
+            r_prv.clone(),
+            d_dty.clone(),
+            d2_dty.clone(),
+            m_mem.clone(),
+            n_nat.clone(),
+        ],
+        //Parameter
+        vec![
+            //Lambda function
+            Ty::new(TyKind::FnTy(Box::new(FnTy::new(
+                vec![],
+                vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+                    DataTyKind::Ref(Box::new(RefDty::new(
+                        Provenance::Ident(r.clone()),
+                        own,
+                        Memory::Ident(m.clone()),
+                        DataTy::new(DataTyKind::Ident(d.clone())),
+                    ))),
+                ))))],
+                ExecTy::new(ExecTyKind::View),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r.clone()),
+                        own,
+                        Memory::Ident(m.clone()),
+                        DataTy::new(DataTyKind::Ident(d2.clone())),
+                    )),
+                ))))),
+            )))),
+            //Arrayshape
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                Box::new(RefDty::new(
+                    Provenance::Ident(r.clone()),
+                    own,
+                    Memory::Ident(m.clone()),
+                    DataTy::new(DataTyKind::ArrayShape(
+                        Box::new(DataTy::new(DataTyKind::Ident(d))),
+                        Nat::Ident(n.clone()),
+                    )),
+                )),
+            ))))),
+        ],
+        //Execution Resource
+        ExecTy::new(ExecTyKind::View),
+        //Return value -> arrayshape
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+            Box::new(RefDty::new(
+                Provenance::Ident(r),
+                own,
+                Memory::Ident(m),
+                DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d2))),
                     Nat::Ident(n),
                 )),
             )),

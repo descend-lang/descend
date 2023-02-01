@@ -6,72 +6,66 @@ fn hist<i: prv, o: prv>(
 
     let d_in = gpu_alloc_copy(&uniq gpu, &shrd *h_in);
     let mut d_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
-    exec::<64, 1024>(
-        &uniq gpu,
-        (
-            &shrd d_in,
-            &uniq d_out
-        ),
-        | inputs: (&shrd gpu.global [u8; 64*1024],
-                   &uniq gpu.global [u32; 256])
-        | -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-            let d_in_groups = group::<1024>(to_view(inputs.0));
-            let d_out_atomic = to_atomic_array(inputs.1);
-            let d_out_atomic_view = to_view(&shrd *d_out_atomic);
-
-            let s_block_out: [AtomicU32; 256] @ gpu.shared = shared_alloc::<[AtomicU32; 256]>();
-            let s_block_out_view = to_view(&shrd s_block_out);
-
-            let mut var: u32 = 0u32;
-
-            sched block in grid {
-                let d_in_group = d_in_groups[[block]]; // 1024 elements per group
-
-                indep(X) 16 block.to_warps {
-                    active_warps => {
-                        sched warp in active_warps {
-                            shfl_up(var, 1)
-                        }
-                    },
-                    inactive_warps => { () }
-                };
-
-                // initialize shared memory histogram
-                indep(X) 256 block {
-                    active => {
-                        sched thread in active {
-                            let s_block_out_item = s_block_out_view[[thread]];
-                            atomic_store(&shrd *s_block_out_item, 0u32)
-                        }
-                    },
-                    inactive => { () }
-                };
-
-                sync;
-
-                sched thread in block {
-                    let d_in_item = d_in_group[[thread]];
-                    let tmp = *d_in_item;
-                    atomic_fetch_add(&shrd (*s_block_out)[tmp], 1u32)
-                };
-
-                sync;
-
-                indep(X) 256 block {
-                    active => {
-                        sched thread in active {
-                            let d_out_atomic_item = d_out_atomic_view[[thread]];
-                            let s_block_out_item = s_block_out_view[[thread]];
-                            atomic_fetch_add(
-                                &shrd *d_out_atomic_item,
-                                atomic_load( &shrd *s_block_out_item )
-                            )
-                        }
-                    },
-                    inactive => { () }
-                }
-            }
-        }
-    );
+    gpu_hist::<<<X<64>, X<1024>; [AtomicU32; 256]>>>(&shrd d_in, &uniq d_out);
     copy_to_host(&shrd d_out, h_out)
+}
+
+
+fn gpu_hist<>(
+    d_in: &shrd gpu.global [u8; 64*1024],
+    d_out: &uniq gpu.global [u32; 256],
+    s_block_out: &uniq gpu.shared [AtomicU32; 256]
+) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
+
+    let d_in_groups = group::<1024>(to_view(d_in));
+    let d_out_atomic = to_atomic_array(d_out);
+    let d_out_atomic_view = to_view(&shrd *d_out_atomic);
+
+    let s_block_out_view = to_view(&shrd *s_block_out);
+
+    sched block in grid {
+        let d_in_group = d_in_groups[[block]];
+
+        sched warp in block.to_warps {
+            indep(X) 1 warp {
+                inactive_lanes => { () },
+                active_lanes => { () }
+            }
+        };
+
+        // initialize shared memory histogram
+        indep(X) 256 block {
+            active => {
+                sched thread in active {
+                    let s_block_out_item = s_block_out_view[[thread]];
+                    atomic_store(&shrd *s_block_out_item, 0u32)
+                }
+            },
+            inactive => { () }
+        };
+
+        sync;
+
+        sched thread in block {
+            let d_in_item = d_in_group[[thread]];
+            let tmp = *d_in_item;
+            atomic_fetch_add(&shrd (*s_block_out)[tmp], 1u32)
+        };
+
+        sync;
+
+        indep(X) 256 block {
+            active => {
+                sched thread in active {
+                    let d_out_atomic_item = d_out_atomic_view[[thread]];
+                    let s_block_out_item = s_block_out_view[[thread]];
+                    atomic_fetch_add(
+                        &shrd *d_out_atomic_item,
+                        atomic_load( &shrd *s_block_out_item )
+                    )
+                }
+            },
+            inactive => { () }
+        }
+    }
 }

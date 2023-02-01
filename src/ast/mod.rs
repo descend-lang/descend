@@ -353,6 +353,17 @@ impl Block {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct AppKernel {
+    pub grid_dim: Dim,
+    pub block_dim: Dim,
+    pub shared_mem_dtys: Vec<DataTy>,
+    pub shared_mem_prvs: Vec<String>,
+    pub fun: Box<Expr>,
+    pub gen_args: Vec<ArgKinded>,
+    pub args: Vec<Expr>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
@@ -388,6 +399,7 @@ pub enum ExprKind {
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
     // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
+    AppKernel(Box<AppKernel>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>),
     // For-each loop.
@@ -895,7 +907,7 @@ pub enum ExecPathElem {
     SplitProj(Box<SplitProj>),
     Distrib(DimCompo),
     ToWarps,
-    // ToThreadGrp(Box<ExecExpr>),
+    ToThreads(DimCompo),
 }
 
 impl fmt::Display for ExecPathElem {
@@ -908,6 +920,7 @@ impl fmt::Display for ExecPathElem {
             ),
             Self::Distrib(dim_compo) => write!(f, "distrib({})", dim_compo),
             Self::ToWarps => write!(f, "to_warps"),
+            Self::ToThreads(dim_compo) => write!(f, "to_threads({})", dim_compo),
         }
     }
 }
@@ -1390,10 +1403,11 @@ pub enum DataTyKind {
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ScalarTy {
     Unit,
-    I32,
     U8,
     U32,
     U64,
+    I32,
+    I64,
     F32,
     F64,
     Bool,
@@ -1491,14 +1505,6 @@ impl ExecTy {
         ExecTy {
             ty: exec,
             span: None,
-        }
-    }
-
-    pub fn callable_in(&self, exec_ty: &Self) -> bool {
-        if &self.ty == &ExecTyKind::View {
-            true
-        } else {
-            self == exec_ty
         }
     }
 }

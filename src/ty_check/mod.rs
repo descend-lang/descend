@@ -27,7 +27,7 @@ macro_rules! matches_dty {
         }
     };
 }
-
+use crate::ast::utils::fresh_ident;
 pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -243,6 +243,14 @@ impl TyChecker {
                 *own,
                 arr_expr,
                 idx,
+            )?,
+            ExprKind::AppKernel(app_kernel) => self.ty_check_app_kernel(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                app_kernel,
             )?,
             ExprKind::Ref(prv, own, pl_expr) => self.ty_check_borrow(
                 kind_ctx,
@@ -1018,7 +1026,8 @@ impl TyChecker {
         sched: &mut Sched,
     ) -> TyResult<(TyCtx, Ty)> {
         legal_exec_under_current(kind_ctx, &ty_ctx, exec, ident_exec, &sched.sched_exec)?;
-        let expanded_exec_expr = expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, exec)?;
+        let expanded_exec_expr =
+            expand_exec_expr(kind_ctx, &ty_ctx, ident_exec, &sched.sched_exec)?;
         let mut body_exec = ExecExpr::new(expanded_exec_expr.exec.distrib(sched.dim));
         ty_check_exec(kind_ctx, &ty_ctx, ident_exec, &mut body_exec)?;
         let inner_ty_ctx = ty_ctx.clone().append_frame(vec![]);
@@ -1082,45 +1091,49 @@ impl TyChecker {
         self.place_expr_ty_under_exec_own(kind_ctx, &ty_ctx, exec, Ownership::Shrd, p)?;
 
         if let DataTyKind::Ref(ref_dty) = &p.ty.as_ref().unwrap().dty().dty {
-            if let DataTyKind::ArrayShape(elem_dty, n) = &ref_dty.dty.dty {
-                // TODO
-                // if n != distrib_exec.active_distrib_size() {
-                //     return Err(TyError::String("There must be as many elements in the view as there exist execution resources that select from it.".to_string()));
-                // }
-                let (impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx.clone(), prv_val_name);
-                if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
-                    return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
-                }
-                let loans = borrow_check::ownership_safe(
-                    self,
-                    kind_ctx,
-                    exec_borrow_ctx,
-                    &impl_ctx,
-                    exec,
-                    &[],
-                    ref_dty.own,
-                    p,
-                )
-                .map_err(|err| TyError::ConflictingBorrow(Box::new(p.clone()), ref_dty.own, err))?;
-                // TODO store_reborrow_for_exec(distrib_exec, p);
-
-                let res_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                    Box::new(RefDty::new(
-                        Provenance::Value(prv_val_name.clone()),
+            match &ref_dty.dty.dty {
+                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
+                    // TODO
+                    // if n != distrib_exec.active_distrib_size() {
+                    //     return Err(TyError::String("There must be as many elements in the view
+                    //  as there exist execution resources that select from it.".to_string()));
+                    // }
+                    let (impl_ctx, prv_val_name) =
+                        TyChecker::infer_prv(ty_ctx.clone(), prv_val_name);
+                    if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
+                        return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
+                    }
+                    let loans = borrow_check::ownership_safe(
+                        self,
+                        kind_ctx,
+                        exec_borrow_ctx,
+                        &impl_ctx,
+                        exec,
+                        &[],
                         ref_dty.own,
-                        ref_dty.mem.clone(),
-                        elem_dty.as_ref().clone(),
-                    )),
-                )))));
-                exec_borrow_ctx.insert(distrib_exec, loans.clone());
-                let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
-                Ok((res_ty_ctx, res_dty))
-            } else {
-                Err(TyError::String("Expected a view.".to_string()))
+                        p,
+                    )
+                    .map_err(|err| {
+                        TyError::ConflictingBorrow(Box::new(p.clone()), ref_dty.own, err)
+                    })?;
+                    // TODO store_reborrow_for_exec(distrib_exec, p);
+                    let res_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                        Box::new(RefDty::new(
+                            Provenance::Value(prv_val_name.clone()),
+                            ref_dty.own,
+                            ref_dty.mem.clone(),
+                            elem_dty.as_ref().clone(),
+                        )),
+                    )))));
+                    exec_borrow_ctx.insert(distrib_exec, loans.clone());
+                    let res_ty_ctx = impl_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
+                    Ok((res_ty_ctx, res_dty))
+                }
+                _ => Err(TyError::String("Expected an array or view.".to_string())),
             }
         } else {
             Err(TyError::String(
-                "Expected a reference to a view.".to_string(),
+                "Expected a reference to an array or view.".to_string(),
             ))
         }
     }
@@ -1880,11 +1893,12 @@ impl TyChecker {
                 k_args,
             )?;
         let exec_f = if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
-            if !fn_ty.exec_ty.callable_in(exec.ty.as_ref().unwrap()) {
+            if !callable_in(&fn_ty.exec_ty, exec.ty.as_ref().unwrap()) {
                 return Err(TyError::String(format!(
                     "Trying to apply function for execution resource `{}` \
                 under execution resource `{}`",
-                    &fn_ty.exec_ty, &ident_exec.ty.ty
+                    &fn_ty.exec_ty,
+                    &exec.ty.as_ref().unwrap()
                 )));
             }
             fn_ty.exec_ty.clone()
@@ -2006,6 +2020,103 @@ impl TyChecker {
                 expected, kv
             )))
         }
+    }
+
+    fn ty_check_app_kernel(
+        &mut self,
+        kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
+        ty_ctx: TyCtx,
+        ident_exec: &IdentExec,
+        exec: &ExecExpr,
+        app_kernel: &mut AppKernel,
+    ) -> TyResult<(TyCtx, Ty)> {
+        // current exec = cpu.thread
+        if !matches!(exec.ty.as_ref().unwrap().ty, ExecTyKind::CpuThread) {
+            return Err(TyError::String(
+                "A kernel must be called from a CPU thread.".to_string(),
+            ));
+        }
+        // new scope with gpu.grid<DIM, DIM> execution resource
+        let mut kernel_ty_ctx = ty_ctx.append_frame(vec![]);
+        let mut kernel_exec = ExecExpr::new(Exec::new(BaseExec::GpuGrid(
+            app_kernel.grid_dim.clone(),
+            app_kernel.block_dim.clone(),
+        )));
+        ty_check_exec(kind_ctx, &kernel_ty_ctx, ident_exec, &mut kernel_exec)?;
+        // add explicit provenances to typing context (see block)
+        for prv in &app_kernel.shared_mem_prvs {
+            kernel_ty_ctx = kernel_ty_ctx.append_prv_mapping(PrvMapping::new(prv))
+        }
+        // generate internal shared memory identifier with provided dtys @ shared
+        let shared_mem_idents_ty = app_kernel
+            .shared_mem_dtys
+            .iter()
+            .map(|dty| {
+                IdentTyped::new(
+                    Ident::new_impli(&utils::fresh_name("shared_mem")),
+                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::At(
+                        Box::new(dty.clone()),
+                        Memory::GpuShared,
+                    ))))),
+                    Mutability::Mut,
+                    kernel_exec.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        // and add shared mem idents to scope
+        for it in &shared_mem_idents_ty {
+            kernel_ty_ctx = kernel_ty_ctx.append_ident_typed(it.clone());
+        }
+        // references to shared memory identifiers
+        let refs_to_shrd = shared_mem_idents_ty.iter().enumerate().map(|(i, idt)| {
+            let prv = if i < app_kernel.shared_mem_prvs.len() {
+                Some(app_kernel.shared_mem_prvs[i].clone())
+            } else {
+                None
+            };
+            Expr::new(ExprKind::Ref(
+                prv,
+                Ownership::Uniq,
+                Box::new(PlaceExpr::new(PlaceExprKind::Ident(idt.ident.clone()))),
+            ))
+        });
+        // type check argument list
+        for arg in app_kernel.args.iter_mut() {
+            kernel_ty_ctx = self.ty_check_expr(
+                kind_ctx,
+                exec_borrow_ctx,
+                kernel_ty_ctx,
+                ident_exec,
+                exec,
+                arg,
+            )?;
+        }
+        // create extended argument list with references to shared memory
+        let mut extended_args = app_kernel
+            .args
+            .iter()
+            .cloned()
+            .chain(refs_to_shrd)
+            .collect::<Vec<_>>();
+        // type check function application for generic args and extended argument list
+        self.ty_check_app(
+            kind_ctx,
+            exec_borrow_ctx,
+            kernel_ty_ctx.clone(),
+            ident_exec,
+            &kernel_exec,
+            &mut app_kernel.fun,
+            &mut app_kernel.gen_args,
+            &mut extended_args,
+        )?;
+        kernel_ty_ctx = kernel_ty_ctx.drop_last_frame();
+        Ok((
+            kernel_ty_ctx,
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Unit,
+            ))))),
+        ))
     }
 
     fn ty_check_tuple(
@@ -2365,7 +2476,6 @@ impl TyChecker {
         Ok((res_ty_ctx, pl_ty))
     }
 
-    //FIXME not yet compatible with changes from multi-dim-grid feature branch
     fn ty_check_borrow_idx(
         &self,
         kind_ctx: &KindCtx,
@@ -2875,7 +2985,7 @@ impl TyChecker {
     }
 }
 
-fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
+/* fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
     match &exec_ty.ty {
         ExecTyKind::CpuThread | ExecTyKind::GpuThread => Nat::Lit(1),
         ExecTyKind::GpuGrid(gdim, _) | ExecTyKind::GpuBlockGrp(gdim, _) => {
@@ -2890,6 +3000,15 @@ fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
         ExecTyKind::GpuWarp => Nat::Lit(32),
         ExecTyKind::GpuGlobalThreads(_) => todo!(),
         ExecTyKind::View => unreachable!(),
+    }
+} */
+
+pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
+    if &callee_exec_ty.ty == &ExecTyKind::View {
+        true
+    } else {
+        let res = unify::unify(&mut callee_exec_ty.clone(), &mut caller_exec_ty.clone());
+        res.is_ok()
     }
 }
 
@@ -2971,13 +3090,25 @@ fn ty_check_exec(
                     &exec_split.pos,
                     exec_split.proj,
                     &exec_ty,
-                )?
+                )?;
+            }
+            ExecPathElem::ToThreads(d) => {
+                exec_ty = ty_check_exec_to_threads(*d, &exec_ty)?;
             }
             ExecPathElem::ToWarps => exec_ty = ty_check_exec_to_warps(&exec_ty, &base_exec_ty)?,
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
     Ok(())
+}
+
+fn ty_check_exec_to_threads(dim: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    let result_ty = if let ExecTyKind::GpuGrid(gdim, bdim) = exec_ty {
+        // match (gdim, bdim) {
+        // }
+        ()
+    };
+    todo!()
 }
 
 fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
@@ -3025,22 +3156,6 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
     };
     Ok(res_ty)
 }
-
-// fn ty_check_exec_to_thread_grp(
-//     kind_ctx: &KindCtx,
-//     ident_exec: &IdentExec,
-//     exec_expr: &mut ExecExpr,
-// ) -> TyResult<ExecTyKind> {
-//     ty_check_exec(kind_ctx, ident_exec, exec_expr)?;
-//     if let ExecTyKind::GpuGrid(gdim, bdim) = &exec_expr.ty.as_ref().unwrap().ty {
-//         Ok(ExecTyKind::GpuGlobalThreads(gdim * bdim))
-//     } else {
-//         Err(TyError::String(format!(
-//             "expected grid but found {}",
-//             exec_expr.ty.as_ref().unwrap().ty
-//         )))
-//     }
-// }
 
 pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
     match (dim, dim_compo) {

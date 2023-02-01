@@ -200,6 +200,7 @@ using f32 = float;
 static_assert(sizeof(f32) == 4);
 using f64 = double;
 static_assert(sizeof(f64) == 8);
+using byte = std::uint8_t;
 
 template<typename T, std::size_t n>
 using array = std::array<T, n>;
@@ -393,14 +394,14 @@ __global__ void launch(F f, Args... args)
     f(args...);
 }
 
-template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
-auto exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
-    CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
+template <typename F, typename... Args>
+auto exec(dim3 num_blocks, dim3 num_threads, std::size_t shared_mem_bytes, F &&f, Args... args) -> void {
+    CHECK_CUDA_ERR( cudaSetDevice(gpu_device(0)) );
 #ifdef BENCH
     Timing timing{};
     timing.record_begin();
 #endif
-    launch<<<num_blocks, num_threads>>>(f, args...);
+    launch<<<num_blocks, num_threads, shared_mem_bytes>>>(f, args...);
 #ifdef BENCH
     timing.record_end();
     benchmark.current_run().insert_timing(timing);
