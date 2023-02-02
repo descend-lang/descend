@@ -102,10 +102,10 @@ pub fn span_derive(attr: TokenStream, input: TokenStream) -> TokenStream {
         #[derive(#(#derive_args),*)]
         #helper
 
-        impl<'a> Into<#helper_name<'a>> for &'a #original_name {
-            fn into(self) -> #helper_name<'a> {
+        impl<'a> From<&'a #original_name> for #helper_name<'a> {
+            fn from(orig: &'a #original_name) -> Self {
                 #helper_name {
-                    #(#into_fields: &self.#into_fields),*
+                    #(#into_fields: &orig.#into_fields),*
                 }
             }
         }

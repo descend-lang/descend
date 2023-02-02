@@ -27,20 +27,39 @@ pub(super) fn check(
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
         (sub, sup) if sub == sup => Ok(ty_ctx),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
-        (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size)) if sub_size == sup_size => {
+        (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size))
+        | (ArrayShape(sub_elem_ty, sub_size), ArrayShape(sup_elem_ty, sup_size)) => {
             check(kind_ctx, ty_ctx, sub_elem_ty, sup_elem_ty)
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′
-        (Ref(sub_prv, Shrd, sub_mem, sub_ty), Ref(sup_prv, Shrd, sup_mem, sup_ty)) => {
-            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            check(kind_ctx, res_outl_ty_ctx, sub_ty, sup_ty)
+        (Ref(lref), Ref(rref)) if lref.own == Shrd && rref.own == Shrd => {
+            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
+            if lref.mem != rref.mem {
+                return Err(SubTyError::MemoryKindsNoMatch);
+            }
+            check(
+                kind_ctx,
+                res_outl_ty_ctx,
+                lref.dty.as_ref(),
+                rref.dty.as_ref(),
+            )
         }
         // Δ; Γ ⊢ &B ρ1 uniq τ1 ≲ &B ρ2 uniq τ2 ⇒ Γ''
-        (Ref(sub_prv, Uniq, sub_mem, sub_ty), Ref(sup_prv, Uniq, sup_mem, sup_ty)) => {
-            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, sub_prv, sup_prv)?;
-            let res_forw = check(kind_ctx, res_outl_ty_ctx.clone(), sub_ty, sup_ty)?;
-            let res_back = check(kind_ctx, res_outl_ty_ctx, sup_ty, sub_ty)?;
-            if sub_mem != sup_mem {
+        (Ref(lref), Ref(rref)) => {
+            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
+            let res_forw = check(
+                kind_ctx,
+                res_outl_ty_ctx.clone(),
+                lref.dty.as_ref(),
+                rref.dty.as_ref(),
+            )?;
+            let res_back = check(
+                kind_ctx,
+                res_outl_ty_ctx,
+                rref.dty.as_ref(),
+                lref.dty.as_ref(),
+            )?;
+            if lref.mem != rref.mem {
                 return Err(SubTyError::MemoryKindsNoMatch);
             }
             // TODO find out why this is important (technically),
@@ -49,7 +68,7 @@ pub(super) fn check(
             Ok(res_back)
         }
         // Δ; Γ ⊢ (τ1, ..., τn) ≲ (τ1′, ..., τn′) ⇒ Γn
-        (DataTyKind::Tuple(sub_elems), DataTyKind::Tuple(sup_elems)) => {
+        (Tuple(sub_elems), Tuple(sup_elems)) => {
             let mut res_ctx = ty_ctx;
             for (sub, sup) in sub_elems.iter().zip(sup_elems) {
                 res_ctx = check(kind_ctx, res_ctx, sub, sup)?;
@@ -92,15 +111,13 @@ fn outlives(
             //  context. See ty_check_global_fun_def.
             kind_ctx
                 .outlives(longer, shorter)
-                .map_err(|err| SubTyError::CtxError(err))?;
+                .map_err(SubTyError::CtxError)?;
             Ok(ty_ctx)
         }
         // OL-LocalProvenances
         (Value(longer), Value(shorter)) => outl_check_val_prvs(ty_ctx, longer, shorter),
         // OL-LocalProvAbsProv
-        (Value(longer_val), Ident(shorter_ident)) => {
-            outl_check_val_ident_prv(kind_ctx, ty_ctx, longer_val, shorter_ident)
-        }
+        (Value(longer_val), Ident(_)) => outl_check_val_ident_prv(ty_ctx, longer_val),
         // OL-AbsProvLocalProv
         (Ident(longer_ident), Value(shorter_val)) => {
             outl_check_ident_val_prv(kind_ctx, ty_ctx, longer_ident, shorter_val)
@@ -135,13 +152,6 @@ fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> SubTyResul
     Ok(res_ty_ctx)
 }
 
-fn create_loan_set_err_msg(prv: &str, error_msg: &str) -> String {
-    format!(
-        "Error when trying to get loan set for {}: {}\n",
-        prv, error_msg
-    )
-}
-
 fn longer_occurs_before_shorter(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> bool {
     for prv in ty_ctx
         .prv_mappings()
@@ -160,15 +170,11 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
     ty_ctx
         .all_places()
         .into_iter()
-        .filter(|(_, ty)| match ty {
-            Ty {
-                ty:
-                    TyKind::Data(DataTy {
-                        dty: DataTyKind::Ref(Provenance::Value(prv_name), _, _, _),
-                        ..
-                    }),
-                ..
-            } if prv_name == prv => true,
+        .filter(|(_, dty)| match &dty.dty {
+            DataTyKind::Ref(reff) => match &reff.rgn {
+                Provenance::Value(prv_name) => prv_name == prv,
+                _ => false,
+            },
             _ => false,
         })
         .any(|(place, _)| {
@@ -183,12 +189,7 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         })
 }
 
-fn outl_check_val_ident_prv(
-    kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
-    longer_val: &str,
-    shorter_ident: &Ident,
-) -> SubTyResult<TyCtx> {
+fn outl_check_val_ident_prv(ty_ctx: TyCtx, longer_val: &str) -> SubTyResult<TyCtx> {
     // TODO how could the set ever be empty?
     let loan_set = ty_ctx.loans_in_prv(longer_val)?;
     if loan_set.is_empty() {
@@ -201,15 +202,10 @@ fn outl_check_val_ident_prv(
 
 // FIXME Makes no sense!
 fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: &HashSet<Loan>) -> bool {
-    ty_ctx.all_places().iter().any(|(pl, ty)| {
-        loan_set.iter().any(|loan| {
-            let Loan {
-                place_expr,
-                own: own_qual,
-            } = loan;
-            place_expr.equiv(pl)
-        })
-    })
+    ty_ctx
+        .all_places()
+        .iter()
+        .any(|(pl, _)| loan_set.iter().any(|loan| loan.place_expr.equiv(pl)))
 }
 
 fn outl_check_ident_val_prv(

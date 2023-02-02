@@ -52,6 +52,8 @@ pub enum TyError {
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
     UnexpectedType,
+    // The thread hierarchy dimension referred to does not exist
+    IllegalDimension,
     // TODO remove as soon as possible
     String(String),
 }
@@ -164,7 +166,7 @@ impl TyError {
                 if let Some(pl_expr_span) = pl_expr.span {
                     let label = format!("expected tuple type but found `{:?}`", ty_kind);
                     let (begin_line, begin_column) = source.get_line_col(pl_expr_span.begin);
-                    let (end_line, end_column) = source.get_line_col(pl_expr_span.end);
+                    let (_, end_column) = source.get_line_col(pl_expr_span.end);
                     let snippet = error::single_line_snippet(
                         source,
                         &label,

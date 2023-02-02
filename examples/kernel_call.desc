@@ -1,0 +1,30 @@
+kernel_fun::<....>(....)<<<gpu.grid<X<64>, X<1024>>, [i32; bs]>>> {
+        // cannot be an @-type because memory would have to be dropped when it goes out of scope
+        let shared tmp: &'kernel uniq gpu.shared [i32; bs];
+        parfor warp in warps {
+            let scan_codewordlen = codewordlen;
+            tmp_shfl_res = shfl_up(scan_codewordlen, 1);
+            par_branch split_warp::<1>(warp) {
+                inactive_lanes => { () },
+                active_lanes => {
+                    parfor _ in active_lanes {
+                        scan_codewordlen = scan_codewordlen + tmp_shfl_res
+                    }
+                }
+            };
+            parfor _ in warp {
+                tmp_shfl_res = shfl_up(scan_codewordlen, 2)
+            };
+        }
+        kernel(tmp)
+    }
+
+F: <l: rgn, x: nat, y: nat, n: nat, d:dty>(ARG_DTYS.., &l uniq gpu.shared [d; n]..) -[gpu.grid<DIM_GRID, DIM_BLOCK>]-> ()
+F::<<<DIM_GRID, DIM_BLOCK; [SHARED_MEM_TY**<n>; ['l**<n>]]>>>::<'l, 'g, x, y, n, DTY>(args..);
+<=>
+on GPU: <'l..> { F(&'l uniq gpu.shared SHARED_MEM_TY.., args..) }
+
+dim3 grid_dim(..);
+dim3 block_dim(..);
+size_t shared_mem_bytes = ...;
+exec(grid_dim, block_dim, shared_mem_bytes, F, args..)

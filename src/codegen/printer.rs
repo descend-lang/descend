@@ -1,7 +1,8 @@
 use super::cu_ast::{
-    BinOp, BufferKind, Expr, Item, ParamDecl, ScalarTy, Stmt, TemplParam, TemplateArg, Ty, UnOp,
+    BinOp, BufferKind, ExecKind, Expr, FnDef, FnSig, GpuAddrSpace, Item, Lit, ParamDecl, ScalarTy,
+    Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::codegen::cu_ast::{GpuAddrSpace, Lit};
+use std::env;
 use std::fmt::Formatter;
 
 // function cuda_fmt takes Formatter and recursively formats
@@ -9,7 +10,7 @@ use std::fmt::Formatter;
 // implement Display for CuAst by calling cuda_fmt in fmt passing the formatter and completely handing
 // over the computation
 
-pub(super) fn print(program: &[Item]) -> String {
+pub(super) fn print(program: &[&Item]) -> String {
     use std::fmt::Write;
 
     let mut code = String::new();
@@ -23,9 +24,15 @@ pub(super) fn print(program: &[Item]) -> String {
 }
 
 fn clang_format(code: &str) -> String {
+    //If clang-format is not available for user, it's path can be set in this env Variable (e.g. in .cargo/config.toml)
+    let clang_format_path = match env::var("CLANG_FORMAT_PATH") {
+        Ok(path) => path,
+        Err(_) => String::from("clang-format"),
+    };
+
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let mut clang_fmt_cmd = Command::new("clang-format")
+    let mut clang_fmt_cmd = Command::new(clang_format_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -41,34 +48,52 @@ fn clang_format(code: &str) -> String {
     String::from_utf8(clang_fmt_output.stdout).expect("cannot read clang-format output as String")
 }
 
-impl std::fmt::Display for Item {
+impl<'a> std::fmt::Display for Item<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Item::Include(path) => write!(f, "#include \"{}\"", path),
-            Item::FunDef {
-                name,
-                templ_params,
-                params,
-                ret_ty,
-                body,
-                is_dev_fun,
-            } => {
-                if !templ_params.is_empty() {
-                    write!(f, "template<")?;
-                    fmt_vec(f, templ_params, ", ")?;
-                    writeln!(f, ">")?;
-                }
-                writeln!(
-                    f,
-                    "{}auto {}(",
-                    if *is_dev_fun { "__device__ " } else { "" },
-                    name
-                )?;
-                fmt_vec(f, params, ",\n")?;
-                writeln!(f, "\n) -> {} {{", ret_ty)?;
-                write!(f, "{}", body)?;
-                writeln!(f, "\n}}")
-            }
+            Item::FunDecl(fn_decl) => write!(f, "{};", fn_decl),
+            Item::FnDef(fn_def) => write!(f, "{}", fn_def.as_ref()),
+            Item::MultiLineComment(str) => write!(f, "/*\n{}\n*/", str),
+        }
+    }
+}
+
+impl std::fmt::Display for FnSig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let FnSig {
+            name,
+            templ_params,
+            params,
+            ret_ty,
+            exec_kind,
+        } = self;
+
+        if !templ_params.is_empty() {
+            write!(f, "template<")?;
+            fmt_vec(f, templ_params, ", ")?;
+            writeln!(f, ">")?;
+        }
+        writeln!(f, "{} auto {}(", exec_kind, name)?;
+        fmt_vec(f, params, ",\n")?;
+        writeln!(f, "\n) -> {}", ret_ty)
+    }
+}
+
+impl std::fmt::Display for FnDef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let FnDef { fn_sig, body } = self;
+        write!(f, "{}", fn_sig)?;
+        write!(f, "{}", body)
+    }
+}
+
+impl std::fmt::Display for ExecKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecKind::Host => write!(f, "__host__"),
+            ExecKind::Global => write!(f, "__global__"),
+            ExecKind::Device => write!(f, "__device__"),
         }
     }
 }
@@ -83,13 +108,21 @@ impl std::fmt::Display for Stmt {
                 ty,
                 addr_space,
                 expr,
+                is_extern,
             } => {
-                if let Some(addrs) = addr_space {
-                    write!(f, "{} ", addrs)?;
+                if *is_extern {
+                    write!(f, "extern ")?;
+                }
+                if let Some(addr_space) = addr_space {
+                    write!(f, "{} ", addr_space)?;
                 }
                 write!(f, "{} {}", ty, name)?;
                 if let Ty::CArray(_, n) = ty {
-                    write!(f, "[{}]", n)?;
+                    write!(f, "[")?;
+                    if let Some(n) = n {
+                        write!(f, "{}", n)?
+                    }
+                    write!(f, "]")?;
                 }
                 if let Some(expr) = expr {
                     write!(f, " = {}", expr)?;
@@ -97,9 +130,9 @@ impl std::fmt::Display for Stmt {
                 write!(f, ";")
             }
             Block(stmt) => {
-                writeln!(f, "{{")?;
-                writeln!(f, "{}", stmt)?;
-                write!(f, "}}")
+                write!(f, "{{")?;
+                write!(f, "{}", stmt)?;
+                writeln!(f, "}}")
             }
             Seq(stmt) => {
                 let (last, leading) = stmt.split_last().unwrap();
@@ -137,7 +170,6 @@ impl std::fmt::Display for Stmt {
                 iter,
                 stmt,
             } => write!(f, "for ({} {}; {}) {}", init, cond, iter, stmt),
-            Label(l) => write!(f, "{}:", l),
             Return(expr) => {
                 write!(f, "return")?;
                 if let Some(e) = expr {
@@ -145,6 +177,20 @@ impl std::fmt::Display for Stmt {
                 }
                 write!(f, ";")
             }
+            ExecKernel(exec_kernel) => {
+                write!(f, "{}", exec_kernel.fun_name)?;
+                if !exec_kernel.template_args.is_empty() {
+                    write!(f, "<")?;
+                    fmt_vec(f, &exec_kernel.template_args, ", ")?;
+                    write!(f, ">")?;
+                }
+                write!(f, "<<<{}, {}", exec_kernel.grid_dim, exec_kernel.block_dim)?;
+                write!(f, ", {}", exec_kernel.shared_mem_bytes)?;
+                write!(f, ">>>(")?;
+                fmt_vec(f, &exec_kernel.args, ", ")?;
+                write!(f, ");")
+            }
+            Label(l) => write!(f, "{}:", l),
         }
     }
 }
@@ -168,27 +214,22 @@ impl std::fmt::Display for Expr {
                 is_dev_fun,
             } => {
                 let dev_qual = if *is_dev_fun { "__device__" } else { "" };
-                writeln!(f, "[");
-                fmt_vec(f, &captures, ",")?;
+                writeln!(f, "[")?;
+                fmt_vec(f, captures, ",")?;
                 writeln!(f, "] {} (", dev_qual)?;
-                fmt_vec(f, &params, ",\n")?;
-                writeln!(f, ") -> {} {{", ret_ty)?;
-                writeln!(f, "{}", &body)?;
-                write!(f, "}}")
+                fmt_vec(f, params, ",\n")?;
+                writeln!(f, ") -> {}", ret_ty)?;
+                write!(f, "{}", &body)
             }
-            FunCall {
-                fun,
-                template_args,
-                args,
-            } => {
-                write!(f, "{}", fun)?;
-                if !template_args.is_empty() {
+            FnCall(fn_call) => {
+                write!(f, "{}", fn_call.fun)?;
+                if !fn_call.template_args.is_empty() {
                     write!(f, "<")?;
-                    fmt_vec(f, template_args, ", ")?;
+                    fmt_vec(f, &fn_call.template_args, ", ")?;
                     write!(f, ">")?;
                 }
                 write!(f, "(")?;
-                fmt_vec(f, args, ", ")?;
+                fmt_vec(f, &fn_call.args, ", ")?;
                 write!(f, ")")
             }
             UnOp { op, arg } => write!(f, "{}{}", op, arg),
@@ -207,6 +248,7 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, elems, ", ")?;
                 write!(f, "}}")
             }
+            Cast(ty, expr) => write!(f, "({}){}", ty, expr),
             Nat(n) => write!(f, "{}", n),
         }
     }
@@ -294,7 +336,7 @@ impl std::fmt::Display for BinOp {
 impl std::fmt::Display for GpuAddrSpace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            GpuAddrSpace::Global => write!(f, ""),
+            GpuAddrSpace::Device => write!(f, "__device__"),
             GpuAddrSpace::Shared => write!(f, "__shared__"),
             GpuAddrSpace::Constant => write!(f, "__constant__"),
         }
@@ -305,14 +347,11 @@ impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
-            // TODO print __restrict__
-            Ptr(ty, Some(addr_space)) => write!(f, "{} {} *", addr_space, ty),
-            Ptr(ty, None) => write!(f, "{} *", ty),
-            PtrConst(ty, Some(addr_space)) => write!(f, "{} const {} *", addr_space, ty),
-            PtrConst(ty, None) => write!(f, "const {} *", ty),
+            Ptr(ty) => write!(f, "{} *", ty),
+            PtrConst(ty) => write!(f, "const {} *", ty),
             Const(ty) => match ty.as_ref() {
-                Ptr(_, _) => write!(f, "{} const", ty),
-                PtrConst(_, _) => write!(f, "{} const", ty),
+                Ptr(_) => write!(f, "{} const", ty),
+                PtrConst(_) => write!(f, "{} const", ty),
                 _ => write!(f, "const {}", ty),
             },
             Array(ty, size) => write!(f, "descend::array<{}, {}>", ty, size),
@@ -342,8 +381,11 @@ impl std::fmt::Display for ScalarTy {
         match self {
             Auto => write!(f, "auto"),
             Void => write!(f, "void"),
-            I32 => write!(f, "descend::i32"),
+            Byte => write!(f, "descend::byte"),
             U32 => write!(f, "descend::u32"),
+            U64 => write!(f, "descend::u64"),
+            I32 => write!(f, "descend::i32"),
+            I64 => write!(f, "descend::i64"),
             F32 => write!(f, "descend::f32"),
             F64 => write!(f, "descend::f64"),
             SizeT => write!(f, "std::size_t"),
@@ -363,43 +405,4 @@ fn fmt_vec<D: std::fmt::Display>(f: &mut Formatter<'_>, v: &[D], sep: &str) -> s
     } else {
         Ok(())
     }
-}
-
-#[test]
-fn test_print_program() -> std::fmt::Result {
-    use Ty::*;
-    let program = vec![
-        Item::Include("descend.cuh".to_string()),
-        Item::FunDef {
-            name: "test_fun".to_string(),
-            templ_params: vec![TemplParam::Value {
-                param_name: "n".to_string(),
-                ty: Scalar(ScalarTy::SizeT),
-            }],
-            params: vec![
-                ParamDecl {
-                    name: "a".to_string(),
-                    ty: Const(Box::new(PtrConst(
-                        Box::new(Scalar(ScalarTy::I32)),
-                        Some(GpuAddrSpace::Shared),
-                    ))),
-                },
-                ParamDecl {
-                    name: "b".to_string(),
-                    ty: Ptr(Box::new(Scalar(ScalarTy::I32)), None),
-                },
-            ],
-            ret_ty: Scalar(ScalarTy::Void),
-            body: Stmt::VarDecl {
-                name: "a_f".to_string(),
-                ty: Ty::Scalar(ScalarTy::Auto),
-                addr_space: None,
-                expr: Some(Expr::Ident("a".to_string())),
-            },
-            is_dev_fun: true,
-        },
-    ];
-    let code = print(&program);
-    print!("{}", code);
-    Ok(())
 }

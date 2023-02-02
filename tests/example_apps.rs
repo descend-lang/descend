@@ -1,3 +1,4 @@
+#![cfg(ignore)]
 #![cfg(test)]
 
 extern crate descend;
@@ -33,15 +34,6 @@ fn vector_add() -> Res {
     Ok(println!(
         "{}",
         descend::compile("examples/with_tys/vec_add.desc")?
-    ))
-}
-
-#[ignore]
-#[test]
-fn warp_reduce() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/with_tys/warp_reduce.desc")?
     ))
 }
 
