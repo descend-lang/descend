@@ -1,0 +1,11 @@
+fn vec_add<n: nat>(
+        vec_1: &uniq cpu.mem[i32, n],
+        vec_2: &uniq cpu.mem[i32, n])
+        -[cpu.thread]-> (res_vec: cou.mem[i32]) {
+    let mut gpu_vec_1 = gpu_alloc_copy(&shrd *vec_1);
+    let mut gpu_vec_2 = gpu_alloc_copy(&shrd *vec_2);
+
+
+
+    copy_to_host(&shrd gpu_vec_1, );
+}

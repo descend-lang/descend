@@ -13,32 +13,33 @@
 
 fn scale_vec<n: nat>(
     h_vec: &uniq cpu.mem [f64; n]
-) -[cpu.thread]-> () {
-let mut gpu = gpu_device(0);
-//&uniq nur möglich wenn variable mut
-let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
-exec::<64, 1024>(
-&uniq gpu, //which GPU?
-(&uniq a_array,), //Input data as tuple: (input1, input2, ...), special case: (input1,)
-| grid: BlockGrp<64, ThreadGrp<1024>>, vec: (&uniq gpu.global [f64; n])     | -[gpu.grid]-> () {
-//View -- allows shaping an arras without memory access
-//can be mutable or constant, i.e. to_view_mut(&uniq ...); to_view(&shrd ..)
-//gibt ei view array zurück [[f64; n]]
-//group_mut::<1024>(view): [[ [[f64, 1024]]; n/1024]]
-let groups = group_mut::<1024>(to_view_mut(vec.0));
-//über den grid was verteilen
-//block in dem grid
-//g eine view aus groups: [[f64; 1024]]
-parfor block in grid with g from groups {
-//was jeder view machen soll in einem grid/block
-//_ könnte auch thread sein
-// nimm einen wert (v) von g und tue was damit
-//v: &uniq gpu.global f64
-parfor _ in block with v from g {
-*v = *v * 3.0
+) -[t: cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+    let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
+    par_scale_vec::<<<X<64>, X<1024>>>>(&uniq a_array);
+    copy_to_host(&shrd a_array, h_vec)
 }
+
+fn par_scale_vec<n: nat, r: prv>(
+    vec: &r uniq gpu.global [f64; n]
+) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
+    let groups = map_mut(
+        |v: &r uniq gpu.global [[f64; 1024]]| -[v: view]-> &r uniq gpu.global [[f64; 1024]] {
+            rev_mut(v)
+        },
+        create_2d_uniq::<1024>(vec)
+    );
+    sched block in grid {
+        sched thread in block {
+            let block_groups = groups[[block]];
+            let v = block_groups[[thread]];
+            *v = *v * 3.0
+        }
+    }
 }
-}
-);
-copy_to_host(&shrd a_array, h_vec)
+
+fn create_2d_uniq<k: nat, n: nat, r: prv>(
+    array: &r uniq gpu.global [f64; n]
+) -[v: view]-> &r uniq gpu.global [[ [[f64; k]]; n/k]] {
+    group_mut::<k>(to_view_mut(array))
 }

@@ -2,22 +2,24 @@
     // TODO global fun params into same frame as top level declaration in body
     ha_array: &a uniq cpu.mem [i32; n],
     hb_array: &b shrd cpu.mem [i32; n]
-) -[cpu.thread]-> () {
+) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
     let b_array = gpu_alloc_copy(&uniq gpu, &shrd *hb_array);
     exec::<64, 1024>(
         &uniq gpu,
-        // FIXME nothing stops me from passing the complete @-value via a move here
         (&uniq a_array, &shrd b_array),
-        | grid: BlockGrp<64, ThreadGrp<1024>>,
-          input: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n])
-        | -[gpu.grid]-> () {
+        | input: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n]) |
+            -[grid: gpu.grid<X<64>, X<1024>>]-> () {
             let view_a = group_mut::<1024>(to_view_mut(input.0));
             let view_b = group::<1024>(to_view(input.1));
-            parfor block in grid with a_group, b_group from view_a, view_b {
-                parfor thread in block with a, b from a_group, b_group {
+            sched block in grid {
+                let a_row = view_a[[block]];
+                let b_row = view_b[[block]];
+                sched thread in block {
+                    let a = a_row[[thread]];
+                    let b = b_row[[thread]];
                     *a = *a + *b
                 }
             }

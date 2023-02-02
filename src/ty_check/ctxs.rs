@@ -1,10 +1,11 @@
-use crate::ast::internal::{Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
+use crate::ast::internal::{ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
+use std::collections::hash_map::Iter;
 use std::collections::{HashMap, HashSet};
 
 // TODO introduce proper struct
-pub(super) type TypedPlace = (internal::Place, Ty);
+pub(super) type TypedPlace = (internal::Place, DataTy);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct TyCtx {
@@ -20,6 +21,22 @@ impl TyCtx {
 
     pub fn from(fr_ty: Frame) -> Self {
         TyCtx { frame: vec![fr_ty] }
+    }
+
+    pub fn get_exec_expr(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
+        let exec_expr = self
+            .frame
+            .iter()
+            .flatten()
+            .rev()
+            .find_map(|entry| match entry {
+                FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
+                _ => None,
+            });
+        match exec_expr {
+            Some(exec) => Ok(exec),
+            None => Err(CtxError::IdentNotFound(ident.clone())),
+        }
     }
 
     pub fn append_frame(mut self, frm_ty: Frame) -> Self {
@@ -40,19 +57,10 @@ impl TyCtx {
         self
     }
 
-    pub fn drop_ident(mut self, ident: &Ident) -> Option<Self> {
-        for frame in self.frame.iter_mut().rev() {
-            let rev_pos_if_exists = frame.iter().rev().position(|ty_entry| match ty_entry {
-                FrameEntry::Var(ident_typed) => &ident_typed.ident == ident,
-                _ => false,
-            });
-            if let Some(rev_pos) = rev_pos_if_exists {
-                let pos = frame.len() - (rev_pos + 1);
-                frame.remove(pos);
-                return Some(self);
-            }
-        }
-        None
+    pub fn append_exec_mapping(mut self, ident: Ident, exec: ExecExpr) -> Self {
+        let frame_typing = self.frame.iter_mut().last().unwrap();
+        frame_typing.push(FrameEntry::ExecMapping(ExecMapping::new(ident, exec)));
+        self
     }
 
     pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
@@ -164,71 +172,41 @@ impl TyCtx {
     // ∀π:τ ∈ Γ
     pub fn all_places(&self) -> Vec<TypedPlace> {
         self.idents_typed()
-            .flat_map(|IdentTyped { ident, ty, .. }| TyCtx::explode_places(&ident, &ty))
+            .filter_map(|IdentTyped { ident, ty, .. }| {
+                if let TyKind::Data(dty) = &ty.ty {
+                    Some(TyCtx::explode_places(&ident, dty))
+                } else {
+                    None
+                }
+            })
+            .flatten()
             .collect()
     }
 
-    fn explode_places(ident: &Ident, ty: &Ty) -> Vec<TypedPlace> {
+    fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<TypedPlace> {
         fn proj(mut pl: internal::Place, idx: usize) -> internal::Place {
             pl.path.push(idx);
             pl
         }
 
-        fn explode(pl: internal::Place, ty: Ty) -> Vec<TypedPlace> {
+        fn explode(pl: internal::Place, dty: DataTy) -> Vec<TypedPlace> {
             use DataTyKind as d;
 
-            match &ty.ty {
-                TyKind::Ident(_)
-                | TyKind::Fn(_, _, _, _)
-                | TyKind::Data(DataTy { dty: d::Range, .. })
-                | TyKind::Data(DataTy {
-                    dty: d::Atomic(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::ThreadHierchy(_),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::SplitThreadHierchy(_, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Scalar(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Array(_, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::ArrayShape(_, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::At(_, _), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Ref(_, _, _, _),
-                    ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::RawPtr(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Ident(_), ..
-                })
-                | TyKind::Data(DataTy {
-                    dty: d::Dead(_), ..
-                })
-                | TyKind::Dead(_) => vec![(pl, ty.clone())],
-                TyKind::Data(DataTy {
-                    dty: d::Tuple(tys), ..
-                }) => {
-                    let mut place_frame = vec![(pl.clone(), ty.clone())];
+            match &dty.dty {
+                d::Range
+                | d::Atomic(_)
+                | d::Scalar(_)
+                | d::Array(_, _)
+                | d::ArrayShape(_, _)
+                | d::At(_, _)
+                | d::Ref(_)
+                | d::RawPtr(_)
+                | d::Ident(_)
+                | d::Dead(_) => vec![(pl, dty.clone())],
+                d::Tuple(tys) => {
+                    let mut place_frame = vec![(pl.clone(), dty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
-                        let mut exploded_index = explode(
-                            proj(pl.clone(), index),
-                            Ty::new(TyKind::Data(proj_ty.clone())),
-                        );
+                        let mut exploded_index = explode(proj(pl.clone(), index), proj_ty.clone());
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
@@ -236,7 +214,7 @@ impl TyCtx {
             }
         }
 
-        explode(internal::Place::new(ident.clone(), vec![]), ty.clone())
+        explode(internal::Place::new(ident.clone(), vec![]), dty.clone())
     }
 
     pub fn ty_of_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
@@ -254,19 +232,16 @@ impl TyCtx {
         }
     }
 
-    pub fn place_ty(&self, place: &internal::Place) -> CtxResult<Ty> {
-        fn proj_ty(ty: Ty, path: &[usize]) -> CtxResult<Ty> {
-            let mut res_ty = ty;
+    pub fn place_dty(&self, place: &internal::Place) -> CtxResult<DataTy> {
+        fn proj_ty(dty: DataTy, path: &[usize]) -> CtxResult<DataTy> {
+            let mut res_dty = dty;
             for n in path {
-                match &res_ty.ty {
-                    TyKind::Data(DataTy {
-                        dty: DataTyKind::Tuple(elem_tys),
-                        ..
-                    }) => {
+                match &res_dty.dty {
+                    DataTyKind::Tuple(elem_tys) => {
                         if elem_tys.len() <= *n {
                             return Err(CtxError::IllegalProjection);
                         }
-                        res_ty = Ty::new(TyKind::Data(elem_tys[*n].clone()));
+                        res_dty = elem_tys[*n].clone();
                     }
                     t => {
                         panic!(
@@ -276,36 +251,28 @@ impl TyCtx {
                     }
                 }
             }
-            Ok(res_ty)
+            Ok(res_dty)
         }
         let ident_ty = self.ty_of_ident(&place.ident)?;
-        proj_ty(ident_ty.clone(), &place.path)
+        if let TyKind::Data(dty) = &ident_ty.ty {
+            proj_ty(dty.as_ref().clone(), &place.path)
+        } else {
+            panic!("This place is not of a data type.")
+        }
     }
 
-    pub fn set_place_ty(mut self, pl: &internal::Place, pl_ty: Ty) -> Self {
-        fn set_ty_for_path_in_ty(orig_ty: Ty, path: &[usize], part_ty: Ty) -> Ty {
+    pub fn set_place_dty(mut self, pl: &internal::Place, pl_ty: DataTy) -> Self {
+        fn set_dty_for_path_in_dty(orig_dty: DataTy, path: &[usize], part_dty: DataTy) -> DataTy {
             if path.is_empty() {
-                return part_ty;
+                return part_dty;
             }
 
             let idx = path.first().unwrap();
-            match orig_ty.ty {
-                TyKind::Data(DataTy {
-                    dty: DataTyKind::Tuple(mut elem_tys),
-                    ..
-                }) => {
-                    elem_tys[*idx] = if let TyKind::Data(dty) = set_ty_for_path_in_ty(
-                        Ty::new(TyKind::Data(elem_tys[*idx].clone())),
-                        &path[1..],
-                        part_ty,
-                    )
-                    .ty
-                    {
-                        dty
-                    } else {
-                        panic!("Trying create non-data type as part of data type.")
-                    };
-                    Ty::new(TyKind::Data(DataTy::new(DataTyKind::Tuple(elem_tys))))
+            match orig_dty.dty {
+                DataTyKind::Tuple(mut elem_tys) => {
+                    elem_tys[*idx] =
+                        set_dty_for_path_in_dty(elem_tys[*idx].clone(), &path[1..], part_dty);
+                    DataTy::new(DataTyKind::Tuple(elem_tys))
                 }
                 _ => panic!("Path not compatible with type."),
             }
@@ -316,26 +283,18 @@ impl TyCtx {
             .rev()
             .find(|ident_typed| ident_typed.ident == pl.ident)
             .unwrap();
-        let updated_ty = set_ty_for_path_in_ty(ident_typed.ty.clone(), pl.path.as_slice(), pl_ty);
-        ident_typed.ty = updated_ty;
-        self
+        if let TyKind::Data(dty) = &ident_typed.ty.ty {
+            let updated_dty = set_dty_for_path_in_dty(*dty.clone(), pl.path.as_slice(), pl_ty);
+            ident_typed.ty = Ty::new(TyKind::Data(Box::new(updated_dty)));
+            self
+        } else {
+            panic!("Trying to set data type for identifier without data type.")
+        }
     }
 
     pub fn kill_place(self, pl: &internal::Place) -> Self {
-        if let Ok(pl_ty) = self.place_ty(pl) {
-            self.set_place_ty(
-                pl,
-                match &pl_ty.ty {
-                    TyKind::Ident(_) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
-                    TyKind::Fn(_, _, _, _) => Ty::new(TyKind::Dead(Box::new(pl_ty.clone()))),
-                    TyKind::Data(dty) => Ty::new(TyKind::Data(DataTy::new(DataTyKind::Dead(
-                        Box::new(dty.clone()),
-                    )))),
-                    TyKind::Dead(_) => {
-                        panic!("Cannot kill dead type.")
-                    }
-                },
-            )
+        if let Ok(pl_dty) = self.place_dty(pl) {
+            self.set_place_dty(pl, DataTy::new(DataTyKind::Dead(Box::new(pl_dty))))
         } else {
             panic!("Trying to kill the type of a place that doesn't exist.")
         }
@@ -394,6 +353,9 @@ impl TyCtx {
                                 loans: without_reborrow,
                             })
                         }
+                        FrameEntry::ExecMapping(exec_mapping) => {
+                            FrameEntry::ExecMapping(exec_mapping.clone())
+                        }
                     })
                     .collect::<Vec<_>>()
             })
@@ -401,6 +363,35 @@ impl TyCtx {
         TyCtx {
             frame: res_frame_tys,
         }
+    }
+}
+
+pub(super) struct ExecBorrowCtx {
+    ctx: HashMap<ExecExpr, HashSet<Loan>>,
+}
+
+impl ExecBorrowCtx {
+    pub fn new() -> Self {
+        ExecBorrowCtx {
+            ctx: HashMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, exec: &ExecExpr, loans: HashSet<Loan>) {
+        let new_loans = if let Some(old) = self.ctx.get(&exec) {
+            old.union(&loans).cloned().collect()
+        } else {
+            loans
+        };
+        self.ctx.insert(exec.clone(), new_loans);
+    }
+
+    pub fn iter(&self) -> Iter<ExecExpr, HashSet<Loan>> {
+        self.ctx.iter()
+    }
+
+    pub fn clear_exec(&mut self, exec: &ExecExpr) {
+        self.ctx.remove(exec);
     }
 }
 
@@ -455,25 +446,6 @@ impl KindCtx {
         })
     }
 
-    pub fn get_kind(&self, ident: &Ident) -> CtxResult<&Kind> {
-        let res = self.ctx.iter().find_map(|entry| {
-            if let KindingCtxEntry::Ident(IdentKinded { ident: id, kind }) = entry {
-                if id == ident {
-                    Some(kind)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
-        if let Some(kind) = res {
-            Ok(kind)
-        } else {
-            Err(CtxError::KindedIdentNotFound(ident.clone()))
-        }
-    }
-
     pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {
         self.get_idents(kind).any(|id| ident == id)
     }
@@ -505,7 +477,7 @@ impl KindCtx {
 
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    items: HashMap<String, Ty>,
+    items: HashMap<Box<str>, FnTy>,
 }
 
 impl GlobalCtx {
@@ -519,44 +491,81 @@ impl GlobalCtx {
         self.items.extend(
             gl_fun_defs
                 .iter()
-                .map(|gl_fun_def| (gl_fun_def.name.clone(), gl_fun_def.ty())),
+                .map(|gl_fun_def| (gl_fun_def.ident.name.clone(), gl_fun_def.fn_ty())),
         );
         self
     }
 
-    pub fn append_fun_decls(mut self, fun_decls: &[(&str, Ty)]) -> Self {
+    pub fn append_fun_decls(mut self, fun_decls: &[(&str, FnTy)]) -> Self {
         self.items.extend(
             fun_decls
                 .iter()
-                .map(|(name, ty)| (String::from(*name), ty.clone())),
+                .map(|(name, ty)| (String::from(*name).into_boxed_str(), ty.clone())),
         );
         self
     }
 
-    pub fn fun_ty_by_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
+    pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
         match self.items.get(&ident.name) {
-            Some(ty) => Ok(ty),
+            Some(fn_ty) => Ok(fn_ty),
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
 }
+//
+// pub(super) struct ExecCtx {
+//     idents_typed: Vec<IdentExec>,
+// }
+//
+// impl ExecCtx {
+//     pub fn new() -> Self {
+//         ExecCtx {
+//             idents_typed: Vec::new(),
+//         }
+//     }
+//
+//     pub fn push(&mut self, ident: Ident, exec_ty: ExecTy) {
+//         self.idents_typed.push(IdentExec::new(ident, exec_ty))
+//     }
+//
+//     pub fn pop(&mut self) -> Option<IdentExec> {
+//         self.idents_typed.pop()
+//     }
+//
+//     pub fn get(&self, ident: &Ident) -> CtxResult<&ExecTy> {
+//         let search_res = self.idents_typed.iter().rev().find_map(|id| {
+//             if &id.ident.name == &ident.name {
+//                 Some(&id.ty)
+//             } else {
+//                 None
+//             }
+//         });
+//         match search_res {
+//             Some(ty) => Ok(ty),
+//             None => Err(CtxError::IdentNotFound(ident.clone())),
+//         }
+//     }
+// }
 
 #[test]
 fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
     let x = IdentTyped::new(
         Ident::new("x"),
-        Ty::new(TyKind::Data(DataTy::new(DataTyKind::Scalar(ScalarTy::I32)))),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32,
+        ))))),
         Mutability::Const,
+        ExecExpr::new(Exec::new(BaseExec::Ident(Ident::new("exec")))),
     );
     let place = internal::Place::new(x.ident.clone(), vec![]);
     ty_ctx = ty_ctx.append_ident_typed(x);
     ty_ctx = ty_ctx.kill_place(&place);
     assert!(matches!(
-        ty_ctx.idents_typed().next().unwrap().ty.ty,
-        TyKind::Data(DataTy {
+        ty_ctx.idents_typed().next().unwrap().ty.dty(),
+        DataTy {
             dty: DataTyKind::Dead(_),
             ..
-        })
+        }
     ));
 }

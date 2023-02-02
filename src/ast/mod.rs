@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
-use std::fmt::Formatter;
 
 use descend_derive::span_derive;
 pub use span::*;
@@ -12,10 +11,10 @@ use crate::parser::SourceCode;
 pub mod internal;
 
 mod span;
-#[macro_use]
-pub mod visit;
 pub mod utils;
-#[macro_use]
+#[allow(dead_code)]
+pub mod visit;
+#[allow(dead_code)]
 pub mod visit_mut;
 
 #[derive(Clone, Debug)]
@@ -32,28 +31,42 @@ impl<'a> CompilUnit<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunDef {
-    pub name: String,
+    pub ident: Ident,
     pub generic_params: Vec<IdentKinded>,
     pub param_decls: Vec<ParamDecl>,
     pub ret_dty: DataTy,
-    pub exec: Exec,
+    pub exec_decl: IdentExec,
     pub prv_rels: Vec<PrvRel>,
-    pub body_expr: Expr,
+    pub body: Box<Block>,
 }
 
 impl FunDef {
-    pub fn ty(&self) -> Ty {
+    pub fn fn_ty(&self) -> FnTy {
         let param_tys: Vec<_> = self
             .param_decls
             .iter()
             .map(|p_decl| p_decl.ty.as_ref().unwrap().clone())
             .collect();
-        Ty::new(TyKind::Fn(
-            self.generic_params.clone(),
+        FnTy {
+            generics: self.generic_params.clone(),
             param_tys,
-            self.exec,
-            Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
-        ))
+            exec_ty: self.exec_decl.ty.as_ref().clone(),
+            ret_ty: Box::new(Ty::new(TyKind::Data(Box::new(self.ret_dty.clone())))),
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdentExec {
+    pub ident: Ident,
+    pub ty: Box<ExecTy>,
+}
+
+impl IdentExec {
+    pub fn new(ident: Ident, exec_ty: ExecTy) -> Self {
+        IdentExec {
+            ident,
+            ty: Box::new(exec_ty),
+        }
     }
 }
 
@@ -68,7 +81,7 @@ pub struct ParamDecl {
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: ExprKind,
-    pub ty: Option<Ty>,
+    pub ty: Option<Box<Ty>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
@@ -93,7 +106,7 @@ impl Expr {
     pub fn with_type(expr: ExprKind, ty: Ty) -> Expr {
         Expr {
             expr,
-            ty: Some(ty),
+            ty: Some(Box::new(ty)),
             span: None,
         }
     }
@@ -104,7 +117,7 @@ impl Expr {
             I: Iterator<Item = &'a &'a str>,
         {
             match &pl_expr.pl_expr {
-                PlaceExprKind::Ident(ident) => idents.any(|name| ident.name == *name),
+                PlaceExprKind::Ident(ident) => idents.any(|name| ident.name.as_ref() == *name),
                 PlaceExprKind::Proj(tuple, _) => pl_expr_contains_name_in(tuple, idents),
                 PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
             }
@@ -119,9 +132,9 @@ impl Expr {
                     match &pl_expr.pl_expr {
                         PlaceExprKind::Ident(ident) => {
                             let subst_expr =
-                                self.subst_map.get::<&str>(&ident.name.as_str()).unwrap();
+                                self.subst_map.get::<str>(ident.name.as_ref()).unwrap();
                             if let ExprKind::PlaceExpr(pl_e) = &subst_expr.expr {
-                                *pl_expr = pl_e.clone();
+                                *pl_expr = pl_e.as_ref().clone();
                             } else {
                                 // TODO can this happen?
                                 panic!("How did this happen?")
@@ -139,20 +152,22 @@ impl Expr {
                             match &pl_expr.pl_expr {
                                 PlaceExprKind::Ident(ident) => {
                                     if let Some(&subst_expr) =
-                                        self.subst_map.get::<&str>(&ident.name.as_str())
+                                        self.subst_map.get::<str>(ident.name.as_ref())
                                     {
                                         *expr = subst_expr.clone();
                                     }
                                 }
                                 PlaceExprKind::Proj(tuple, i) => {
-                                    let mut tuple_expr =
-                                        Expr::new(ExprKind::PlaceExpr(tuple.as_ref().clone()));
+                                    let mut tuple_expr = Expr::new(ExprKind::PlaceExpr(Box::new(
+                                        tuple.as_ref().clone(),
+                                    )));
                                     self.visit_expr(&mut tuple_expr);
                                     *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), *i));
                                 }
                                 PlaceExprKind::Deref(deref_expr) => {
-                                    let mut ref_expr =
-                                        Expr::new(ExprKind::PlaceExpr(deref_expr.as_ref().clone()));
+                                    let mut ref_expr = Expr::new(ExprKind::PlaceExpr(Box::new(
+                                        deref_expr.as_ref().clone(),
+                                    )));
                                     self.visit_expr(&mut ref_expr);
                                     *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
                                 }
@@ -173,18 +188,16 @@ impl Expr {
         self.subst_idents(&subst_map);
     }
 
-    pub fn subst_kinded_idents(&mut self, subst_map: HashMap<&str, &ArgKinded>) {
+    pub fn subst_kinded_idents(&mut self, subst_map: &HashMap<&str, &ArgKinded>) {
         struct SubstKindedIdents<'a> {
-            subst_map: HashMap<&'a str, &'a ArgKinded>,
+            subst_map: &'a HashMap<&'a str, &'a ArgKinded>,
         }
-        // FIXME currently not able to deal with identifiers for which the kind is not known,
-        //  i.e., pre codegneration, there still exist ArgKinded::Ident(_)
         impl VisitMut for SubstKindedIdents<'_> {
             fn visit_nat(&mut self, nat: &mut Nat) {
                 match nat {
                     Nat::Ident(ident) => {
                         if let Some(ArgKinded::Nat(nat_arg)) =
-                            self.subst_map.get::<&str>(&ident.name.as_str())
+                            self.subst_map.get::<str>(ident.name.as_ref())
                         {
                             *nat = nat_arg.clone()
                         }
@@ -197,7 +210,7 @@ impl Expr {
                 match mem {
                     Memory::Ident(ident) => {
                         if let Some(ArgKinded::Memory(mem_arg)) =
-                            self.subst_map.get::<&str>(&ident.name.as_str())
+                            self.subst_map.get::<str>(ident.name.as_ref())
                         {
                             *mem = mem_arg.clone()
                         }
@@ -210,7 +223,7 @@ impl Expr {
                 match prv {
                     Provenance::Ident(ident) => {
                         if let Some(ArgKinded::Provenance(prv_arg)) =
-                            self.subst_map.get::<&str>(&ident.name.as_str())
+                            self.subst_map.get::<str>(ident.name.as_ref())
                         {
                             *prv = prv_arg.clone()
                         }
@@ -222,28 +235,13 @@ impl Expr {
             fn visit_dty(&mut self, dty: &mut DataTy) {
                 match &mut dty.dty {
                     DataTyKind::Ident(ident) => {
-                        if let Some(ArgKinded::Ty(Ty {
-                            ty: TyKind::Data(dty_arg),
-                            ..
-                        })) = self.subst_map.get::<&str>(&ident.name.as_str())
+                        if let Some(ArgKinded::DataTy(dty_arg)) =
+                            self.subst_map.get::<str>(ident.name.as_ref())
                         {
                             *dty = dty_arg.clone()
                         }
                     }
                     _ => visit_mut::walk_dty(self, dty),
-                }
-            }
-
-            fn visit_ty(&mut self, ty: &mut Ty) {
-                match &ty.ty {
-                    TyKind::Ident(ident) => {
-                        if let Some(ArgKinded::Ty(ty_arg)) =
-                            self.subst_map.get::<&str>(&ident.name.as_str())
-                        {
-                            *ty = ty_arg.clone();
-                        }
-                    }
-                    _ => visit_mut::walk_ty(self, ty),
                 }
             }
         }
@@ -254,41 +252,153 @@ impl Expr {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub struct Sched {
+    pub dim: DimCompo,
+    pub inner_exec_ident: Option<Ident>,
+    pub sched_exec: Ident,
+    pub body: Box<Block>,
+}
+
+impl Sched {
+    pub fn new(
+        dim: DimCompo,
+        inner_exec_ident: Option<Ident>,
+        sched_exec: Ident,
+        body: Block,
+    ) -> Self {
+        Sched {
+            dim,
+            inner_exec_ident,
+            sched_exec,
+            body: Box::new(body),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct ExprSplit {
+    pub lrgn: Option<String>,
+    pub rrgn: Option<String>,
+    pub own: Ownership,
+    pub pos: Nat,
+    pub view: Box<PlaceExpr>,
+}
+
+impl ExprSplit {
+    pub fn new(
+        lrgn: Option<String>,
+        rrgn: Option<String>,
+        own: Ownership,
+        pos: Nat,
+        view: PlaceExpr,
+    ) -> Self {
+        ExprSplit {
+            lrgn,
+            rrgn,
+            own,
+            pos,
+            view: Box::new(view),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct Indep {
+    pub dim_compo: DimCompo,
+    pub pos: Nat,
+    pub split_exec_ident: Ident,
+    pub branch_idents: Vec<Ident>,
+    pub branch_bodies: Vec<Expr>,
+}
+
+impl Indep {
+    pub fn new(
+        dim_compo: DimCompo,
+        pos: Nat,
+        split_exec_ident: Ident,
+        branch_idents: Vec<Ident>,
+        branch_bodies: Vec<Expr>,
+    ) -> Self {
+        Indep {
+            dim_compo,
+            pos,
+            split_exec_ident,
+            branch_idents,
+            branch_bodies,
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct Block {
+    pub prvs: Vec<String>,
+    pub body: Box<Expr>,
+}
+
+impl Block {
+    pub fn new(body: Expr) -> Self {
+        Block {
+            prvs: vec![],
+            body: Box::new(body),
+        }
+    }
+
+    pub fn with_prvs(prvs: Vec<String>, body: Expr) -> Self {
+        Block {
+            prvs,
+            body: Box::new(body),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct AppKernel {
+    pub grid_dim: Dim,
+    pub block_dim: Dim,
+    pub shared_mem_dtys: Vec<DataTy>,
+    pub shared_mem_prvs: Vec<String>,
+    pub fun: Box<Expr>,
+    pub gen_args: Vec<ArgKinded>,
+    pub args: Vec<Expr>,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
-    PlaceExpr(PlaceExpr),
+    PlaceExpr(Box<PlaceExpr>),
     // Index into array, e.g., arr[i]
-    Index(PlaceExpr, Nat),
+    Index(Box<PlaceExpr>, Nat),
+    // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
+    Proj(Box<Expr>, usize),
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),
     Tuple(Vec<Expr>),
-    // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
-    Proj(Box<Expr>, usize),
     // Borrow Expressions
-    Ref(Option<String>, Ownership, PlaceExpr),
-    BorrowIndex(Option<String>, Ownership, PlaceExpr, Nat),
-    Block(Vec<String>, Box<Expr>),
+    Ref(Option<String>, Ownership, Box<PlaceExpr>),
+    BorrowIndex(Option<String>, Ownership, Box<PlaceExpr>, Nat),
+    Block(Block),
     // Variable declaration
     // let mut x: ty;
     LetUninit(Ident, Box<Ty>),
     // Variable declaration, assignment and sequencing
     // let w x: ty = e1
-    Let(Pattern, Box<Option<Ty>>, Box<Expr>),
+    Let(Pattern, Option<Box<Ty>>, Box<Expr>),
     // Assignment to existing place [expression]
-    Assign(PlaceExpr, Box<Expr>),
+    Assign(Box<PlaceExpr>, Box<Expr>),
     // e1[i] = e2
-    IdxAssign(PlaceExpr, Nat, Box<Expr>),
+    IdxAssign(Box<PlaceExpr>, Nat, Box<Expr>),
     // e1 ; e2
     Seq(Vec<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
-    Lambda(Vec<ParamDecl>, Exec, Box<DataTy>, Box<Expr>),
+    Lambda(Vec<ParamDecl>, IdentExec, Box<DataTy>, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
     // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
+    AppKernel(Box<AppKernel>),
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>),
     // For-each loop.
@@ -300,22 +410,11 @@ pub enum ExprKind {
     While(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
-    ParBranch(Box<Expr>, Vec<Ident>, Vec<Expr>),
-    ParForWith(
-        Option<Vec<Expr>>,
-        Option<Ident>,
-        Box<Expr>,
-        Vec<Ident>,
-        Vec<Expr>,
-        Box<Expr>,
-    ),
-    Split(
-        Option<String>,
-        Option<String>,
-        Ownership,
-        Nat,
-        Box<PlaceExpr>,
-    ),
+    Indep(Box<Indep>),
+    Sched(Box<Sched>),
+    Select(Option<String>, Box<PlaceExpr>, Box<Ident>),
+    Split(Box<ExprSplit>),
+    Sync,
     Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),
@@ -326,7 +425,9 @@ pub enum ExprKind {
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Clone, Debug)]
 pub struct Ident {
-    pub name: String,
+    // Identifier names never change. Instead a new identifier is created. Therefore it is not
+    // necessary to keep the capacity that is stored in a String for efficient appending.
+    pub name: Box<str>,
     #[span_derive_ignore]
     pub span: Option<Span>,
     pub is_implicit: bool,
@@ -335,7 +436,7 @@ pub struct Ident {
 impl Ident {
     pub fn new(name: &str) -> Self {
         Self {
-            name: String::from(name),
+            name: Box::from(name),
             span: None,
             is_implicit: false,
         }
@@ -343,15 +444,15 @@ impl Ident {
 
     pub fn new_impli(name: &str) -> Self {
         Self {
-            name: String::from(name),
+            name: Box::from(name),
             span: None,
             is_implicit: true,
         }
     }
 
-    pub fn with_span(name: String, span: Span) -> Self {
+    pub fn with_span(name: &str, span: Span) -> Self {
         Self {
-            name,
+            name: Box::from(name),
             span: Some(span),
             is_implicit: false,
         }
@@ -493,11 +594,10 @@ impl fmt::Display for BinOp {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Kind {
     Nat,
     Memory,
-    Ty,
     DataTy,
     Provenance,
 }
@@ -507,7 +607,6 @@ impl fmt::Display for Kind {
         let str = match self {
             Kind::Nat => "nat",
             Kind::Memory => "mem",
-            Kind::Ty => "type",
             Kind::DataTy => "dty",
             Kind::Provenance => "prv",
         };
@@ -520,7 +619,6 @@ pub enum ArgKinded {
     Ident(Ident),
     Nat(Nat),
     Memory(Memory),
-    Ty(Ty),
     DataTy(DataTy),
     Provenance(Provenance),
 }
@@ -531,7 +629,6 @@ impl ArgKinded {
             ArgKinded::Ident(_) => {
                 panic!("Unexpected: unkinded identifier should have been removed after parsing")
             }
-            ArgKinded::Ty(_) => Kind::Ty,
             ArgKinded::DataTy(_) => Kind::DataTy,
             ArgKinded::Provenance(_) => Kind::Provenance,
             ArgKinded::Memory(_) => Kind::Memory,
@@ -544,7 +641,7 @@ impl ArgKinded {
 #[derive(Debug, Clone)]
 pub struct PlaceExpr {
     pub pl_expr: PlaceExprKind,
-    pub ty: Option<Ty>,
+    pub ty: Option<Box<Ty>>,
     // for borrow checking
     pub split_tag_path: Vec<SplitTag>,
     #[span_derive_ignore]
@@ -658,49 +755,213 @@ impl fmt::Display for PlaceExpr {
 
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
+pub struct ExecExpr {
+    pub exec: Box<Exec>,
+    pub ty: Option<Box<ExecTy>>,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
+}
+
+impl ExecExpr {
+    pub fn new(exec: Exec) -> Self {
+        ExecExpr {
+            exec: Box::new(exec),
+            ty: None,
+            span: None,
+        }
+    }
+
+    pub fn is_subexec_of(&self, exec: &ExecExpr) -> bool {
+        if self.exec.base == exec.exec.base {
+            if self.exec.path.len() < exec.exec.path.len() {
+                return false;
+            }
+
+            for (l, r) in self.exec.path.iter().zip(&exec.exec.path) {
+                if l != r {
+                    return false;
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl fmt::Display for ExecExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.exec)
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct SplitProj {
+    pub split_dim: DimCompo,
+    pub pos: Nat,
+    pub proj: u8,
+}
+
+impl SplitProj {
+    pub fn new(split_dim: DimCompo, pos: Nat, proj: u8) -> Self {
+        SplitProj {
+            split_dim,
+            pos,
+            proj,
+        }
+    }
+}
+
+impl fmt::Display for SplitProj {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "split({}, {}).{}", self.split_dim, self.pos, self.proj)
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Exec {
+    pub base: BaseExec,
+    pub path: Vec<ExecPathElem>,
+}
+
+impl Exec {
+    pub fn new(base: BaseExec) -> Self {
+        Exec { base, path: vec![] }
+    }
+    //
+    // pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
+    //     Exec { base, path }
+    // }
+    //
+    // pub fn append(mut self, path: Vec<ExecPathElem>) -> Self {
+    //     self.path.append(&mut path);
+    //     self
+    // }
+
+    pub fn split_proj(mut self, dim_compo: DimCompo, pos: Nat, proj: u8) -> Self {
+        self.path
+            .push(ExecPathElem::SplitProj(Box::new(SplitProj::new(
+                dim_compo, pos, proj,
+            ))));
+        self
+    }
+
+    pub fn distrib(mut self, dim_compo: DimCompo) -> Self {
+        self.path.push(ExecPathElem::Distrib(dim_compo));
+        self
+    }
+
+    pub fn active_distrib_dim(&self) -> Option<DimCompo> {
+        for e in self.path.iter().rev() {
+            if let ExecPathElem::Distrib(dim) = e {
+                return Some(*dim);
+            }
+        }
+        None
+    }
+}
+
+impl fmt::Display for Exec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.base)?;
+        for e in &self.path {
+            write!(f, ".{}", e)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum BaseExec {
+    Ident(Ident),
+    CpuThread,
+    GpuGrid(Dim, Dim),
+}
+
+impl fmt::Display for BaseExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ident(ident) => write!(f, "{}", ident),
+            Self::CpuThread => write!(f, "cpu.thread"),
+            Self::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum ExecPathElem {
+    SplitProj(Box<SplitProj>),
+    Distrib(DimCompo),
+    ToThreads(DimCompo),
+}
+
+impl fmt::Display for ExecPathElem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SplitProj(split_proj) => write!(
+                f,
+                "split_proj_{}({}, {})",
+                split_proj.proj, split_proj.split_dim, split_proj.pos
+            ),
+            Self::Distrib(dim_compo) => write!(f, "distrib({})", dim_compo),
+            Self::ToThreads(dim_compo) => write!(f, "to_threads({})", dim_compo),
+        }
+    }
+}
+
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Ty {
     pub ty: TyKind,
-    pub constraints: Vec<Constraint>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum TyKind {
-    Data(DataTy),
-    Fn(Vec<IdentKinded>, Vec<Ty>, Exec, Box<Ty>),
-    Ident(Ident),
-    Dead(Box<Ty>),
+pub struct FnTy {
+    pub generics: Vec<IdentKinded>,
+    pub param_tys: Vec<Ty>,
+    pub exec_ty: ExecTy,
+    pub ret_ty: Box<Ty>,
 }
 
+impl FnTy {
+    pub fn new(
+        generics: Vec<IdentKinded>,
+        param_tys: Vec<Ty>,
+        exec_ty: ExecTy,
+        ret_ty: Ty,
+    ) -> Self {
+        FnTy {
+            generics,
+            param_tys,
+            exec_ty,
+            ret_ty: Box::new(ret_ty),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum TyKind {
+    Data(Box<DataTy>),
+    // <x:k,..>(ty..) -[x:exec]-> ty
+    FnTy(Box<FnTy>),
+}
+
+// TODO remove
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Constraint {
     Copyable,
-    NonCopyable,
-    Dead,
 }
 
 impl Ty {
     pub fn new(ty: TyKind) -> Self {
-        Ty {
-            ty,
-            constraints: vec![],
-            span: None,
-        }
-    }
-
-    pub fn with_constr(ty: TyKind, constraints: Vec<Constraint>) -> Ty {
-        Ty {
-            ty,
-            constraints,
-            span: None,
-        }
+        Ty { ty, span: None }
     }
 
     pub fn with_span(ty: TyKind, span: Span) -> Ty {
         Ty {
             ty,
-            constraints: vec![],
             span: Some(span),
         }
     }
@@ -723,140 +984,188 @@ impl Ty {
         }
     }
 
-    pub fn non_copyable(&self) -> bool {
-        !self.copyable()
-    }
-
     pub fn copyable(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.copyable(),
-            TyKind::Fn(_, _, _, _) => true,
-            TyKind::Ident(_) => false,
-            TyKind::Dead(_) => panic!(
-                "This case is not expected to mean anything.\
-                The type is dead. There is nothing we can do with it."
-            ),
+            TyKind::FnTy(_) => true,
         }
     }
 
     pub fn is_fully_alive(&self) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.is_fully_alive(),
-            TyKind::Ident(_) | TyKind::Fn(_, _, _, _) => true,
-            TyKind::Dead(_) => false,
-        }
-    }
-
-    pub fn eq_structure(&self, other: &Self) -> bool {
-        match (&self.ty, &other.ty) {
-            (TyKind::Fn(gps1, ptys1, exec1, ret_ty1), TyKind::Fn(gps2, ptys2, exec2, ret_ty2)) => {
-                let mut res = true;
-                for (gp1, gp2) in gps1.iter().zip(gps2) {
-                    res &= gp1 == gp2;
-                }
-                for (pty1, pty2) in ptys1.iter().zip(ptys2) {
-                    res &= pty1.eq_structure(pty2);
-                }
-                res &= exec1 == exec2;
-                res & ret_ty1.eq_structure(ret_ty2)
-            }
-            (TyKind::Data(dty1), TyKind::Data(dty2)) => unimplemented!(), //dty1.eq_structure(dty2),
-            (TyKind::Ident(id1), TyKind::Ident(id2)) => id1 == id2,
-            (TyKind::Dead(ty1), TyKind::Dead(ty2)) => ty1.eq_structure(ty2),
-            _ => false,
+            TyKind::FnTy(_) => true,
         }
     }
 
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         match &self.ty {
             TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
-            TyKind::Fn(_, param_tys, _, ret_ty) => {
-                param_tys
+            TyKind::FnTy(fn_ty) => {
+                fn_ty
+                    .param_tys
                     .iter()
                     .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
-                    || ret_ty.contains_ref_to_prv(prv_val_name)
+                    || fn_ty.ret_ty.contains_ref_to_prv(prv_val_name)
             }
-            TyKind::Ident(_) | TyKind::Dead(_) => false,
         }
     }
 
     pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
         match &self.ty {
             // TODO mutate and do not create a new type (also this drops the span).
-            TyKind::Data(dty) => Ty::new(TyKind::Data(dty.subst_ident_kinded(ident_kinded, with))),
-            TyKind::Fn(gen_params, params, exec, ret) => Ty::new(TyKind::Fn(
-                gen_params.clone(),
-                params
+            TyKind::Data(dty) => Ty::new(TyKind::Data(Box::new(
+                dty.subst_ident_kinded(ident_kinded, with),
+            ))),
+            TyKind::FnTy(fn_ty) => Ty::new(TyKind::FnTy(Box::new(FnTy::new(
+                fn_ty.generics.clone(),
+                fn_ty
+                    .param_tys
                     .iter()
                     .map(|param| param.subst_ident_kinded(ident_kinded, with))
                     .collect(),
-                exec.clone(),
-                Box::new(ret.subst_ident_kinded(ident_kinded, with)),
-            )),
-            TyKind::Ident(ident) => {
-                if &ident_kinded.ident == ident && ident_kinded.kind == Kind::Ty {
-                    match with {
-                        ArgKinded::Ident(idk) => Ty::new(TyKind::Ident(idk.clone())),
-                        ArgKinded::Ty(ty) => ty.clone(),
-                        _ => panic!("Trying to substitute type identifier with non-type value."),
-                    }
-                } else {
-                    self.clone()
-                }
-            }
-            TyKind::Dead(ty) => ty.subst_ident_kinded(ident_kinded, with),
+                fn_ty.exec_ty.clone(),
+                fn_ty.ret_ty.subst_ident_kinded(ident_kinded, with),
+            )))),
         }
     }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum ThreadHierchyTy {
-    // BlockGrp(gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y, blockDim.z)
-    BlockGrp(Nat, Nat, Nat, Nat, Nat, Nat),
-    // ThreadGrp(blockDim.x, blockDim.y, blockDim.z)
-    ThreadGrp(Nat, Nat, Nat),
-    WarpGrp(Nat),
-    Warp,
-    Thread,
+pub struct Dim1d(pub Nat);
+impl Dim1d {
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        Dim1d(self.0.subst_ident_kinded(ident_kinded, with))
+    }
+}
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Dim2d(pub Nat, pub Nat);
+impl Dim2d {
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        Dim2d(
+            self.0.subst_ident_kinded(ident_kinded, with),
+            self.1.subst_ident_kinded(ident_kinded, with),
+        )
+    }
+}
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Dim3d(pub Nat, pub Nat, pub Nat);
+impl Dim3d {
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        Dim3d(
+            self.0.subst_ident_kinded(ident_kinded, with),
+            self.1.subst_ident_kinded(ident_kinded, with),
+            self.2.subst_ident_kinded(ident_kinded, with),
+        )
+    }
 }
 
-impl fmt::Display for ThreadHierchyTy {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use ThreadHierchyTy::*;
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum Dim {
+    XYZ(Box<Dim3d>),
+    XY(Box<Dim2d>),
+    XZ(Box<Dim2d>),
+    YZ(Box<Dim2d>),
+    X(Box<Dim1d>),
+    Y(Box<Dim1d>),
+    Z(Box<Dim1d>),
+}
+
+impl Dim {
+    pub fn new_3d(n1: Nat, n2: Nat, n3: Nat) -> Self {
+        Dim::XYZ(Box::new(Dim3d(n1, n2, n3)))
+    }
+
+    pub fn new_2d<F: Fn(Box<Dim2d>) -> Self>(constr: F, n1: Nat, n2: Nat) -> Self {
+        constr(Box::new(Dim2d(n1, n2)))
+    }
+    pub fn new_1d<F: Fn(Box<Dim1d>) -> Self>(constr: F, n: Nat) -> Self {
+        constr(Box::new(Dim1d(n)))
+    }
+
+    pub fn proj_size(&self, dim_compo: DimCompo) -> Nat {
+        match (dim_compo, self) {
+            (DimCompo::X, Dim::XYZ(dim3d)) => dim3d.0.clone(),
+            (DimCompo::X, Dim::XY(dim2d) | Dim::XZ(dim2d)) => dim2d.0.clone(),
+            (DimCompo::X, Dim::X(dim1d)) => dim1d.0.clone(),
+            (DimCompo::Y, Dim::XYZ(dim3d)) => dim3d.1.clone(),
+            (DimCompo::Y, Dim::XY(dim2d)) => dim2d.1.clone(),
+            (DimCompo::Y, Dim::YZ(dim2d)) => dim2d.0.clone(),
+            (DimCompo::Y, Dim::Y(dim1d)) => dim1d.0.clone(),
+            (DimCompo::Z, Dim::XYZ(dim3d)) => dim3d.2.clone(),
+            (DimCompo::Z, Dim::XZ(dim2d) | Dim::YZ(dim2d)) => dim2d.1.clone(),
+            (DimCompo::Z, Dim::Z(dim1d)) => dim1d.0.clone(),
+            _ => panic!("Attempting to project size for a dimension that does not exist."),
+        }
+    }
+
+    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
+        use Dim::*;
         match self {
-            BlockGrp(n1, n2, n3, m1, m2, m3) => write!(
-                f,
-                "BlockGrp<{}, {}, {}, ThreadGrp<{}, {}, {}>>",
-                n1, n2, n3, m1, m2, m3
-            ),
-            ThreadGrp(n1, n2, n3) => write!(f, "ThreadGrp<{}, {}, {}>", n1, n2, n3),
-            WarpGrp(n) => write!(f, "WarpGrp<{}>", n),
-            Warp => write!(f, "Warp"),
-            Thread => write!(f, "Thread"),
+            XYZ(dim3d) => XYZ(Box::new(dim3d.subst_ident_kinded(ident_kinded, with))),
+            XY(dim2d) => XY(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
+            XZ(dim2d) => XZ(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
+            YZ(dim2d) => YZ(Box::new(dim2d.subst_ident_kinded(ident_kinded, with))),
+            X(dim1d) => X(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
+            Y(dim1d) => Y(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
+            Z(dim1d) => Z(Box::new(dim1d.subst_ident_kinded(ident_kinded, with))),
+        }
+    }
+
+    fn dim3d(&self) -> Dim3d {
+        use Dim::*;
+        match self {
+            XYZ(d) => d.as_ref().clone(),
+            XY(d) => Dim3d(d.0.clone(), d.1.clone(), Nat::Lit(1)),
+            XZ(d) => Dim3d(d.0.clone(), Nat::Lit(1), d.1.clone()),
+            YZ(d) => Dim3d(Nat::Lit(1), d.0.clone(), d.1.clone()),
+            X(d) => Dim3d(d.0.clone(), Nat::Lit(1), Nat::Lit(1)),
+            Y(d) => Dim3d(Nat::Lit(1), d.0.clone(), Nat::Lit(1)),
+            Z(d) => Dim3d(Nat::Lit(1), Nat::Lit(1), d.0.clone()),
         }
     }
 }
 
-impl ThreadHierchyTy {
-    pub fn subst_ident_kinded(&self, ident_kinded: &IdentKinded, with: &ArgKinded) -> Self {
-        use ThreadHierchyTy::*;
+impl std::ops::Mul for Dim {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        unimplemented!()
+    }
+}
+
+impl fmt::Display for Dim {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Dim::*;
         match self {
-            BlockGrp(n1, n2, n3, m1, m2, m3) => BlockGrp(
-                n1.subst_ident_kinded(ident_kinded, with),
-                n2.subst_ident_kinded(ident_kinded, with),
-                n3.subst_ident_kinded(ident_kinded, with),
-                m1.subst_ident_kinded(ident_kinded, with),
-                m2.subst_ident_kinded(ident_kinded, with),
-                m3.subst_ident_kinded(ident_kinded, with),
+            XYZ(dim3d) => write!(
+                f,
+                "{}, {}, {}",
+                dim3d.as_ref().0,
+                dim3d.as_ref().1,
+                dim3d.as_ref().2
             ),
-            ThreadGrp(n1, n2, n3) => ThreadGrp(
-                n1.subst_ident_kinded(ident_kinded, with),
-                n2.subst_ident_kinded(ident_kinded, with),
-                n3.subst_ident_kinded(ident_kinded, with),
-            ),
-            WarpGrp(n) => WarpGrp(n.subst_ident_kinded(ident_kinded, with)),
-            Warp => Warp,
-            Thread => Thread,
+            XY(dim2d) | XZ(dim2d) | YZ(dim2d) => {
+                write!(f, "{}, {}", dim2d.as_ref().0, dim2d.as_ref().1)
+            }
+            X(dim1d) | Y(dim1d) | Z(dim1d) => write!(f, "{}", dim1d.as_ref().0),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+pub enum DimCompo {
+    X,
+    Y,
+    Z,
+}
+
+impl fmt::Display for DimCompo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DimCompo::X => write!(f, "x"),
+            DimCompo::Y => write!(f, "y"),
+            DimCompo::Z => write!(f, "z"),
         }
     }
 }
@@ -865,30 +1174,11 @@ impl ThreadHierchyTy {
 #[derive(Debug, Clone)]
 pub struct DataTy {
     pub dty: DataTyKind,
+    // TODO remove with introduction of traits
     pub constraints: Vec<Constraint>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum DataTyKind {
-    Ident(Ident),
-    Scalar(ScalarTy),
-    Atomic(ScalarTy),
-    Array(Box<DataTy>, Nat),
-    // [[ dty; n ]]
-    ArrayShape(Box<DataTy>, Nat),
-    Tuple(Vec<DataTy>),
-    At(Box<DataTy>, Memory),
-    Ref(Provenance, Ownership, Memory, Box<DataTy>),
-    ThreadHierchy(Box<ThreadHierchyTy>),
-    SplitThreadHierchy(Box<ThreadHierchyTy>, Nat),
-    RawPtr(Box<DataTy>),
-    Range,
-    // Only for type checking purposes.
-    Dead(Box<DataTy>),
-}
-
 impl DataTy {
     pub fn new(dty: DataTyKind) -> Self {
         DataTy {
@@ -921,11 +1211,7 @@ impl DataTy {
             Scalar(_) => false,
             Atomic(_) => false,
             Ident(_) => true,
-            Ref(_, Ownership::Uniq, _, _) => true,
-            Ref(_, Ownership::Shrd, _, _) => false,
-            // FIXME thread hierarchies and their splits should be non-copyable!
-            ThreadHierchy(_) => false,
-            SplitThreadHierchy(_, _) => false,
+            Ref(reff) => reff.own == Ownership::Uniq,
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
@@ -951,10 +1237,7 @@ impl DataTy {
             | Range
             | Atomic(_)
             | Ident(_)
-            | Ref(_, _, _, _)
-            // FIXME Thread hierarchies and their splits should be non-copyable and can therefore be dead
-            | ThreadHierchy(_)
-            | SplitThreadHierchy(_, _)
+            | Ref(_)
             | At(_, _)
             | Array(_, _)
             | ArrayShape(_, _) => true,
@@ -970,14 +1253,10 @@ impl DataTy {
             return true;
         }
         match &dty.dty {
-            DataTyKind::Scalar(_)
-            | DataTyKind::Ident(_)
-            | DataTyKind::ThreadHierchy(_)
-            | DataTyKind::SplitThreadHierchy(_, _)
-            | DataTyKind::Range => false,
+            DataTyKind::Scalar(_) | DataTyKind::Ident(_) | DataTyKind::Range => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
             DataTyKind::Atomic(sty) => &self.dty == &DataTyKind::Scalar(sty.clone()),
-            DataTyKind::Ref(_, _, _, elem_dty) => self.occurs_in(elem_dty),
+            DataTyKind::Ref(reff) => self.occurs_in(&reff.dty),
             DataTyKind::RawPtr(elem_dty) => self.occurs_in(elem_dty),
             DataTyKind::Tuple(elem_dtys) => {
                 let mut found = false;
@@ -995,20 +1274,14 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTyKind::*;
         match &self.dty {
-            Scalar(_)
-            | Atomic(_)
-            | Ident(_)
-            | Range
-            | ThreadHierchy(_)
-            | SplitThreadHierchy(_, _)
-            | Dead(_) => false,
-            Ref(prv, _, _, ty) => {
-                let found_reference = if let Provenance::Value(prv_val_n) = prv {
+            Scalar(_) | Atomic(_) | Ident(_) | Range | Dead(_) => false,
+            Ref(reff) => {
+                let found_reference = if let Provenance::Value(prv_val_n) = &reff.rgn {
                     prv_val_name == prv_val_n
                 } else {
                     false
                 };
-                found_reference || ty.contains_ref_to_prv(prv_val_name)
+                found_reference || reff.dty.contains_ref_to_prv(prv_val_name)
             }
             RawPtr(dty) => dty.contains_ref_to_prv(prv_val_name),
             At(dty, _) => dty.contains_ref_to_prv(prv_val_name),
@@ -1037,19 +1310,12 @@ impl DataTy {
                     self.clone()
                 }
             }
-            ThreadHierchy(th_hy) => DataTy::new(ThreadHierchy(Box::new(
-                th_hy.subst_ident_kinded(ident_kinded, with),
-            ))),
-            SplitThreadHierchy(th_hy, n) => DataTy::new(SplitThreadHierchy(
-                Box::new(th_hy.subst_ident_kinded(ident_kinded, with)),
-                n.subst_ident_kinded(ident_kinded, with),
-            )),
-            Ref(prv, own, mem, dty) => DataTy::new(Ref(
-                prv.subst_ident_kinded(ident_kinded, with),
-                *own,
-                mem.subst_ident_kinded(ident_kinded, with),
-                Box::new(dty.subst_ident_kinded(ident_kinded, with)),
-            )),
+            Ref(reff) => DataTy::new(Ref(Box::new(RefDty::new(
+                reff.rgn.subst_ident_kinded(ident_kinded, with),
+                reff.own,
+                reff.mem.subst_ident_kinded(ident_kinded, with),
+                reff.dty.subst_ident_kinded(ident_kinded, with),
+            )))),
             RawPtr(dty) => {
                 DataTy::new(RawPtr(Box::new(dty.subst_ident_kinded(ident_kinded, with))))
             }
@@ -1076,11 +1342,49 @@ impl DataTy {
     }
 }
 
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct RefDty {
+    pub rgn: Provenance,
+    pub own: Ownership,
+    pub mem: Memory,
+    pub dty: Box<DataTy>,
+}
+
+impl RefDty {
+    pub fn new(rgn: Provenance, own: Ownership, mem: Memory, dty: DataTy) -> Self {
+        RefDty {
+            rgn,
+            own,
+            mem,
+            dty: Box::new(dty),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum DataTyKind {
+    Ident(Ident),
+    Scalar(ScalarTy),
+    Atomic(ScalarTy),
+    Array(Box<DataTy>, Nat),
+    // [[ dty; n ]]
+    ArrayShape(Box<DataTy>, Nat),
+    Tuple(Vec<DataTy>),
+    At(Box<DataTy>, Memory),
+    Ref(Box<RefDty>),
+    RawPtr(Box<DataTy>),
+    Range,
+    // Only for type checking purposes.
+    Dead(Box<DataTy>),
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ScalarTy {
     Unit,
-    I32,
     U32,
+    U64,
+    I32,
+    I64,
     F32,
     F64,
     Bool,
@@ -1149,7 +1453,7 @@ impl Memory {
 }
 
 impl fmt::Display for Memory {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Memory::CpuMem => write!(f, "cpu.mem"),
             Memory::GpuGlobal => write!(f, "gpu.global"),
@@ -1160,35 +1464,54 @@ impl fmt::Display for Memory {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
-pub enum Exec {
-    CpuThread,
-    GpuGrid,
-    GpuBlock,
-    GpuWarp,
-    GpuThread,
-    View,
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
+pub struct ExecTy {
+    pub ty: ExecTyKind,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
 }
 
-impl Exec {
-    pub fn callable_in(self, exec: Self) -> bool {
-        if self == Exec::View {
-            true
-        } else {
-            self == exec
+impl ExecTy {
+    pub fn new(exec: ExecTyKind) -> Self {
+        ExecTy {
+            ty: exec,
+            span: None,
         }
     }
 }
 
-impl fmt::Display for Exec {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl fmt::Display for ExecTy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.ty)
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum ExecTyKind {
+    CpuThread,
+    GpuGrid(Dim, Dim),
+    GpuBlock(Dim),
+    GpuGlobalThreads(Dim),
+    GpuBlockGrp(Dim, Dim),
+    GpuThreadGrp(Dim),
+    GpuThread,
+    View,
+}
+
+impl fmt::Display for ExecTyKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Exec::CpuThread => write!(f, "cpu.thread"),
-            Exec::GpuGrid => write!(f, "gpu.grid"),
-            Exec::GpuBlock => write!(f, "gpu.block"),
-            Exec::GpuWarp => write!(f, "gpu.warp"),
-            Exec::GpuThread => write!(f, "gpu.thread"),
-            Exec::View => write!(f, "view"),
+            ExecTyKind::CpuThread => write!(f, "cpu.thread"),
+            ExecTyKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
+            ExecTyKind::GpuGlobalThreads(size) => write!(f, "gpu.global_threads<{}>", size),
+            ExecTyKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
+            ExecTyKind::GpuThread => write!(f, "gpu.thread"),
+            ExecTyKind::GpuBlockGrp(gsize, bsize) => {
+                write!(f, "gpu.block_grp<{}, {}>", gsize, bsize)
+            }
+            ExecTyKind::GpuThreadGrp(size) => write!(f, "gpu.thread_grp<{}>", size),
+            ExecTyKind::View => write!(f, "view"),
         }
     }
 }
@@ -1220,8 +1543,14 @@ impl IdentKinded {
 pub enum Nat {
     Ident(Ident),
     Lit(usize),
+    ThreadIdx(DimCompo),
+    BlockIdx(DimCompo),
+    BlockDim(DimCompo),
+    // Dummy that is always 0, i.e. equivalent to Lit(0)
+    GridIdx,
     BinOp(BinOpNat, Box<Nat>, Box<Nat>),
-    App(Ident, Vec<Nat>),
+    // Use Box<[Nat]> to safe 8 bytes compared to Vec<Nat>
+    App(Ident, Box<[Nat]>),
 }
 
 impl Nat {
@@ -1254,7 +1583,11 @@ impl Nat {
 
     pub fn eval(&self) -> Result<usize, String> {
         match self {
-            Nat::Ident(i) => Err(format!("Cannot evaluate identifier `{}`.", i)),
+            Nat::Ident(_)
+            | Nat::GridIdx
+            | Nat::BlockIdx(_)
+            | Nat::BlockDim(_)
+            | Nat::ThreadIdx(_) => Err("Cannot evaluate.".to_string()),
             Nat::Lit(n) => Ok(*n),
             Nat::BinOp(op, l, r) => match op {
                 BinOpNat::Add => Ok(l.eval()? + r.eval()?),
@@ -1350,6 +1683,10 @@ impl fmt::Display for Nat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Ident(ident) => write!(f, "{}", ident),
+            Self::GridIdx => Ok(()),
+            Self::BlockIdx(d) => write!(f, "blockIdx.{}", d),
+            Self::BlockDim(d) => write!(f, "blockDim.{}", d),
+            Self::ThreadIdx(d) => write!(f, "threadIdx.{}", d),
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Self::App(func, args) => {
@@ -1385,4 +1722,43 @@ impl fmt::Display for BinOpNat {
             Self::Mod => write!(f, "%"),
         }
     }
+}
+
+// When changing the AST, the types can quickly grow and lead to stack overflows in the different
+//  compiler stages.
+//
+// Taken from the rustc implementation and adjusted for this AST:
+// Some nodes are used a lot. Make sure they don't unintentionally get bigger.
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "64"))]
+mod size_asserts {
+    use super::*;
+    // Type size assertion. The first argument is a type and the second argument is its expected size.
+    macro_rules! static_assert_size {
+        ($ty:ty, $size:expr) => {
+            const _: [(); $size] = [(); ::std::mem::size_of::<$ty>()];
+        };
+    }
+    static_assert_size!(Dim, 16);
+    static_assert_size!(DataTy, 112);
+    static_assert_size!(DataTyKind, 72);
+    static_assert_size!(ExecExpr, 32);
+    static_assert_size!(Exec, 64);
+    static_assert_size!(ExecPathElem, 16);
+    static_assert_size!(ExecTy, 56);
+    static_assert_size!(ExecTyKind, 40);
+    static_assert_size!(Expr, 128);
+    static_assert_size!(ExprKind, 104);
+    static_assert_size!(FunDef, 264);
+    static_assert_size!(Ident, 32); // maybe too large?
+    static_assert_size!(IdentExec, 40);
+    static_assert_size!(Lit, 16);
+    static_assert_size!(Memory, 32);
+    static_assert_size!(Nat, 56);
+    static_assert_size!(ParamDecl, 72);
+    static_assert_size!(Pattern, 40);
+    static_assert_size!(PlaceExpr, 88);
+    static_assert_size!(PlaceExprKind, 40);
+    static_assert_size!(ScalarTy, 1);
+    static_assert_size!(Ty, 32);
+    static_assert_size!(TyKind, 16);
 }

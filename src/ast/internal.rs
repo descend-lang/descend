@@ -4,7 +4,7 @@
 // TODO specific access modifiers
 
 use super::{Ident, Ownership, PlaceExpr, Ty};
-use crate::ast::{Mutability, PlaceExprKind};
+use crate::ast::{ExecExpr, Mutability, PlaceExprKind};
 use std::collections::HashSet;
 
 pub type Frame = Vec<FrameEntry>;
@@ -22,6 +22,7 @@ pub fn append_idents_typed(frm: &Frame, idents_typed: Vec<IdentTyped>) -> Frame 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum FrameEntry {
     Var(IdentTyped),
+    ExecMapping(ExecMapping),
     PrvMapping(PrvMapping),
 }
 
@@ -30,11 +31,29 @@ pub struct IdentTyped {
     pub ident: Ident,
     pub ty: Ty,
     pub mutbl: Mutability,
+    pub exec: ExecExpr,
 }
 
 impl IdentTyped {
-    pub fn new(ident: Ident, ty: Ty, mutbl: Mutability) -> Self {
-        IdentTyped { ident, ty, mutbl }
+    pub fn new(ident: Ident, ty: Ty, mutbl: Mutability, exec: ExecExpr) -> Self {
+        IdentTyped {
+            ident,
+            ty,
+            mutbl,
+            exec,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct ExecMapping {
+    pub ident: Ident,
+    pub exec_expr: ExecExpr,
+}
+
+impl ExecMapping {
+    pub fn new(ident: Ident, exec_expr: ExecExpr) -> Self {
+        ExecMapping { ident, exec_expr }
     }
 }
 

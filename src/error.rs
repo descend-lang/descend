@@ -55,9 +55,9 @@ pub fn default_format() -> FormatOptions {
 pub fn single_line_snippet<'a>(
     source: &'a SourceCode<'a>,
     label: &'a str,
-    line_num: usize,
-    begin_column: usize,
-    end_column: usize,
+    line_num: u32,
+    begin_column: u32,
+    end_column: u32,
 ) -> Snippet<'a> {
     let line = source.get_line(line_num);
     Snippet {
@@ -69,10 +69,10 @@ pub fn single_line_snippet<'a>(
         footer: vec![],
         slices: vec![Slice {
             source: line,
-            line_start: line_num + 1,
+            line_start: line_num as usize + 1,
             origin: source.file_path,
             annotations: vec![SourceAnnotation {
-                range: (begin_column, end_column),
+                range: (begin_column as usize, end_column as usize),
                 label,
                 annotation_type: AnnotationType::Error,
             }],
