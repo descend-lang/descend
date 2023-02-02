@@ -50,10 +50,7 @@ fn gpu_vlc_encode<>(
         let g_out_idx_block_group = g_out_idx_block_groups[[block]];
 
         // create shared memory views
-        let s_codewords_view = to_view_mut(&uniq *s_codewords);
-        let s_codewordlens_view = to_view_mut(&uniq *s_codewordlens);
         let s_block_out_view = to_view(&shrd *s_block_out);
-        let s_last_index_to_copy_view = to_view_mut(&uniq *s_last_index_to_copy);
 
         // Declare register variables for information that is relevant throughout the entire
         // algorithm, but can be most efficiently calculated some steps before the
@@ -75,14 +72,19 @@ fn gpu_vlc_encode<>(
         let mut l_thread_start_bit: u32 = 0u32; // does not need to be initialized here
 
         // cache the codewords and their lengths (in bits) in shared memory
-        sched thread in block {
-            let g_codeword_item = g_codewords_view[[thread]];
-            let g_codewordlen_item = g_codewordlens_view[[thread]];
-            let s_codeword_item = s_codewords_view[[thread]];
-            let s_codewordlen_item = s_codewordlens_view[[thread]];
+        {
+            let s_codewords_view = to_view_mut(&uniq *s_codewords);
+            let s_codewordlens_view = to_view_mut(&uniq *s_codewordlens);
 
-            *s_codeword_item = *g_codeword_item;
-            *s_codewordlen_item = *g_codewordlen_item
+            sched thread in block {
+                let g_codeword_item = g_codewords_view[[thread]];
+                let g_codewordlen_item = g_codewordlens_view[[thread]];
+                let s_codeword_item = s_codewords_view[[thread]];
+                let s_codewordlen_item = s_codewordlens_view[[thread]];
+
+                *s_codeword_item = *g_codeword_item;
+                *s_codewordlen_item = *g_codewordlen_item
+            }
         };
 
         sync;
@@ -251,20 +253,22 @@ fn gpu_vlc_encode<>(
         // store the last index of the output that is needed to store the output of the
         // block to reduce the amount of copy operations from gpu.shared to gpu.global
         // (s_last_index_to_copy_item)
-        indep(X) 255 block {
-            inactive_threads => { () },
-            active_thread => {
-                sched thread in active_thread {
-                    let g_out_idx_block_item = g_out_idx_block_group[[thread]];
-                    let s_last_index_to_copy_item = s_last_index_to_copy_view[[thread]];
+        {
+            let s_last_index_to_copy_view = to_view_mut(&uniq *s_last_index_to_copy);
+            indep(X) 255 block {
+                inactive_threads => { () },
+                active_thread => {
+                    sched thread in active_thread {
+                        let g_out_idx_block_item = g_out_idx_block_group[[thread]];
+                        let s_last_index_to_copy_item = s_last_index_to_copy_view[[thread]];
 
-                    *g_out_idx_block_item = l_thread_out_len_scan + l_thread_out_len;
-                    *s_last_index_to_copy_item =
-                        (l_thread_out_len_scan + l_thread_out_len) / 32u32
+                        *g_out_idx_block_item = l_thread_out_len_scan + l_thread_out_len;
+                        *s_last_index_to_copy_item =
+                            (l_thread_out_len_scan + l_thread_out_len) / 32u32
+                    }
                 }
             }
         };
-
         // syncthreads
 
         // l_thread_start_value =

@@ -82,6 +82,7 @@ pub(super) struct ConstrainMap {
     pub dty_unifier: HashMap<Box<str>, DataTy>,
     pub nat_unifier: HashMap<Box<str>, Nat>,
     pub mem_unifier: HashMap<Box<str>, Memory>,
+    pub prv_unifier: HashMap<Box<str>, Provenance>,
 }
 
 impl ConstrainMap {
@@ -90,6 +91,7 @@ impl ConstrainMap {
             dty_unifier: HashMap::new(),
             nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
+            prv_unifier: HashMap::new(),
         }
     }
 }
@@ -211,7 +213,7 @@ impl Constrainable for DataTy {
             (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) => {
                 match (i1.is_implicit, i2.is_implicit) {
                     (true, _) => other.bind_to(i1, constr_map),
-                    (false, _) => self.bind_to(i2, constr_map),
+                    _ => self.bind_to(i2, constr_map),
                 }
             }
             (DataTyKind::Ident(i), _) => other.bind_to(i, constr_map),
@@ -490,7 +492,7 @@ impl Constrainable for Memory {
         constr_map: &mut ConstrainMap,
         _prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        match (&mut *self, &mut *other) {
+        match (&*self, &*other) {
             (Memory::Ident(i1), Memory::Ident(i2)) if i1 == i2 => Ok(()),
             (Memory::Ident(i1), Memory::Ident(i2)) => match (i1.is_implicit, i2.is_implicit) {
                 (true, _) => other.bind_to(i1, constr_map),
@@ -515,18 +517,61 @@ impl Constrainable for Memory {
     }
 }
 
+impl Provenance {
+    fn bind_to(&self, ident: &Ident, constr_map: &mut ConstrainMap) -> TyResult<()> {
+        // TODO not necessary, since no recursion possible
+        if Self::occurs_check(&IdentKinded::new(ident, Kind::Provenance), self) {
+            return Err(TyError::InfiniteType);
+        }
+
+        if let Provenance::Ident(prv_id) = &self {
+            if prv_id == ident {
+                return Ok(());
+            }
+        }
+        if let Some(old) = constr_map
+            .prv_unifier
+            .insert(ident.name.clone(), self.clone())
+        {
+            if &old != self {
+                panic!(
+                    "Attempting to bind same variable name twice.\n\
+        Old value: `{:?}` replaced by new value: `{:?}`",
+                    old, self
+                )
+            }
+        }
+        constr_map
+            .prv_unifier
+            .values_mut()
+            .for_each(|m| SubstIdent::new(ident, self).visit_prv(m));
+        Ok(())
+    }
+}
+
 impl Constrainable for Provenance {
     fn constrain(
         &mut self,
         other: &mut Self,
-        _constr_map: &mut ConstrainMap,
+        constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()> {
-        if self == other {
-            return Ok(());
+        // TODO restructure cases for less?
+        match (&*self, &*other) {
+            (Provenance::Ident(i1), Provenance::Ident(i2)) if i1 == i2 => Ok(()),
+            (Provenance::Ident(i), r) | (r, Provenance::Ident(i)) => {
+                if i.is_implicit {
+                    r.bind_to(i, constr_map)
+                } else {
+                    prv_rels.push(PrvConstr(self.clone(), other.clone()));
+                    Ok(())
+                }
+            }
+            (Provenance::Value(_), Provenance::Value(_)) => {
+                prv_rels.push(PrvConstr(self.clone(), other.clone()));
+                Ok(())
+            }
         }
-        prv_rels.push(PrvConstr(self.clone(), other.clone()));
-        Ok(())
     }
     fn free_idents(&self) -> HashSet<IdentKinded> {
         let mut free_idents = FreeKindedIdents::new();
@@ -573,14 +618,14 @@ impl<'a> VisitMut for ApplySubst<'a> {
         }
     }
 
-    // fn visit_prv(&mut self, prv: &mut Provenance) {
-    //     match prv {
-    //         Provenance::Ident(ident) if self.subst.prv_constrs.contains_key(&ident.name) => {
-    //             *prv = self.subst.prv_unifier.get(&ident.name).unwrap().clone()
-    //         }
-    //         _ => visit_mut::walk_prv(self, prv),
-    //     }
-    // }
+    fn visit_prv(&mut self, prv: &mut Provenance) {
+        match prv {
+            Provenance::Ident(ident) if self.subst.prv_unifier.contains_key(&ident.name) => {
+                *prv = self.subst.prv_unifier.get(&ident.name).unwrap().clone()
+            }
+            _ => visit_mut::walk_prv(self, prv),
+        }
+    }
 
     fn visit_dty(&mut self, dty: &mut DataTy) {
         match &mut dty.dty {
