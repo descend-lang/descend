@@ -2365,7 +2365,7 @@ impl TyChecker {
         let (impl_ctx, prv_val_name) = TyChecker::infer_prv(ty_ctx, prv_val_name);
 
         if !impl_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
-            return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
+            return Err(TyError::PrvValueAlreadyInUse(prv_val_name));
         }
 
         let loans = borrow_check::ownership_safe(
@@ -2420,7 +2420,7 @@ impl TyChecker {
             ));
         }
         let res_dty = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-            Provenance::Value(prv_val_name.to_string()),
+            Provenance::Value(prv_val_name.clone()),
             own,
             rmem,
             reffed_ty,

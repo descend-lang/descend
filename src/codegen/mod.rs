@@ -1063,7 +1063,7 @@ fn gen_indep(
 ) -> cu::Stmt {
     let outer_exec = codegen_ctx.exec.clone();
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().split_proj(
+    codegen_ctx.exec = desc::ExecExpr::new(outer_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         0,
@@ -1071,7 +1071,7 @@ fn gen_indep(
     let fst_branch = gen_stmt(&branch_bodies[0], false, codegen_ctx);
     codegen_ctx.drop_scope();
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().split_proj(
+    codegen_ctx.exec = desc::ExecExpr::new(outer_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         1,
@@ -2675,41 +2675,49 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
         }
         desc::BaseExec::Ident(_) | desc::BaseExec::CpuThread => unreachable!(),
     };
+    let mut split_shift = desc::Nat::Lit(0);
     for e in &exec.exec.path {
         match e {
             desc::ExecPathElem::SplitProj(split_proj) => {
                 if split_proj.proj == 1 {
-                    let shift_idx = |idx: desc::Nat| {
-                        desc::Nat::BinOp(
-                            desc::BinOpNat::Sub,
-                            Box::new(idx),
-                            Box::new(split_proj.pos.clone()),
-                        )
-                    };
-                    match &split_proj.split_dim {
-                        desc::DimCompo::X => indices.0 = shift_idx(indices.0),
-                        desc::DimCompo::Y => indices.1 = shift_idx(indices.1),
-                        desc::DimCompo::Z => indices.2 = shift_idx(indices.2),
-                    }
+                    split_shift = desc::Nat::BinOp(
+                        desc::BinOpNat::Add,
+                        Box::new(split_shift),
+                        Box::new(split_proj.pos.clone()),
+                    )
                 }
             }
             desc::ExecPathElem::Distrib(d) => match d {
                 desc::DimCompo::X => match contained_par_idx(&indices.0) {
-                    Some(desc::Nat::GridIdx) => indices.0 = desc::Nat::BlockIdx(desc::DimCompo::X),
+                    Some(desc::Nat::GridIdx) => {
+                        set_distrib_idx(
+                            &mut indices.0,
+                            desc::Nat::BlockIdx(desc::DimCompo::X),
+                            &mut split_shift,
+                        );
+                    }
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::X => {
-                        indices.0 = desc::Nat::ThreadIdx(d)
+                        set_distrib_idx(&mut indices.0, desc::Nat::ThreadIdx(d), &mut split_shift);
                     }
                     _ => unreachable!(),
                 },
                 desc::DimCompo::Y => match contained_par_idx(&indices.1) {
-                    Some(desc::Nat::GridIdx) => indices.1 = desc::Nat::BlockIdx(desc::DimCompo::Y),
+                    Some(desc::Nat::GridIdx) => set_distrib_idx(
+                        &mut indices.1,
+                        desc::Nat::BlockIdx(desc::DimCompo::Y),
+                        &mut split_shift,
+                    ),
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::Y => {
-                        indices.1 = desc::Nat::ThreadIdx(d)
+                        set_distrib_idx(&mut indices.1, desc::Nat::ThreadIdx(d), &mut split_shift);
                     }
                     _ => unreachable!(),
                 },
                 desc::DimCompo::Z => match contained_par_idx(&indices.2) {
-                    Some(desc::Nat::GridIdx) => indices.2 = desc::Nat::BlockIdx(desc::DimCompo::Z),
+                    Some(desc::Nat::GridIdx) => set_distrib_idx(
+                        &mut indices.2,
+                        desc::Nat::BlockIdx(desc::DimCompo::Z),
+                        &mut split_shift,
+                    ),
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::Z => {
                         indices.2 = desc::Nat::ThreadIdx(d)
                     }
@@ -2758,6 +2766,15 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
     let mut contained = ContainedParIdx { par_idx: None };
     contained.visit_nat(n);
     contained.par_idx
+}
+
+fn set_distrib_idx(idx: &mut desc::Nat, parall_idx: desc::Nat, shift: &mut desc::Nat) {
+    *idx = shift_idx_by(parall_idx, shift.clone());
+    *shift = desc::Nat::Lit(0);
+}
+
+fn shift_idx_by(idx: desc::Nat, shift: desc::Nat) -> desc::Nat {
+    desc::Nat::BinOp(desc::BinOpNat::Sub, Box::new(idx), Box::new(shift))
 }
 
 fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr) -> desc::Nat {

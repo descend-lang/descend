@@ -14,7 +14,6 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
     }
 }
 
-// FIXME: wrongly declaring a nat that cannot be inferred leads to panic
 fn gpu_reduce<gs: nat, bs: nat>(
     vec: &shrd gpu.global [i32; gs*bs],
     out_vec: &uniq gpu.global [i32; gs],
@@ -22,7 +21,6 @@ fn gpu_reduce<gs: nat, bs: nat>(
 ) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
     let block_group = group::<1024>(to_view(vec));
     let view_out = group_mut::<1>(to_view_mut(out_vec));
-    // TODO remove decl and move out tmp declaration
     sched block in grid {
         let ib = block_group[[block]];
         let out_elem = view_out[[block]];
