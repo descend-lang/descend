@@ -556,10 +556,30 @@ fn gen_decl_init(
         cu::Stmt::Skip
         // Let Expression
     } else {
-        let cu_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
-        let (init_expr, checks) = match gen_expr(e, codegen_ctx) {
-            CheckedExpr::Expr(e) => (e, None),
-            CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+        let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
+        let (init_expr, cu_ty, checks) = match gened_ty {
+            cu::Ty::Array(_, _) => {
+                let (ex, ch) = match gen_expr(e, codegen_ctx) {
+                    CheckedExpr::Expr(e) => (e, None),
+                    CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+                };
+                (ex, gened_ty, ch)
+            }
+            _ => {
+                let (ex, ch) = match gen_expr(e, codegen_ctx) {
+                    CheckedExpr::Expr(e) => (e, None),
+                    CheckedExpr::ExprIdxCheck(c, e) => (e, Some(c)),
+                };
+                (
+                    ex,
+                    if mutbl == desc::Mutability::Mut {
+                        cu::Ty::Scalar(cu::ScalarTy::Auto)
+                    } else {
+                        cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                    },
+                    ch,
+                )
+            }
         };
         let var_decl = cu::Stmt::VarDecl {
             name: ident.name.to_string(),
@@ -1058,8 +1078,8 @@ fn gen_indep(
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
     let outer_exec = codegen_ctx.exec.clone();
-    codegen_ctx.push_scope();
 
+    codegen_ctx.push_scope();
     let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
@@ -1076,11 +1096,11 @@ fn gen_indep(
     let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
-        0,
+        1,
     ));
     codegen_ctx
         .exec_mapping
-        .insert(&branch_idents[0].name, inner_exec.clone());
+        .insert(&branch_idents[1].name, inner_exec.clone());
     codegen_ctx.exec = inner_exec;
     let snd_branch = gen_stmt(&branch_bodies[1], false, codegen_ctx);
     codegen_ctx.drop_scope();
@@ -1124,7 +1144,7 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
 
 fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
+    let inner_exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().distrib(sched.dim));
     let outer_exec = codegen_ctx.exec.clone();
     if let Some(id) = &sched.inner_exec_ident {
         codegen_ctx
