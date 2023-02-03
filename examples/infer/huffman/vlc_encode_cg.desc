@@ -51,6 +51,7 @@ fn gpu_vlc_encode<>(
 
         // create shared memory views
         let s_block_out_view = to_view(&shrd *s_block_out);
+        let s_scan_arr_view = to_view_mut(&uniq *s_scan_arr);
 
         // Declare register variables for information that is relevant throughout the entire
         // algorithm, but can be most efficiently calculated some steps before the
@@ -139,16 +140,16 @@ fn gpu_vlc_encode<>(
         let mut tmp_shfl_res: u32 = 0u32;
         let mut tmp_scan_block: u32 = 0u32;
 
-        let sm_scan_arr_view = to_view(&shrd *s_scan_arr);
-
         // calculate inclusive scan for each warp
         sched warp in block.to_warps {
-            tmp_shfl_res = shfl_up(l_thread_out_len_scan, 1);
-            indep(X) 1 warp {
-                inactive_lanes => { () },
-                active_lanes => {
-                    sched lane in active_lanes {
-                        l_thread_out_len_scan = l_thread_out_len_scan + tmp_shfl_res
+            for_nat k in doubled_range(1, 16) {
+                tmp_shfl_res = shfl_up::<k>(l_thread_out_len_scan);
+                indep(X) k warp {
+                    inactive_lanes => { () },
+                    active_lanes => {
+                        sched lane in active_lanes {
+                            l_thread_out_len_scan = l_thread_out_len_scan + tmp_shfl_res
+                        }
                     }
                 }
             }
@@ -156,24 +157,21 @@ fn gpu_vlc_encode<>(
 
         // write sum of all input values to shared memory for the first 7 out of 8 warps
         // these sums are required for calculating the scan for the entire block
-        /*{
-            let tmp_s_scan_arr_view = to_view_mut(&uniq *s_scan_arr);
-            indep(X) 7 warps {
-                active_warps => {
-                    sched warp in active_warps {
-                        let s_scan_arr_item = tmp_s_scan_arr_view[[warp]];
-                        indep(X) 31 warp {
-                            inactive_lanes => { () },
-                            active_lane => {
-                                sched lane in active_lane {
-                                    *s_scan_arr_item = l_thread_out_len_scan
-                                }
+        indep(X) 7 block.to_warps {
+            active_warps => {
+                sched warp in active_warps {
+                    let s_scan_arr_item = s_scan_arr_view[[warp]];
+                    indep(X) 31 warp {
+                        inactive_lanes => { () },
+                        active_lane => {
+                            sched lane in active_lane {
+                                *s_scan_arr_item = l_thread_out_len_scan
                             }
                         }
                     }
-                },
-                inactive_warp => { () }
-            }
+                }
+            },
+            inactive_warp => { () }
         };
 
         sync;
@@ -197,7 +195,7 @@ fn gpu_vlc_encode<>(
                         }
                     };
                     for_nat k in doubled_range(1, 4) {
-                        tmp_shfl_res = shfl_up(tmp_scan_block, k);
+                        tmp_shfl_res = shfl_up::<k>(tmp_scan_block);
                         indep(X) k warp {
                             inactive_lanes => { () },
                             active_lanes => {
@@ -208,11 +206,10 @@ fn gpu_vlc_encode<>(
                         }
                     };
                     {
-                        let tmp_s_scan_arr_view = to_view_mut(&uniq *s_scan_arr);
                         indep(X) 7 warp {
                             active_lanes => {
                                 sched lane in active_lanes {
-                                    let s_scan_arr_item = tmp_s_scan_arr_view[[lane]];
+                                    let s_scan_arr_item = s_scan_arr_view[[lane]];
                                     *s_scan_arr_item = tmp_scan_block
                                 }
                             },
@@ -223,7 +220,6 @@ fn gpu_vlc_encode<>(
             },
             inactive_warps => { () }
         };
-
         sync;
 
         // add sums of previous warps to each result of a warps inclusive scan
@@ -244,7 +240,7 @@ fn gpu_vlc_encode<>(
             sched lane in warp {
                 l_thread_out_len_scan = l_thread_out_len_scan - l_thread_out_len
             }
-        };*/
+        };
         // ---------------------------------------------------------------------------------
 
 

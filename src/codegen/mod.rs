@@ -32,6 +32,9 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         };
         codegen_ctx.push_scope();
         codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(exec));
+        codegen_ctx
+            .exec_mapping
+            .insert(&fun_def.exec_decl.ident.name, codegen_ctx.exec.clone());
         initial_fns.push(gen_fun_def(fun_def, &mut codegen_ctx));
         codegen_ctx.drop_scope();
         debug_assert_eq!(codegen_ctx.shape_ctx.map.len(), 0);
@@ -1080,7 +1083,7 @@ fn gen_indep(
     let outer_exec = codegen_ctx.exec.clone();
 
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(outer_exec.exec.clone().split_proj(
+    let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         0,
@@ -1093,7 +1096,7 @@ fn gen_indep(
     codegen_ctx.drop_scope();
 
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(outer_exec.exec.clone().split_proj(
+    let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         1,
@@ -1144,7 +1147,7 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
 
 fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().distrib(sched.dim));
+    let inner_exec = desc::ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
     let outer_exec = codegen_ctx.exec.clone();
     if let Some(id) = &sched.inner_exec_ident {
         codegen_ctx

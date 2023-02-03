@@ -170,18 +170,18 @@ fn offset_raw_ptr_ty() -> FnTy {
 }
 
 // shfl_up:
-//  <>(u32, i32) -> u32
+//  <n: nat>(u32) -> u32
 fn shfl_up_ty() -> FnTy {
+    let n = Ident::new("n");
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
     FnTy::new(
-        vec![],
-        vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::U32,
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::I32,
-            ))))),
-        ],
+        vec![n_nat],
+        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+            DataTyKind::Scalar(ScalarTy::U32),
+        ))))],
         ExecTy::new(ExecTyKind::GpuWarp),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
