@@ -23,7 +23,7 @@ fn gpu_vec_add<r: prv, n: nat>(
         sched thread in block {
             let a = a_row[[thread]];
             let b = b_row[[thread]]
-            // *a = *a + *b
+            *a = *a + *b
         }
     }
 }

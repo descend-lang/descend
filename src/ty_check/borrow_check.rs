@@ -3,7 +3,7 @@ use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::ctxs::ExecBorrowCtx;
 use crate::ty_check::error::BorrowingError;
-use crate::ty_check::TyChecker;
+use crate::ty_check::{pl_expr, TyChecker};
 use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
@@ -261,11 +261,8 @@ fn ownership_safe_deref_abs(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
     currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
-    ty_checker.place_expr_ty_under_exec_own(
-        kind_ctx,
-        ty_ctx,
-        exec,
-        own,
+    pl_expr::ty_check(
+        &pl_expr::TyPlExprCtx::new(&ty_checker.gl_ctx, kind_ctx, ty_ctx, exec, own),
         &mut currently_checked_pl_expr,
     )?;
     new_own_weaker_equal(own, ref_own)?;
