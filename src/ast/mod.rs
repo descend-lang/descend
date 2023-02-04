@@ -771,7 +771,7 @@ impl ExecExpr {
         }
     }
 
-    pub fn is_subexec_of(&self, exec: &ExecExpr) -> bool {
+    pub fn is_sub_exec_of(&self, exec: &ExecExpr) -> bool {
         if self.exec.base == exec.exec.base {
             if self.exec.path.len() < exec.exec.path.len() {
                 return false;

@@ -8,7 +8,7 @@ fn reduce<n: nat, a: prv, b: prv>(
     copy_to_host(&shrd a_array, ha_array)
 }
 
-fn gpu_reduce<n:nat>(input: &uniq gpu.global [i32; n]) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
+fn gpu_reduce<n: nat>(input: &uniq gpu.global [i32; n]) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
     let block_group = group_mut::<1024>(to_view_mut(input));
     sched block in grid {
         let ib = block_group[[block]];

@@ -1,6 +1,6 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind};
+use crate::ast::{BaseExec, Ident, Ownership, PlaceExpr, TyKind};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -151,6 +151,10 @@ impl TyError {
                         }
                         BorrowingError::ConflictingOwnership => eprintln!("{:?}", conflict),
                         BorrowingError::CtxError(ctx_err) => eprintln!("{:?}", ctx_err),
+                        BorrowingError::WrongDevice(under, from) => {
+                            eprintln!("error: wrong device\nunder:{:?}\nfrom:{:?}", under, from)
+                        }
+                        BorrowingError::MultipleDistribs => eprintln!("{:?}", conflict),
                         BorrowingError::TyError(ty_err) => {
                             ty_err.emit(source);
                         }
@@ -246,6 +250,8 @@ pub enum BorrowingError {
     // The borrowing place is not in the reborrow list
     BorrowNotInReborrowList(Place),
     TemporaryConflictingBorrow(String),
+    WrongDevice(BaseExec, BaseExec),
+    MultipleDistribs,
     TyError(Box<TyError>),
 }
 

@@ -8,6 +8,42 @@ use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
 
+fn borrowable_from_exec_under_exec(
+    own: Ownership,
+    under: &ExecExpr,
+    from: &ExecExpr,
+) -> OwnResult<()> {
+    if own == Ownership::Shrd {
+        return Ok(());
+    }
+    if under.exec.base != from.exec.base {
+        return Err(BorrowingError::WrongDevice(
+            under.exec.base.clone(),
+            from.exec.base.clone(),
+        ));
+    }
+    if under.exec.path.len() < from.exec.path.len() {
+        panic!(
+            "Unexpected: Trying to borrow from an execution resource that is \
+                more specific than the current one."
+        )
+    }
+    for (u, f) in under.exec.path.iter().zip(&from.exec.path) {
+        if u != f {
+            panic!("Unexpected: Trying to borrow from divergent execution resource.")
+        }
+    }
+    // let mut previous_distrib = false;
+    for e in &under.exec.path[from.exec.path.len()..] {
+        if let ExecPathElem::Distrib(_) = e {
+            // if previous_distrib {
+            return Err(BorrowingError::MultipleDistribs);
+            // }
+            // previous_distrib = true;
+        }
+    }
+    Ok(())
+}
 //
 // Ownership Safety
 //
@@ -22,10 +58,12 @@ pub(super) fn ownership_safe(
     own: Ownership,
     p: &PlaceExpr,
 ) -> OwnResult<HashSet<Loan>> {
+    let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
+    let p_exec = &ty_ctx.ident_ty(&most_spec_pl.ident)?.exec;
+    borrowable_from_exec_under_exec(own, exec, p_exec)?;
     if p.is_place() {
         ownership_safe_place(exec_borrow_ctx, ty_ctx, reborrows, exec, own, p)
     } else {
-        let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
         let pl_ctx_no_deref = pl_ctx.without_innermost_deref();
         // Γ(π) = &r ωπ τπ
         match &ty_ctx.place_dty(&most_spec_pl)?.dty {
