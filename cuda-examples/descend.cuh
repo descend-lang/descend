@@ -495,8 +495,8 @@ inline __device__ cooperative_groups::thread_block_tile<32> to_warps() {
 template <typename T>
 inline __device__ T shfl_up(
         T val,
-        T delta) {
-    return warp().shfl_up(val, delta);
+        descend::i32 delta) {
+    return to_warps().shfl_up(val, delta);
 }
 
 namespace detail

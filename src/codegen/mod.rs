@@ -1082,8 +1082,10 @@ fn gen_indep(
 ) -> cu::Stmt {
     let outer_exec = codegen_ctx.exec.clone();
 
+    let expanded_split_exec_expr = expand_exec_expr(codegen_ctx, split_exec);
+
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
+    let inner_exec = desc::ExecExpr::new(expanded_split_exec_expr.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         0,
@@ -1096,7 +1098,7 @@ fn gen_indep(
     codegen_ctx.drop_scope();
 
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(split_exec.exec.clone().split_proj(
+    let inner_exec = desc::ExecExpr::new(expanded_split_exec_expr.exec.clone().split_proj(
         dim_compo,
         pos.clone(),
         1,
@@ -1109,7 +1111,8 @@ fn gen_indep(
     codegen_ctx.drop_scope();
 
     codegen_ctx.exec = outer_exec;
-    let split_cond = gen_indep_branch_cond(dim_compo, pos, &split_exec.exec, codegen_ctx);
+    let split_cond =
+        gen_indep_branch_cond(dim_compo, pos, &expanded_split_exec_expr.exec, codegen_ctx);
     cu::Stmt::Seq(vec![
         cu::Stmt::IfElse {
             cond: split_cond,
@@ -1147,7 +1150,8 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
 
 fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
+    let expanded_sched_exec_expr = expand_exec_expr(codegen_ctx, sched.sched_exec.as_ref());
+    let inner_exec = desc::ExecExpr::new(expanded_sched_exec_expr.exec.clone().distrib(sched.dim));
     let outer_exec = codegen_ctx.exec.clone();
     if let Some(id) = &sched.inner_exec_ident {
         codegen_ctx
@@ -1413,12 +1417,16 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
                         .iter()
                         .any(|(name, _)| &ident.name.as_ref() == name) =>
                 {
-                    let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
-                    CheckedExpr::Expr(cu::Expr::FnCall(create_fn_call(
-                        cu::Expr::Ident(pre_decl_ident.name.to_string()),
-                        gen_args_kinded(kinded_args),
-                        gen_fn_call_args(args, codegen_ctx),
-                    )))
+                    if (*ident.name == *"nat_as_u64") {
+                        gen_nat_as_u64(kinded_args)
+                    } else {
+                        let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
+                        CheckedExpr::Expr(cu::Expr::FnCall(create_fn_call(
+                            cu::Expr::Ident(pre_decl_ident.name.to_string()),
+                            gen_args_kinded(kinded_args),
+                            gen_fn_call_args(args, codegen_ctx),
+                        )))
+                    }
                 }
                 desc::PlaceExprKind::Ident(ident)
                     if codegen_ctx.comp_unit.iter().any(|f| &f.ident == ident) =>
@@ -2204,6 +2212,19 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
     templ_args.iter().filter_map(gen_arg_kinded).collect()
 }
 
+fn gen_nat_as_u64(templ_args: &[desc::ArgKinded]) -> CheckedExpr {
+    let generated_arg_expr = gen_arg_kinded(&templ_args[0]);
+    if let Some(e) = generated_arg_expr {
+        if let cu::TemplateArg::Expr(expr) = e {
+            CheckedExpr::Expr(expr)
+        } else {
+            panic!("This should never happen!")
+        }
+    } else {
+        panic!("This should never happen!")
+    }
+}
+
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
@@ -2752,6 +2773,21 @@ impl ShapeExpr {
     }
 }
 
+fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &ExecExpr) -> ExecExpr {
+    match &exec_expr.exec.base {
+        desc::BaseExec::CpuThread | desc::BaseExec::GpuGrid(_, _) => exec_expr.clone(),
+        desc::BaseExec::Ident(ident) => {
+            let inner_exec_expr = codegen_ctx.exec_mapping.get(ident.name.as_ref());
+            let new_base = inner_exec_expr.exec.base.clone();
+            let mut new_exec_path = inner_exec_expr.exec.path.clone();
+            new_exec_path.append(&mut exec_expr.exec.path.clone());
+            let mut expanded_exec_expr: ExecExpr =
+                ExecExpr::new(Exec::with_path(new_base, new_exec_path));
+            expanded_exec_expr
+        }
+    }
+}
+
 fn to_parall_indices(
     exec: &desc::ExecExpr,
     codegen_ctx: &CodegenCtx,
@@ -2760,10 +2796,7 @@ fn to_parall_indices(
         desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
         }
-        desc::BaseExec::Ident(i) => {
-            to_parall_indices(codegen_ctx.exec_mapping.get(&i.name), codegen_ctx)
-        }
-        desc::BaseExec::CpuThread => unreachable!(),
+        desc::BaseExec::CpuThread | desc::BaseExec::Ident(_) => unreachable!(),
     };
     let mut split_shift = desc::Nat::Lit(0);
     for e in &exec.exec.path {

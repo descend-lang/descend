@@ -143,7 +143,7 @@ fn gpu_vlc_encode<>(
         // calculate inclusive scan for each warp
         sched warp in block.to_warps {
             for_nat k in doubled_range(1, 16) {
-                tmp_shfl_res = shfl_up::<k>(l_thread_out_len_scan);
+                tmp_shfl_res = shfl_up(l_thread_out_len_scan, nat_as_u64::<k>() as i32);
                 indep(X) k warp {
                     inactive_lanes => { () },
                     active_lanes => {
@@ -195,7 +195,7 @@ fn gpu_vlc_encode<>(
                         }
                     };
                     for_nat k in doubled_range(1, 4) {
-                        tmp_shfl_res = shfl_up::<k>(tmp_scan_block);
+                        tmp_shfl_res = shfl_up(tmp_scan_block, nat_as_u64::<k>() as i32);
                         indep(X) k warp {
                             inactive_lanes => { () },
                             active_lanes => {
@@ -220,6 +220,7 @@ fn gpu_vlc_encode<>(
             },
             inactive_warps => { () }
         };
+
         sync;
 
         // add sums of previous warps to each result of a warps inclusive scan
@@ -265,7 +266,8 @@ fn gpu_vlc_encode<>(
                 }
             }
         };
-        // syncthreads
+
+        sync;
 
         // l_thread_start_value =
         //     index of the value in the output array (32 bits per value) where the codeword

@@ -31,6 +31,7 @@ pub static MAP_MUT: &str = "map_mut";
 
 //pub static TO_WARPS: &str = "to_warps";
 pub static SHFL_UP: &str = "shfl_up";
+pub static NAT_AS_U64: &str = "nat_as_u64";
 
 pub static THREAD_ID_X: &str = "thread_id_x";
 
@@ -53,6 +54,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (TO_RAW_PTR, to_raw_ptr_ty()),
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
         (SHFL_UP, shfl_up_ty()),
+        (NAT_AS_U64, nat_as_u64_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -170,8 +172,28 @@ fn offset_raw_ptr_ty() -> FnTy {
 }
 
 // shfl_up:
-//  <n: nat>(u32) -> u32
+//  <>(u32, i32) -> u32
 fn shfl_up_ty() -> FnTy {
+    FnTy::new(
+        vec![],
+        vec![
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::U32,
+            ))))),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::I32,
+            ))))),
+        ],
+        ExecTy::new(ExecTyKind::GpuWarp),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))),
+    )
+}
+
+// nat_as_u64:
+//  <n: nat>() -> u64
+fn nat_as_u64_ty() -> FnTy {
     let n = Ident::new("n");
     let n_nat = IdentKinded {
         ident: n.clone(),
@@ -179,9 +201,7 @@ fn shfl_up_ty() -> FnTy {
     };
     FnTy::new(
         vec![n_nat],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Scalar(ScalarTy::U32),
-        ))))],
+        vec![],
         ExecTy::new(ExecTyKind::GpuWarp),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
@@ -217,7 +237,6 @@ fn gpu_device_ty() -> FnTy {
     )
 }
 
-// todo extend atomic functions to other atomic types
 // to_atomic_array:
 //  <r: prv, m: mem, n: nat>(&r uniq m [u32; n]) -[view]-> &r uniq m [AtomicU32; n]
 fn to_atomic_array_ty() -> FnTy {
