@@ -7,6 +7,7 @@ use super::{Ident, Ownership, PlaceExpr, Ty};
 use crate::ast::{ExecExpr, Mutability, PlaceExprKind};
 use std::collections::HashSet;
 
+// TODO give its own struct
 pub type Frame = Vec<FrameEntry>;
 pub fn append_idents_typed(frm: &Frame, idents_typed: Vec<IdentTyped>) -> Frame {
     let mut new_frm = frm.clone();

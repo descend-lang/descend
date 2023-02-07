@@ -1,5 +1,5 @@
-fn reverse_block_elems<m: nat, n1: nat, k: nat>(
-    vec: &uniq gpu.global [f64; k]
+fn reverse_block_elems<m: nat, n1: nat, k: nat, r: prv>(
+    vec: &r uniq gpu.global [f64; k]
 ) -[grid: gpu.grid<X<m>, X<n1>>]-> () {
     // FIXME, if n is used instead of n1, then k is generated, probably because n is part of the
     //  type definition of group_mut

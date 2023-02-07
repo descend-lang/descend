@@ -1,11 +1,12 @@
-use crate::ast::utils::{fresh_ident, FreeKindedIdents};
+use crate::ast::utils;
+use crate::ast::utils::FreeKindedIdents;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::TyError;
-use crate::ty_check::subty::multiple_outlives;
-use crate::ty_check::{TyChecker, TyResult};
+use crate::ty_check::subty;
+use crate::ty_check::TyResult;
 use std::collections::{HashMap, HashSet};
 
 pub(super) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
@@ -17,19 +18,19 @@ pub(super) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
 
 pub(super) fn sub_unify<C: Constrainable>(
     kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
+    ty_ctx: &mut TyCtx,
     sub: &mut C,
     sup: &mut C,
-) -> TyResult<TyCtx> {
+) -> TyResult<()> {
     let (subst, prv_rels) = constrain(sub, sup)?;
     substitute(&subst, sub);
     substitute(&subst, sup);
-    let outlives_ctx = multiple_outlives(
+    subty::multiple_outlives(
         kind_ctx,
         ty_ctx,
         prv_rels.iter().map(|PrvConstr(p1, p2)| (p1, p2)),
     )?;
-    Ok(outlives_ctx)
+    Ok(())
 }
 
 fn constrain<S: Constrainable>(t1: &mut S, t2: &mut S) -> TyResult<(ConstrainMap, Vec<PrvConstr>)> {
@@ -48,22 +49,23 @@ pub(super) fn inst_fn_ty_scheme(
     let mono_idents: Vec<_> = idents_kinded
         .iter()
         .map(|i| match i.kind {
-            Kind::DataTy => {
-                ArgKinded::DataTy(DataTy::new(fresh_ident(&i.ident.name, DataTyKind::Ident)))
-            }
-            Kind::Nat => ArgKinded::Nat(fresh_ident(&i.ident.name, Nat::Ident)),
-            Kind::Memory => ArgKinded::Memory(fresh_ident(&i.ident.name, Memory::Ident)),
+            Kind::DataTy => ArgKinded::DataTy(DataTy::new(utils::fresh_ident(
+                &i.ident.name,
+                DataTyKind::Ident,
+            ))),
+            Kind::Nat => ArgKinded::Nat(utils::fresh_ident(&i.ident.name, Nat::Ident)),
+            Kind::Memory => ArgKinded::Memory(utils::fresh_ident(&i.ident.name, Memory::Ident)),
             Kind::Provenance => {
-                ArgKinded::Provenance(fresh_ident(&i.ident.name, Provenance::Ident))
+                ArgKinded::Provenance(utils::fresh_ident(&i.ident.name, Provenance::Ident))
             }
         })
         .collect();
 
     let mono_param_tys = param_tys
         .iter()
-        .map(|ty| TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ty))
+        .map(|ty| super::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ty))
         .collect();
-    let mono_ret_ty = TyChecker::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
+    let mono_ret_ty = super::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
 
     Ok(Ty::new(TyKind::FnTy(Box::new(FnTy::new(
         vec![],

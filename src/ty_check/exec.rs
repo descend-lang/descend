@@ -14,7 +14,7 @@ pub(super) fn ty_check(
             if ident == &ident_exec.ident {
                 ident_exec.ty.ty.clone()
             } else {
-                let mut inline_exec = ty_ctx.get_exec_expr(ident)?;
+                let inline_exec = ty_ctx.get_exec_expr(ident)?;
                 inline_exec.ty.as_ref().unwrap().ty.clone()
             }
         }

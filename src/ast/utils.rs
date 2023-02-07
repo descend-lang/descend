@@ -126,13 +126,9 @@ impl Visit for FreeKindedIdents {
     }
 }
 
-pub fn implicit_idents_without_rgns(f: &FunDef) -> Option<HashSet<Ident>> {
+pub fn implicit_idents(f: &FunDef) -> Option<HashSet<Ident>> {
     struct ImplicitIdents(HashSet<Ident>);
     impl Visit for ImplicitIdents {
-        fn visit_prv(&mut self, _prv: &Provenance) {
-            // ignore
-        }
-
         fn visit_ident(&mut self, ident: &Ident) {
             if ident.is_implicit {
                 self.0.insert(ident.clone());

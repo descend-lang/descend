@@ -144,7 +144,7 @@ pub mod error {
                 column_num,
                 column_num + 1,
             );
-            println!("{}", DisplayList::from(snippet).to_string());
+            println!("{}", DisplayList::from(snippet));
             ErrorReported
         }
     }
@@ -165,11 +165,6 @@ pub mod error {
             end_column - 1,
         )
     }
-}
-
-enum IdxOrSelect {
-    Idx(Nat),
-    Select(Option<String>, Ident),
 }
 
 peg::parser! {
@@ -689,7 +684,7 @@ peg::parser! {
 
         rule ident() -> Ident
             = begin:position!() ident:$(identifier()) end:position!() {
-                Ident::with_span(ident.into(), Span::new(begin, end))
+                Ident::with_span(ident, Span::new(begin, end))
             }
 
         rule provenance() -> Provenance
@@ -959,7 +954,7 @@ mod tests {
             Ok(DataTy::new(DataTyKind::Tuple(vec![
                 ty_unit.clone(),
                 ty_unit.clone(),
-                ty_unit.clone()
+                ty_unit
             ]))),
             "does not recognize (unit,unit,unit) tuple type"
         );
@@ -1153,9 +1148,8 @@ mod tests {
             Ok(Lit::Bool(true)),
             "does not parse boolean correctly"
         );
-        assert_eq!(
+        assert!(
             descend::literal("False").is_err(),
-            true,
             "wrongfully parses misspelled boolean"
         );
         assert_eq!(
@@ -1228,19 +1222,16 @@ mod tests {
             Ok(Lit::F32(3.1415927)),
             "not parsing f32 float as expected"
         );
-        assert_eq!(
+        assert!(
             descend::literal("12345ad").is_err(),
-            true,
             "incorrectly parsing invalid literal"
         );
-        assert_eq!(
+        assert!(
             descend::literal("e54").is_err(),
-            true,
             "incorrectly parsing e-notation only to literal"
         );
-        assert_eq!(
+        assert!(
             descend::literal("-i32").is_err(),
-            true,
             "incorrectly parsing 'negative data type' to literal"
         );
     }

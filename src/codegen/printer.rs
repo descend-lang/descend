@@ -190,7 +190,6 @@ impl std::fmt::Display for Stmt {
                 fmt_vec(f, &exec_kernel.args, ", ")?;
                 write!(f, ");")
             }
-            Label(l) => write!(f, "{}:", l),
         }
     }
 }
@@ -336,9 +335,9 @@ impl std::fmt::Display for BinOp {
 impl std::fmt::Display for GpuAddrSpace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            GpuAddrSpace::Device => write!(f, "__device__"),
+            // GpuAddrSpace::Device => write!(f, "__device__"),
             GpuAddrSpace::Shared => write!(f, "__shared__"),
-            GpuAddrSpace::Constant => write!(f, "__constant__"),
+            // GpuAddrSpace::Constant => write!(f, "__constant__"),
         }
     }
 }

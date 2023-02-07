@@ -1,6 +1,7 @@
 use crate::ast::internal::{ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
+use crate::ty_check::pre_decl;
 use std::collections::hash_map::Iter;
 use std::collections::{HashMap, HashSet};
 
@@ -8,69 +9,120 @@ use std::collections::{HashMap, HashSet};
 pub(super) type TypedPlace = (internal::Place, DataTy);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
+struct ScopedCtx<T> {
+    scopes: Vec<Vec<T>>,
+}
+
+impl<T> ScopedCtx<T> {
+    fn new() -> Self {
+        ScopedCtx {
+            scopes: vec![vec![]],
+        }
+    }
+
+    fn flat_ctx(&self) -> std::iter::Flatten<std::slice::Iter<Vec<T>>> {
+        self.scopes.iter().flatten()
+    }
+
+    fn flat_ctx_mut(&mut self) -> std::iter::Flatten<std::slice::IterMut<Vec<T>>> {
+        self.scopes.iter_mut().flatten()
+    }
+
+    fn push(&mut self, v: T) -> &mut Self {
+        self.last_scope_mut().push(v);
+        self
+    }
+
+    fn push_scope(&mut self, s: Vec<T>) -> &mut Self {
+        self.scopes.push(s);
+        self
+    }
+
+    fn push_empty_scope(&mut self) -> &mut Self {
+        self.scopes.push(vec![]);
+        self
+    }
+
+    fn pop_scope(&mut self) -> Vec<T> {
+        self.scopes
+            .pop()
+            .expect("It should never be the case that there is no scope.")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        if self.scopes.len() == 1 {
+            self.scopes
+                .first()
+                .expect("It should never be the case that there is no scope.")
+                .is_empty()
+        } else {
+            false
+        }
+    }
+
+    fn last_scope_mut(&mut self) -> &mut Vec<T> {
+        self.scopes
+            .iter_mut()
+            .last()
+            .expect("It should never be the case that there is no scope.")
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct TyCtx {
-    frame: Vec<Frame>,
+    frames: ScopedCtx<FrameEntry>,
 }
 
 impl TyCtx {
     pub fn new() -> Self {
         TyCtx {
-            frame: vec![vec![]],
+            frames: ScopedCtx::new(),
         }
     }
 
-    pub fn from(fr_ty: Frame) -> Self {
-        TyCtx { frame: vec![fr_ty] }
-    }
-
     pub fn get_exec_expr(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
-        let exec_expr = self
-            .frame
-            .iter()
-            .flatten()
-            .rev()
-            .find_map(|entry| match entry {
-                FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
-                _ => None,
-            });
+        let exec_expr = self.frames.flat_ctx().rev().find_map(|entry| match entry {
+            FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
+            _ => None,
+        });
         match exec_expr {
             Some(exec) => Ok(exec),
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
 
-    pub fn append_frame(mut self, frm_ty: Frame) -> Self {
-        self.frame.append(&mut vec![frm_ty]);
+    pub fn push_empty_frame(&mut self) -> &mut Self {
+        self.frames.push_empty_scope();
         self
     }
 
-    pub fn drop_last_frame(mut self) -> Self {
-        self.frame
-            .pop()
-            .expect("It should never be the case that there is no frame typing.");
+    pub fn push_frame(&mut self, frame: Frame) -> &mut Self {
+        self.frames.push_scope(frame);
         self
     }
 
-    pub fn append_ident_typed(mut self, id_typed: IdentTyped) -> Self {
-        let frame_typing = self.frame.iter_mut().last().unwrap();
-        frame_typing.push(FrameEntry::Var(id_typed));
+    pub fn pop_frame(&mut self) -> Frame {
+        self.frames.pop_scope()
+    }
+
+    pub fn append_ident_typed(&mut self, id_typed: IdentTyped) -> &mut Self {
+        self.frames.push(FrameEntry::Var(id_typed));
         self
     }
 
-    pub fn append_exec_mapping(mut self, ident: Ident, exec: ExecExpr) -> Self {
-        let frame_typing = self.frame.iter_mut().last().unwrap();
-        frame_typing.push(FrameEntry::ExecMapping(ExecMapping::new(ident, exec)));
+    pub fn append_exec_mapping(&mut self, ident: Ident, exec: ExecExpr) -> &mut Self {
+        self.frames
+            .push(FrameEntry::ExecMapping(ExecMapping::new(ident, exec)));
         self
     }
 
-    pub fn append_prv_mapping(mut self, prv_mapping: PrvMapping) -> Self {
-        let frame_typing = self.frame.iter_mut().last().unwrap();
-        frame_typing.push(FrameEntry::PrvMapping(prv_mapping));
+    pub fn append_prv_mapping(&mut self, prv_mapping: PrvMapping) -> &mut Self {
+        self.frames.push(FrameEntry::PrvMapping(prv_mapping));
         self
     }
 
     fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
-        self.frame.iter().flatten().filter_map(|fe| {
+        self.frames.flat_ctx().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
@@ -80,7 +132,7 @@ impl TyCtx {
     }
 
     fn idents_typed_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut IdentTyped> {
-        self.frame.iter_mut().flatten().filter_map(|fe| {
+        self.frames.flat_ctx_mut().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
@@ -90,7 +142,7 @@ impl TyCtx {
     }
 
     pub(crate) fn prv_mappings(&self) -> impl DoubleEndedIterator<Item = &'_ PrvMapping> {
-        self.frame.iter().flatten().filter_map(|fe| {
+        self.frames.flat_ctx().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
@@ -100,7 +152,7 @@ impl TyCtx {
     }
 
     fn prv_mappings_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut PrvMapping> {
-        self.frame.iter_mut().flatten().filter_map(|fe| {
+        self.frames.flat_ctx_mut().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
@@ -110,10 +162,10 @@ impl TyCtx {
     }
 
     pub fn update_loan_set(
-        mut self,
+        &mut self,
         prv_val_name: &str,
         loan_set: HashSet<Loan>,
-    ) -> CtxResult<Self> {
+    ) -> CtxResult<&mut Self> {
         let mut found = false;
         for prv_mapping in self.prv_mappings_mut().rev() {
             if prv_mapping.prv == prv_val_name {
@@ -129,7 +181,7 @@ impl TyCtx {
         }
     }
 
-    pub fn extend_loans_for_prv<I>(mut self, base: &str, extension: I) -> CtxResult<TyCtx>
+    pub fn extend_loans_for_prv<I>(&mut self, base: &str, extension: I) -> CtxResult<&mut TyCtx>
     where
         I: IntoIterator<Item = Loan>,
     {
@@ -166,7 +218,7 @@ impl TyCtx {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.frame.first().unwrap().is_empty()
+        self.frames.is_empty()
     }
 
     // ∀π:τ ∈ Γ
@@ -174,7 +226,7 @@ impl TyCtx {
         self.idents_typed()
             .filter_map(|IdentTyped { ident, ty, .. }| {
                 if let TyKind::Data(dty) = &ty.ty {
-                    Some(TyCtx::explode_places(&ident, dty))
+                    Some(TyCtx::explode_places(ident, dty))
                 } else {
                     None
                 }
@@ -261,7 +313,7 @@ impl TyCtx {
         }
     }
 
-    pub fn set_place_dty(mut self, pl: &internal::Place, pl_ty: DataTy) -> Self {
+    pub fn set_place_dty(&mut self, pl: &internal::Place, pl_ty: DataTy) -> &mut Self {
         fn set_dty_for_path_in_dty(orig_dty: DataTy, path: &[usize], part_dty: DataTy) -> DataTy {
             if path.is_empty() {
                 return part_dty;
@@ -292,7 +344,7 @@ impl TyCtx {
         }
     }
 
-    pub fn kill_place(self, pl: &internal::Place) -> Self {
+    pub fn kill_place(&mut self, pl: &internal::Place) -> &mut Self {
         if let Ok(pl_dty) = self.place_dty(pl) {
             self.set_place_dty(pl, DataTy::new(DataTyKind::Dead(Box::new(pl_dty))))
         } else {
@@ -300,7 +352,7 @@ impl TyCtx {
         }
     }
 
-    pub fn garbage_collect_loans(self) -> Self {
+    pub fn garbage_collect_loans(&mut self) -> &mut Self {
         let invalid_prvs: Vec<_> = self
             .prv_mappings()
             .map(|prv_mapping| &prv_mapping.prv)
@@ -314,7 +366,7 @@ impl TyCtx {
         self.invalidate_prvs(invalid_prvs)
     }
 
-    fn invalidate_prvs(self, prv_names: Vec<String>) -> Self {
+    fn invalidate_prvs(&mut self, prv_names: Vec<String>) -> &mut Self {
         prv_names.iter().fold(self, |ty_ctx, prv| {
             ty_ctx
                 // TODO simply delete the provenance?1
@@ -324,45 +376,25 @@ impl TyCtx {
     }
 
     // Γ ▷- p = Γ′
-    pub(super) fn without_reborrow_loans(&self, pl_expr: &PlaceExpr) -> TyCtx {
-        let res_frame_tys = self
-            .frame
-            .iter()
-            .map(|frm_ty| {
-                frm_ty
+    pub(super) fn without_reborrow_loans(&mut self, pl_expr: &PlaceExpr) -> &mut Self {
+        for frame_entry in self.frames.flat_ctx_mut() {
+            if let FrameEntry::PrvMapping(PrvMapping { prv: _, loans }) = frame_entry {
+                let without_reborrow: HashSet<Loan> = loans
                     .iter()
-                    .map(|frame| match frame {
-                        FrameEntry::Var(ident_typed) => FrameEntry::Var(ident_typed.clone()),
-                        FrameEntry::PrvMapping(PrvMapping { prv, loans }) => {
-                            let without_reborrow: HashSet<Loan> = loans
-                                .iter()
-                                .filter_map(|loan| {
-                                    if !PlaceExpr::new(PlaceExprKind::Deref(Box::new(
-                                        pl_expr.clone(),
-                                    )))
-                                    .prefix_of(&loan.place_expr)
-                                    {
-                                        Some(loan.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            FrameEntry::PrvMapping(PrvMapping {
-                                prv: prv.clone(),
-                                loans: without_reborrow,
-                            })
-                        }
-                        FrameEntry::ExecMapping(exec_mapping) => {
-                            FrameEntry::ExecMapping(exec_mapping.clone())
+                    .filter_map(|loan| {
+                        if !PlaceExpr::new(PlaceExprKind::Deref(Box::new(pl_expr.clone())))
+                            .prefix_of(&loan.place_expr)
+                        {
+                            Some(loan.clone())
+                        } else {
+                            None
                         }
                     })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        TyCtx {
-            frame: res_frame_tys,
+                    .collect();
+                *loans = without_reborrow;
+            }
         }
+        self
     }
 }
 
@@ -378,7 +410,7 @@ impl ExecBorrowCtx {
     }
 
     pub fn insert(&mut self, exec: &ExecExpr, loans: HashSet<Loan>) {
-        let new_loans = if let Some(old) = self.ctx.get(&exec) {
+        let new_loans = if let Some(old) = self.ctx.get(exec) {
             old.union(&loans).cloned().collect()
         } else {
             loans
@@ -405,35 +437,69 @@ pub(super) type CtxResult<T> = Result<T, CtxError>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct KindCtx {
-    ctx: Vec<KindingCtxEntry>,
+    ctx: ScopedCtx<KindingCtxEntry>,
 }
 
 impl KindCtx {
     pub fn new() -> Self {
-        KindCtx { ctx: Vec::new() }
+        KindCtx {
+            ctx: ScopedCtx::new(),
+        }
     }
 
-    pub fn from(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> CtxResult<Self> {
-        let kind_ctx: Self = Self::new().append_idents(idents);
-        kind_ctx.well_kinded_prv_rels(&prv_rels)?;
-        Ok(kind_ctx.append_prv_rels(prv_rels))
+    pub fn gl_fun_kind_ctx(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> CtxResult<Self> {
+        let mut kind_ctx: Self = KindCtx::new();
+        kind_ctx.append_idents(idents);
+        kind_ctx.append_prv_rels(prv_rels)?;
+        Ok(kind_ctx)
     }
 
-    pub fn append_idents(mut self, idents: Vec<IdentKinded>) -> Self {
-        let mut entries: Vec<_> = idents.into_iter().map(KindingCtxEntry::Ident).collect();
-        self.ctx.append(&mut entries);
+    pub fn push_empty_scope(&mut self) -> &mut Self {
+        self.ctx.push_empty_scope();
         self
     }
 
-    pub fn append_prv_rels(mut self, prv_rels: Vec<PrvRel>) -> Self {
-        for prv_rel in prv_rels {
-            self.ctx.push(KindingCtxEntry::PrvRel(prv_rel));
+    pub fn drop_scope(&mut self) {
+        self.ctx.pop_scope();
+    }
+
+    pub fn append_idents<I: IntoIterator<Item = IdentKinded>>(&mut self, idents: I) -> &mut Self {
+        let entries = idents.into_iter().map(KindingCtxEntry::Ident);
+        for e in entries {
+            self.ctx.push(e);
         }
         self
     }
 
+    pub fn append_prv_rels<I: IntoIterator<Item = PrvRel> + Clone>(
+        &mut self,
+        prv_rels: I,
+    ) -> CtxResult<&mut Self> {
+        self.well_kinded_prv_rels(prv_rels.clone())?;
+        for prv_rel in prv_rels {
+            self.ctx.push(KindingCtxEntry::PrvRel(prv_rel));
+        }
+        Ok(self)
+    }
+
+    pub fn well_kinded_prv_rels<I: IntoIterator<Item = PrvRel>>(
+        &self,
+        prv_rels: I,
+    ) -> CtxResult<()> {
+        let mut prv_idents = self.get_idents(Kind::Provenance);
+        for prv_rel in prv_rels.into_iter() {
+            if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
+                return Err(CtxError::PrvIdentNotFound(prv_rel.longer.clone()));
+            }
+            if !prv_idents.any(|prv_ident| &prv_rel.shorter == prv_ident) {
+                return Err(CtxError::PrvIdentNotFound(prv_rel.shorter.clone()));
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
-        self.ctx.iter().filter_map(move |entry| {
+        self.ctx.flat_ctx().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
                     Some(ident)
@@ -450,21 +516,8 @@ impl KindCtx {
         self.get_idents(kind).any(|id| ident == id)
     }
 
-    pub fn well_kinded_prv_rels(&self, prv_rels: &[PrvRel]) -> CtxResult<()> {
-        let mut prv_idents = self.get_idents(Kind::Provenance);
-        for prv_rel in prv_rels {
-            if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
-                return Err(CtxError::PrvIdentNotFound(prv_rel.longer.clone()));
-            }
-            if !prv_idents.any(|prv_ident| &prv_rel.shorter == prv_ident) {
-                return Err(CtxError::PrvIdentNotFound(prv_rel.shorter.clone()));
-            }
-        }
-        Ok(())
-    }
-
     pub fn outlives(&self, l: &Ident, s: &Ident) -> CtxResult<()> {
-        if self.ctx.iter().any(|entry| match entry {
+        if self.ctx.flat_ctx().any(|entry| match entry {
             KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
         }) {
@@ -481,28 +534,26 @@ pub(super) struct GlobalCtx {
 }
 
 impl GlobalCtx {
-    pub fn new() -> Self {
-        GlobalCtx {
+    pub fn from_iter<'a, I>(funs: I) -> Self
+    where
+        I: Iterator<Item = &'a FunDef>,
+    {
+        let mut gl_ctx = GlobalCtx {
             items: HashMap::new(),
-        }
+        };
+        Self::append_fun_decls(&mut gl_ctx, &pre_decl::fun_decls());
+        gl_ctx
+            .items
+            .extend(funs.map(|fun_def| (fun_def.ident.name.clone(), fun_def.fn_ty())));
+        gl_ctx
     }
 
-    pub fn append_from_fun_defs(mut self, gl_fun_defs: &[FunDef]) -> Self {
-        self.items.extend(
-            gl_fun_defs
-                .iter()
-                .map(|gl_fun_def| (gl_fun_def.ident.name.clone(), gl_fun_def.fn_ty())),
-        );
-        self
-    }
-
-    pub fn append_fun_decls(mut self, fun_decls: &[(&str, FnTy)]) -> Self {
-        self.items.extend(
+    fn append_fun_decls(gl_ctx: &mut GlobalCtx, fun_decls: &[(&str, FnTy)]) {
+        gl_ctx.items.extend(
             fun_decls
                 .iter()
                 .map(|(name, ty)| (String::from(*name).into_boxed_str(), ty.clone())),
-        );
-        self
+        )
     }
 
     pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
@@ -512,40 +563,6 @@ impl GlobalCtx {
         }
     }
 }
-//
-// pub(super) struct ExecCtx {
-//     idents_typed: Vec<IdentExec>,
-// }
-//
-// impl ExecCtx {
-//     pub fn new() -> Self {
-//         ExecCtx {
-//             idents_typed: Vec::new(),
-//         }
-//     }
-//
-//     pub fn push(&mut self, ident: Ident, exec_ty: ExecTy) {
-//         self.idents_typed.push(IdentExec::new(ident, exec_ty))
-//     }
-//
-//     pub fn pop(&mut self) -> Option<IdentExec> {
-//         self.idents_typed.pop()
-//     }
-//
-//     pub fn get(&self, ident: &Ident) -> CtxResult<&ExecTy> {
-//         let search_res = self.idents_typed.iter().rev().find_map(|id| {
-//             if &id.ident.name == &ident.name {
-//                 Some(&id.ty)
-//             } else {
-//                 None
-//             }
-//         });
-//         match search_res {
-//             Some(ty) => Ok(ty),
-//             None => Err(CtxError::IdentNotFound(ident.clone())),
-//         }
-//     }
-// }
 
 #[test]
 fn test_kill_place_ident() {
@@ -559,8 +576,7 @@ fn test_kill_place_ident() {
         ExecExpr::new(Exec::new(BaseExec::Ident(Ident::new("exec")))),
     );
     let place = internal::Place::new(x.ident.clone(), vec![]);
-    ty_ctx = ty_ctx.append_ident_typed(x);
-    ty_ctx = ty_ctx.kill_place(&place);
+    ty_ctx.append_ident_typed(x).kill_place(&place);
     assert!(matches!(
         ty_ctx.idents_typed().next().unwrap().ty.dty(),
         DataTy {

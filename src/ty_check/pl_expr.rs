@@ -1,46 +1,32 @@
-use super::ctxs::{GlobalCtx, KindCtx, TyCtx};
 use super::error::TyError;
-use super::{subty, TyResult};
+use super::TyResult;
 use crate::ast::{
-    DataTy, DataTyKind, Exec, ExecExpr, ExecTyKind, Ident, Memory, Ownership, PlaceExpr,
-    PlaceExprKind, Provenance, Ty, TyKind,
+    DataTy, DataTyKind, ExecTyKind, Ident, Memory, Ownership, PlaceExpr, PlaceExprKind, Provenance,
+    Ty, TyKind,
 };
 
-pub(super) struct TyPlExprCtx<'a> {
-    gl_ctx: &'a GlobalCtx,
-    kind_ctx: &'a KindCtx,
-    ty_ctx: &'a TyCtx,
-    exec: &'a ExecExpr,
+use crate::ty_check::ExprTyCtx;
+
+pub(super) struct PlExprTyCtx<'a> {
+    expr_ty_ctx: &'a ExprTyCtx<'a>,
     own: Ownership,
 }
 
-impl<'a> TyPlExprCtx<'a> {
-    pub(super) fn new(
-        gl_ctx: &'a GlobalCtx,
-        kind_ctx: &'a KindCtx,
-        ty_ctx: &'a TyCtx,
-        exec: &'a ExecExpr,
-        own: Ownership,
-    ) -> Self {
-        TyPlExprCtx::<'a> {
-            gl_ctx,
-            kind_ctx,
-            ty_ctx,
-            exec,
-            own,
-        }
+impl<'a> PlExprTyCtx<'a> {
+    pub(super) fn new(expr_ty_ctx: &'a ExprTyCtx, own: Ownership) -> Self {
+        PlExprTyCtx { expr_ty_ctx, own }
     }
 }
 
 // Δ; Γ ⊢ω p:τ
 // p in an ω context has type τ under Δ and Γ
-pub(super) fn ty_check(ctx: &TyPlExprCtx, pl_expr: &mut PlaceExpr) -> TyResult<()> {
+pub(super) fn ty_check(ctx: &PlExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<()> {
     let _mem = ty_check_and_passed_mems(ctx, pl_expr)?;
     Ok(())
 }
 
 pub(super) fn ty_check_and_passed_mems(
-    ctx: &TyPlExprCtx,
+    ctx: &PlExprTyCtx,
     pl_expr: &mut PlaceExpr,
 ) -> TyResult<Vec<Memory>> {
     let (mem, _) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
@@ -50,7 +36,7 @@ pub(super) fn ty_check_and_passed_mems(
 // Δ; Γ ⊢ω p:τ,{ρ}
 // p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
 fn ty_check_and_passed_mems_prvs(
-    ctx: &TyPlExprCtx,
+    ctx: &PlExprTyCtx,
     pl_expr: &mut PlaceExpr,
 ) -> TyResult<(Vec<Memory>, Vec<Provenance>)> {
     let (ty, mem, prvs) = match &mut pl_expr.pl_expr {
@@ -66,10 +52,10 @@ fn ty_check_and_passed_mems_prvs(
 }
 
 fn ty_check_ident(
-    ctx: &TyPlExprCtx,
+    ctx: &PlExprTyCtx,
     ident: &Ident,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-    if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
+    if let Ok(tty) = ctx.expr_ty_ctx.ty_ctx.ty_of_ident(ident) {
         // let ident_dty = if let TyKind::Data(dty) = &tty.ty {
         //     dty.as_ref()
         // } else {
@@ -84,7 +70,7 @@ fn ty_check_ident(
         }
         // FIXME Should throw an error if thread local memory is accessed by a block
         //  for example.
-        let mem = default_mem_by_exec(&ctx.exec.ty.as_ref().unwrap().ty);
+        let mem = default_mem_by_exec(&ctx.expr_ty_ctx.exec.ty.as_ref().unwrap().ty);
         Ok((
             tty.clone(),
             if mem.is_some() {
@@ -95,7 +81,7 @@ fn ty_check_ident(
             vec![],
         ))
     } else {
-        let fn_ty = ctx.gl_ctx.fn_ty_by_ident(ident)?;
+        let fn_ty = ctx.expr_ty_ctx.gl_ctx.fn_ty_by_ident(ident)?;
         Ok((
             Ty::new(TyKind::FnTy(Box::new(fn_ty.clone()))),
             vec![],
@@ -118,7 +104,7 @@ fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
 }
 
 fn ty_check_proj(
-    ctx: &TyPlExprCtx,
+    ctx: &PlExprTyCtx,
     tuple_expr: &mut PlaceExpr,
     n: usize,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
@@ -146,17 +132,15 @@ fn ty_check_proj(
                 ))
             }
         }
-        dty_kind => {
-            return Err(TyError::ExpectedTupleType(
-                TyKind::Data(Box::new(DataTy::new(dty_kind.clone()))),
-                tuple_expr.clone(),
-            ))
-        }
+        dty_kind => Err(TyError::ExpectedTupleType(
+            TyKind::Data(Box::new(DataTy::new(dty_kind.clone()))),
+            tuple_expr.clone(),
+        )),
     }
 }
 
 fn ty_check_deref(
-    ctx: &TyPlExprCtx,
+    ctx: &PlExprTyCtx,
     borr_expr: &mut PlaceExpr,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
     let (mut inner_mem, mut passed_prvs) = ty_check_and_passed_mems_prvs(ctx, borr_expr)?;
@@ -174,8 +158,6 @@ fn ty_check_deref(
                     "Trying to dereference and mutably use a shrd reference.".to_string(),
                 ));
             }
-            let outl_rels = passed_prvs.iter().map(|passed_prv| (&reff.rgn, passed_prv));
-            subty::multiple_outlives(&ctx.kind_ctx, ctx.ty_ctx.clone(), outl_rels)?;
             passed_prvs.push(reff.rgn.clone());
             inner_mem.push(reff.mem.clone());
             Ok((

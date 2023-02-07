@@ -212,6 +212,8 @@ pub enum SubTyError {
     PrvNotUsedInBorrow(String),
     // Subtyping checks fail if the memory kinds are not equal
     MemoryKindsNoMatch,
+    // Subtyping checks fail if the ownership of supposedly subtyped references do not match
+    OwnershipNoMatch,
     // TODO remove asap
     Dummy,
 }

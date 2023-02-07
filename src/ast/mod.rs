@@ -392,6 +392,7 @@ pub enum ExprKind {
     Seq(Vec<Expr>),
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
+    // TODO body expression should always be block?! No but treated like one.
     Lambda(Vec<ParamDecl>, IdentExec, Box<DataTy>, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
@@ -399,17 +400,23 @@ pub enum ExprKind {
     // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
     AppKernel(Box<AppKernel>),
+    // TODO branches must be blocks
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
+    // TODO branch must be block
     If(Box<Expr>, Box<Expr>),
     // For-each loop.
     // for x in e_1 { e_2 }
+    // TODO body must be block
     For(Ident, Box<Expr>, Box<Expr>),
     // for n in range(..) { e }
+    // TODO body must be block
     ForNat(Ident, Nat, Box<Expr>),
     // while( e_1 ) { e_2 }
+    // TODO body must be block
     While(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
+    // TODO branches must be blocks or treated like blocks
     Indep(Box<Indep>),
     Sched(Box<Sched>),
     Select(Option<String>, Box<PlaceExpr>, Box<Ident>),

@@ -16,16 +16,16 @@ type SubTyResult<T> = Result<T, SubTyError>;
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
 pub(super) fn check(
     kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
+    ty_ctx: &mut TyCtx,
     sub_dty: &DataTy,
     super_dty: &DataTy,
-) -> SubTyResult<TyCtx> {
+) -> SubTyResult<()> {
     use super::Ownership::*;
     use DataTyKind::*;
 
     match (&sub_dty.dty, &super_dty.dty) {
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
-        (sub, sup) if sub == sup => Ok(ty_ctx),
+        (sub, sup) if sub == sup => Ok(()),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
         (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size))
         | (ArrayShape(sub_elem_ty, sub_size), ArrayShape(sup_elem_ty, sup_size)) => {
@@ -33,47 +33,29 @@ pub(super) fn check(
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′
         (Ref(lref), Ref(rref)) if lref.own == Shrd && rref.own == Shrd => {
-            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
+            outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
             if lref.mem != rref.mem {
                 return Err(SubTyError::MemoryKindsNoMatch);
             }
-            check(
-                kind_ctx,
-                res_outl_ty_ctx,
-                lref.dty.as_ref(),
-                rref.dty.as_ref(),
-            )
+            check(kind_ctx, ty_ctx, lref.dty.as_ref(), rref.dty.as_ref())
         }
         // Δ; Γ ⊢ &B ρ1 uniq τ1 ≲ &B ρ2 uniq τ2 ⇒ Γ''
         (Ref(lref), Ref(rref)) => {
-            let res_outl_ty_ctx = outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
-            let res_forw = check(
-                kind_ctx,
-                res_outl_ty_ctx.clone(),
-                lref.dty.as_ref(),
-                rref.dty.as_ref(),
-            )?;
-            let res_back = check(
-                kind_ctx,
-                res_outl_ty_ctx,
-                rref.dty.as_ref(),
-                lref.dty.as_ref(),
-            )?;
+            if lref.own != rref.own {
+                return Err(SubTyError::OwnershipNoMatch);
+            }
             if lref.mem != rref.mem {
                 return Err(SubTyError::MemoryKindsNoMatch);
             }
-            // TODO find out why this is important (technically),
-            //  and return a proper error if suitable
-            assert_eq!(res_forw, res_back);
-            Ok(res_back)
+            outlives(kind_ctx, ty_ctx, &lref.rgn, &rref.rgn)?;
+            check(kind_ctx, ty_ctx, lref.dty.as_ref(), rref.dty.as_ref())
         }
         // Δ; Γ ⊢ (τ1, ..., τn) ≲ (τ1′, ..., τn′) ⇒ Γn
         (Tuple(sub_elems), Tuple(sup_elems)) => {
-            let mut res_ctx = ty_ctx;
             for (sub, sup) in sub_elems.iter().zip(sup_elems) {
-                res_ctx = check(kind_ctx, res_ctx, sub, sup)?;
+                check(kind_ctx, ty_ctx, sub, sup)?;
             }
-            Ok(res_ctx)
+            Ok(())
         }
         // Δ; Γ ⊢ \delta1 ≲ †\delta2 ⇒ Γ
         (_, Dead(sup)) => check(kind_ctx, ty_ctx, sub_dty, sup),
@@ -90,16 +72,16 @@ pub(super) fn check(
 // Δ; Γ ⊢ ρ1 :> ρ2 ⇒ Γ′
 fn outlives(
     kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
+    ty_ctx: &mut TyCtx,
     longer_prv: &Provenance,
     shorter_prv: &Provenance,
-) -> SubTyResult<TyCtx> {
+) -> SubTyResult<()> {
     use Provenance::*;
 
     match (longer_prv, shorter_prv) {
         // Δ; Γ ⊢ ρ :> ρ ⇒ Γ
         // OL-Refl
-        (longer, shorter) if longer == shorter => Ok(ty_ctx),
+        (longer, shorter) if longer == shorter => Ok(()),
         // TODO transitivity missing
         // OL-Trans
 
@@ -112,7 +94,7 @@ fn outlives(
             kind_ctx
                 .outlives(longer, shorter)
                 .map_err(SubTyError::CtxError)?;
-            Ok(ty_ctx)
+            Ok(())
         }
         // OL-LocalProvenances
         (Value(longer), Value(shorter)) => outl_check_val_prvs(ty_ctx, longer, shorter),
@@ -127,19 +109,19 @@ fn outlives(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> SubTyResult<TyCtx> {
+fn outl_check_val_prvs(ty_ctx: &mut TyCtx, longer: &str, shorter: &str) -> SubTyResult<()> {
     // CHECK:
     //    NOT CLEAR WHY a. IS NECESSARY
     // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan
     //  dereferencing the variable for any provenance in ty_ctx.
 
-    if exists_deref_loan_with_prv(&ty_ctx, longer) {
+    if exists_deref_loan_with_prv(ty_ctx, longer) {
         // TODO better error msg
         return Err(SubTyError::Dummy);
     }
 
     // b. r1 occurs before r2 in Gamma (left to right)
-    if !longer_occurs_before_shorter(&ty_ctx, longer, shorter) {
+    if !longer_occurs_before_shorter(ty_ctx, longer, shorter) {
         return Err(SubTyError::NotOutliving(
             longer.to_string(),
             shorter.to_string(),
@@ -148,8 +130,8 @@ fn outl_check_val_prvs(ty_ctx: TyCtx, longer: &str, shorter: &str) -> SubTyResul
 
     // Create output Ctx
     let longer_loans = ty_ctx.loans_in_prv(longer)?.clone();
-    let res_ty_ctx = ty_ctx.extend_loans_for_prv(shorter, longer_loans)?;
-    Ok(res_ty_ctx)
+    ty_ctx.extend_loans_for_prv(shorter, longer_loans)?;
+    Ok(())
 }
 
 fn longer_occurs_before_shorter(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> bool {
@@ -189,14 +171,14 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         })
 }
 
-fn outl_check_val_ident_prv(ty_ctx: TyCtx, longer_val: &str) -> SubTyResult<TyCtx> {
+fn outl_check_val_ident_prv(ty_ctx: &TyCtx, longer_val: &str) -> SubTyResult<()> {
     // TODO how could the set ever be empty?
     let loan_set = ty_ctx.loans_in_prv(longer_val)?;
     if loan_set.is_empty() {
         return Err(SubTyError::PrvNotUsedInBorrow(longer_val.to_string()));
     }
 
-    borrowed_pl_expr_no_ref_to_existing_pl(&ty_ctx, loan_set);
+    borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx, loan_set);
     panic!("Not yet implemented.")
 }
 
@@ -210,10 +192,10 @@ fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: &HashSet<Loa
 
 fn outl_check_ident_val_prv(
     kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
+    ty_ctx: &TyCtx,
     longer_ident: &Ident,
     shorter_val: &str,
-) -> SubTyResult<TyCtx> {
+) -> SubTyResult<()> {
     if !kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance) {
         return Err(SubTyError::CtxError(CtxError::PrvIdentNotFound(
             longer_ident.clone(),
@@ -224,22 +206,21 @@ fn outl_check_ident_val_prv(
             shorter_val.to_string(),
         )));
     }
-    Ok(ty_ctx)
+    Ok(())
 }
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
 pub(super) fn multiple_outlives<'a, I>(
     kind_ctx: &KindCtx,
-    ty_ctx: TyCtx,
+    ty_ctx: &mut TyCtx,
     prv_rels: I,
-) -> SubTyResult<TyCtx>
+) -> SubTyResult<()>
 where
     I: IntoIterator<Item = (&'a Provenance, &'a Provenance)>,
 {
-    prv_rels
-        .into_iter()
-        .try_fold(ty_ctx, |res_ty_ctx, prv_rel| {
-            let (longer, shorter) = prv_rel;
-            outlives(kind_ctx, res_ty_ctx, longer, shorter)
-        })
+    for prv_rel in prv_rels {
+        let (longer, shorter) = prv_rel;
+        outlives(kind_ctx, ty_ctx, longer, shorter)?;
+    }
+    Ok(())
 }

@@ -951,11 +951,11 @@ fn gen_exec(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> Check
                     },
                     body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Return(None)))),
                 },
-                cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
-                    fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-                    template_args: vec![],
-                    args: vec![],
-                })),
+                cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall::new(
+                    cu::Expr::Ident("__syncthreads".to_string()),
+                    vec![],
+                    vec![],
+                ))),
             ];
 
             // FIXME reintroduce, but differentiate between statically computed and runtime computed
@@ -1038,19 +1038,19 @@ fn gen_exec(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> Check
     codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(desc::BaseExec::CpuThread));
 
     if checks.is_empty() {
-        CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall {
-            fun: Box::new(cu::Expr::Ident(exec_name.to_string())),
-            template_args: vec![],
+        CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall::new(
+            cu::Expr::Ident(exec_name.to_string()),
+            vec![],
             args,
-        }))
+        )))
     } else {
         CheckedExpr::ExprIdxCheck(
             cu::Stmt::Seq(checks),
-            cu::Expr::FnCall(cu::FnCall {
-                fun: Box::new(cu::Expr::Ident(exec_name.to_string())),
-                template_args: vec![],
+            cu::Expr::FnCall(cu::FnCall::new(
+                cu::Expr::Ident(exec_name.to_string()),
+                vec![],
                 args,
-            }),
+            )),
         )
     }
 }
@@ -1092,11 +1092,11 @@ fn gen_indep(
 }
 
 fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
-    let sync = cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
-        fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-        template_args: vec![],
-        args: vec![],
-    }));
+    let sync = cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall::new(
+        cu::Expr::Ident("__syncthreads".to_string()),
+        vec![],
+        vec![],
+    )));
     unimplemented!()
     // match exec {
     //     ParallelityCollec::Split { parall_collec, .. } => gen_sync_stmt(parall_collec),
@@ -1176,16 +1176,16 @@ fn gen_check_idx_stmt(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::St
                     rhs: Box::new(cu::Expr::Nat(n.clone())),
                 },
                 body: Box::new(cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
-                    cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
-                        fun: Box::new(cu::Expr::Ident("descend::atomic_set".to_string())),
-                        template_args: gen_args_kinded(&vec![ArgKinded::DataTy(DataTy::new(
-                            DataTyKind::Scalar(ScalarTy::I32),
-                        ))]),
-                        args: vec![
+                    cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall::new(
+                        cu::Expr::Ident("descend::atomic_set".to_string()),
+                        gen_args_kinded(&[ArgKinded::DataTy(DataTy::new(DataTyKind::Scalar(
+                            ScalarTy::I32,
+                        )))]),
+                        vec![
                             cu::Expr::Ident("global_failure".to_string()),
                             cu::Expr::Lit(cu::Lit::I32(incr_idx_check_counter())),
                         ],
-                    })),
+                    ))),
                     cu::Stmt::Expr(cu::Expr::Ident(format!("goto sync_{}", unsafe {
                         LABEL_COUNTER.load(Ordering::SeqCst)
                     }))),
@@ -1420,11 +1420,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
             }),
             index: i.clone(),
         }),
-        Sync => CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall {
-            fun: Box::new(cu::Expr::Ident("__syncthreads".to_string())),
-            template_args: vec![],
-            args: vec![],
-        })),
+        Sync => CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall::new(
+            cu::Expr::Ident("__syncthreads".to_string()),
+            vec![],
+            vec![],
+        ))),
         Let(_, _, _)
         | LetUninit(_, _)
         | Block(_)
