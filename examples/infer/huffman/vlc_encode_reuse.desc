@@ -223,7 +223,8 @@ fn gpu_vlc_encode<>(
                 }
             }
         };
-        // syncthreads
+
+        sync;
 
         // l_thread_start_value =
         //     index of the value in the output array (32 bits per value) where the codeword
@@ -293,6 +294,7 @@ fn gpu_vlc_encode<>(
                 }
             }
         };
+
         sync;
 
         {
