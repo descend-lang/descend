@@ -4,7 +4,6 @@ extern crate descend;
 
 type Res = Result<(), descend::error::ErrorReported>;
 
-#[ignore]
 #[test]
 fn scale_vec() -> Res {
     Ok(println!(
@@ -31,6 +30,7 @@ fn bitonic_sort() -> Res {
 }
 
 #[ignore]
+#[test]
 fn scan() -> Res {
     eprintln!(
         "Breaks because there are name clashes between nats and type variables.\n \
@@ -43,7 +43,6 @@ fn scan() -> Res {
     ))
 }
 
-#[ignore]
 #[test]
 fn reduce_shared_mem() -> Res {
     Ok(println!(
@@ -52,7 +51,6 @@ fn reduce_shared_mem() -> Res {
     ))
 }
 
-#[ignore]
 #[test]
 fn tree_reduce() -> Res {
     Ok(println!(
@@ -92,4 +90,3 @@ fn lu_decomposition_test() -> Res {
         descend::compile("examples/infer/lu_decomposition.desc")?,
     ))
 }
-

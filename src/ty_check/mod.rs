@@ -26,7 +26,6 @@ macro_rules! matches_dty {
         }
     };
 }
-use crate::ast::utils::fresh_ident;
 pub(crate) use matches_dty;
 
 // ∀ε ∈ Σ. Σ ⊢ ε
@@ -402,9 +401,17 @@ impl TyChecker {
             ExprKind::Range(l, u) => {
                 self.ty_check_range(kind_ctx, exec_borrow_ctx, ty_ctx, ident_exec, exec, l, u)?
             }
-            // ExprKind::BorrowIndex(prv_name, own, arr_expr, idx) => {
-            //     self.ty_check_borrow_idx(kind_ctx, ty_ctx, exec, prv_name, *own, arr_expr, idx)?
-            // }
+            ExprKind::BorrowIndex(prv_name, own, arr_expr, idx) => self.ty_check_borrow_idx(
+                kind_ctx,
+                exec_borrow_ctx,
+                ty_ctx,
+                ident_exec,
+                exec,
+                prv_name,
+                *own,
+                arr_expr,
+                idx,
+            )?,
             ExprKind::Idx(_, _) => {
                 unimplemented!("This is helper syntax to index into non-place expressions.")
             }
@@ -2347,39 +2354,47 @@ impl TyChecker {
         Ok((res_ty_ctx, pl_ty))
     }
 
-    // fn ty_check_borrow_idx(
-    //     &self,
-    //     kind_ctx: &KindCtx,
-    //     ty_ctx: TyCtx,
-    //     exec: Exec,
-    //     prv_val_name: &Option<String>,
-    //     own: Ownership,
-    //     arr_expr: &mut PlaceExpr,
-    //     idx: &Nat,
-    // ) -> TyResult<(TyCtx, Ty)> {
-    //     let (arr_ty_ctx, ref_dty) =
-    //         self.ty_check_borrow(kind_ctx, ty_ctx, exec, prv_val_name, own, arr_expr)?;
-    //     if let TyKind::Data(DataTy {
-    //         dty: DataTyKind::Ref(prv, own, mem, ref_dty),
-    //         ..
-    //     }) = &ref_dty.ty
-    //     {
-    //         match &ref_dty.as_ref().dty {
-    //             DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => Ok((
-    //                 arr_ty_ctx,
-    //                 Ty::new(TyKind::Data(DataTy::new(DataTyKind::Ref(
-    //                     prv.clone(),
-    //                     *own,
-    //                     mem.clone(),
-    //                     Box::new(elem_dty.as_ref().clone()),
-    //                 )))),
-    //             )),
-    //             _ => Err(TyError::String("Expected an array or view.".to_string())),
-    //         }
-    //     } else {
-    //         unreachable!();
-    //     }
-    // }
+    fn ty_check_borrow_idx(
+        &self,
+        kind_ctx: &KindCtx,
+        exec_borrow_ctx: &mut ExecBorrowCtx,
+        ty_ctx: TyCtx,
+        ident_exec: &IdentExec,
+        exec: &ExecExpr,
+        prv_val_name: &Option<String>,
+        own: Ownership,
+        arr_expr: &mut PlaceExpr,
+        idx: &Nat,
+    ) -> TyResult<(TyCtx, Ty)> {
+        let (arr_ty_ctx, ref_dty) = self.ty_check_borrow(
+            kind_ctx,
+            exec_borrow_ctx,
+            ty_ctx,
+            ident_exec,
+            exec,
+            prv_val_name,
+            own,
+            arr_expr,
+        )?;
+        if let DataTyKind::Ref(ref_dty) = &ref_dty.dty().dty {
+            match &ref_dty.dty.dty {
+                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => Ok((
+                    arr_ty_ctx,
+                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                        Box::new(RefDty::new(
+                            ref_dty.rgn.clone(),
+                            ref_dty.own,
+                            ref_dty.mem.clone(),
+                            ref_dty.dty.as_ref().clone(),
+                        )),
+                    ))))),
+                )),
+                _ => Err(TyError::String("Expected an array or view.".to_string())),
+            }
+        } else {
+            unreachable!();
+        }
+    }
 
     fn ty_check_borrow(
         &self,

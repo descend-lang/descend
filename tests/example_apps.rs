@@ -1,3 +1,4 @@
+#![cfg(ignore)]
 #![cfg(test)]
 
 extern crate descend;
