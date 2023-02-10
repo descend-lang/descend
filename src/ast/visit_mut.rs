@@ -191,6 +191,10 @@ pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
     match &mut pl_expr.pl_expr {
         PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
+        PlaceExprKind::Select(p, distrib_exec_idents) => {
+            visitor.visit_pl_expr(p);
+            walk_list!(visitor, visit_ident, distrib_exec_idents);
+        }
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
         }
@@ -349,10 +353,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::Sched(par_for) => {
             visitor.visit_par_for(par_for);
-        }
-        ExprKind::Select(_, p, distrib_exec) => {
-            visitor.visit_pl_expr(p);
-            visitor.visit_ident(distrib_exec);
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(ident);

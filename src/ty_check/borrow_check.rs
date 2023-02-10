@@ -8,19 +8,19 @@ use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
 
-pub(super) struct BorrowCheckCtx<'a> {
-    expr_ty_ctx: &'a ExprTyCtx<'a>,
+pub(super) struct BorrowCheckCtx<'ctxt> {
+    expr_ty_ctx: &'ctxt ExprTyCtx<'ctxt>,
     reborrows: Vec<internal::Place>,
     own: Ownership,
 }
 
-impl<'a> BorrowCheckCtx<'a> {
+impl<'ctxt> BorrowCheckCtx<'ctxt> {
     pub(super) fn new(
-        expr_ty_ctx: &'a ExprTyCtx,
+        expr_ty_ctx: &'ctxt ExprTyCtx,
         reborrows: Vec<internal::Place>,
         own: Ownership,
     ) -> Self {
-        BorrowCheckCtx::<'a> {
+        BorrowCheckCtx::<'ctxt> {
             expr_ty_ctx,
             reborrows: reborrows.to_vec(),
             own,
@@ -34,9 +34,8 @@ impl<'a> BorrowCheckCtx<'a> {
         let mut extended_reborrows = self.reborrows.clone();
         extended_reborrows.extend(iter);
         BorrowCheckCtx {
-            expr_ty_ctx: self.expr_ty_ctx,
             reborrows: extended_reborrows,
-            own: self.own,
+            ..*self
         }
     }
 }
@@ -47,13 +46,17 @@ impl<'a> BorrowCheckCtx<'a> {
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
 pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
     let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
-    let p_exec = &ctx.expr_ty_ctx.ty_ctx.ident_ty(&most_spec_pl.ident)?.exec;
-    borrowable_from_exec_under_exec(ctx.own, &ctx.expr_ty_ctx.exec, p_exec)?;
     if p.is_place() {
         ownership_safe_place(ctx, p)
     } else {
         let pl_ctx_no_deref = pl_ctx.without_innermost_deref();
         // Γ(π) = &r ωπ τπ
+        // Instead of over the type branch via syntax
+        // 1. keep splitting into ctx and most_spec_pl
+        // 2. check innermost context around Hole:
+        //   a. pl => borrowable(); ownership_safe_place
+        //   a. *pl => borrowable(); ownership_safe_deref -- includes both cases branched over type
+        //   b. pl[[_]] => borrowable(); ownership_safe_deref(pl,
         match &ctx.expr_ty_ctx.ty_ctx.place_dty(&most_spec_pl)?.dty {
             DataTyKind::Ref(reff) => match &reff.rgn {
                 Provenance::Value(prv_val_name) => ownership_safe_deref(
@@ -79,43 +82,6 @@ pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<H
     }
 }
 
-fn borrowable_from_exec_under_exec(
-    own: Ownership,
-    under: &ExecExpr,
-    from: &ExecExpr,
-) -> OwnResult<()> {
-    if own == Ownership::Shrd {
-        return Ok(());
-    }
-    if under.exec.base != from.exec.base {
-        return Err(BorrowingError::WrongDevice(
-            under.exec.base.clone(),
-            from.exec.base.clone(),
-        ));
-    }
-    if under.exec.path.len() < from.exec.path.len() {
-        panic!(
-            "Unexpected: Trying to borrow from an execution resource that is \
-                more specific than the current one."
-        )
-    }
-    for (u, f) in under.exec.path.iter().zip(&from.exec.path) {
-        if u != f {
-            panic!("Unexpected: Trying to borrow from divergent execution resource.")
-        }
-    }
-    // let mut previous_distrib = false;
-    for e in &under.exec.path[from.exec.path.len()..] {
-        if let ExecPathElem::Distrib(_) = e {
-            // if previous_distrib {
-            return Err(BorrowingError::MultipleDistribs);
-            // }
-            // previous_distrib = true;
-        }
-    }
-    Ok(())
-}
-
 // TODO remove?
 fn ownership_safe_deref_raw(
     ctx: &BorrowCheckCtx,
@@ -135,6 +101,7 @@ fn ownership_safe_deref_raw(
 }
 
 fn ownership_safe_place(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
+    // borrowable_from_exec_under_exec(ctx, p)?;
     ownership_safe_under_existing_loans(ctx, p)?;
     let mut loan_set = HashSet::new();
     loan_set.insert(Loan {
@@ -152,6 +119,8 @@ fn ownership_safe_deref(
     ref_own: Ownership,
     split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
+    // FIXME
+    // borrowable_from_exec_under_exec(ctx, p)?;
     // Γ(r) = { ω′pi }
     let loans_in_prv = ctx.expr_ty_ctx.ty_ctx.loans_in_prv(prv_val_name)?;
     // ω ≲ ωπ
@@ -210,6 +179,7 @@ fn ownership_safe_deref_abs(
     ref_own: Ownership,
     split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
+    // borrowable_from_exec_under_exec(ctx, p)?;
     let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
@@ -226,6 +196,54 @@ fn ownership_safe_deref_abs(
         own: ctx.own,
     });
     Ok(passed_through_prvs)
+}
+
+fn borrowable_from_exec_under_exec(
+    ctx: &BorrowCheckCtx,
+    pl: &internal::Place,
+    mut execs: &[ExecExpr],
+) -> OwnResult<()> {
+    if ctx.own == Ownership::Shrd {
+        return Ok(());
+    }
+    let mut under = &ctx.expr_ty_ctx.exec;
+    // FIXME allows current to be with extra distrib in comparison to last exec
+    while let Some((mut from, mut prevs)) = execs.split_last() {
+        // TODO remove one distrib from under? the do not allow crossing distrib line
+        //  conflicts with first
+        if under.exec.base != from.exec.base {
+            return Err(BorrowingError::WrongDevice(
+                under.exec.base.clone(),
+                from.exec.base.clone(),
+            ));
+        }
+        if under.exec.path.len() < from.exec.path.len() {
+            panic!(
+                "Unexpected: Trying to borrow from an execution resource that is \
+                more specific than the current one."
+            )
+        }
+        for (u, f) in under.exec.path.iter().zip(&from.exec.path) {
+            if u != f {
+                panic!("Unexpected: Trying to borrow from divergent execution resource.")
+            }
+        }
+        let mut previous_distrib = false;
+        for e in &under.exec.path[from.exec.path.len()..] {
+            if let ExecPathElem::Distrib(_) = e {
+                if previous_distrib {
+                    return Err(BorrowingError::MultipleDistribs);
+                }
+                previous_distrib = true;
+            }
+        }
+        under = from; // TODO remove one distrib somehwere
+        execs = prevs;
+    }
+    // TODO still one distrib distance allowed
+    let from = &ctx.expr_ty_ctx.ty_ctx.ident_ty(&pl.ident)?.exec;
+
+    Ok(())
 }
 
 fn pl_ctxs_and_places_in_loans(

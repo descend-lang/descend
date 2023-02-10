@@ -415,22 +415,15 @@ peg::parser! {
         rule maybe_square_bracket_indexing_assignment() -> Expr =
             p:place_expression()
             idx:(_ "[" _ n:nat() _ "]" { n })?
-            select_info:(_ "[" _ "[" prv:(p:prov_value() __ { p })? ident:ident() _ "]" _ "]" {
-                (prv, ident)
-            })?
             expr:(_ "=" _ e:expression() {e})? { ?
                 match expr {
-                    None => match (idx, select_info) {
-                        (None, None) => Ok(Expr::new(ExprKind::PlaceExpr(Box::new(p)))),
-                        (Some(idx), None) => Ok(Expr::new(ExprKind::Index(Box::new(p), idx))),
-                        (None, Some((prv, ident))) =>
-                            Ok(Expr::new(ExprKind::Select(prv, Box::new(p), Box::new(ident)))),
-                        (Some(_), Some(_)) => Err("cannot select on an indexing expression")
+                    None => match idx {
+                        None => Ok(Expr::new(ExprKind::PlaceExpr(Box::new(p)))),
+                        Some(idx) => Ok(Expr::new(ExprKind::Index(Box::new(p), idx))),
                     },
-                    Some(expr) => match (idx, select_info) {
-                        (None, None) => Ok(Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr)))),
-                        (Some(idx), None) => Ok(Expr::new(ExprKind::IdxAssign(Box::new(p), idx, Box::new(expr)))),
-                        (_, Some(_)) => Err("expected a place expression or indexing, but found a selection instead"),
+                    Some(expr) => match idx {
+                        None => Ok(Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr)))),
+                        Some(idx) => Ok(Expr::new(ExprKind::IdxAssign(Box::new(p), idx, Box::new(expr)))),
                     }
                 }
             }
@@ -485,9 +478,14 @@ peg::parser! {
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
             = precedence!{
-                "*" _ deref:@ { PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref))) }
+                "*" _ deref:@ {
+                    PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref)))
+                }
+                pl_expr:@ idents:(_ "[" _ "[" _ ident:ident() _ "]" _ "]"{ ident }) **<1,> _ {
+                    PlaceExpr::new(PlaceExprKind::Select(Box::new(pl_expr), idents))
+                }
                 --
-                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n))}
+                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {

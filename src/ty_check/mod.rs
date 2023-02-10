@@ -63,13 +63,37 @@ fn ty_check_compil_unit(gl_ctx: &GlobalCtx, compil_unit: &mut CompilUnit) -> TyR
     }
 }
 
-struct ExprTyCtx<'a> {
-    gl_ctx: &'a GlobalCtx,
-    ident_exec: &'a IdentExec,
-    kind_ctx: &'a mut KindCtx,
+struct ExprTyCtx<'ctxt> {
+    gl_ctx: &'ctxt GlobalCtx,
+    ident_exec: &'ctxt IdentExec,
+    kind_ctx: &'ctxt mut KindCtx,
     exec: ExecExpr,
-    ty_ctx: &'a mut TyCtx,
-    exec_borrow_ctx: &'a mut ExecBorrowCtx,
+    ty_ctx: &'ctxt mut TyCtx,
+    exec_borrow_ctx: &'ctxt mut ExecBorrowCtx,
+}
+
+fn new_ty_ctx<'k, 'a: 'k>(old: &'a mut ExprTyCtx<'a>, ty_ctx: &'k mut TyCtx) -> ExprTyCtx<'k> {
+    ExprTyCtx {
+        gl_ctx: old.gl_ctx,
+        ident_exec: old.ident_exec,
+        kind_ctx: &mut *old.kind_ctx,
+        exec: old.exec.clone(),
+        ty_ctx,
+        exec_borrow_ctx: &mut *old.exec_borrow_ctx,
+    }
+}
+
+impl<'ctxt> ExprTyCtx<'ctxt> {
+    fn new_kind_ctx(&'ctxt mut self, kind_ctx: &'ctxt mut KindCtx) -> Self {
+        ExprTyCtx {
+            gl_ctx: self.gl_ctx,
+            ident_exec: self.ident_exec,
+            kind_ctx,
+            exec: self.exec.clone(),
+            ty_ctx: &mut *self.ty_ctx,
+            exec_borrow_ctx: &mut *self.exec_borrow_ctx,
+        }
+    }
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
@@ -179,7 +203,6 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         ExprKind::IdxAssign(pl_expr, idx, e) => ty_check_idx_assign(ctx, pl_expr, idx, e)?,
         ExprKind::Indep(indep) => ty_check_indep(ctx, indep)?,
         ExprKind::Sched(sched) => ty_check_sched(ctx, sched)?,
-        ExprKind::Select(r, p, distrib_exec) => ty_check_select(ctx, r, p, distrib_exec)?,
         ExprKind::ForNat(var, range, body) => ty_check_for_nat(ctx, var, range, body)?,
         ExprKind::For(ident, collec, body) => ty_check_for(ctx, ident, collec, body)?,
         ExprKind::IfElse(cond, case_true, case_false) => {
@@ -730,87 +753,6 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
 //             ExecPathElem::SplitProj(_) => None
 //     })
 // }
-
-fn ty_check_select(
-    ctx: &mut ExprTyCtx,
-    prv_val_name: &Option<String>,
-    p: &mut PlaceExpr,
-    distrib_ident: &Ident,
-) -> TyResult<Ty> {
-    let distrib_exec = ctx.ty_ctx.get_exec_expr(distrib_ident)?.clone();
-    if !ctx.exec.is_sub_exec_of(&distrib_exec) {
-        return Err(TyError::String(
-            "Trying select memory for illegal excution resource.".to_string(),
-        ));
-    }
-
-    pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Shrd), p)?;
-    if let DataTyKind::Ref(ref_dty) = &p.ty.as_ref().unwrap().dty().dty {
-        match &ref_dty.dty.dty {
-            DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
-                // TODO check sizes
-                // if n != distrib_exec.active_distrib_size() {
-                //     return Err(TyError::String("There must be as many elements in the view
-                //  as there exist execution resources that select from it.".to_string()));
-                // }
-                let prv_val_name = infer_and_append_prv(&mut *ctx.ty_ctx, prv_val_name);
-                if !ctx.ty_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
-                    return Err(TyError::PrvValueAlreadyInUse(prv_val_name.to_string()));
-                }
-                // Remove last distrib to get exec that represents the next upper level of the
-                //  thread hierarchy.
-                let last_distrib_offset = if let Some(i) = ctx
-                    .exec
-                    .exec
-                    .path
-                    .iter()
-                    .rposition(|pe| matches!(pe, ExecPathElem::Distrib(_)))
-                {
-                    i
-                } else {
-                    0
-                };
-                let outer_exec = ExecExpr::new(Exec {
-                    base: ctx.exec.exec.base.clone(),
-                    path: ctx.exec.exec.path[..last_distrib_offset].to_vec(),
-                });
-                // Do not typecheck. This exec is only used for borrow checking and should be
-                // removed.
-                // exec::ty_check(&ctx.kind_ctx, &ctx.ty_ctx, &ctx.ident_exec, &mut outer_exec)
-                let select_ctx = ExprTyCtx {
-                    gl_ctx: ctx.gl_ctx,
-                    ident_exec: ctx.ident_exec,
-                    kind_ctx: &mut *ctx.kind_ctx,
-                    exec: outer_exec,
-                    ty_ctx: &mut *ctx.ty_ctx,
-                    exec_borrow_ctx: &mut *ctx.exec_borrow_ctx,
-                };
-                let loans = borrow_check::ownership_safe(
-                    &BorrowCheckCtx::new(&select_ctx, vec![], ref_dty.own),
-                    p,
-                )
-                .map_err(|err| TyError::ConflictingBorrow(Box::new(p.clone()), ref_dty.own, err))?;
-                // TODO store_reborrow_for_exec(distrib_exec, p);
-                let res_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                    Box::new(RefDty::new(
-                        Provenance::Value(prv_val_name.clone()),
-                        ref_dty.own,
-                        ref_dty.mem.clone(),
-                        elem_dty.as_ref().clone(),
-                    )),
-                )))));
-                ctx.exec_borrow_ctx.insert(&distrib_exec, loans.clone());
-                ctx.ty_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
-                Ok(res_dty)
-            }
-            _ => Err(TyError::String("Expected an array or view.".to_string())),
-        }
-    } else {
-        Err(TyError::String(
-            "Expected a reference to an array or view.".to_string(),
-        ))
-    }
-}
 
 fn type_input_idents(
     input_idents: &[Ident],

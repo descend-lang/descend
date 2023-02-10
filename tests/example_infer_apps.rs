@@ -30,6 +30,7 @@ fn bitonic_sort() -> Res {
 }
 
 #[ignore]
+#[test]
 fn scan() -> Res {
     eprintln!(
         "Breaks because there are name clashes between nats and type variables.\n \
