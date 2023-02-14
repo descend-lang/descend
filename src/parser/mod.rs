@@ -81,6 +81,9 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                     self.visit_expr(f);
                     self.subst_in_gen_args(gen_args);
                 }
+                // ExprKind::AppKernel() => {
+                //
+                // }
                 ExprKind::App(f, gen_args, args) => {
                     self.visit_expr(f);
                     self.subst_in_gen_args(gen_args);

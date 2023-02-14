@@ -626,8 +626,8 @@ pub enum ArgKinded {
 impl ArgKinded {
     pub fn kind(&self) -> Kind {
         match self {
-            ArgKinded::Ident(_) => {
-                panic!("Unexpected: unkinded identifier should have been removed after parsing")
+            ArgKinded::Ident(i) => {
+                panic!("Unexpected: unkinded identifier should have been removed after parsing, i: {}", i)
             }
             ArgKinded::DataTy(_) => Kind::DataTy,
             ArgKinded::Provenance(_) => Kind::Provenance,
@@ -1756,8 +1756,8 @@ mod size_asserts {
     static_assert_size!(Nat, 56);
     static_assert_size!(ParamDecl, 72);
     static_assert_size!(Pattern, 40);
-    static_assert_size!(PlaceExpr, 88);
-    static_assert_size!(PlaceExprKind, 40);
+    static_assert_size!(PlaceExpr, 80);
+    static_assert_size!(PlaceExprKind, 32);
     static_assert_size!(ScalarTy, 1);
     static_assert_size!(Ty, 32);
     static_assert_size!(TyKind, 16);
