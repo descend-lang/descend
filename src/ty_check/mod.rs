@@ -2385,7 +2385,7 @@ impl TyChecker {
                             ref_dty.rgn.clone(),
                             ref_dty.own,
                             ref_dty.mem.clone(),
-                            ref_dty.dty.as_ref().clone(),
+                            elem_dty.as_ref().clone(),
                         )),
                     ))))),
                 )),
