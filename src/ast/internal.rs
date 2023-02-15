@@ -4,7 +4,7 @@
 // TODO specific access modifiers
 
 use super::{Ident, Ownership, PlaceExpr, Ty};
-use crate::ast::{ExecExpr, Mutability, PlaceExprKind};
+use crate::ast::{ExecExpr, ExecPathElem, Mutability, PlaceExprKind};
 use std::collections::HashSet;
 
 // TODO give its own struct
@@ -103,6 +103,7 @@ impl Place {
 pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, usize),
     Deref(Box<PlaceCtx>),
+    Select(Box<PlaceCtx>, Vec<Ident>),
     Hole,
 }
 
@@ -117,27 +118,44 @@ impl PlaceCtx {
             Self::Deref(pl_ctx) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
                 pl_ctx.insert_pl_expr(pl_expr),
             ))),
+            Self::Select(pl_ctx, exec_idents) => PlaceExpr::new(PlaceExprKind::Select(
+                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
+                exec_idents.clone(),
+            )),
         }
     }
 
     // Assumes the PlaceCtx HAS an innermost deref, meaning the Hole is wrapped by a Deref.
     // This is always true for PlaceCtxs created by PlaceExpr.to_pl_ctx_and_most_specif_pl
-    pub fn without_innermost_deref(&self) -> Self {
+    pub fn without_innermost_deref(&self) -> (Self, &[Ident]) {
         match self {
-            Self::Hole => Self::Hole,
-            Self::Proj(pl_ctx, _) => {
-                if let Self::Hole = **pl_ctx {
+            PlaceCtx::Hole => (PlaceCtx::Hole, &[]),
+            PlaceCtx::Proj(pl_ctx, i) => {
+                if let PlaceCtx::Hole = **pl_ctx {
                     panic!("There must an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
                 } else {
-                    pl_ctx.without_innermost_deref()
+                    let (inner_ctx, inner_exec_idents) = pl_ctx.without_innermost_deref();
+                    (PlaceCtx::Proj(Box::new(inner_ctx), *i), inner_exec_idents)
                 }
             }
-            Self::Deref(pl_ctx) => {
-                if let Self::Hole = **pl_ctx {
-                    Self::Hole
+            PlaceCtx::Deref(pl_ctx) => {
+                if let PlaceCtx::Hole = **pl_ctx {
+                    (PlaceCtx::Hole, &[])
                 } else {
-                    pl_ctx.without_innermost_deref()
+                    let (inner_ctx, inner_exec_idents) = pl_ctx.without_innermost_deref();
+                    (PlaceCtx::Deref(Box::new(inner_ctx)), inner_exec_idents)
                 }
+            }
+            PlaceCtx::Select(pl_ctx, exec_idents) => {
+                // if let PlaceCtx::Hole = **pl_ctx {
+                //     (PlaceCtx::Hole, exec_idents.as_slice())
+                // } else {
+                let (inner_ctx, inner_exec_idents) = pl_ctx.without_innermost_deref();
+                (
+                    PlaceCtx::Select(Box::new(inner_ctx), exec_idents.clone()),
+                    inner_exec_idents,
+                )
+                // }
             }
         }
     }

@@ -18,10 +18,9 @@ fn gpu_vec_add<r: prv, n: nat>(
     let view_a = group_mut::<1024>(to_view_mut(a_array));
     let view_b = group::<1024>(to_view(b_array));
     sched block in grid {
-        let a_row = &uniq view_a[[block]];
-        let b_row = &shrd view_b[[block]];
         sched thread in block {
-            a_row[[thread]] = a_row[[thread]] + b_row[[thread]]
+            let a_ref = &uniq *view_a[[block]][[thread]];
+            *a_ref = *a_ref + *view_b[[block]][[thread]]
         }
     }
 }

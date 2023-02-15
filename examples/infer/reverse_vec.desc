@@ -3,11 +3,14 @@ fn reverse_block_elems<m: nat, n1: nat, k: nat, r: prv>(
 ) -[grid: gpu.grid<X<m>, X<n1>>]-> () {
     // FIXME, if n is used instead of n1, then k is generated, probably because n is part of the
     //  type definition of group_mut
+    // borrowed: *vec
     let rev_block_view = rev_mut(group_mut::<n1>(to_view_mut(&uniq *vec)));
     sched block in grid {
-        let block_group = &uniq rev_block_view[[block]];
+        // borrowed: rev_block_view[[block]]: block, *vec[[block]]: block
+        let block_group = &uniq *rev_block_view[[block]];
         sched thread in block {
-            let rev_elem_ref = &uniq block_group[[thread]];
+            // borrowed: block_group[[thread]]:thread, rev_block_view[[block]][[thread]]: thread, *vec[[block]][[thread]]: thread
+            let rev_elem_ref = &uniq *block_group[[thread]];
             let tmp = *rev_elem_ref;
             sync // TODO must be enforced!
             // TODO

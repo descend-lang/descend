@@ -1,20 +1,46 @@
+use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
-    DataTy, DataTyKind, ExecTyKind, Ident, Memory, Ownership, PlaceExpr, PlaceExprKind, Provenance,
-    Ty, TyKind,
+    DataTy, DataTyKind, ExecExpr, ExecTyKind, Ident, Memory, Ownership, PlaceExpr, PlaceExprKind,
+    Provenance, Ty, TyKind,
 };
+use crate::ty_check::ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
 
 use crate::ty_check::ExprTyCtx;
 
-pub(super) struct PlExprTyCtx<'a> {
-    expr_ty_ctx: &'a ExprTyCtx<'a>,
+pub(super) struct PlExprTyCtx<'ctxt> {
+    gl_ctx: &'ctxt GlobalCtx,
+    kind_ctx: &'ctxt KindCtx,
+    exec: ExecExpr,
+    ty_ctx: &'ctxt TyCtx,
+    exec_borrow_ctx: &'ctxt ExecBorrowCtx,
     own: Ownership,
 }
 
-impl<'a> PlExprTyCtx<'a> {
-    pub(super) fn new(expr_ty_ctx: &'a ExprTyCtx, own: Ownership) -> Self {
-        PlExprTyCtx { expr_ty_ctx, own }
+impl<'ctxt> PlExprTyCtx<'ctxt> {
+    pub(super) fn new(expr_ty_ctx: &'ctxt ExprTyCtx, own: Ownership) -> Self {
+        PlExprTyCtx {
+            gl_ctx: &*expr_ty_ctx.gl_ctx,
+            kind_ctx: &*expr_ty_ctx.kind_ctx,
+            exec: expr_ty_ctx.exec.clone(),
+            ty_ctx: &*expr_ty_ctx.ty_ctx,
+            exec_borrow_ctx: &*expr_ty_ctx.exec_borrow_ctx,
+            own,
+        }
+    }
+}
+
+impl<'ctxt> From<&'ctxt BorrowCheckCtx<'ctxt>> for PlExprTyCtx<'ctxt> {
+    fn from(ctx: &'ctxt BorrowCheckCtx<'ctxt>) -> Self {
+        PlExprTyCtx::<'ctxt> {
+            gl_ctx: ctx.gl_ctx,
+            kind_ctx: ctx.kind_ctx,
+            exec: ctx.exec.clone(),
+            ty_ctx: ctx.ty_ctx,
+            exec_borrow_ctx: ctx.exec_borrow_ctx,
+            own: Ownership::Shrd,
+        }
     }
 }
 
@@ -57,7 +83,7 @@ fn ty_check_ident(
     ctx: &PlExprTyCtx,
     ident: &Ident,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-    if let Ok(tty) = ctx.expr_ty_ctx.ty_ctx.ty_of_ident(ident) {
+    if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
         // let ident_dty = if let TyKind::Data(dty) = &tty.ty {
         //     dty.as_ref()
         // } else {
@@ -72,7 +98,7 @@ fn ty_check_ident(
         }
         // FIXME Should throw an error if thread local memory is accessed by a block
         //  for example.
-        let mem = default_mem_by_exec(&ctx.expr_ty_ctx.exec.ty.as_ref().unwrap().ty);
+        let mem = default_mem_by_exec(&ctx.exec.ty.as_ref().unwrap().ty);
         Ok((
             tty.clone(),
             if mem.is_some() {
@@ -83,7 +109,7 @@ fn ty_check_ident(
             vec![],
         ))
     } else {
-        let fn_ty = ctx.expr_ty_ctx.gl_ctx.fn_ty_by_ident(ident)?;
+        let fn_ty = ctx.gl_ctx.fn_ty_by_ident(ident)?;
         Ok((
             Ty::new(TyKind::FnTy(Box::new(fn_ty.clone()))),
             vec![],
@@ -187,9 +213,9 @@ fn ty_check_select(
     p: &mut PlaceExpr,
     distrib_idents: &[Ident],
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-    let mut exec = ctx.expr_ty_ctx.exec.clone();
+    let mut exec = ctx.exec.clone();
     for distrib_ident in distrib_idents.iter().rev() {
-        let distrib_exec = ctx.expr_ty_ctx.ty_ctx.get_exec_expr(distrib_ident)?.clone();
+        let distrib_exec = ctx.ty_ctx.get_exec_expr(distrib_ident)?.clone();
         if !exec.is_sub_exec_of(&distrib_exec) {
             return Err(TyError::String(
                 "Trying select memory for illegal combination of excution resources.".to_string(),
@@ -198,32 +224,32 @@ fn ty_check_select(
         exec = distrib_exec;
     }
     let (mut mems, mut prvs) = ty_check_and_passed_mems_prvs(ctx, p)?;
-    if let DataTyKind::Ref(ref_dty) = &p.ty.as_ref().unwrap().dty().dty {
-        if ref_dty.own < ctx.own {
-            return Err(TyError::String(
-                "Trying to dereference and mutably use a shrd reference.".to_string(),
-            ));
-        }
-        mems.push(ref_dty.mem.clone());
-        prvs.push(ref_dty.rgn.clone());
-        let mut res_dty = ref_dty.dty.as_ref().clone();
-        for _ in 0..distrib_idents.len() {
-            match res_dty.dty {
-                DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
-                    // TODO check sizes
-                    // if n != distrib_exec.active_distrib_size() {
-                    //     return Err(TyError::String("There must be as many elements in the view
-                    //  as there exist execution resources that select from it.".to_string()));
-                    // }
-                    res_dty = *elem_dty;
-                }
-                _ => {
-                    return Err(TyError::String("Expected an array or view.".to_string()));
-                }
+    // if let DataTyKind::Ref(ref_dty) = &p.ty.as_ref().unwrap().dty().dty {
+    // if ref_dty.own < ctx.own {
+    //     return Err(TyError::String(
+    //         "Trying to dereference and mutably use a shrd reference.".to_string(),
+    //     ));
+    // }
+    // mems.push(ref_dty.mem.clone());
+    // prvs.push(ref_dty.rgn.clone());
+    let mut p_dty = p.ty.as_ref().unwrap().dty().clone();
+    for _ in 0..distrib_idents.len() {
+        match p_dty.dty {
+            DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
+                // TODO check sizes
+                // if n != distrib_exec.active_distrib_size() {
+                //     return Err(TyError::String("There must be as many elements in the view
+                //  as there exist execution resources that select from it.".to_string()));
+                // }
+                p_dty = *elem_dty;
+            }
+            _ => {
+                return Err(TyError::String("Expected an array or view.".to_string()));
             }
         }
-        Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
-    } else {
-        Err(TyError::String("Expected a reference.".to_string()))
     }
+    Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
+    // } else {
+    //     Err(TyError::String("Expected a reference.".to_string()))
+    // }
 }

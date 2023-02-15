@@ -725,7 +725,14 @@ impl PlaceExpr {
     // TODO refactor see to_place
     pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, internal::Place) {
         match &self.pl_expr {
-            PlaceExprKind::Select(inner_ple, _) | PlaceExprKind::Deref(inner_ple) => {
+            PlaceExprKind::Select(inner_ple, exec_idents) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (
+                    internal::PlaceCtx::Select(Box::new(pl_ctx), exec_idents.clone()),
+                    pl,
+                )
+            }
+            PlaceExprKind::Deref(inner_ple) => {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 (internal::PlaceCtx::Deref(Box::new(pl_ctx)), pl)
             }
@@ -846,11 +853,11 @@ impl Exec {
     pub fn new(base: BaseExec) -> Self {
         Exec { base, path: vec![] }
     }
-    //
-    // pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
-    //     Exec { base, path }
-    // }
-    //
+
+    pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
+        Exec { base, path }
+    }
+
     // pub fn append(mut self, path: Vec<ExecPathElem>) -> Self {
     //     self.path.append(&mut path);
     //     self

@@ -18,8 +18,7 @@ fn par_scale_vec<n: nat, r: prv>(
     );
     sched block in grid {
         sched thread in block {
-            let block_groups = &uniq groups[[block]];
-            let v = &uniq block_groups[[thread]];
+            let v = &uniq *groups[[block]][[thread]];
             *v = *v * 3.0
         }
     }
