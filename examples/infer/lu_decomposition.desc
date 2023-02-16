@@ -10,7 +10,7 @@ fn lud_descend<tile_size: nat, matrix_dim: nat>(
     for_nat it in 0..(matrix_dim/tile_size-1) {
 
         //1-D Grid mit 1-D Threads
-        //lud_diagonal::<<<X<1>, X<tile_size>>>>::<it, tile_size, matrix_dim>(&uniq m_gpu);
+        lud_diagonal::<<<X<1>, X<tile_size>>>>::<it, tile_size, matrix_dim>(&uniq m_gpu);
 
         lud_perimeter::<it, tile_size, matrix_dim>(&uniq m_gpu);
 
