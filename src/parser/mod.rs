@@ -81,18 +81,17 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                     self.visit_expr(f);
                     self.subst_in_gen_args(gen_args);
                 }
-                // TODO
-                // ExprKind::AppKernel(app_kernel) => {
-                //     let AppKernel {
-                //         grid_dim,
-                //         block_dim,
-                //         shared_mem_dtys,
-                //         shared_mem_prvs,
-                //         fun,
-                //         gen_args,
-                //         args,
-                //     } = app_kernel;
-                // }
+                ExprKind::AppKernel(app_kernel) => {
+                    let AppKernel {
+                        fun,
+                        gen_args,
+                        args,
+                        ..
+                    } = app_kernel.as_mut();
+                    self.visit_expr(fun);
+                    self.subst_in_gen_args(gen_args);
+                    visit_mut::walk_list!(self, visit_expr, args)
+                }
                 ExprKind::App(f, gen_args, args) => {
                     self.visit_expr(f);
                     self.subst_in_gen_args(gen_args);
