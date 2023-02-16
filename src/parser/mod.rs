@@ -284,9 +284,6 @@ peg::parser! {
             x:(@) _ "/" _ y:@ { utils::make_binary(BinOp::Div, x, y) }
             x:(@) _ "%" _ y:@ { utils::make_binary(BinOp::Mod, x, y) }
             --
-            x: (@) _ ".." _ y: @ {
-                Expr::new(ExprKind::Range(Box::new(x), Box::new(y)))
-            }
             "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
             "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
             --

@@ -430,7 +430,8 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                     };
                     (init_decl, cond, iter)
                 }
-                _ => panic!("Currently ranges are assumed to be predeclared functions."),
+
+                _ => panic!("Currently ranges are assumed to be predeclared functions. \n{:?}", range),
             };
 
             cu::Stmt::ForLoop {
@@ -2432,7 +2433,7 @@ impl ShapeExpr {
                     panic!("Taking a reference of a view means it must have been reborrowed.")
                 }
             }
-            desc::ExprKind::Index(pl_expr, idx) => ShapeExpr::Idx {
+            desc::ExprKind::Index(pl_expr, idx)| desc::ExprKind::BorrowIndex(_, _, pl_expr, idx) => ShapeExpr::Idx {
                 idx: idx.clone(),
                 shape: Box::new(ShapeExpr::create_from(
                     &desc::Expr::new(desc::ExprKind::PlaceExpr(pl_expr.clone())),
@@ -2509,10 +2510,10 @@ impl ShapeExpr {
                 i: *i,
             },
             desc::PlaceExpr {
-                pl_expr: desc::PlaceExprKind::Deref(_),
+                pl_expr: desc::PlaceExprKind::Deref(pl_expr),
                 ..
             } => {
-                panic!("It is not possible to take references of shapes. This should never happen.")
+                ShapeExpr::create_pl_expr_shape(pl_expr, codegen_ctx)
             }
         }
     }
