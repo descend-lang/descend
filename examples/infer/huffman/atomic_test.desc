@@ -1,0 +1,32 @@
+fn hist<i: prv, o: prv>(
+    h: &o uniq cpu.mem [u32; 256]
+) -[t: cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let mut d = gpu_alloc_copy(&uniq gpu, &shrd *h);
+    atomic_test::<<<X<2>, X<32>; [AtomicU32; 32]>>>(&uniq d);
+    copy_to_host(&shrd d, h)
+}
+
+fn atomic_test<>(
+    g: &uniq gpu.global [u32; 32],
+    s: &uniq gpu.shared [AtomicU32; 32]
+) -[grid: gpu.grid<X<2>, X<32>>]-> () {
+    let g_atomic = to_atomic_array(g);
+    let g_atomic_view = to_view(&shrd *g_atomic);
+    let s_view = to_view(&shrd *s);
+    sched block in grid {
+        sched thread in block {
+            let d_atomic_item = g_atomic_view[[thread]];
+            let s_item = s_view[[thread]];
+            atomic_store(&shrd *s_item, 0u32);
+            sync;
+            atomic_fetch_add(&shrd (*s)[0], 1u32);
+            sync;
+            atomic_fetch_add(
+                &shrd *d_atomic_item,
+                atomic_load( &shrd *s_item )
+            )
+        }
+    }
+}

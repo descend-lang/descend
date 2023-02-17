@@ -13,6 +13,15 @@ pub static SHARED_ALLOC: &str = "shared_alloc";
 pub static COPY_TO_GPU: &str = "copy_to_gpu";
 pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
+pub static SHFL_UP: &str = "shfl_up";
+pub static NAT_AS_U64: &str = "nat_as_u64";
+pub static THREAD_ID_X: &str = "thread_id_x";
+
+pub static ATOMIC_STORE: &str = "atomic_store";
+pub static ATOMIC_LOAD: &str = "atomic_load";
+pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
+pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
+pub static TO_ATOMIC_ARRAY: &str = "to_atomic_array";
 
 pub static CREATE_ARRAY: &str = "create_array";
 
@@ -29,18 +38,6 @@ pub static TRANSPOSE_MUT: &str = "transpose_mut";
 pub static MAP: &str = "map";
 pub static MAP_MUT: &str = "map_mut";
 
-//pub static TO_WARPS: &str = "to_warps";
-pub static SHFL_UP: &str = "shfl_up";
-pub static NAT_AS_U64: &str = "nat_as_u64";
-
-pub static THREAD_ID_X: &str = "thread_id_x";
-
-pub static TO_ATOMIC_ARRAY: &str = "to_atomic_array";
-pub static ATOMIC_STORE: &str = "atomic_store";
-pub static ATOMIC_LOAD: &str = "atomic_load";
-pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
-pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
-
 pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
     let decls = [
         // Built-in functions
@@ -54,7 +51,14 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (TO_RAW_PTR, to_raw_ptr_ty()),
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
         (SHFL_UP, shfl_up_ty()),
+        (THREAD_ID_X, thread_id_x_ty()),
         (NAT_AS_U64, nat_as_u64_ty()),
+        // Built-in atomic functions
+        (ATOMIC_STORE, atomic_store_ty()),
+        (ATOMIC_LOAD, atomic_load_ty()),
+        (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
+        (ATOMIC_FETCH_ADD, atomic_fetch_add_ty()),
+        (TO_ATOMIC_ARRAY, to_atomic_array_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -68,13 +72,6 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (JOIN_MUT, join_ty(Ownership::Uniq)),
         (TRANSPOSE, transpose_ty(Ownership::Shrd)),
         (TRANSPOSE_MUT, transpose_ty(Ownership::Uniq)),
-        //(TO_WARPS, to_warps_ty()),
-        (THREAD_ID_X, thread_id_x_ty()),
-        (TO_ATOMIC_ARRAY, to_atomic_array_ty()),
-        (ATOMIC_STORE, atomic_store_ty()),
-        (ATOMIC_LOAD, atomic_load_ty()),
-        (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
-        (ATOMIC_FETCH_ADD, atomic_fetch_add_ty()),
     ];
 
     decls.to_vec()
@@ -172,7 +169,7 @@ fn offset_raw_ptr_ty() -> FnTy {
 }
 
 // shfl_up:
-//  <>(u32, i32) -> u32
+//  <>(u32, i32) -[gpu.warp]-> u32
 fn shfl_up_ty() -> FnTy {
     FnTy::new(
         vec![],
@@ -192,7 +189,7 @@ fn shfl_up_ty() -> FnTy {
 }
 
 // nat_as_u64:
-//  <n: nat>() -> u64
+//  <n: nat>() -[view]-> u64
 fn nat_as_u64_ty() -> FnTy {
     let n = Ident::new("n");
     let n_nat = IdentKinded {
@@ -202,9 +199,9 @@ fn nat_as_u64_ty() -> FnTy {
     FnTy::new(
         vec![n_nat],
         vec![],
-        ExecTy::new(ExecTyKind::GpuWarp),
+        ExecTy::new(ExecTyKind::View),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::U32,
+            ScalarTy::U64,
         ))))),
     )
 }

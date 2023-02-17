@@ -83,6 +83,14 @@ fn histogram() -> Res {
 }
 
 #[test]
+fn atomic_test() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/atomic_test.desc")?
+    ))
+}
+
+#[test]
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",

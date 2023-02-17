@@ -1,23 +1,22 @@
-fn hist<i: prv, o: prv>(
-    h_in: &s shrd cpu.mem [u8; 64*1024],
+fn hist<i: prv, o: prv, gs:nat, ts:nat>(
+    h_in: &s shrd cpu.mem [u8; gs*256*ts],
     h_out: &o uniq cpu.mem [u32; 256]
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
     let d_in = gpu_alloc_copy(&uniq gpu, &shrd *h_in);
     let mut d_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
-    gpu_hist::<<<X<64>, X<1024>; [AtomicU32; 256]>>>(&shrd d_in, &uniq d_out);
+    gpu_hist::<<<X<gs>, X<256>; [AtomicU32; 256]>>>(&shrd d_in, &uniq d_out);
     copy_to_host(&shrd d_out, h_out)
 }
 
-
-fn gpu_hist<>(
-    d_in: &shrd gpu.global [u8; 64*1024],
+fn gpu_hist<gs:nat, ts:nat>(
+    d_in: &shrd gpu.global [u8; gs*256*ts],
     d_out: &uniq gpu.global [u32; 256],
     s_block_out: &uniq gpu.shared [AtomicU32; 256]
-) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
+) -[grid: gpu.grid<X<gs>, X<256>>]-> () {
 
-    let d_in_groups = group::<1024>(to_view(d_in));
+    let d_in_groups = group::<256>(transpose(group::<(gs*256)>(to_view(d_in))));
     let d_out_atomic = to_atomic_array(d_out);
     let d_out_atomic_view = to_view(&shrd *d_out_atomic);
 
@@ -26,39 +25,22 @@ fn gpu_hist<>(
     sched block in grid {
         let d_in_group = d_in_groups[[block]];
 
-        // initialize shared memory histogram
-        indep(X) 256 block {
-            active => {
-                sched thread in active {
-                    let s_block_out_item = s_block_out_view[[thread]];
-                    atomic_store(&shrd *s_block_out_item, 0u32)
-                }
-            },
-            inactive => { () }
-        };
-
-        sync;
-
         sched thread in block {
+            let s_block_out_item = s_block_out_view[[thread]];
             let d_in_item = d_in_group[[thread]];
-            let tmp = *d_in_item;
-            atomic_fetch_add(&shrd (*s_block_out)[tmp], 1u32)
-        };
+            let d_out_atomic_item = d_out_atomic_view[[thread]];
 
-        sync;
-
-        indep(X) 256 block {
-            active => {
-                sched thread in active {
-                    let d_out_atomic_item = d_out_atomic_view[[thread]];
-                    let s_block_out_item = s_block_out_view[[thread]];
-                    atomic_fetch_add(
-                        &shrd *d_out_atomic_item,
-                        atomic_load( &shrd *s_block_out_item )
-                    )
-                }
-            },
-            inactive => { () }
+            atomic_store(&shrd *s_block_out_item, 0u32);
+            sync;
+            for_nat i in range(0, ts) {
+                let tmp = d_in_item[i];
+                atomic_fetch_add(&shrd (*s_block_out)[tmp], 1u32)
+            };
+            sync;
+            atomic_fetch_add(
+                &shrd *d_out_atomic_item,
+                atomic_load( &shrd *s_block_out_item )
+            )
         }
     }
 }

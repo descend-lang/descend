@@ -1417,8 +1417,10 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
                         .iter()
                         .any(|(name, _)| &ident.name.as_ref() == name) =>
                 {
-                    if (*ident.name == *"nat_as_u64") {
+                    if *ident.name == *"nat_as_u64" {
                         gen_nat_as_u64(kinded_args)
+                    } else if *ident.name == *"to_atomic_array" {
+                        gen_to_atomic_array(args, codegen_ctx)
                     } else {
                         let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
                         CheckedExpr::Expr(cu::Expr::FnCall(create_fn_call(
@@ -2223,6 +2225,10 @@ fn gen_nat_as_u64(templ_args: &[desc::ArgKinded]) -> CheckedExpr {
     } else {
         panic!("This should never happen!")
     }
+}
+
+fn gen_to_atomic_array(args: &Vec<Expr>, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
+    CheckedExpr::Expr(gen_fn_call_args(args, codegen_ctx)[0].clone())
 }
 
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {

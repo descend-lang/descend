@@ -99,37 +99,19 @@ fn gpu_vlc_encode<>(
             let tmp_source_data_item = *g_source_data_item;
 
             // declare temporary variables
-            let mut tmp_source_data_item_i: u8;
-            let mut tmp_cw: u32;
-            let mut tmp_cwl: u32;
 
-            // encode first symbol
-            tmp_source_data_item_i = (tmp_source_data_item >> 24) as u8;
-            tmp_cw = s_codewords[tmp_source_data_item_i];
-            tmp_cwl = s_codewordlens[tmp_source_data_item_i];
-            l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
-            l_thread_out_len = l_thread_out_len + tmp_cwl;
+            let mut tmp_source_data_item_i: u8 = 0u8;
+            let mut tmp_cw: u32 = 0u32;
+            let mut tmp_cwl: u32 = 0u32;
 
-            // encode second symbol
-            tmp_source_data_item_i = (tmp_source_data_item >> 16) as u8;
-            tmp_cw = s_codewords[tmp_source_data_item_i];
-            tmp_cwl = s_codewordlens[tmp_source_data_item_i];
-            l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
-            l_thread_out_len = l_thread_out_len + tmp_cwl;
-
-            // encode third symbol
-            tmp_source_data_item_i = (tmp_source_data_item >> 8) as u8;
-            tmp_cw = s_codewords[tmp_source_data_item_i];
-            tmp_cwl = s_codewordlens[tmp_source_data_item_i];
-            l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
-            l_thread_out_len = l_thread_out_len + tmp_cwl;
-
-            // encode fourth symbol
-            tmp_source_data_item_i = tmp_source_data_item as u8;
-            tmp_cw = s_codewords[tmp_source_data_item_i];
-            tmp_cwl = s_codewordlens[tmp_source_data_item_i];
-            l_thread_out = (l_thread_out<<tmp_cwl) | tmp_cw as u64;
-            l_thread_out_len = l_thread_out_len + tmp_cwl
+            for_nat i in range(0,4) {
+                tmp_source_data_item_i =
+                        (tmp_source_data_item >> 8 * (3 - (nat_as_u64::<i>() as i32))) as u8;
+                tmp_cw = s_codewords[tmp_source_data_item_i];
+                tmp_cwl = s_codewordlens[tmp_source_data_item_i];
+                l_thread_out = (l_thread_out << tmp_cwl) | tmp_cw as u64;
+                l_thread_out_len = l_thread_out_len + tmp_cwl
+            }
         };
 
         // ---------------------------------------------------------------------------------
