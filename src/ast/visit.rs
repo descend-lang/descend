@@ -194,6 +194,10 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
             visitor.visit_pl_expr(p);
             walk_list!(visitor, visit_ident, distrib_exec_idents);
         }
+        PlaceExprKind::SplitAt(split_pos, pl_expr) => {
+            visitor.visit_nat(split_pos);
+            visitor.visit_pl_expr(pl_expr);
+        }
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
         }

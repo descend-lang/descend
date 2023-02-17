@@ -22,12 +22,12 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
     let block_group = group::<1024>(to_view(vec));
     let view_out = group_mut::<1>(to_view_mut(out_vec));
     sched block in grid {
-        let ib = &shrd block_group[[block]];
-        let out_elem = &uniq view_out[[block]];
+        let ib = &shrd *block_group[[block]];
+        let out_elem = &uniq *view_out[[block]];
         let tmp_view = to_view_mut(&uniq *tmp);
         sched thread in block {
-            let inp = &shrd ib[[thread]];
-            let tmp_in = &uniq tmp_view[[thread]];
+            let inp = &shrd *ib[[thread]];
+            let tmp_in = &uniq *tmp_view[[thread]];
             *tmp_in = *inp
         };
 
@@ -42,8 +42,8 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
             indep(X) k block {
                 active =>
                     sched thread in active {
-                        let a = &uniq active_half0[[thread]];
-                        let b = &shrd active_half1[[thread]];
+                        let a = &uniq *active_half0[[thread]];
+                        let b = &shrd *active_half1[[thread]];
                         *a = *a + *b
                     },
                 inactive => { () }
@@ -54,8 +54,8 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
         indep(X) 1 block {
             single_thread =>
                 sched thread in single_thread {
-                    let out = &uniq out_elem[[thread]];
-                    let tmp_val = &shrd tmp_res[[thread]];
+                    let out = &uniq *out_elem[[thread]];
+                    let tmp_val = &shrd *tmp_res[[thread]];
                     *out = *tmp_val
                 },
             rest => { () }

@@ -2,8 +2,8 @@ use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
-    DataTy, DataTyKind, ExecExpr, ExecTyKind, Ident, Memory, Ownership, PlaceExpr, PlaceExprKind,
-    Provenance, Ty, TyKind,
+    BinOpNat, DataTy, DataTyKind, ExecExpr, ExecTyKind, Ident, Memory, Nat, Ownership, PlaceExpr,
+    PlaceExprKind, Provenance, Ty, TyKind,
 };
 use crate::ty_check::ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
 
@@ -74,6 +74,10 @@ fn ty_check_and_passed_mems_prvs(
         PlaceExprKind::Deref(borr_expr) => ty_check_deref(ctx, borr_expr)?,
         // TC-Select
         PlaceExprKind::Select(p, distrib_execs) => ty_check_select(ctx, p, distrib_execs)?,
+        // TC-Split-Proj
+        PlaceExprKind::SplitAt(split_pos, split_pl_expr) => {
+            ty_check_split_at(ctx, split_pl_expr, split_pos)?
+        }
     };
     pl_expr.ty = Some(Box::new(ty));
     Ok((mem, prvs))
@@ -252,4 +256,38 @@ fn ty_check_select(
     // } else {
     //     Err(TyError::String("Expected a reference.".to_string()))
     // }
+}
+
+fn ty_check_split_at(
+    ctx: &PlExprTyCtx,
+    p: &mut PlaceExpr,
+    split_pos: &Nat,
+) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, p)?;
+    if let DataTyKind::ArrayShape(elem_dty, n) = &p.ty.as_ref().unwrap().dty().dty {
+        if split_pos > n {
+            return Err(TyError::String(
+                "Trying to access array out-of-bounds.".to_string(),
+            ));
+        }
+
+        let lhs_size = split_pos.clone();
+        let rhs_size = Nat::BinOp(
+            BinOpNat::Sub,
+            Box::new(n.clone()),
+            Box::new(split_pos.clone()),
+        );
+        Ok((
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
+                vec![
+                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), lhs_size)),
+                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), rhs_size)),
+                ],
+            ))))),
+            mems,
+            passed_prvs,
+        ))
+    } else {
+        Err(TyError::UnexpectedType)
+    }
 }

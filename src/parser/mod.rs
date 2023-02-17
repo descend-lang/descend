@@ -308,11 +308,7 @@ peg::parser! {
                     |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
                 )
             }
-            begin:position!() "split" __ r1:(prv:prov_value() __ { prv })?
-                    r2:(prv:prov_value()  __ { prv })? o:ownership() __
-                    s:nat() __ view:place_expression() end:position!() {
-                Expr::new(ExprKind::Split(Box::new(ExprSplit::new(r1, r2, o, s, view))))
-            }
+
             begin:position!() func:ident() place_end:position!() _
                 kind_args:kind_args()?
                 args:args() end:position!()
@@ -360,7 +356,6 @@ peg::parser! {
                         args,
                     })))
             }
-
             l:literal() {
                 Expr::with_type(
                     ExprKind::Lit(l),
@@ -497,6 +492,11 @@ peg::parser! {
                 }
                 --
                 proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
+                --
+                view:@ _ "[" _ ".." _ split_pos:nat() _ ".." _ "]" {
+                    PlaceExpr::new(
+                        PlaceExprKind::SplitAt(Box::new(split_pos), Box::new(view)))
+                }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -725,7 +725,7 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to" / "with"
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
+                / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
                 / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view")
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']

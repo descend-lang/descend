@@ -1602,6 +1602,7 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, codegen_ctx: &mut CodegenCtx) -> cu::E
                     };
                     cu::Expr::Ident(name)
             }
+            desc::PlaceExprKind::SplitAt(_, pl_expr) => gen_pl_expr(pl_expr, codegen_ctx),
             desc::PlaceExprKind::Proj(pl, n) => //match pl_expr.to_place() {
                 // // FIXME this does not work when there are tuples inside of shape tuples
                 // Some(p) if codegen_ctx.shape_ctx.contains_key(&p.ident.name) => gen_shape(
@@ -2225,15 +2226,9 @@ impl ShapeExpr {
                 i: *i,
             },
             desc::ExprKind::Tuple(elems) => ShapeExpr::create_tuple_shape(elems, codegen_ctx),
-            desc::ExprKind::Ref(_, _, pl_expr) => match &pl_expr.pl_expr {
-                desc::PlaceExprKind::Deref(ple) => {
-                    ShapeExpr::create_pl_expr_shape(ple.as_ref(), codegen_ctx)
-                }
-                desc::PlaceExprKind::Select(_, _) => {
-                    ShapeExpr::create_pl_expr_shape(pl_expr, codegen_ctx)
-                }
-                _ => panic!("Taking a reference of a view means it must have been reborrowed."),
-            },
+            desc::ExprKind::Ref(_, _, pl_expr) => {
+                ShapeExpr::create_pl_expr_shape(pl_expr, codegen_ctx)
+            }
             desc::ExprKind::Index(pl_expr, idx) => ShapeExpr::Idx {
                 idx: idx.clone(),
                 shape: Box::new(ShapeExpr::create_from(
@@ -2301,7 +2296,10 @@ impl ShapeExpr {
                 shape: Box::new(ShapeExpr::create_pl_expr_shape(vv, codegen_ctx)),
                 i: *i,
             },
-
+            desc::PlaceExpr {
+                pl_expr: desc::PlaceExprKind::SplitAt(pos, pl_expr),
+                ..
+            } => Self::create_split_at_shape(pos, pl_expr, codegen_ctx),
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Select(pl_expr, exec_idents),
                 ..

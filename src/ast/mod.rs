@@ -121,6 +121,7 @@ impl Expr {
                 PlaceExprKind::Proj(tuple, _) => pl_expr_contains_name_in(tuple, idents),
                 PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
                 PlaceExprKind::Select(pl_expr, _) => pl_expr_contains_name_in(pl_expr, idents),
+                PlaceExprKind::SplitAt(_, pl_expr) => pl_expr_contains_name_in(pl_expr, idents),
             }
         }
 
@@ -172,7 +173,7 @@ impl Expr {
                                     self.visit_expr(&mut ref_expr);
                                     *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
                                 }
-                                PlaceExprKind::Select(pl_expr, exec_ident) => {
+                                PlaceExprKind::Select(_, _) | PlaceExprKind::SplitAt(_, _) => {
                                     unimplemented!()
                                 }
                             }
@@ -666,9 +667,15 @@ pub enum SplitTag {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExprKind {
+    // p[[x]]
     Select(Box<PlaceExpr>, Vec<Ident>),
+    // p[..k] | p[k..]
+    SplitAt(Box<Nat>, Box<PlaceExpr>),
+    // p.0 | p.1
     Proj(Box<PlaceExpr>, usize),
+    // *p
     Deref(Box<PlaceExpr>),
+    // x
     Ident(Ident),
 }
 
@@ -695,7 +702,9 @@ impl PlaceExpr {
         match &self.pl_expr {
             PlaceExprKind::Ident(_) => true,
             PlaceExprKind::Proj(ple, _) => ple.is_place(),
-            PlaceExprKind::Select(_, _) | PlaceExprKind::Deref(_) => false,
+            PlaceExprKind::Select(_, _)
+            | PlaceExprKind::Deref(_)
+            | PlaceExprKind::SplitAt(_, _) => false,
         }
     }
 
@@ -706,6 +715,7 @@ impl PlaceExpr {
                 PlaceExprKind::Proj(pl_expr, _) => self.prefix_of(pl_expr),
                 PlaceExprKind::Deref(pl_expr) => self.prefix_of(pl_expr),
                 PlaceExprKind::Select(pl_expr, _) => self.prefix_of(pl_expr),
+                PlaceExprKind::SplitAt(_, pl_expr) => self.prefix_of(pl_expr),
                 PlaceExprKind::Ident(_) => false,
             }
         } else {
@@ -729,6 +739,13 @@ impl PlaceExpr {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 (
                     internal::PlaceCtx::Select(Box::new(pl_ctx), exec_idents.clone()),
+                    pl,
+                )
+            }
+            PlaceExprKind::SplitAt(split_pos, inner_ple) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (
+                    internal::PlaceCtx::SplitAt(split_pos.clone(), Box::new(pl_ctx)),
                     pl,
                 )
             }
@@ -773,6 +790,9 @@ impl fmt::Display for PlaceExpr {
                     write!(f, "[[{}]]", i)?;
                 }
                 Ok(())
+            }
+            PlaceExprKind::SplitAt(split_pos, pl_expr) => {
+                write!(f, "{}[..{}..]", pl_expr, split_pos)
             }
             PlaceExprKind::Ident(ident) => write!(f, "{}", ident),
         }
