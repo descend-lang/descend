@@ -227,7 +227,7 @@ fn ty_check_select(
         }
         exec = distrib_exec;
     }
-    let (mut mems, mut prvs) = ty_check_and_passed_mems_prvs(ctx, p)?;
+    let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, p)?;
     // if let DataTyKind::Ref(ref_dty) = &p.ty.as_ref().unwrap().dty().dty {
     // if ref_dty.own < ctx.own {
     //     return Err(TyError::String(

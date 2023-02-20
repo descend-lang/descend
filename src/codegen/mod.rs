@@ -2,6 +2,7 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
+use crate::ast::utils;
 use crate::ast::visit::Visit;
 use crate::ty_check;
 use crate::ty_check::matches_dty;
@@ -1119,9 +1120,12 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
         }
         Lambda(params, exec_decl, dty, body) => CheckedExpr::Expr(cu::Expr::Lambda {
             captures: {
-                let mut free_idents = desc::utils::FreeKindedIdents::new();
-                free_idents.visit_expr(body);
-                free_idents.set.iter().map(|ki| ki.ident.clone()).collect()
+                // FIXME should list all captures not just generic arguments
+                // free_idents(body)
+                //     .iter()
+                //     .map(|ki| ki.ident.clone())
+                //     .collect()
+                vec![]
             },
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
@@ -1244,9 +1248,6 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
             "Trying to generate a statement where an expression is expected:\n{:?}",
             &expr
         ),
-        Split(_) => {
-            panic!("The split operator should have been descontructed by now.")
-        }
         Range(_, _) => {
             panic!("Range should be deconstructed at a different place.")
         }
@@ -1831,7 +1832,7 @@ fn gen_shape(
                                 {
                                     let app_f = ShapeExpr::applied_shape_fun(
                                         std::iter::empty(),
-                                        &[],
+                                        std::iter::empty(),
                                         vf.param_decls.iter().map(|p| p.ident.name.as_ref()),
                                         &[idx],
                                         &vf.body.body,
@@ -1851,7 +1852,7 @@ fn gen_shape(
                         desc::ExprKind::Lambda(param_decl, _, _, body) => {
                             let app_f = ShapeExpr::applied_shape_fun(
                                 std::iter::empty(),
-                                &[],
+                                std::iter::empty(),
                                 param_decl.iter().map(|p| p.ident.name.as_ref()),
                                 &[idx],
                                 body,
@@ -2178,8 +2179,8 @@ impl ShapeExpr {
                             .find(|vf| vf.ident.name == ident.name)
                         {
                             ShapeExpr::applied_shape_fun(
-                                vf.generic_params.iter().map(|g| g.ident.name.as_ref()),
-                                gen_args,
+                                vf.generic_params.iter(),
+                                gen_args.iter(),
                                 vf.param_decls.iter().map(|p| p.ident.name.as_ref()),
                                 args,
                                 &vf.body.body,
@@ -2194,7 +2195,7 @@ impl ShapeExpr {
                 } else if let desc::ExprKind::Lambda(params, _, _, body) = &f.expr {
                     ShapeExpr::applied_shape_fun(
                         std::iter::empty(),
-                        &[],
+                        std::iter::empty(),
                         params.iter().map(|p| p.ident.name.as_ref()),
                         args,
                         body,
@@ -2202,20 +2203,6 @@ impl ShapeExpr {
                     )
                 } else {
                     panic!("Non-globally defined shape functions do not exist.")
-                }
-            }
-            desc::ExprKind::Split(expr_split) => {
-                if let desc::PlaceExpr {
-                    pl_expr: desc::PlaceExprKind::Deref(shape),
-                    ..
-                } = expr_split.view.as_ref()
-                {
-                    ShapeExpr::create_split_at_shape(&expr_split.pos, shape.as_ref(), codegen_ctx)
-                } else {
-                    panic!(
-                        "An error pointing out that only a value must be split by reborrowing \
-                        should have been thrown before."
-                    )
                 }
             }
             desc::ExprKind::PlaceExpr(pl_expr) => {
@@ -2250,22 +2237,22 @@ impl ShapeExpr {
         }
     }
 
-    fn applied_shape_fun<'a, I, J>(
+    fn applied_shape_fun<'a, I, J, K>(
         gen_idents: I,
-        gen_args: &[desc::ArgKinded],
-        param_idents: J,
+        gen_args: J,
+        param_idents: K,
         args: &[desc::Expr],
         body: &desc::Expr,
         codegen_ctx: &CodegenCtx,
     ) -> ShapeExpr
     where
-        I: Iterator<Item = &'a str>,
-        J: Iterator<Item = &'a str>,
+        I: Iterator<Item = &'a desc::IdentKinded>,
+        J: Iterator<Item = &'a desc::ArgKinded>,
+        K: Iterator<Item = &'a str>,
     {
-        let generic_substs = HashMap::from_iter(gen_idents.zip(gen_args));
-        let param_substs = HashMap::from_iter(param_idents.zip(args));
         let mut subst_body = body.clone();
-        subst_body.subst_kinded_idents(&generic_substs);
+        utils::subst_idents_kinded(gen_idents, gen_args, &mut subst_body);
+        let param_substs = HashMap::from_iter(param_idents.zip(args));
         subst_body.subst_idents(&param_substs);
         ShapeExpr::create_from(&subst_body, codegen_ctx)
     }

@@ -9,13 +9,12 @@ mod subty;
 mod unify;
 
 use self::pl_expr::PlExprTyCtx;
-use crate::ast::internal::{FrameEntry, IdentTyped, Loan, Place, PrvMapping};
+use crate::ast::internal::{Frame, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::utils;
 use crate::ast::*;
 use crate::error::ErrorReported;
 use ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
 use error::*;
-use std::collections::HashSet;
 
 type TyResult<T> = Result<T, TyError>;
 
@@ -70,30 +69,6 @@ struct ExprTyCtx<'ctxt> {
     exec: ExecExpr,
     ty_ctx: &'ctxt mut TyCtx,
     exec_borrow_ctx: &'ctxt mut ExecBorrowCtx,
-}
-
-fn new_ty_ctx<'k, 'a: 'k>(old: &'a mut ExprTyCtx<'a>, ty_ctx: &'k mut TyCtx) -> ExprTyCtx<'k> {
-    ExprTyCtx {
-        gl_ctx: old.gl_ctx,
-        ident_exec: old.ident_exec,
-        kind_ctx: &mut *old.kind_ctx,
-        exec: old.exec.clone(),
-        ty_ctx,
-        exec_borrow_ctx: &mut *old.exec_borrow_ctx,
-    }
-}
-
-impl<'ctxt> ExprTyCtx<'ctxt> {
-    fn new_kind_ctx(&'ctxt mut self, kind_ctx: &'ctxt mut KindCtx) -> Self {
-        ExprTyCtx {
-            gl_ctx: self.gl_ctx,
-            ident_exec: self.ident_exec,
-            kind_ctx,
-            exec: self.exec.clone(),
-            ty_ctx: &mut *self.ty_ctx,
-            exec_borrow_ctx: &mut *self.exec_borrow_ctx,
-        }
-    }
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
@@ -155,14 +130,11 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> TyResult<()> 
     if let Some(hm) = utils::implicit_idents(gf) {
         panic!("Implicit Idents:\n{:?}", hm)
     }
-
-    //TODO why is this the case?
     debug_assert!(
         empty_ty_ctx.is_empty(),
         "Expected typing context to be empty. But TyCtx:\n {:?}",
         empty_ty_ctx
     );
-
     Ok(())
 }
 
@@ -215,7 +187,6 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         }
         ExprKind::BinOp(bin_op, lhs, rhs) => ty_check_binary_op(ctx, bin_op, lhs, rhs)?,
         ExprKind::UnOp(un_op, e) => ty_check_unary_op(ctx, un_op, e)?,
-        ExprKind::Split(expr_split) => ty_check_split(ctx, expr_split)?,
         ExprKind::Sync => {
             //TODO implement
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
@@ -274,111 +245,6 @@ fn ty_check_range(ctx: &mut ExprTyCtx, l: &mut Expr, u: &mut Expr) -> TyResult<T
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Range,
     )))))
-}
-
-fn ty_check_split(ctx: &mut ExprTyCtx, expr_split: &mut ExprSplit) -> TyResult<Ty> {
-    fn tag_loans(loans: &HashSet<Loan>, tag: SplitTag) -> HashSet<Loan> {
-        loans
-            .iter()
-            .cloned()
-            .map(|mut l| {
-                l.place_expr.split_tag_path.push(tag);
-                l
-            })
-            .collect()
-    }
-    fn split_loans(loans: HashSet<Loan>) -> (HashSet<Loan>, HashSet<Loan>) {
-        let fst = tag_loans(&loans, SplitTag::Fst);
-        let snd = tag_loans(&loans, SplitTag::Snd);
-        (fst, snd)
-    }
-
-    let prv1 = infer_and_append_prv(ctx.ty_ctx, &expr_split.lrgn);
-    let prv2 = infer_and_append_prv(ctx.ty_ctx, &expr_split.rrgn);
-    if !(ctx.ty_ctx.loans_in_prv(&prv1)?.is_empty()) {
-        return Err(TyError::PrvValueAlreadyInUse(prv1));
-    }
-    if !(ctx.ty_ctx.loans_in_prv(&prv2)?.is_empty()) {
-        return Err(TyError::PrvValueAlreadyInUse(prv2));
-    }
-
-    let mems = pl_expr::ty_check_and_passed_mems(
-        &PlExprTyCtx::new(ctx, expr_split.own),
-        &mut expr_split.view,
-    )?;
-
-    let split_ty = if let TyKind::Data(dty) = &expr_split.view.ty.as_ref().unwrap().ty {
-        if let DataTyKind::ArrayShape(elem_dty, n) = &dty.dty {
-            if &expr_split.pos > n {
-                return Err(TyError::String(
-                    "Trying to access array out-of-bounds.".to_string(),
-                ));
-            }
-
-            let mem = if let Some(mem) = mems.last() {
-                mem
-            } else {
-                panic!("An array view must always reside in memory.")
-            };
-
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
-                vec![
-                    DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-                        Provenance::Value(prv1.clone()),
-                        expr_split.own,
-                        mem.clone(),
-                        DataTy::new(DataTyKind::ArrayShape(
-                            elem_dty.clone(),
-                            expr_split.pos.clone(),
-                        )),
-                    )))),
-                    DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-                        Provenance::Value(prv2.clone()),
-                        expr_split.own,
-                        mem.clone(),
-                        DataTy::new(DataTyKind::ArrayShape(
-                            elem_dty.clone(),
-                            Nat::BinOp(
-                                BinOpNat::Sub,
-                                Box::new(n.clone()),
-                                Box::new(expr_split.pos.clone()),
-                            ),
-                        )),
-                    )))),
-                ],
-            )))))
-        } else {
-            return Err(TyError::UnexpectedType);
-        }
-    } else {
-        return Err(TyError::UnexpectedType);
-    };
-
-    let loans = borrow_check::ownership_safe(
-        &BorrowCheckCtx::new(&ctx, vec![], expr_split.own), //reborrow: &[]
-        &expr_split.view,
-    )
-    .map_err(|err| {
-        TyError::ConflictingBorrow(
-            Box::new(expr_split.view.as_ref().clone()),
-            Ownership::Uniq,
-            err,
-        )
-    })?;
-    let (fst_loans, snd_loans) = split_loans(loans);
-    let prv1_to_loans = PrvMapping {
-        prv: prv1,
-        loans: fst_loans,
-    };
-    let prv2_to_loans = PrvMapping {
-        prv: prv2,
-        loans: snd_loans,
-    };
-    ctx.ty_ctx
-        .append_prv_mapping(prv1_to_loans)
-        .append_prv_mapping(prv2_to_loans);
-
-    Ok(split_ty)
 }
 
 fn infer_and_append_prv(ty_ctx: &mut TyCtx, prv_name: &Option<String>) -> String {
@@ -466,12 +332,14 @@ fn ty_check_for(
         }
     };
     let compare_ty_ctx = ctx.ty_ctx.clone();
-    ctx.ty_ctx.push_frame(vec![FrameEntry::Var(IdentTyped::new(
+    let mut frame = Frame::new();
+    frame.append_idents_typed(vec![IdentTyped::new(
         ident.clone(),
         Ty::new(TyKind::Data(Box::new(DataTy::new(ident_dty)))),
         Mutability::Const,
         ExecExpr::new(Exec::new(BaseExec::Ident(ctx.ident_exec.ident.clone()))),
-    ))]);
+    )]);
+    ctx.ty_ctx.push_frame(frame);
     ty_check_expr(ctx, body)?;
     ctx.ty_ctx.pop_frame();
     if ctx.ty_ctx != &compare_ty_ctx {
@@ -743,72 +611,6 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
     )))))
 }
 
-// pub fn current_distrib_size(exec: &ExecExpr) -> Nat {
-//     match exec.exec.base {
-//         BaseExec::CpuThread => Err(TyError::String("it is impossible to select from view for a single CPU thread".to_string())),
-//         BaseExec::Ident(ident) => Err(TyError::String("cannot select from view; it is not specified how many execution resources {} are working in parallel".to_string())),
-//     }
-//     exec.exec.path.iter().rev().find_map(|&e| match e {
-//         ExecPathElem::Distrib(dim_compo) =>
-//             ExecPathElem::SplitProj(_) => None
-//     })
-// }
-
-fn type_input_idents(
-    input_idents: &[Ident],
-    input_exprs: &[Expr],
-    body_exec_ident: &IdentExec,
-) -> TyResult<Vec<IdentTyped>> {
-    if input_idents.len() != input_exprs.len() {
-        return Err(TyError::String(
-            "Amount of input identifiers and input shapes do not match".to_string(),
-        ));
-    }
-
-    input_exprs
-        .iter()
-        .map(|e| {
-            if let TyKind::Data(dty) = &e.ty.as_ref().unwrap().ty {
-                if let DataTy {
-                    dty: DataTyKind::Ref(reff),
-                    ..
-                } = dty.as_ref()
-                {
-                    if let DataTy {
-                        dty: DataTyKind::ArrayShape(tty, n),
-                        ..
-                    } = reff.dty.as_ref()
-                    {
-                        Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
-                            DataTyKind::Ref(Box::new(RefDty::new(
-                                reff.rgn.clone(),
-                                reff.own,
-                                reff.mem.clone(),
-                                tty.as_ref().clone(),
-                            ))),
-                        )))))
-                    } else {
-                        Err(TyError::UnexpectedType)
-                    }
-                } else {
-                    Err(TyError::UnexpectedType)
-                }
-            } else {
-                Err(TyError::UnexpectedType)
-            }
-        })
-        .zip(input_idents)
-        .map(|(ty, i)| {
-            Ok(IdentTyped::new(
-                i.clone(),
-                ty?,
-                Mutability::Const,
-                ExecExpr::new(Exec::new(BaseExec::Ident(body_exec_ident.ident.clone()))),
-            ))
-        })
-        .collect::<TyResult<Vec<_>>>()
-}
-
 fn ty_check_lambda(
     ctx: &mut ExprTyCtx,
     params: &mut [ParamDecl],
@@ -817,8 +619,8 @@ fn ty_check_lambda(
     body: &mut Expr,
 ) -> TyResult<Ty> {
     // Build frame typing for this function
-    let fun_frame = internal::append_idents_typed(
-        &vec![],
+    let mut fun_frame = Frame::new();
+    fun_frame.append_idents_typed(
         params
             .iter()
             .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
@@ -948,6 +750,7 @@ fn ty_check_assign_place(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr, e: &mut Expr)
         .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
         })?;
+        ctx.ty_ctx.append_unsynced_loans(pl_uniq_loans);
     }
 
     let e_dty = if let TyKind::Data(dty) = &mut e.ty.as_mut().unwrap().as_mut().ty {
@@ -971,17 +774,18 @@ fn ty_check_assign_deref(
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), deref_expr)?;
-    borrow_check::ownership_safe(
+    let unsynced_loans = borrow_check::ownership_safe(
         &BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq),
         deref_expr,
     )
     .map_err(|err| {
         TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
     })?;
+    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
     let deref_ty = deref_expr.ty.as_mut().unwrap();
     unify::sub_unify(
-        &ctx.kind_ctx,
-        &mut ctx.ty_ctx,
+        ctx.kind_ctx,
+        ctx.ty_ctx,
         e.ty.as_mut().unwrap().as_mut(),
         deref_ty,
     )?;
@@ -1075,10 +879,12 @@ fn ty_check_idx_assign(
             "Trying to access array out-of-bounds.".to_string(),
         ));
     }
-    borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq), pl_expr)
-        .map_err(|err| {
+    let unsynced_loans =
+        borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq), pl_expr)
+            .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
+    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
     subty::check(ctx.kind_ctx, ctx.ty_ctx, e.ty.as_ref().unwrap().dty(), &dty)?;
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
@@ -1090,10 +896,12 @@ fn ty_check_index_copy(
     pl_expr: &mut PlaceExpr,
     idx: &mut Nat,
 ) -> TyResult<Ty> {
-    borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd), pl_expr)
-        .map_err(|err| {
+    let unsynced_loans =
+        borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd), pl_expr)
+            .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
+    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Shrd), pl_expr)?;
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
         dty
@@ -1318,12 +1126,12 @@ fn ty_check_dep_app(
         for (gp, kv) in fn_ty.generics.iter().zip(&*k_args) {
             check_arg_has_correct_kind(&ctx.kind_ctx, &gp.kind, kv)?;
         }
-        let subst_param_tys: Vec<_> = fn_ty
-            .param_tys
-            .iter()
-            .map(|ty| subst_ident_kinded(&fn_ty.generics, k_args, ty))
-            .collect();
-        let subst_out_ty = subst_ident_kinded(&fn_ty.generics, k_args, &fn_ty.ret_ty);
+        let mut subst_param_tys = fn_ty.param_tys.clone();
+        for ty in &mut subst_param_tys {
+            utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), ty);
+        }
+        let mut subst_out_ty = fn_ty.ret_ty.as_ref().clone();
+        utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), &mut subst_out_ty);
         let mono_fun_ty = unify::inst_fn_ty_scheme(
             &fn_ty.generics[k_args.len()..],
             &subst_param_tys,
@@ -1342,15 +1150,6 @@ fn ty_check_dep_app(
             ef
         )))
     }
-}
-
-// TODO move into ast?
-pub(super) fn subst_ident_kinded(gen_params: &[IdentKinded], k_args: &[ArgKinded], ty: &Ty) -> Ty {
-    let mut subst_ty = ty.clone();
-    for (gen_param, k_arg) in gen_params.iter().zip(k_args) {
-        subst_ty = subst_ty.subst_ident_kinded(gen_param, k_arg)
-    }
-    subst_ty
 }
 
 fn check_arg_has_correct_kind(kind_ctx: &KindCtx, expected: &Kind, kv: &ArgKinded) -> TyResult<()> {
@@ -1667,10 +1466,6 @@ fn ty_check_seq(ctx: &mut ExprTyCtx, es: &mut [Expr]) -> TyResult<Ty> {
 }
 
 fn ty_check_pl_expr_with_deref(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> {
-    borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd), pl_expr)
-        .map_err(|err| {
-            TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
-        })?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Shrd), pl_expr)?;
     if !pl_expr.ty.as_ref().unwrap().is_fully_alive() {
         return Err(TyError::String(format!(
@@ -1685,6 +1480,12 @@ fn ty_check_pl_expr_with_deref(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> 
             vec![Constraint::Copyable],
         )))),
     )?;
+    let unsynced_loans =
+        borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd), pl_expr)
+            .map_err(|err| {
+            TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
+        })?;
+    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
     if pl_expr.ty.as_ref().unwrap().copyable() {
         Ok(pl_expr.ty.as_ref().unwrap().as_ref().clone())
     } else {
@@ -1708,21 +1509,23 @@ fn ty_check_pl_expr_without_deref(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr) -> T
         }
         if pl_ty.copyable() {
             // TODO refactor
-            borrow_check::ownership_safe(
+            let unsynced_loans = borrow_check::ownership_safe(
                 &BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd),
                 pl_expr,
             )
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
             })?;
+            ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
         } else {
-            borrow_check::ownership_safe(
+            let unsynced_loans = borrow_check::ownership_safe(
                 &BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq),
                 pl_expr,
             )
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
             })?;
+            ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
             ctx.ty_ctx.kill_place(&place);
         };
         Ty::new(TyKind::Data(Box::new(pl_ty)))
@@ -1788,7 +1591,7 @@ fn ty_check_borrow(
         rmem,
         reffed_ty,
     ))));
-    ctx.exec_borrow_ctx.insert(&ctx.exec, loans.clone());
+    ctx.ty_ctx.append_unsynced_loans(loans.clone());
     ctx.ty_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
     Ok(Ty::new(TyKind::Data(Box::new(res_dty))))
 }

@@ -1,13 +1,12 @@
 use crate::ast::utils;
-use crate::ast::utils::FreeKindedIdents;
-use crate::ast::visit::Visit;
+use crate::ast::utils::Visitable;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::TyError;
 use crate::ty_check::subty;
 use crate::ty_check::TyResult;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(super) fn unify<C: Constrainable>(t1: &mut C, t2: &mut C) -> TyResult<()> {
     let (subst, _) = constrain(t1, t2)?;
@@ -61,11 +60,12 @@ pub(super) fn inst_fn_ty_scheme(
         })
         .collect();
 
-    let mono_param_tys = param_tys
-        .iter()
-        .map(|ty| super::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ty))
-        .collect();
-    let mono_ret_ty = super::subst_ident_kinded(idents_kinded, mono_idents.as_slice(), ret_ty);
+    let mut mono_param_tys = param_tys.to_vec();
+    for ty in &mut mono_param_tys {
+        utils::subst_idents_kinded(idents_kinded, mono_idents.as_slice(), ty);
+    }
+    let mut mono_ret_ty = ret_ty.clone();
+    utils::subst_idents_kinded(idents_kinded, mono_idents.as_slice(), &mut mono_ret_ty);
 
     Ok(Ty::new(TyKind::FnTy(Box::new(FnTy::new(
         vec![],
@@ -129,18 +129,16 @@ impl DataTy {
     }
 }
 
-pub(super) trait Constrainable {
+pub(super) trait Constrainable: Visitable {
     fn constrain(
         &mut self,
         other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> TyResult<()>;
-    fn free_idents(&self) -> HashSet<IdentKinded>;
     fn substitute(&mut self, subst: &ConstrainMap);
-
     fn occurs_check<S: Constrainable>(ident_kinded: &IdentKinded, s: &S) -> bool {
-        s.free_idents().contains(ident_kinded)
+        utils::free_kinded_idents(s).contains(ident_kinded)
     }
 }
 
@@ -190,12 +188,6 @@ impl Constrainable for Ty {
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
             _ => Err(TyError::CannotUnify),
         }
-    }
-
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_ty(self);
-        free_idents.set
     }
 
     fn substitute(&mut self, subst: &ConstrainMap) {
@@ -282,12 +274,6 @@ impl Constrainable for DataTy {
         }
     }
 
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_dty(self);
-        free_idents.set
-    }
-
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_dty(self);
@@ -322,12 +308,6 @@ impl Constrainable for ExecTy {
         }
     }
 
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_exec_ty(self);
-        free_idents.set
-    }
-
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_exec_ty(self);
@@ -358,12 +338,6 @@ impl Constrainable for Dim {
             }
             _ => Err(TyError::CannotUnify),
         }
-    }
-
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_dim(self);
-        free_idents.set
     }
 
     fn substitute(&mut self, subst: &ConstrainMap) {
@@ -440,12 +414,6 @@ impl Constrainable for Nat {
         }
     }
 
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_nat(self);
-        free_idents.set
-    }
-
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_nat(self);
@@ -501,12 +469,6 @@ impl Constrainable for Memory {
             (mem1, mem2) if mem1 == mem2 => Ok(()),
             _ => Err(TyError::CannotUnify),
         }
-    }
-
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_mem(self);
-        free_idents.set
     }
 
     fn substitute(&mut self, subst: &ConstrainMap) {
@@ -570,11 +532,6 @@ impl Constrainable for Provenance {
                 Ok(())
             }
         }
-    }
-    fn free_idents(&self) -> HashSet<IdentKinded> {
-        let mut free_idents = FreeKindedIdents::new();
-        free_idents.visit_prv(self);
-        free_idents.set
     }
 
     fn substitute(&mut self, subst: &ConstrainMap) {

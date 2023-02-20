@@ -8,80 +8,70 @@ use std::collections::{HashMap, HashSet};
 // TODO introduce proper struct
 pub(super) type TypedPlace = (internal::Place, DataTy);
 
-#[derive(PartialEq, Eq, Debug, Clone)]
-struct ScopedCtx<T> {
-    scopes: Vec<Vec<T>>,
-}
-
-impl<T> ScopedCtx<T> {
-    fn new() -> Self {
-        ScopedCtx {
-            scopes: vec![vec![]],
-        }
-    }
-
-    fn flat_ctx(&self) -> std::iter::Flatten<std::slice::Iter<Vec<T>>> {
-        self.scopes.iter().flatten()
-    }
-
-    fn flat_ctx_mut(&mut self) -> std::iter::Flatten<std::slice::IterMut<Vec<T>>> {
-        self.scopes.iter_mut().flatten()
-    }
-
-    fn push(&mut self, v: T) -> &mut Self {
-        self.last_scope_mut().push(v);
-        self
-    }
-
-    fn push_scope(&mut self, s: Vec<T>) -> &mut Self {
-        self.scopes.push(s);
-        self
-    }
-
-    fn push_empty_scope(&mut self) -> &mut Self {
-        self.scopes.push(vec![]);
-        self
-    }
-
-    fn pop_scope(&mut self) -> Vec<T> {
-        self.scopes
-            .pop()
-            .expect("It should never be the case that there is no scope.")
-    }
-
-    pub fn is_empty(&self) -> bool {
-        if self.scopes.len() == 1 {
-            self.scopes
-                .first()
-                .expect("It should never be the case that there is no scope.")
-                .is_empty()
-        } else {
-            false
-        }
-    }
-
-    fn last_scope_mut(&mut self) -> &mut Vec<T> {
-        self.scopes
-            .iter_mut()
-            .last()
-            .expect("It should never be the case that there is no scope.")
-    }
-}
+// #[derive(PartialEq, Eq, Debug, Clone)]
+// struct ScopedCtx<T> {
+//     scopes: Vec<T>,
+// }
+//
+// impl<T> ScopedCtx<T> {
+//     fn new() -> Self {
+//         ScopedCtx { scopes: vec![] }
+//     }
+//
+//     fn push(&mut self, v: T) -> &mut Self {
+//         self.last_scope_mut().push(v);
+//         self
+//     }
+//
+//     fn push_scope(&mut self, s: Vec<T>) -> &mut Self {
+//         self.scopes.push(s);
+//         self
+//     }
+//
+//     fn push_empty_scope(&mut self) -> &mut Self {
+//         self.scopes.push(vec![]);
+//         self
+//     }
+//
+//     fn pop_scope(&mut self) -> Vec<T> {
+//         self.scopes
+//             .pop()
+//             .expect("It should never be the case that there is no scope.")
+//     }
+//
+//     pub fn is_empty(&self) -> bool {
+//         if self.scopes.len() == 1 {
+//             self.scopes
+//                 .first()
+//                 .expect("It should never be the case that there is no scope.")
+//                 .is_empty()
+//         } else {
+//             false
+//         }
+//     }
+//
+//     fn last_scope_mut(&mut self) -> &mut Vec<T> {
+//         self.scopes
+//             .iter_mut()
+//             .last()
+//             .expect("It should never be the case that there is no scope.")
+//     }
+// }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct TyCtx {
-    frames: ScopedCtx<FrameEntry>,
+    frames: Vec<Frame>,
 }
 
 impl TyCtx {
     pub fn new() -> Self {
         TyCtx {
-            frames: ScopedCtx::new(),
+            frames: vec![Frame::new()],
         }
     }
 
     pub fn get_exec_expr(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
-        let exec_expr = self.frames.flat_ctx().rev().find_map(|entry| match entry {
+        let exec_expr = self.flat_bindings().rev().find_map(|entry| match entry {
             FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
             _ => None,
         });
@@ -90,39 +80,68 @@ impl TyCtx {
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
+    //
+    // pub fn last_frame(&self) -> &Frame {
+    //     self.frames.last().unwrap()
+    // }
+
+    pub fn last_frame_mut(&mut self) -> &mut Frame {
+        self.frames.last_mut().unwrap()
+    }
+
+    pub fn flat_bindings_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut FrameEntry> {
+        self.frames.iter_mut().flat_map(|frm| &mut frm.bindings)
+    }
+
+    pub fn flat_bindings(&self) -> impl DoubleEndedIterator<Item = &'_ FrameEntry> {
+        self.frames.iter().flat_map(|frm| &frm.bindings)
+    }
 
     pub fn push_empty_frame(&mut self) -> &mut Self {
-        self.frames.push_empty_scope();
+        self.frames.push(Frame::new());
         self
     }
 
     pub fn push_frame(&mut self, frame: Frame) -> &mut Self {
-        self.frames.push_scope(frame);
+        self.frames.push(frame);
         self
     }
 
     pub fn pop_frame(&mut self) -> Frame {
-        self.frames.pop_scope()
+        self.frames.pop().expect("There must always be a scope.")
+    }
+
+    pub fn append_unsynced_loans<I>(&mut self, loans: I) -> &mut Self
+    where
+        I: IntoIterator<Item = Loan>,
+    {
+        self.last_frame_mut().append_unsynced_loans(loans);
+        self
     }
 
     pub fn append_ident_typed(&mut self, id_typed: IdentTyped) -> &mut Self {
-        self.frames.push(FrameEntry::Var(id_typed));
+        self.last_frame_mut()
+            .bindings
+            .push(FrameEntry::Var(id_typed));
         self
     }
 
     pub fn append_exec_mapping(&mut self, ident: Ident, exec: ExecExpr) -> &mut Self {
-        self.frames
+        self.last_frame_mut()
+            .bindings
             .push(FrameEntry::ExecMapping(ExecMapping::new(ident, exec)));
         self
     }
 
     pub fn append_prv_mapping(&mut self, prv_mapping: PrvMapping) -> &mut Self {
-        self.frames.push(FrameEntry::PrvMapping(prv_mapping));
+        self.last_frame_mut()
+            .bindings
+            .push(FrameEntry::PrvMapping(prv_mapping));
         self
     }
 
     fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
-        self.frames.flat_ctx().filter_map(|fe| {
+        self.flat_bindings().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
@@ -132,7 +151,7 @@ impl TyCtx {
     }
 
     fn idents_typed_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut IdentTyped> {
-        self.frames.flat_ctx_mut().filter_map(|fe| {
+        self.flat_bindings_mut().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
             } else {
@@ -142,7 +161,7 @@ impl TyCtx {
     }
 
     pub(crate) fn prv_mappings(&self) -> impl DoubleEndedIterator<Item = &'_ PrvMapping> {
-        self.frames.flat_ctx().filter_map(|fe| {
+        self.flat_bindings().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
@@ -152,7 +171,7 @@ impl TyCtx {
     }
 
     fn prv_mappings_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut PrvMapping> {
-        self.frames.flat_ctx_mut().filter_map(|fe| {
+        self.flat_bindings_mut().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
             } else {
@@ -218,7 +237,11 @@ impl TyCtx {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.frames.is_empty()
+        if let Some(frm) = self.frames.last() {
+            self.frames.len() == 1 && frm.bindings.is_empty() && frm.unsynced_loans.is_empty()
+        } else {
+            false
+        }
     }
 
     // ∀π:τ ∈ Γ
@@ -377,7 +400,7 @@ impl TyCtx {
 
     // Γ ▷- p = Γ′
     pub(super) fn without_reborrow_loans(&mut self, pl_expr: &PlaceExpr) -> &mut Self {
-        for frame_entry in self.frames.flat_ctx_mut() {
+        for frame_entry in self.flat_bindings_mut() {
             if let FrameEntry::PrvMapping(PrvMapping { prv: _, loans }) = frame_entry {
                 let without_reborrow: HashSet<Loan> = loans
                     .iter()
@@ -437,14 +460,12 @@ pub(super) type CtxResult<T> = Result<T, CtxError>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct KindCtx {
-    ctx: ScopedCtx<KindingCtxEntry>,
+    ctx: Vec<Vec<KindingCtxEntry>>,
 }
 
 impl KindCtx {
     pub fn new() -> Self {
-        KindCtx {
-            ctx: ScopedCtx::new(),
-        }
+        KindCtx { ctx: vec![vec![]] }
     }
 
     pub fn gl_fun_kind_ctx(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> CtxResult<Self> {
@@ -455,18 +476,18 @@ impl KindCtx {
     }
 
     pub fn push_empty_scope(&mut self) -> &mut Self {
-        self.ctx.push_empty_scope();
+        self.ctx.push(vec![]);
         self
     }
 
     pub fn drop_scope(&mut self) {
-        self.ctx.pop_scope();
+        self.ctx.pop();
     }
 
     pub fn append_idents<I: IntoIterator<Item = IdentKinded>>(&mut self, idents: I) -> &mut Self {
         let entries = idents.into_iter().map(KindingCtxEntry::Ident);
         for e in entries {
-            self.ctx.push(e);
+            self.ctx.last_mut().unwrap().push(e);
         }
         self
     }
@@ -477,7 +498,10 @@ impl KindCtx {
     ) -> CtxResult<&mut Self> {
         self.well_kinded_prv_rels(prv_rels.clone())?;
         for prv_rel in prv_rels {
-            self.ctx.push(KindingCtxEntry::PrvRel(prv_rel));
+            self.ctx
+                .last_mut()
+                .unwrap()
+                .push(KindingCtxEntry::PrvRel(prv_rel));
         }
         Ok(self)
     }
@@ -499,7 +523,7 @@ impl KindCtx {
     }
 
     pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
-        self.ctx.flat_ctx().filter_map(move |entry| {
+        self.ctx.iter().flatten().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
                     Some(ident)
@@ -517,7 +541,7 @@ impl KindCtx {
     }
 
     pub fn outlives(&self, l: &Ident, s: &Ident) -> CtxResult<()> {
-        if self.ctx.flat_ctx().any(|entry| match entry {
+        if self.ctx.iter().flatten().any(|entry| match entry {
             KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
         }) {

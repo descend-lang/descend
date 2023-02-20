@@ -4,20 +4,37 @@
 // TODO specific access modifiers
 
 use super::{Ident, Ownership, PlaceExpr, Ty};
-use crate::ast::{ExecExpr, ExecPathElem, Mutability, Nat, PlaceExprKind};
+use crate::ast::{ExecExpr, Mutability, Nat, PlaceExprKind};
 use std::collections::HashSet;
 
-// TODO give its own struct
-pub type Frame = Vec<FrameEntry>;
-pub fn append_idents_typed(frm: &Frame, idents_typed: Vec<IdentTyped>) -> Frame {
-    let mut new_frm = frm.clone();
-    new_frm.append(
-        &mut idents_typed
-            .into_iter()
-            .map(FrameEntry::Var)
-            .collect::<Vec<_>>(),
-    );
-    new_frm
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct Frame {
+    pub bindings: Vec<FrameEntry>,
+    pub unsynced_loans: HashSet<Loan>,
+}
+
+impl Frame {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn append_idents_typed(&mut self, idents_typed: Vec<IdentTyped>) -> &mut Frame {
+        self.bindings.append(
+            &mut idents_typed
+                .into_iter()
+                .map(FrameEntry::Var)
+                .collect::<Vec<_>>(),
+        );
+        self
+    }
+
+    pub fn append_unsynced_loans<I>(&mut self, loans: I) -> &mut Frame
+    where
+        I: IntoIterator<Item = Loan>,
+    {
+        self.unsynced_loans.extend(loans);
+        self
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

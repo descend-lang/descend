@@ -32,7 +32,6 @@ pub trait Visit: Sized {
     fn visit_pattern(&mut self, pattern: &Pattern) { walk_pattern(self, pattern) }
     fn visit_indep(&mut self, par_branch: &Indep) { walk_indep(self, par_branch) }
     fn visit_par_for(&mut self, par_for: &Sched) { walk_sched(self, par_for) }
-    fn visit_expr_split(&mut self, expr_split: &ExprSplit) { walk_expr_split(self, expr_split) }
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
     fn visit_app_kernel(&mut self, app_kernel: &AppKernel) { walk_app_kernel(self, app_kernel) }
     fn visit_block(&mut self, block: &Block) { walk_block(self, block) }
@@ -257,19 +256,6 @@ pub fn walk_sched<V: Visit>(visitor: &mut V, par_for: &Sched) {
     visitor.visit_block(body);
 }
 
-pub fn walk_expr_split<V: Visit>(visitor: &mut V, expr_split: &ExprSplit) {
-    let ExprSplit {
-        lrgn: _lrgn,
-        rrgn: _rgn,
-        own,
-        pos,
-        view,
-    } = expr_split;
-    visitor.visit_own(own);
-    visitor.visit_nat(pos);
-    visitor.visit_pl_expr(view);
-}
-
 pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
     // For now, only visit ExprKind
     match &expr.expr {
@@ -376,9 +362,6 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
         ExprKind::UnOp(op, expr) => {
             visitor.visit_unary_op(op);
             visitor.visit_expr(expr)
-        }
-        ExprKind::Split(expr_split) => {
-            visitor.visit_expr_split(expr_split);
         }
         ExprKind::Idx(e, i) => {
             visitor.visit_expr(e);

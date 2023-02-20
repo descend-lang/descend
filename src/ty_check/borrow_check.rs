@@ -3,8 +3,7 @@ use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::ctxs::{CtxResult, ExecBorrowCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
-use crate::ty_check::pl_expr::PlExprTyCtx;
-use crate::ty_check::{pl_expr, ExprTyCtx};
+use crate::ty_check::ExprTyCtx;
 use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
@@ -75,15 +74,10 @@ pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<H
                     &most_spec_pl,
                     prv_val_name.as_str(),
                     reff.own,
-                    &p.split_tag_path,
                 ),
-                Provenance::Ident(_) => ownership_safe_deref_abs(
-                    ctx,
-                    &pl_ctx_no_deref,
-                    &most_spec_pl,
-                    reff.own,
-                    &p.split_tag_path,
-                ),
+                Provenance::Ident(_) => {
+                    ownership_safe_deref_abs(ctx, &pl_ctx_no_deref, &most_spec_pl, reff.own)
+                }
             },
             DataTyKind::RawPtr(_) => ownership_safe_deref_raw(ctx, &pl_ctx_no_deref, &most_spec_pl),
             // TODO improve error message
@@ -126,7 +120,6 @@ fn ownership_safe_deref(
     most_spec_pl: &internal::Place,
     prv_val_name: &str,
     ref_own: Ownership,
-    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
     // Γ(r) = { ω′pi }
     let loans_in_prv = ctx.ty_ctx.loans_in_prv(prv_val_name)?;
@@ -135,7 +128,7 @@ fn ownership_safe_deref(
     // List<pi = pi□ [πi]>
     let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_in_loans(loans_in_prv);
     // List<πe>, List<πi>, π
-    let mut ext_reborrow_ctx = ctx.extend_reborrows(
+    let ext_reborrow_ctx = ctx.extend_reborrows(
         pl_ctxs_and_places_in_loans
             .map(|(_, pl)| pl)
             .chain(std::iter::once(most_spec_pl.clone())),
@@ -147,13 +140,11 @@ fn ownership_safe_deref(
         &ext_reborrow_ctx,
         pl_ctx_no_deref,
         loans_in_prv,
-        split_tag_path,
     )?;
 
-    let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+    let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
-    currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
     ownership_safe_under_existing_loans(&ext_reborrow_ctx, &currently_checked_pl_expr)?;
     potential_prvs_after_subst.insert(Loan {
         place_expr: currently_checked_pl_expr,
@@ -166,14 +157,10 @@ fn subst_pl_with_potential_prvs_ownership_safe(
     ctx: &BorrowCheckCtx,
     pl_ctx_no_deref: &PlaceCtx,
     loans_in_prv: &HashSet<Loan>,
-    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
     let mut loans: HashSet<Loan> = HashSet::new();
     for pl_expr in loans_in_prv.iter().map(|loan| &loan.place_expr) {
-        let mut insert_dereferenced_pl_expr = pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
-        insert_dereferenced_pl_expr
-            .split_tag_path
-            .append(&mut split_tag_path.to_vec());
+        let insert_dereferenced_pl_expr = pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
         let loans_for_possible_prv_pl_expr = ownership_safe(ctx, &insert_dereferenced_pl_expr)?;
         loans.extend(loans_for_possible_prv_pl_expr);
     }
@@ -185,12 +172,10 @@ fn ownership_safe_deref_abs(
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
     ref_own: Ownership,
-    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
-    let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+    let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
-    currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
     // FIXME the type check should not have any effect, however guaranteeing that every place
     //  expression even those which are formed recursively seem cleaner
     // pl_expr::ty_check(&PlExprTyCtx::from(ctx), &mut currently_checked_pl_expr)?;
