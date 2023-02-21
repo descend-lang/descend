@@ -15,6 +15,7 @@ use crate::ast::*;
 use crate::error::ErrorReported;
 use ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
 use error::*;
+use std::collections::HashSet;
 
 type TyResult<T> = Result<T, TyError>;
 
@@ -560,7 +561,7 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
         branch_expr_ty_ctx
             .ty_ctx
             .push_empty_frame()
-            .append_exec_mapping(indep.branch_idents[i].clone(), branch_exec);
+            .append_exec_mapping(indep.branch_idents[i].clone(), branch_exec.clone());
         ty_check_expr(&mut branch_expr_ty_ctx, &mut indep.branch_bodies[i])?;
         if indep.branch_bodies[i].ty.as_ref().unwrap().ty
             != TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::Unit))))
@@ -569,7 +570,9 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
                 "A par_branch branch must not return a value.".to_string(),
             ));
         }
-        branch_expr_ty_ctx.ty_ctx.pop_frame();
+        let frame = branch_expr_ty_ctx.ty_ctx.pop_frame();
+        ctx.exec_borrow_ctx
+            .insert(&branch_exec, frame.unsynced_loans);
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
@@ -597,7 +600,7 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
     if let Some(ident) = &sched.inner_exec_ident {
         schedule_body_ctx
             .ty_ctx
-            .append_exec_mapping(ident.clone(), body_exec);
+            .append_exec_mapping(ident.clone(), body_exec.clone());
     };
     for prv in &sched.body.prvs {
         schedule_body_ctx
@@ -605,7 +608,8 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
             .append_prv_mapping(PrvMapping::new(prv));
     }
     ty_check_expr(&mut schedule_body_ctx, &mut sched.body.body)?;
-    schedule_body_ctx.ty_ctx.pop_frame();
+    let frame = schedule_body_ctx.ty_ctx.pop_frame();
+    ctx.exec_borrow_ctx.insert(&body_exec, frame.unsynced_loans);
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
@@ -713,8 +717,22 @@ fn ty_check_block(ctx: &mut ExprTyCtx, block: &mut Block) -> TyResult<Ty> {
         ctx.ty_ctx.append_prv_mapping(PrvMapping::new(prv));
     }
     ty_check_expr(ctx, &mut block.body)?;
-    ctx.ty_ctx.pop_frame();
+    let frame = ctx.ty_ctx.pop_frame();
+    let valid_loans = collect_valid_loans(ctx.ty_ctx, frame.unsynced_loans);
+    ctx.ty_ctx
+        .last_frame_mut()
+        .unsynced_loans
+        .extend(valid_loans);
     Ok(block.body.ty.as_ref().unwrap().as_ref().clone())
+}
+
+fn collect_valid_loans(ty_ctx: &TyCtx, mut loans: HashSet<Loan>) -> HashSet<Loan> {
+    // FIXME this implementations assumes unique names which is not the case
+    loans.retain(|l| {
+        let root_ident = &l.place_expr.to_pl_ctx_and_most_specif_pl().1.ident;
+        ty_ctx.contains(root_ident)
+    });
+    loans
 }
 
 fn check_mutable(ty_ctx: &TyCtx, pl: &Place) -> TyResult<()> {

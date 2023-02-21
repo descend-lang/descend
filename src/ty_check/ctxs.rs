@@ -307,6 +307,10 @@ impl TyCtx {
         }
     }
 
+    pub fn contains(&self, ident: &Ident) -> bool {
+        self.idents_typed().any(|i| i.ident.name == ident.name)
+    }
+
     pub fn place_dty(&self, place: &internal::Place) -> CtxResult<DataTy> {
         fn proj_ty(dty: DataTy, path: &[usize]) -> CtxResult<DataTy> {
             let mut res_dty = dty;

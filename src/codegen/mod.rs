@@ -45,7 +45,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
             if let Some(ki) = codegen_ctx
                 .kernel_infos
                 .iter()
-                .find(|ki| &ki.name == &f.fn_sig.name)
+                .find(|ki| ki.name == f.fn_sig.name)
             {
                 f.fn_sig.exec_kind = cu::ExecKind::Global;
                 mv_shrd_mem_params_into_decls(f, &ki.unnamed_shrd_mem_decls, ki.num_shrd_mem_decls)
