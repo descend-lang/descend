@@ -15,16 +15,12 @@ fn gpu_hist<gs:nat, ts:nat>(
     d_out: &uniq gpu.global [u32; 256],
     s_block_out: &uniq gpu.shared [AtomicU32; 256]
 ) -[grid: gpu.grid<X<gs>, X<256>>]-> () {
-
     let d_in_groups = group::<256>(transpose(group::<(gs*256)>(to_view(d_in))));
     let d_out_atomic = to_atomic_array(d_out);
     let d_out_atomic_view = to_view(&shrd *d_out_atomic);
-
     let s_block_out_view = to_view(&shrd *s_block_out);
-
     sched block in grid {
         let d_in_group = d_in_groups[[block]];
-
         sched thread in block {
             let s_block_out_item = s_block_out_view[[thread]];
             let d_in_item = d_in_group[[thread]];

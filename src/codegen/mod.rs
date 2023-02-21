@@ -3,14 +3,21 @@ mod printer;
 
 use crate::ast as desc;
 use crate::ast::visit::Visit;
-use crate::ast::{BinOpNat, DimCompo, Exec, ExecExpr, ExecTyKind, Expr, Ident, Nat};
+use crate::ast::{
+    ArgKinded, BinOpNat, DimCompo, Exec, ExecExpr, ExecPathElem, ExecTyKind, Expr, ExprKind, Ident,
+    Nat,
+};
+use crate::codegen::cu::Stmt;
+use crate::codegen::cu_ast::ScalarTy;
 use crate::ty_check;
 use crate::ty_check::matches_dty;
 use cu_ast as cu;
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{format, Debug};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicI32, Ordering};
+
+pub(crate) static WARP_IDENT: &str = "$warp";
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -1113,14 +1120,25 @@ fn gen_indep(
     codegen_ctx.exec = outer_exec;
     let split_cond =
         gen_indep_branch_cond(dim_compo, pos, &expanded_split_exec_expr.exec, codegen_ctx);
-    cu::Stmt::Seq(vec![
-        cu::Stmt::IfElse {
-            cond: split_cond,
-            true_body: Box::new(fst_branch),
-            false_body: Box::new(snd_branch),
-        },
-        //  gen_sync_stmt(&split_par_collec),
-    ])
+    let branches = cu::Stmt::IfElse {
+        cond: split_cond,
+        true_body: Box::new(fst_branch),
+        false_body: Box::new(snd_branch),
+    };
+    if let Some(ExecPathElem::ToWarps) = split_exec.exec.path.last() {
+        cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
+            cu::Stmt::VarDecl {
+                name: WARP_IDENT.to_string(),
+                ty: cu::Ty::Scalar(ScalarTy::Warp),
+                addr_space: None,
+                expr: Some(cu::Expr::Ident("descend::to_warps()".to_string())),
+                is_extern: false,
+            },
+            branches,
+        ])))
+    } else {
+        branches
+    }
 }
 
 fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
@@ -1174,7 +1192,20 @@ fn gen_parall_section(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::
 
     codegen_ctx.exec = outer_exec;
     codegen_ctx.drop_scope();
-    cu::Stmt::Block(Box::new(stmt))
+    if let Some(ExecPathElem::ToWarps) = sched.sched_exec.exec.path.last() {
+        cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
+            cu::Stmt::VarDecl {
+                name: WARP_IDENT.to_string(),
+                ty: cu::Ty::Scalar(ScalarTy::Warp),
+                addr_space: None,
+                expr: Some(cu::Expr::Ident("descend::to_warps()".to_string())),
+                is_extern: false,
+            },
+            stmt,
+        ])))
+    } else {
+        cu::Stmt::Block(Box::new(stmt))
+    }
 }
 
 fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
@@ -1314,6 +1345,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
                     ..
                 } = &pl_expr.ty.as_ref().unwrap().dty()
                 {
+                    let pl_expr = if let desc::PlaceExprKind::Deref(p) = &pl_expr.pl_expr {
+                        &p
+                    } else {
+                        pl_expr
+                    };
                     let array_idx = cu::Expr::ArraySubscript {
                         array: Box::new(gen_pl_expr(pl_expr, codegen_ctx)),
                         index: idx.clone(),
@@ -1421,6 +1457,8 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
                         gen_nat_as_u64(kinded_args)
                     } else if *ident.name == *"to_atomic_array" {
                         gen_to_atomic_array(args, codegen_ctx)
+                    } else if *ident.name == *"shfl_up" {
+                        gen_shfl_up(args, kinded_args, codegen_ctx)
                     } else {
                         let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
                         CheckedExpr::Expr(cu::Expr::FnCall(create_fn_call(
@@ -1939,7 +1977,6 @@ fn gen_indep_branch_cond(
             // The condition must range over the elements within the execution resource.
             // Use Distrib to indicate this.
             &desc::ExecExpr::new(exec.clone().distrib(dim_compo)),
-            codegen_ctx,
         ))),
         rhs: Box::new(cu::Expr::Nat(pos.clone())),
     }
@@ -2229,6 +2266,18 @@ fn gen_nat_as_u64(templ_args: &[desc::ArgKinded]) -> CheckedExpr {
 
 fn gen_to_atomic_array(args: &Vec<Expr>, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
     CheckedExpr::Expr(gen_fn_call_args(args, codegen_ctx)[0].clone())
+}
+
+fn gen_shfl_up(
+    args: &Vec<Expr>,
+    kinded_args: &Vec<ArgKinded>,
+    codegen_ctx: &mut CodegenCtx,
+) -> CheckedExpr {
+    CheckedExpr::Expr(cu::Expr::FnCall(create_fn_call(
+        cu::Expr::Ident(format!("{}.shfl_up", WARP_IDENT)),
+        gen_args_kinded(kinded_args),
+        gen_fn_call_args(args, codegen_ctx),
+    )))
 }
 
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
@@ -2773,7 +2822,7 @@ impl ShapeExpr {
         codegen_ctx: &CodegenCtx,
     ) -> Self {
         ShapeExpr::Idx {
-            idx: parall_idx(dim, exec, codegen_ctx),
+            idx: parall_idx(dim, exec),
             shape: Box::new(self.clone()),
         }
     }
@@ -2794,10 +2843,7 @@ fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &ExecExpr) -> ExecExpr 
     }
 }
 
-fn to_parall_indices(
-    exec: &desc::ExecExpr,
-    codegen_ctx: &CodegenCtx,
-) -> (desc::Nat, desc::Nat, desc::Nat) {
+fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat) {
     let mut indices = match &exec.exec.base {
         desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
@@ -2920,11 +2966,11 @@ fn shift_idx_by(idx: desc::Nat, shift: desc::Nat) -> desc::Nat {
     desc::Nat::BinOp(desc::BinOpNat::Sub, Box::new(idx), Box::new(shift))
 }
 
-fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr, codegen_ctx: &CodegenCtx) -> desc::Nat {
+fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr) -> desc::Nat {
     match dim {
-        desc::DimCompo::X => to_parall_indices(exec, codegen_ctx).0,
-        desc::DimCompo::Y => to_parall_indices(exec, codegen_ctx).1,
-        desc::DimCompo::Z => to_parall_indices(exec, codegen_ctx).2,
+        desc::DimCompo::X => to_parall_indices(exec).0,
+        desc::DimCompo::Y => to_parall_indices(exec).1,
+        desc::DimCompo::Z => to_parall_indices(exec).2,
     }
 }
 

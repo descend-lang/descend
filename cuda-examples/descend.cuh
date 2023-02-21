@@ -211,6 +211,8 @@ using tuple = thrust::tuple<Types...>;
 template<typename T>
 using atomic_ref = cuda::atomic_ref<T, cuda::thread_scope_device>;
 
+using Warp = cooperative_groups::thread_block_tile<32>;
+
 template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
     return sizeof(T);
@@ -483,15 +485,8 @@ inline __device__ T atomic_fetch_add(
     return target.fetch_add(val, order);
 }
 
-inline __device__ cooperative_groups::thread_block_tile<32> to_warps() {
+inline __device__ Warp to_warps() {
     return cooperative_groups::tiled_partition<32>(cooperative_groups::this_thread_block());
-}
-
-template <typename T>
-inline __device__ T shfl_up(
-        T val,
-        i32 delta) {
-    return to_warps().shfl_up(val, delta);
 }
 
 namespace detail

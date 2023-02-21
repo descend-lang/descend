@@ -8,6 +8,8 @@ pub use span::*;
 use crate::ast::visit_mut::VisitMut;
 use crate::parser::SourceCode;
 
+use crate::codegen::WARP_IDENT;
+
 pub mod internal;
 
 mod span;
@@ -1727,8 +1729,8 @@ impl fmt::Display for Nat {
             Self::BlockDim(d) => write!(f, "blockDim.{}", d),
             Self::ThreadIdx(d) => write!(f, "threadIdx.{}", d),
             Self::WarpGrpIdx => Ok(()),
-            Self::WarpIdx => write!(f, "descend::to_warps().meta_group_rank()"),
-            Self::LaneIdx => write!(f, "descend::to_warps().thread_rank()"),
+            Self::WarpIdx => write!(f, "{}.meta_group_rank()", WARP_IDENT),
+            Self::LaneIdx => write!(f, "{}.thread_rank()", WARP_IDENT),
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
             Self::App(func, args) => {

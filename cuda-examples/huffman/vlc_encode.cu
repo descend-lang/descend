@@ -1,19 +1,18 @@
 // =====================================================================================================================
 //   code generated from ../examples/infer/huffman/vlc_encode.desc
-//   3 deref operators in front of arrays have been removed manually
 // =====================================================================================================================
 
 #include "descend.cuh"
 /*
 function declarations
 */
-template <std::size_t bs>
+template <std::size_t gs>
 __host__ auto vlc_encode(const descend::u32 *const h_source_data,
                          const descend::u32 *const h_codewords,
                          const descend::u32 *const h_codewordlens,
                          descend::u32 *const h_out,
                          descend::u32 *const h_out_idx) -> void;
-template <std::size_t bs>
+template <std::size_t gs>
 __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                                const descend::u32 *const g_codewords,
                                const descend::u32 *const g_codewordlens,
@@ -22,7 +21,7 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
 /*
 function definitions
 */
-template <std::size_t bs>
+template <std::size_t gs>
 __host__ auto vlc_encode(const descend::u32 *const h_source_data,
                          const descend::u32 *const h_codewords,
                          const descend::u32 *const h_codewordlens,
@@ -30,7 +29,7 @@ __host__ auto vlc_encode(const descend::u32 *const h_source_data,
                          descend::u32 *const h_out_idx) -> void {
     auto gpu = descend::gpu_device(0);
     const auto g_source_data =
-    descend::gpu_alloc_copy<descend::array<descend::u32, (bs * 256)>>(
+    descend::gpu_alloc_copy<descend::array<descend::u32, (gs * 256)>>(
             (&gpu), (&(*h_source_data)));
     const auto g_codewords =
     descend::gpu_alloc_copy<descend::array<descend::u32, 256>>(
@@ -39,23 +38,23 @@ __host__ auto vlc_encode(const descend::u32 *const h_source_data,
     descend::gpu_alloc_copy<descend::array<descend::u32, 256>>(
             (&gpu), (&(*h_codewordlens)));
     auto g_out =
-    descend::gpu_alloc_copy<descend::array<descend::u32, (bs * 256)>>(
+    descend::gpu_alloc_copy<descend::array<descend::u32, (gs * 256)>>(
             (&gpu), (&(*h_out)));
-    auto g_out_idx = descend::gpu_alloc_copy<descend::array<descend::u32, bs>>(
+    auto g_out_idx = descend::gpu_alloc_copy<descend::array<descend::u32, gs>>(
             (&gpu), (&(*h_out_idx)));
-    gpu_vlc_encode<bs>
-    <<<dim3(bs, 1, 1), dim3(256, 1, 1),
+    gpu_vlc_encode<gs>
+    <<<dim3(gs, 1, 1), dim3(256, 1, 1),
     (((((0 + (4 * (1 * 256))) + (4 * (1 * 256))) + (4 * (1 * 256))) +
       (4 * (1 * 256))) +
      (4 * (1 * 1)))>>>((&g_source_data), (&g_codewords), (&g_codewordlens),
                        (&g_out), (&g_out_idx));
-    descend::copy_to_host<descend::array<descend::u32, (bs * 256)>>((&g_out),
+    descend::copy_to_host<descend::array<descend::u32, (gs * 256)>>((&g_out),
             h_out);
-    descend::copy_to_host<descend::array<descend::u32, bs>>((&g_out_idx),
+    descend::copy_to_host<descend::array<descend::u32, gs>>((&g_out_idx),
             h_out_idx);
 }
 
-template <std::size_t bs>
+template <std::size_t gs>
 __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                                const descend::u32 *const g_codewords,
                                const descend::u32 *const g_codewordlens,
@@ -216,8 +215,7 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
             auto tmpcw =
                     (descend::u32)((l_thread_out >> (l_thread_out_len - wrbits)));
             descend::atomic_fetch_or(
-                    descend::atomic_ref<descend::u32>(
-                            (s_block_out)[l_thread_start_value]),
+                    descend::atomic_ref<descend::u32>(s_block_out[l_thread_start_value]),
                     (tmpcw << ((32u - l_thread_start_bit) - wrbits)));
             l_thread_out_len = (l_thread_out_len - wrbits);
             if ((l_thread_out_len > 0u)) {
@@ -230,8 +228,8 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                 l_thread_out_len = (l_thread_out_len - wrbits);
                 tmpcw = ((descend::u32)((l_thread_out >> l_thread_out_len)) &
                          ((1u << wrbits) - 1u));
-                descend::atomic_fetch_or(descend::atomic_ref<descend::u32>((
-                                                                                   s_block_out)[(l_thread_start_value + 1)]),
+                descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
+                                                 s_block_out[(l_thread_start_value + 1)]),
                                          (tmpcw << (32u - wrbits)));
             }
 
@@ -239,8 +237,8 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                 tmpcw = (descend::u32)(
                         (l_thread_out &
                          ((((descend::u64)1) << l_thread_out_len) - ((descend::u64)1))));
-                descend::atomic_fetch_or(descend::atomic_ref<descend::u32>((
-                                                                                   s_block_out)[(l_thread_start_value + 2)]),
+                descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
+                                                 s_block_out[(l_thread_start_value + 2)]),
                                          (tmpcw << (32u - l_thread_out_len)));
             }
 

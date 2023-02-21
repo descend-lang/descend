@@ -2,6 +2,19 @@
 //   code generated from ../examples/infer/huffman/histogram.desc
 // =====================================================================================================================
 
+#include "descend.cuh"
+/*
+function declarations
+*/
+template <std::size_t gs, std::size_t ts>
+__host__ auto hist(const descend::u8 *const h_in, descend::u32 *const h_out)
+-> void;
+template <std::size_t gs, std::size_t ts>
+__global__ auto gpu_hist(const descend::u8 *const d_in,
+                         descend::u32 *const d_out) -> void;
+/*
+function definitions
+*/
 template <std::size_t gs, std::size_t ts>
 __host__ auto hist(const descend::u8 *const h_in, descend::u32 *const h_out)
 -> void {
@@ -36,7 +49,7 @@ __global__ auto gpu_hist(const descend::u8 *const d_in,
                 const auto tmp = d_in[((i * (gs * 256)) +
                                        (((blockIdx.x - 0) * 256) + (threadIdx.x - 0)))];
                 descend::atomic_fetch_add(
-                        descend::atomic_ref<descend::u32>((*s_block_out)[tmp]), 1u);
+                        descend::atomic_ref<descend::u32>(s_block_out[tmp]), 1u);
             }
 
             __syncthreads();

@@ -400,6 +400,7 @@ impl std::fmt::Display for ScalarTy {
             Bool => write!(f, "bool"),
             Memory => write!(f, "descend::Memory"),
             Gpu => write!(f, "descend::Gpu"),
+            Warp => write!(f, "descend::Warp"),
         }
     }
 }

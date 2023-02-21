@@ -278,4 +278,5 @@ pub(super) enum ScalarTy {
     SizeT,
     Memory,
     Gpu,
+    Warp,
 }

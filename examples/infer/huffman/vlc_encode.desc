@@ -1,9 +1,9 @@
-fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv, bs:nat>(
-    h_source_data: &s shrd cpu.mem [u32; bs*256],
+fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv, gs:nat>(
+    h_source_data: &s shrd cpu.mem [u32; gs*256],
     h_codewords: &c shrd cpu.mem [u32; 256],
     h_codewordlens: &cl shrd cpu.mem [u32; 256],
-    h_out: &o uniq cpu.mem [u32; bs*256],
-    h_out_idx: &oi uniq cpu.mem [u32; bs]
+    h_out: &o uniq cpu.mem [u32; gs*256],
+    h_out_idx: &oi uniq cpu.mem [u32; gs]
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
 
@@ -12,7 +12,7 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv, bs:nat>(
     let g_codewordlens = gpu_alloc_copy(&uniq gpu, &shrd *h_codewordlens);
     let mut g_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
     let mut g_out_idx = gpu_alloc_copy(&uniq gpu, &shrd *h_out_idx);
-    gpu_vlc_encode::<<<X<bs>, X<256>; [u32; 256], [u32; 256], [u32; 256], [AtomicU32; 256], [u32; 1]>>>(
+    gpu_vlc_encode::<<<X<gs>, X<256>; [u32; 256], [u32; 256], [u32; 256], [AtomicU32; 256], [u32; 1]>>>(
         &shrd g_source_data,
         &shrd g_codewords,
         &shrd g_codewordlens,
@@ -23,18 +23,18 @@ fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv, bs:nat>(
     copy_to_host(&shrd g_out_idx, h_out_idx)
 }
 
-fn gpu_vlc_encode<bs:nat>(
-    g_source_data: &shrd gpu.global [u32; bs*256],
+fn gpu_vlc_encode<gs:nat>(
+    g_source_data: &shrd gpu.global [u32; gs*256],
     g_codewords: &shrd gpu.global [u32; 256],
     g_codewordlens: &shrd gpu.global [u32; 256],
-    g_out: &uniq gpu.global [u32; bs*256],
-    g_out_idx: &uniq gpu.global [u32; bs],
+    g_out: &uniq gpu.global [u32; gs*256],
+    g_out_idx: &uniq gpu.global [u32; gs],
     s_codewords: &uniq gpu.shared [u32; 256],
     s_codewordlens: &uniq gpu.shared [u32; 256],
     s_result_locations: &uniq gpu.shared [u32; 256],
     s_block_out: &uniq gpu.shared [AtomicU32; 256],
     s_last_index_to_copy: &uniq gpu.shared [u32; 1]
-) -[grid: gpu.grid<X<bs>, X<256>>]-> () {
+) -[grid: gpu.grid<X<gs>, X<256>>]-> () {
 
     let g_source_data_block_groups = group::<256>(to_view(g_source_data));
     let g_codewords_view = to_view(g_codewords);
