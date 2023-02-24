@@ -776,7 +776,15 @@ fn ty_check_assign_place(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr, e: &mut Expr)
     } else {
         return Err(TyError::UnexpectedType);
     };
-    unify::sub_unify(ctx.kind_ctx, ctx.ty_ctx, e_dty, &mut place_ty)?;
+    let err = unify::sub_unify(ctx.kind_ctx, ctx.ty_ctx, e_dty, &mut place_ty);
+    if let Err(err) = err {
+        return Err(match err {
+            UnifyError::CannotUnify => {
+                TyError::MismatchedDataTypes(place_ty.clone(), e_dty.clone(), e.clone())
+            }
+            err => TyError::from(err),
+        });
+    }
     ctx.ty_ctx
         .set_place_dty(&pl, e_dty.clone())
         .without_reborrow_loans(pl_expr);
@@ -834,7 +842,7 @@ fn ty_check_idx_assign(
         && &ctx.ident_exec.ty.ty != &ExecTyKind::GpuThread
     {
         return Err(TyError::String(format!(
-            "Trying to assign to memory from {}.",
+            "Trying to assign to memory from {:?}.",
             &ctx.ident_exec.ty.ty
         )));
     }
@@ -1079,8 +1087,8 @@ fn ty_check_app(
     let exec_f = if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
         if !callable_in(&fn_ty.exec_ty, ctx.exec.ty.as_ref().unwrap()) {
             return Err(TyError::String(format!(
-                "Trying to apply function for execution resource `{}` \
-                under execution resource `{}`",
+                "Trying to apply function for execution resource `{:?}` \
+                under execution resource `{:?}`",
                 &fn_ty.exec_ty,
                 &ctx.exec.ty.as_ref().unwrap()
             )));
@@ -1273,7 +1281,7 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
     if let TyKind::FnTy(fn_ty) = &app_kernel.fun.ty.as_ref().unwrap().ty {
         if !callable_in(&fn_ty.exec_ty, kernel_ctx.exec.ty.as_ref().unwrap()) {
             return Err(TyError::String(format!(
-                "Trying to execute function for {} as kernel.",
+                "Trying to execute function for {:?} as kernel.",
                 &fn_ty.exec_ty,
             )));
         }
@@ -1634,7 +1642,7 @@ fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
         Ok(())
     } else {
         Err(TyError::String(format!(
-            "Trying to dereference pointer to `{}` from execution resource `{}`",
+            "Trying to dereference pointer to `{:?}` from execution resource `{:?}`",
             mem, &exec_ty.ty
         )))
     }

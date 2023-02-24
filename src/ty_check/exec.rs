@@ -91,7 +91,7 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
             }
         }
         ex @ ExecTyKind::CpuThread | ex @ ExecTyKind::GpuThread | ex @ ExecTyKind::View => {
-            return Err(TyError::String(format!("Cannot schedule over {}", ex)))
+            return Err(TyError::String(format!("Cannot schedule over {:?}", ex)))
         }
     };
     Ok(res_ty)
@@ -165,7 +165,7 @@ fn ty_check_exec_split_proj(
         }
         ex => {
             return Err(TyError::String(format!(
-                "Trying to split non-splittable execution resource: {}",
+                "Trying to split non-splittable execution resource: {:?}",
                 ex
             )))
         }

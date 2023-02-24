@@ -2403,59 +2403,6 @@ impl ShapeExpr {
         panic!("Cannot create `map` from provided arguments.");
     }
 
-    fn collect_and_rename_input_exprs(&mut self) -> Vec<(String, desc::Expr)> {
-        fn collect_and_rename_input_exprs_rec(
-            v: &mut ShapeExpr,
-            count: &mut u32,
-            mut vec: Vec<(String, desc::Expr)>,
-        ) -> Vec<(String, desc::Expr)> {
-            match v {
-                ShapeExpr::ToView { ref_expr } => {
-                    let new_name = format!("p{}", *count);
-                    vec.push((new_name.clone(), ref_expr.as_ref().clone()));
-                    ref_expr.expr = desc::ExprKind::PlaceExpr(Box::new(desc::PlaceExpr::new(
-                        desc::PlaceExprKind::Ident(desc::Ident::new(&new_name)),
-                    )));
-                    *count += 1;
-                    vec
-                }
-                ShapeExpr::Tuple { shapes: elems } => {
-                    let mut renamed = vec;
-                    for e in elems {
-                        match e {
-                            ViewOrExpr::V(v) => {
-                                renamed = collect_and_rename_input_exprs_rec(v, count, renamed);
-                            }
-                            ViewOrExpr::E(expr) => {
-                                let new_name = format!("p{}", *count);
-                                renamed.push((new_name.clone(), expr.clone()));
-                                expr.expr =
-                                    desc::ExprKind::PlaceExpr(Box::new(desc::PlaceExpr::new(
-                                        desc::PlaceExprKind::Ident(desc::Ident::new(&new_name)),
-                                    )));
-                                *count += 1;
-                            }
-                        }
-                    }
-                    renamed
-                }
-                ShapeExpr::SplitAt { shape, .. }
-                | ShapeExpr::Reverse { shape, .. }
-                | ShapeExpr::Group { shape, .. }
-                | ShapeExpr::Join { shape, .. }
-                | ShapeExpr::Transpose { shape, .. }
-                | ShapeExpr::Idx { shape, .. }
-                | ShapeExpr::Proj { shape, .. } => {
-                    collect_and_rename_input_exprs_rec(shape, count, vec)
-                }
-                ShapeExpr::Map { .. } => unimplemented!(),
-            }
-        }
-        let vec = vec![];
-        let mut count = 0;
-        collect_and_rename_input_exprs_rec(self, &mut count, vec)
-    }
-
     fn par_distrib_shape(&self, dim: desc::DimCompo, exec: &desc::ExecExpr) -> Self {
         ShapeExpr::Idx {
             idx: parall_idx(dim, exec),

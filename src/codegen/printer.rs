@@ -2,6 +2,7 @@ use super::cu_ast::{
     BinOp, BufferKind, ExecKind, Expr, FnDef, FnSig, GpuAddrSpace, Item, Lit, ParamDecl, ScalarTy,
     Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
+use crate::ast::{BinOpNat, DimCompo, Ident, Nat};
 use std::env;
 use std::fmt::Formatter;
 
@@ -85,6 +86,12 @@ impl std::fmt::Display for FnDef {
         let FnDef { fn_sig, body } = self;
         write!(f, "{}", fn_sig)?;
         write!(f, "{}", body)
+    }
+}
+
+impl std::fmt::Display for Ident {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
     }
 }
 
@@ -391,6 +398,60 @@ impl std::fmt::Display for ScalarTy {
             Bool => write!(f, "bool"),
             Memory => write!(f, "descend::Memory"),
             Gpu => write!(f, "descend::Gpu"),
+        }
+    }
+}
+
+impl std::fmt::Display for Nat {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ident(ident) => write!(f, "{}", ident),
+            Self::GridIdx => Ok(()), // print nothing
+            Self::BlockIdx(d) => {
+                write!(f, "blockIdx.{}", d)
+            }
+            Self::BlockDim(d) => {
+                write!(f, "blockDim.{}", d)
+            }
+            Self::ThreadIdx(d) => {
+                write!(f, "threadIdx.{}", d)
+            }
+            Self::Lit(n) => write!(f, "{}", n),
+            Self::BinOp(op, lhs, rhs) => {
+                write!(f, "{} {} {}", lhs, op, rhs)
+            }
+            Self::App(func, args) => {
+                write!(f, "{}(", func)?;
+                if let Some((last, leading)) = args.split_last() {
+                    for arg in leading {
+                        write!(f, "{}, ", arg)?;
+                    }
+                    write!(f, "{})", last)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for BinOpNat {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Add => write!(f, "+"),
+            Self::Sub => write!(f, "-"),
+            Self::Mul => write!(f, "*"),
+            Self::Div => write!(f, "/"),
+            Self::Mod => write!(f, "%"),
+        }
+    }
+}
+
+impl std::fmt::Display for DimCompo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DimCompo::X => write!(f, "{}", 'x'),
+            DimCompo::Y => write!(f, "{}", 'y'),
+            DimCompo::Z => write!(f, "{}", 'z'),
         }
     }
 }

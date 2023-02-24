@@ -10,6 +10,7 @@ use crate::parser::SourceCode;
 
 pub mod internal;
 
+pub mod printer;
 mod span;
 pub mod utils;
 #[allow(dead_code)]
@@ -374,12 +375,6 @@ impl Ident {
     }
 }
 
-impl fmt::Display for Ident {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     Ident(Mutability, Ident),
@@ -445,16 +440,6 @@ pub enum Ownership {
     Uniq,
 }
 
-impl fmt::Display for Ownership {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Self::Shrd => "shrd",
-            Self::Uniq => "uniq",
-        };
-        write!(f, "{}", str)
-    }
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Not,
@@ -515,18 +500,6 @@ pub enum Kind {
     Memory,
     DataTy,
     Provenance,
-}
-
-impl fmt::Display for Kind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let str = match self {
-            Kind::Nat => "nat",
-            Kind::Memory => "mem",
-            Kind::DataTy => "dty",
-            Kind::Provenance => "prv",
-        };
-        write!(f, "{}", str)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -673,26 +646,6 @@ impl PlaceExpr {
     }
 }
 
-impl fmt::Display for PlaceExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.pl_expr {
-            PlaceExprKind::Proj(pl_expr, n) => write!(f, "{}.{}", pl_expr, n),
-            PlaceExprKind::Deref(pl_expr) => write!(f, "*{}", pl_expr),
-            PlaceExprKind::Select(pl_expr, exec_idents) => {
-                write!(f, "*{}", pl_expr)?;
-                for i in exec_idents {
-                    write!(f, "[[{}]]", i)?;
-                }
-                Ok(())
-            }
-            PlaceExprKind::SplitAt(split_pos, pl_expr) => {
-                write!(f, "{}[..{}..]", pl_expr, split_pos)
-            }
-            PlaceExprKind::Ident(ident) => write!(f, "{}", ident),
-        }
-    }
-}
-
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct ExecExpr {
@@ -728,12 +681,6 @@ impl ExecExpr {
     }
 }
 
-impl fmt::Display for ExecExpr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.exec)
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct SplitProj {
     pub split_dim: DimCompo,
@@ -748,12 +695,6 @@ impl SplitProj {
             pos,
             proj,
         }
-    }
-}
-
-impl fmt::Display for SplitProj {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "split({}, {}).{}", self.split_dim, self.pos, self.proj)
     }
 }
 
@@ -795,16 +736,6 @@ impl Exec {
     }
 }
 
-impl fmt::Display for Exec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.base)?;
-        for e in &self.path {
-            write!(f, ".{}", e)?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum BaseExec {
     Ident(Ident),
@@ -812,35 +743,11 @@ pub enum BaseExec {
     GpuGrid(Dim, Dim),
 }
 
-impl fmt::Display for BaseExec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ident(ident) => write!(f, "{}", ident),
-            Self::CpuThread => write!(f, "cpu.thread"),
-            Self::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
-        }
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ExecPathElem {
     SplitProj(Box<SplitProj>),
     Distrib(DimCompo),
     ToThreads(DimCompo),
-}
-
-impl fmt::Display for ExecPathElem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SplitProj(split_proj) => write!(
-                f,
-                "split_proj_{}({}, {})",
-                split_proj.proj, split_proj.split_dim, split_proj.pos
-            ),
-            Self::Distrib(dim_compo) => write!(f, "distrib({})", dim_compo),
-            Self::ToThreads(dim_compo) => write!(f, "to_threads({})", dim_compo),
-        }
-    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -965,40 +872,11 @@ impl Dim {
     }
 }
 
-impl fmt::Display for Dim {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Dim::*;
-        match self {
-            XYZ(dim3d) => write!(
-                f,
-                "{}, {}, {}",
-                dim3d.as_ref().0,
-                dim3d.as_ref().1,
-                dim3d.as_ref().2
-            ),
-            XY(dim2d) | XZ(dim2d) | YZ(dim2d) => {
-                write!(f, "{}, {}", dim2d.as_ref().0, dim2d.as_ref().1)
-            }
-            X(dim1d) | Y(dim1d) | Z(dim1d) => write!(f, "{}", dim1d.as_ref().0),
-        }
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum DimCompo {
     X,
     Y,
     Z,
-}
-
-impl fmt::Display for DimCompo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DimCompo::X => write!(f, "x"),
-            DimCompo::Y => write!(f, "y"),
-            DimCompo::Z => write!(f, "z"),
-        }
-    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -1157,6 +1035,7 @@ pub enum DataTyKind {
     Ref(Box<RefDty>),
     RawPtr(Box<DataTy>),
     Range,
+    // TODO remove. This is an attribute of a typing context entry, not the type.
     // Only for type checking purposes.
     Dead(Box<DataTy>),
 }
@@ -1180,15 +1059,6 @@ pub enum Provenance {
     Ident(Ident),
 }
 
-impl fmt::Display for Provenance {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Value(name) => write!(f, "{}", name),
-            Self::Ident(ty_ident) => write!(f, "{}", ty_ident),
-        }
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Memory {
     CpuMem,
@@ -1196,18 +1066,6 @@ pub enum Memory {
     GpuShared,
     GpuLocal,
     Ident(Ident),
-}
-
-impl fmt::Display for Memory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Memory::CpuMem => write!(f, "cpu.mem"),
-            Memory::GpuGlobal => write!(f, "gpu.global"),
-            Memory::GpuShared => write!(f, "gpu.shared"),
-            Memory::GpuLocal => write!(f, "gpu.local"),
-            Memory::Ident(x) => write!(f, "{}", x),
-        }
-    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -1227,12 +1085,6 @@ impl ExecTy {
     }
 }
 
-impl fmt::Display for ExecTy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.ty)
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ExecTyKind {
     CpuThread,
@@ -1243,23 +1095,6 @@ pub enum ExecTyKind {
     GpuThreadGrp(Dim),
     GpuThread,
     View,
-}
-
-impl fmt::Display for ExecTyKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExecTyKind::CpuThread => write!(f, "cpu.thread"),
-            ExecTyKind::GpuGrid(gsize, bsize) => write!(f, "gpu.grid<{}, {}>", gsize, bsize),
-            ExecTyKind::GpuGlobalThreads(size) => write!(f, "gpu.global_threads<{}>", size),
-            ExecTyKind::GpuBlock(bsize) => write!(f, "gpu.block<{}>", bsize),
-            ExecTyKind::GpuThread => write!(f, "gpu.thread"),
-            ExecTyKind::GpuBlockGrp(gsize, bsize) => {
-                write!(f, "gpu.block_grp<{}, {}>", gsize, bsize)
-            }
-            ExecTyKind::GpuThreadGrp(size) => write!(f, "gpu.thread_grp<{}>", size),
-            ExecTyKind::View => write!(f, "view"),
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -1403,30 +1238,6 @@ impl PartialOrd for Nat {
     }
 }
 
-impl fmt::Display for Nat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Ident(ident) => write!(f, "{}", ident),
-            Self::GridIdx => Ok(()),
-            Self::BlockIdx(d) => write!(f, "blockIdx.{}", d),
-            Self::BlockDim(d) => write!(f, "blockDim.{}", d),
-            Self::ThreadIdx(d) => write!(f, "threadIdx.{}", d),
-            Self::Lit(n) => write!(f, "{}", n),
-            Self::BinOp(op, lhs, rhs) => write!(f, "({} {} {})", lhs, op, rhs),
-            Self::App(func, args) => {
-                write!(f, "{}(", func)?;
-                if let Some((last, leading)) = args.split_last() {
-                    for arg in leading {
-                        write!(f, "{}, ", arg)?;
-                    }
-                    write!(f, "{})", last)?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum BinOpNat {
     Add,
@@ -1434,18 +1245,6 @@ pub enum BinOpNat {
     Mul,
     Div,
     Mod,
-}
-
-impl fmt::Display for BinOpNat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Add => write!(f, "+"),
-            Self::Sub => write!(f, "-"),
-            Self::Mul => write!(f, "*"),
-            Self::Div => write!(f, "/"),
-            Self::Mod => write!(f, "%"),
-        }
-    }
 }
 
 // When changing the AST, the types can quickly grow and lead to stack overflows in the different

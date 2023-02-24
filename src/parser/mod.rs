@@ -171,6 +171,7 @@ pub mod error {
         crate::error::single_line_snippet(
             source,
             label,
+            label,
             line_num - 1,
             begin_column - 1,
             end_column - 1,
