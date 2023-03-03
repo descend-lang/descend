@@ -117,12 +117,12 @@ pub(super) enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
-    Lambda {
-        captures: Vec<crate::ast::Ident>,
-        params: Vec<ParamDecl>,
-        body: Box<Stmt>,
-        ret_ty: Ty,
-        is_dev_fun: bool,
+    Lambda { //für static_for
+        captures: Vec<crate::ast::Ident>, //leer
+        params: Vec<ParamDecl>, //einen: auto j
+        body: Box<Stmt>, //genStmt bei body von fornat
+        ret_ty: Ty, //void
+        is_dev_fun: bool, //false
     },
     FnCall(FnCall),
     UnOp {
@@ -156,9 +156,9 @@ pub(super) enum Expr {
 
 #[derive(Clone, Debug)]
 pub(super) struct FnCall {
-    pub fun: Box<Expr>,
-    pub template_args: Vec<TemplateArg>,
-    pub args: Vec<Expr>,
+    pub fun: Box<Expr>, //Identifier mit name von static_for: Ident::new...
+    pub template_args: Vec<TemplateArg>,//First, Last Werte
+    pub args: Vec<Expr>, //vec![Lambda FUnktion]
 }
 
 impl FnCall {

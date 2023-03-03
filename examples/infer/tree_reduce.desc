@@ -16,15 +16,15 @@ fn gpu_reduce<n:nat>(input: &uniq gpu.global [i32; n]) -[grid: gpu.grid<X<64>, X
             let split_ib = (split uniq 2*k (*ib)).0;
             let (active_half0, active_half1) = split uniq k (*split_ib);
 
-            indep(X) k block {
-                active_threads => {
+            indep(X) k block { //Teil die blöck bei k
+                active_threads => { //Führe k erste Threads aus
                     sched thread in active_threads {
                         let fst_half = active_half0[[thread]];
                         let snd_half = active_half1[[thread]];
                         *fst_half = *fst_half + *snd_half
                     }
                 },
-                inactive_threads => { () }
+                inactive_threads => { () } //führe den Rest aus
             };
             sync //not enforced yet
         }

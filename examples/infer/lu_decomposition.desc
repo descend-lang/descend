@@ -74,13 +74,18 @@ fn diagonal_block<tile_size: nat, a: prv>(
             let indiv_access: & 'd shrd gpu.global [[ [[f64; i]]; tile_size - (i+ 1)]] = transpose::<'d>(&'d shrd *split_columnl);
 
             //let (mut_elements, shrd_elements) = split uniq tile_size to_view_mut(array)
-            sched thread in block <'b, 'c, 'd >{ //elem: &uniq f64, shrd_row: &shrd [[f64, i]]
-                let elem = thread_elements[[thread]];
-                let shrd_row = indiv_access[[thread]];
+            indep(X) (i+1) block { //elem: &uniq f64, shrd_row: &shrd [[f64, i]]
+                active_threads => { () },
+                inactive_threads => <'b, 'c, 'd > {
+                    sched thread in inactive_threads {
+                        let elem = thread_elements[[thread]];
+                        let shrd_row = indiv_access[[thread]];
 
-                let row_i: & 'b shrd gpu.global [[f64; tile_size]] = &'b shrd *lhs[i];
-                let (column_il, column_ir): ( & 'c shrd gpu.global [[f64; i + 1]], & 'd shrd gpu.global [[f64; tile_size - (i + 1)]]) = split 'c 'd shrd (i + 1) (*row_i);
-                diagonal_below_HD::<i, a >(elem, shrd_row, column_il)
+                        let row_i: & 'b shrd gpu.global [[f64; tile_size]] = &'b shrd *lhs[i];
+                        let (column_il, column_ir): ( & 'c shrd gpu.global [[f64; i + 1]], & 'd shrd gpu.global [[f64; tile_size - (i + 1)]]) = split 'c 'd shrd (i + 1) (*row_i);
+                        diagonal_below_HD::<i, a >(elem, shrd_row, column_il)
+                    }
+                }
             };
             sync
         };

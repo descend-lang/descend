@@ -9,6 +9,8 @@ use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
+use crate::ast::{ArgKinded, DataTy, DataTyKind, Expr, ExprKind, Ident, Ty, TyKind};
+use crate::codegen::cu::{ParamDecl, TemplateArg};
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -665,6 +667,42 @@ fn gen_for_each(
     codegen_ctx.shape_ctx.drop_scope();
     for_loop
 }
+
+// fn gen_for_nat(
+//     range: &desc::Expr,
+//     body: &desc::Expr,
+//     codegen_ctx: &mut CodegenCtx,
+// ) -> cu::FnCall {
+//     if let desc::ExprKind::Range(first, last) = &range.expr {
+//         let ident = Box::new(cu::Expr::Ident::new("static_for"));
+//         let first = TemplateArg::Expr(descend::codegen::cu_ast::Expr(first));
+//         let last = TemplateArg::Expr(descend::codegen::cu_ast::Expr(last));
+//         let lambda_function = descend::codegen::cu_ast::Expr::Lambda(
+//             vec![],
+//             vec![ParamDecl::new("i", )],
+//             Box::new(body),
+//             Ty::new(TyKind::)
+//         );
+//
+//         // template_args: gen_args_kinded(&vec![ArgKinded::DataTy(DataTy::new(
+//         //     DataTyKind::Scalar(ScalarTy::I32),
+//         // ))]),
+//         // args: vec![
+//         //     cu::Expr::Ident("global_failure".to_string()),
+//         //     cu::Expr::Lit(cu::Lit::I32(incr_idx_check_counter())),
+//         // ],
+//
+//         cu::FnCall {
+//             fun: ident,
+//             template_args: vec![first, last],
+//             args: vec![]
+//         }
+//     } else {
+//         panic!("Expected range expression")
+//     }
+//
+//
+// }
 
 fn gen_for_range(
     ident: &desc::Ident,
