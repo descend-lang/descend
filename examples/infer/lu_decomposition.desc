@@ -74,10 +74,10 @@ fn diagonal_block<tile_size: nat, a: prv>(
             let indiv_access: & 'd shrd gpu.global [[ [[f64; i]]; tile_size - (i+ 1)]] = transpose::<'d>(&'d shrd *split_columnl);
 
             //let (mut_elements, shrd_elements) = split uniq tile_size to_view_mut(array)
-            indep(X) (i+1) block { //elem: &uniq f64, shrd_row: &shrd [[f64, i]]
+            indep(X) (tile_size-(i+1)) block { //elem: &uniq f64, shrd_row: &shrd [[f64, i]]
                 active_threads => { () },
-                inactive_threads => <'b, 'c, 'd > {
-                    sched thread in inactive_threads {
+                inactive_threads => {
+                    sched thread in inactive_threads <'b, 'c, 'd > {
                         let elem = thread_elements[[thread]];
                         let shrd_row = indiv_access[[thread]];
 
@@ -100,12 +100,17 @@ fn diagonal_block<tile_size: nat, a: prv>(
             split 'j 'k shrd (i+1) (*row_i0_transpose);
         //let indiv_access: &'m shrd gpu.global [[ [[f64; tile_size-(i+1)]]; (i+1)]]  = transpose::<'m>(&'m shrd *split_row_i0_columnr);
 
-        sched thread in block <'n> {
-            let elem = thread_elements[[thread]];
-            let shrd_column = indiv_access[[thread]];
+        indep(X) (i+1) block  {
+            active_threads => { () },
+            inactive_threads => {
+                sched thread in inactive_threads <'n> {
+                    let elem = thread_elements[[thread]];
+                    let shrd_column = indiv_access[[thread]];
 
-            let shrd_row: &'n shrd gpu.global [[f64; i+1]]  = &'n shrd *shrd_row_access; //&shrd [[f64; i+1]]
-            diagonal_above_HD::<i, a>(elem, shrd_column, shrd_row)
+                    let shrd_row: &'n shrd gpu.global [[f64; i+1]]  = &'n shrd *shrd_row_access; //&shrd [[f64; i+1]]
+                    diagonal_above_HD::<i, a>(elem, shrd_column, shrd_row)
+                }
+            }
         };
         sync
     }
