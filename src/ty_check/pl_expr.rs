@@ -5,7 +5,7 @@ use crate::ast::{
     BinOpNat, DataTy, DataTyKind, ExecExpr, ExecTyKind, Ident, Memory, Nat, Ownership, PlaceExpr,
     PlaceExprKind, Provenance, Ty, TyKind,
 };
-use crate::ty_check::ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
+use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 
 use crate::ty_check::ExprTyCtx;
 
@@ -14,7 +14,7 @@ pub(super) struct PlExprTyCtx<'ctxt> {
     kind_ctx: &'ctxt KindCtx,
     exec: ExecExpr,
     ty_ctx: &'ctxt TyCtx,
-    exec_borrow_ctx: &'ctxt ExecBorrowCtx,
+    exec_borrow_ctx: &'ctxt AccessCtx,
     own: Ownership,
 }
 
@@ -25,7 +25,7 @@ impl<'ctxt> PlExprTyCtx<'ctxt> {
             kind_ctx: &*expr_ty_ctx.kind_ctx,
             exec: expr_ty_ctx.exec.clone(),
             ty_ctx: &*expr_ty_ctx.ty_ctx,
-            exec_borrow_ctx: &*expr_ty_ctx.exec_borrow_ctx,
+            exec_borrow_ctx: &*expr_ty_ctx.access_ctx,
             own,
         }
     }
@@ -38,7 +38,7 @@ impl<'ctxt> From<&'ctxt BorrowCheckCtx<'ctxt>> for PlExprTyCtx<'ctxt> {
             kind_ctx: ctx.kind_ctx,
             exec: ctx.exec.clone(),
             ty_ctx: ctx.ty_ctx,
-            exec_borrow_ctx: ctx.exec_borrow_ctx,
+            exec_borrow_ctx: ctx.access_ctx,
             own: Ownership::Shrd,
         }
     }

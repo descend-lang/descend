@@ -1,7 +1,7 @@
 use super::ctxs::TyCtx;
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
-use crate::ty_check::ctxs::{CtxResult, ExecBorrowCtx, GlobalCtx, KindCtx};
+use crate::ty_check::ctxs::{AccessCtx, CtxResult, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::ExprTyCtx;
 use std::collections::HashSet;
@@ -9,11 +9,11 @@ use std::collections::HashSet;
 type OwnResult<T> = Result<T, BorrowingError>;
 
 pub(super) struct BorrowCheckCtx<'ctxt> {
-    // TODO refactor move into ctx module and remove public
+    // TODO refactor: move into ctx module and remove public
     pub gl_ctx: &'ctxt GlobalCtx,
     pub kind_ctx: &'ctxt KindCtx,
     pub ty_ctx: &'ctxt TyCtx,
-    pub exec_borrow_ctx: &'ctxt ExecBorrowCtx,
+    pub access_ctx: &'ctxt AccessCtx,
     pub exec: ExecExpr,
     pub reborrows: Vec<internal::Place>,
     pub own: Ownership,
@@ -29,7 +29,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             kind_ctx: &*expr_ty_ctx.kind_ctx,
             ty_ctx: &*expr_ty_ctx.ty_ctx,
-            exec_borrow_ctx: &*expr_ty_ctx.exec_borrow_ctx,
+            access_ctx: &*expr_ty_ctx.access_ctx,
             exec: expr_ty_ctx.exec.clone(),
             reborrows: reborrows.to_vec(),
             own,
@@ -46,7 +46,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
             gl_ctx: &*self.gl_ctx,
             kind_ctx: &*self.kind_ctx,
             ty_ctx: &*self.ty_ctx,
-            exec_borrow_ctx: &*self.exec_borrow_ctx,
+            access_ctx: &*self.access_ctx,
             exec: self.exec.clone(),
             reborrows: extended_reborrows,
             own: self.own,
@@ -59,7 +59,12 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
 pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
-    borrowable_under_exec(ctx, p, &ctx.exec)?;
+    ownership_safe_under_exec(ctx, p, &ctx.exec)?;
+    no_conflicting_accesses(ctx, p)?;
+    // no conflict with existing borrows
+    // no conflicting access:
+    //  no overlapping access with any exec != this.exec
+    //  if exec = this.exec: then no access through different view
     let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
     if p.is_place() {
         ownership_safe_place(ctx, p)
@@ -105,7 +110,7 @@ fn ownership_safe_deref_raw(
 }
 
 fn ownership_safe_place(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
-    ownership_safe_under_existing_loans(ctx, p)?;
+    ownership_safe_under_existing_borrows(ctx, p)?;
     let mut loan_set = HashSet::new();
     loan_set.insert(Loan {
         place_expr: p.clone(),
@@ -145,7 +150,7 @@ fn ownership_safe_deref(
     let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
-    ownership_safe_under_existing_loans(&ext_reborrow_ctx, &currently_checked_pl_expr)?;
+    ownership_safe_under_existing_borrows(&ext_reborrow_ctx, &currently_checked_pl_expr)?;
     potential_prvs_after_subst.insert(Loan {
         place_expr: currently_checked_pl_expr,
         own: ctx.own,
@@ -180,7 +185,7 @@ fn ownership_safe_deref_abs(
     //  expression even those which are formed recursively seem cleaner
     // pl_expr::ty_check(&PlExprTyCtx::from(ctx), &mut currently_checked_pl_expr)?;
     new_own_weaker_equal(ctx.own, ref_own)?;
-    ownership_safe_under_existing_loans(ctx, &currently_checked_pl_expr)?;
+    ownership_safe_under_existing_borrows(ctx, &currently_checked_pl_expr)?;
     let mut passed_through_prvs = HashSet::new();
     passed_through_prvs.insert(Loan {
         place_expr: currently_checked_pl_expr,
@@ -189,8 +194,8 @@ fn ownership_safe_deref_abs(
     Ok(passed_through_prvs)
 }
 
-fn borrowable_under_exec<'a>(
-    ctx: &BorrowCheckCtx<'a>,
+fn ownership_safe_under_exec(
+    ctx: &BorrowCheckCtx,
     p: &PlaceExpr,
     exec: &ExecExpr,
 ) -> OwnResult<()> {
@@ -231,12 +236,21 @@ fn borrowable_under_exec<'a>(
                 exec = remove_last_distrib(&exec);
                 select_exec_slice = prevs;
             }
-            borrowable_under_exec(ctx, pl_expr, &exec)
+            ownership_safe_under_exec(ctx, pl_expr, &exec)
         }
         PlaceExprKind::Deref(pl_expr)
         | PlaceExprKind::Proj(pl_expr, _)
-        | PlaceExprKind::SplitAt(_, pl_expr) => borrowable_under_exec(ctx, pl_expr, exec),
+        | PlaceExprKind::SplitAt(_, pl_expr) => ownership_safe_under_exec(ctx, pl_expr, exec),
     }
+}
+
+fn no_conflicting_accesses(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
+    for (ex, loans) in ctx.access_ctx.iter().filter(|(exec, _)| *exec != &ctx.exec) {
+        if !no_uniq_loan_overlap(ctx.own, p, loans) {
+            return Err(BorrowingError::ConflictingAccess);
+        }
+    }
+    Ok(())
 }
 
 fn no_distrib_in_diff(under: &ExecExpr, from: &ExecExpr) -> OwnResult<()> {
@@ -282,7 +296,10 @@ fn new_own_weaker_equal(checked_own: Ownership, ref_own: Ownership) -> OwnResult
     }
 }
 
-fn ownership_safe_under_existing_loans(ctx: &BorrowCheckCtx, pl_expr: &PlaceExpr) -> OwnResult<()> {
+fn ownership_safe_under_existing_borrows(
+    ctx: &BorrowCheckCtx,
+    pl_expr: &PlaceExpr,
+) -> OwnResult<()> {
     for prv_mapping in ctx.ty_ctx.prv_mappings() {
         let PrvMapping { prv, loans } = prv_mapping;
         let no_uniq_overlap = no_uniq_loan_overlap(ctx.own, pl_expr, loans);

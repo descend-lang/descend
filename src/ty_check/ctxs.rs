@@ -425,13 +425,13 @@ impl TyCtx {
     }
 }
 
-pub(super) struct ExecBorrowCtx {
+pub(super) struct AccessCtx {
     ctx: HashMap<ExecExpr, HashSet<Loan>>,
 }
 
-impl ExecBorrowCtx {
+impl AccessCtx {
     pub fn new() -> Self {
-        ExecBorrowCtx {
+        AccessCtx {
             ctx: HashMap::new(),
         }
     }
@@ -449,8 +449,8 @@ impl ExecBorrowCtx {
         self.ctx.iter()
     }
 
-    pub fn clear_exec(&mut self, exec: &ExecExpr) {
-        self.ctx.remove(exec);
+    pub fn clear_for(&mut self, exec: &ExecExpr) {
+        self.ctx.retain(|ex, _| !ex.is_sub_exec_of(exec))
     }
 }
 

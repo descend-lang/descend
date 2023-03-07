@@ -13,7 +13,7 @@ use crate::ast::internal::{Frame, IdentTyped, Loan, Place, PrvMapping};
 use crate::ast::utils;
 use crate::ast::*;
 use crate::error::ErrorReported;
-use ctxs::{ExecBorrowCtx, GlobalCtx, KindCtx, TyCtx};
+use ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
 
@@ -69,7 +69,7 @@ struct ExprTyCtx<'ctxt> {
     kind_ctx: &'ctxt mut KindCtx,
     exec: ExecExpr,
     ty_ctx: &'ctxt mut TyCtx,
-    exec_borrow_ctx: &'ctxt mut ExecBorrowCtx,
+    access_ctx: &'ctxt mut AccessCtx,
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
@@ -101,14 +101,14 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> TyResult<()> 
     exec::ty_check(&kind_ctx, &ty_ctx, &gf.exec_decl, &mut exec)?;
     ty_ctx.append_exec_mapping(gf.exec_decl.ident.clone(), exec.clone());
 
-    let mut exec_borrow_ctx = ExecBorrowCtx::new();
+    let mut access_ctx = AccessCtx::new();
     let mut ctx = ExprTyCtx {
         gl_ctx,
         kind_ctx: &mut kind_ctx,
         ident_exec: &ident_exec,
         exec,
         ty_ctx: &mut ty_ctx,
-        exec_borrow_ctx: &mut exec_borrow_ctx,
+        access_ctx: &mut access_ctx,
     };
 
     ty_check_expr(&mut ctx, &mut gf.body.body)?;
@@ -188,12 +188,7 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         }
         ExprKind::BinOp(bin_op, lhs, rhs) => ty_check_binary_op(ctx, bin_op, lhs, rhs)?,
         ExprKind::UnOp(un_op, e) => ty_check_unary_op(ctx, un_op, e)?,
-        ExprKind::Sync => {
-            //TODO implement
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::Unit,
-            )))))
-        }
+        ExprKind::Sync(exec) => ty_check_sync(ctx, exec)?,
         ExprKind::Range(l, u) => ty_check_range(ctx, l, u)?,
         ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
         ExprKind::Idx(_, _) => {
@@ -211,6 +206,54 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
     //}
     expr.ty = Some(Box::new(ty));
     Ok(())
+}
+
+fn ty_check_sync(ctx: &mut ExprTyCtx, exec: &mut Option<Ident>) -> TyResult<Ty> {
+    let synced = match exec {
+        Some(ident) => ctx.ty_ctx.get_exec_expr(ident)?,
+        None => &ctx.exec,
+    };
+    syncable_under_exec(synced, &ctx.exec)?;
+    ctx.access_ctx.clear_for(synced);
+    Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+        DataTyKind::Scalar(ScalarTy::Unit),
+    )))))
+}
+
+// assumes fully typed ExecExpr as input
+fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
+    if !syncable_exec_ty(synced.ty.as_ref().unwrap()) {
+        return Err(TyError::String(
+            "trying to synchronize non-synchronizable execution resource".to_string(),
+        ));
+    }
+    if under.is_sub_exec_of(synced) {
+        for ep in &under.exec.path[synced.exec.path.len()..] {
+            if matches!(ep, ExecPathElem::SplitProj(_)) {
+                return Err(TyError::String(
+                    "tyring to synchronize on split execution resource".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    } else {
+        Err(TyError::String(
+            "cannot call sync from this execution resource".to_string(),
+        ))
+    }
+}
+
+fn syncable_exec_ty(exec_ty: &ExecTy) -> bool {
+    match &exec_ty.ty {
+        ExecTyKind::GpuBlock(_) => true,
+        ExecTyKind::CpuThread
+        | ExecTyKind::GpuGrid(_, _)
+        | ExecTyKind::GpuGlobalThreads(_)
+        | ExecTyKind::GpuBlockGrp(_, _)
+        | ExecTyKind::GpuThreadGrp(_)
+        | ExecTyKind::GpuThread
+        | ExecTyKind::View => false,
+    }
 }
 
 fn ty_check_range(ctx: &mut ExprTyCtx, l: &mut Expr, u: &mut Expr) -> TyResult<Ty> {
@@ -415,7 +458,7 @@ fn ty_check_if_else(
 ) -> TyResult<Ty> {
     // TODO deal with provenances in cases
     ty_check_expr(ctx, cond)?;
-    // TODO exec_borrow_ctx clone
+    // TODO acccess_ctx clone
     let mut ty_ctx_clone = ctx.ty_ctx.clone();
     let mut ctx_clone = ExprTyCtx {
         gl_ctx: ctx.gl_ctx,
@@ -423,7 +466,7 @@ fn ty_check_if_else(
         kind_ctx: &mut *ctx.kind_ctx,
         exec: ctx.exec.clone(),
         ty_ctx: &mut ty_ctx_clone,
-        exec_borrow_ctx: &mut *ctx.exec_borrow_ctx,
+        access_ctx: &mut *ctx.access_ctx,
     };
     let _case_true_ty_ctx = ty_check_expr(&mut ctx_clone, case_true)?;
     ctx.ty_ctx.push_empty_frame();
@@ -556,7 +599,7 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
             kind_ctx: &mut *ctx.kind_ctx,
             exec: branch_exec.clone(),
             ty_ctx: &mut *ctx.ty_ctx,
-            exec_borrow_ctx: &mut *ctx.exec_borrow_ctx,
+            access_ctx: &mut *ctx.access_ctx,
         };
         branch_expr_ty_ctx
             .ty_ctx
@@ -571,8 +614,7 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
             ));
         }
         let frame = branch_expr_ty_ctx.ty_ctx.pop_frame();
-        ctx.exec_borrow_ctx
-            .insert(&branch_exec, frame.unsynced_loans);
+        ctx.access_ctx.insert(&branch_exec, frame.unsynced_loans);
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
@@ -594,7 +636,7 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
         kind_ctx: &mut *ctx.kind_ctx,
         exec: body_exec.clone(),
         ty_ctx: &mut *ctx.ty_ctx,
-        exec_borrow_ctx: &mut *ctx.exec_borrow_ctx,
+        access_ctx: &mut *ctx.access_ctx,
     };
     schedule_body_ctx.ty_ctx.push_empty_frame();
     if let Some(ident) = &sched.inner_exec_ident {
@@ -609,7 +651,7 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
     }
     ty_check_expr(&mut schedule_body_ctx, &mut sched.body.body)?;
     let frame = schedule_body_ctx.ty_ctx.pop_frame();
-    ctx.exec_borrow_ctx.insert(&body_exec, frame.unsynced_loans);
+    ctx.access_ctx.insert(&body_exec, frame.unsynced_loans);
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
@@ -654,15 +696,15 @@ fn ty_check_lambda(
     )?;
     ctx.ty_ctx
         .append_exec_mapping(lambda_ident_exec.ident.clone(), body_exec.clone());
-    let mut new_exec_borrow_ctx = ExprTyCtx {
+    let mut access_ctx = ExprTyCtx {
         gl_ctx: ctx.gl_ctx,
         ident_exec: ctx.ident_exec,
         kind_ctx: ctx.kind_ctx,
         exec: body_exec,
         ty_ctx: &mut *ctx.ty_ctx,
-        exec_borrow_ctx: &mut ExecBorrowCtx::new(),
+        access_ctx: &mut AccessCtx::new(),
     };
-    ty_check_expr(&mut new_exec_borrow_ctx, body)?;
+    ty_check_expr(&mut access_ctx, body)?;
     ctx.ty_ctx.pop_frame();
     // FIXME reintroduce after introducing temporary typing context
     // let no_move_ty_ctx = capture_ty_ctx.clone().drop_last_frame();
@@ -761,14 +803,14 @@ fn ty_check_assign_place(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr, e: &mut Expr)
 
     // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
     if !matches!(&place_ty.dty, DataTyKind::Dead(_),) {
-        let pl_uniq_loans = borrow_check::ownership_safe(
+        let potential_accesses = borrow_check::ownership_safe(
             &BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq),
             pl_expr,
         )
         .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
         })?;
-        ctx.ty_ctx.append_unsynced_loans(pl_uniq_loans);
+        ctx.access_ctx.insert(&ctx.exec, potential_accesses);
     }
 
     let e_dty = if let TyKind::Data(dty) = &mut e.ty.as_mut().unwrap().as_mut().ty {
@@ -800,14 +842,14 @@ fn ty_check_assign_deref(
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), deref_expr)?;
-    let unsynced_loans = borrow_check::ownership_safe(
+    let potential_accesses = borrow_check::ownership_safe(
         &BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq),
         deref_expr,
     )
     .map_err(|err| {
         TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
     })?;
-    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
+    ctx.access_ctx.insert(&ctx.exec, potential_accesses);
     let deref_ty = deref_expr.ty.as_mut().unwrap();
     unify::sub_unify(
         ctx.kind_ctx,
@@ -905,13 +947,13 @@ fn ty_check_idx_assign(
             "Trying to access array out-of-bounds.".to_string(),
         ));
     }
-    let unsynced_loans =
+    let potential_accesses =
         borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq), pl_expr)
             .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
-    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
-    subty::check(ctx.kind_ctx, ctx.ty_ctx, e.ty.as_ref().unwrap().dty(), &dty)?;
+    ctx.access_ctx.insert(&ctx.exec, potential_accesses);
+    subty::check(ctx.kind_ctx, ctx.ty_ctx, e.ty.as_ref().unwrap().dty(), dty)?;
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
@@ -922,12 +964,12 @@ fn ty_check_index_copy(
     pl_expr: &mut PlaceExpr,
     idx: &mut Nat,
 ) -> TyResult<Ty> {
-    let unsynced_loans =
+    let potential_accesses =
         borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd), pl_expr)
             .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
-    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
+    ctx.access_ctx.insert(&ctx.exec, potential_accesses);
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Shrd), pl_expr)?;
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
         dty
@@ -1109,7 +1151,6 @@ fn ty_check_app(
         DataTyKind::Ident,
     )))));
     unify::unify(
-        &mut f_mono_ty,
         &mut Ty::new(TyKind::FnTy(Box::new(FnTy::new(
             vec![],
             args.iter()
@@ -1118,6 +1159,7 @@ fn ty_check_app(
             exec_f,
             ret_dty,
         )))),
+        &mut f_mono_ty,
     )?;
     let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
         f_remain_gen_args,
@@ -1210,7 +1252,7 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
             app_kernel.block_dim.clone(),
         ))),
         ty_ctx: &mut *ctx.ty_ctx,
-        exec_borrow_ctx: &mut ExecBorrowCtx::new(),
+        access_ctx: &mut AccessCtx::new(),
     };
     exec::ty_check(
         &kernel_ctx.kind_ctx,
@@ -1297,13 +1339,13 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         ScalarTy::Unit,
     )))));
     unify::unify(
-        &mut f_mono_ty,
         &mut Ty::new(TyKind::FnTy(Box::new(FnTy::new(
             vec![],
             extended_arg_tys,
             *kernel_ctx.exec.ty.unwrap(),
             unit_ty.clone(),
         )))),
+        &mut f_mono_ty,
     )?;
     let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
         f_remain_gen_args,
@@ -1506,12 +1548,12 @@ fn ty_check_pl_expr_with_deref(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> 
             vec![Constraint::Copyable],
         )))),
     )?;
-    let unsynced_loans =
+    let potential_accesses =
         borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd), pl_expr)
             .map_err(|err| {
             TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
         })?;
-    ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
+    ctx.access_ctx.insert(&ctx.exec, potential_accesses);
     if pl_expr.ty.as_ref().unwrap().copyable() {
         Ok(pl_expr.ty.as_ref().unwrap().as_ref().clone())
     } else {
@@ -1535,23 +1577,23 @@ fn ty_check_pl_expr_without_deref(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr) -> T
         }
         if pl_ty.copyable() {
             // TODO refactor
-            let unsynced_loans = borrow_check::ownership_safe(
+            let potential_accesses = borrow_check::ownership_safe(
                 &BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd),
                 pl_expr,
             )
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
             })?;
-            ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
+            ctx.access_ctx.insert(&ctx.exec, potential_accesses);
         } else {
-            let unsynced_loans = borrow_check::ownership_safe(
+            let potential_accesses = borrow_check::ownership_safe(
                 &BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq),
                 pl_expr,
             )
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
             })?;
-            ctx.ty_ctx.append_unsynced_loans(unsynced_loans);
+            ctx.access_ctx.insert(&ctx.exec, potential_accesses);
             ctx.ty_ctx.kill_place(&place);
         };
         Ty::new(TyKind::Data(Box::new(pl_ty)))
@@ -1617,7 +1659,6 @@ fn ty_check_borrow(
         rmem,
         reffed_ty,
     ))));
-    ctx.ty_ctx.append_unsynced_loans(loans.clone());
     ctx.ty_ctx.extend_loans_for_prv(&prv_val_name, loans)?;
     Ok(Ty::new(TyKind::Data(Box::new(res_dty))))
 }

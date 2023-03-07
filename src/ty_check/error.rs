@@ -94,7 +94,7 @@ impl TyError {
                     begin_column,
                     end_column,
                 );
-                eprintln!("{}", DisplayList::from(snippet).to_string());
+                eprintln!("{}", DisplayList::from(snippet));
             }
             TyError::MutabilityNotAllowed(ty) => {
                 if let Some(span) = ty.span {
@@ -109,7 +109,7 @@ impl TyError {
                         begin_column,
                         end_column,
                     );
-                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                    eprintln!("{}", DisplayList::from(snippet));
                 } else {
                     eprintln!("{:?}", &self);
                 };
@@ -131,7 +131,7 @@ impl TyError {
                     }],
                     opt: default_format(),
                 };
-                eprintln!("{}", DisplayList::from(snippet).to_string());
+                eprintln!("{}", DisplayList::from(snippet));
             }
             TyError::CtxError(CtxError::IdentNotFound(ident)) => {
                 if let Some(span) = ident.span {
@@ -149,7 +149,7 @@ impl TyError {
                         begin_column,
                         end_column,
                     );
-                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                    eprintln!("{}", DisplayList::from(snippet));
                 } else {
                     eprintln!("{:?}", &self);
                 };
@@ -170,13 +170,14 @@ impl TyError {
                                 begin_column,
                                 end_column,
                             );
-                            eprintln!("{}", DisplayList::from(snippet).to_string());
+                            eprintln!("{}", DisplayList::from(snippet));
                             eprintln!("conflicting with {:?}", place);
                         }
                         BorrowingError::TemporaryConflictingBorrow(_prv) => {
                             eprintln!("{:?}", conflict)
                         }
                         BorrowingError::ConflictingOwnership => eprintln!("{:?}", conflict),
+                        BorrowingError::ConflictingAccess => eprintln!("{:?}", conflict),
                         BorrowingError::CtxError(ctx_err) => eprintln!("{:?}", ctx_err),
                         BorrowingError::WrongDevice(under, from) => {
                             eprintln!("error: wrong device\nunder:{:?}\nfrom:{:?}", under, from)
@@ -206,7 +207,7 @@ impl TyError {
                         begin_column,
                         end_column,
                     );
-                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                    eprintln!("{}", DisplayList::from(snippet));
                 } else {
                     eprintln!("{:?}", &self);
                 };
@@ -298,6 +299,7 @@ pub enum BorrowingError {
     //     loan with {} capability.",
     // checked_own, ref_own
     ConflictingOwnership,
+    ConflictingAccess,
     // The borrowing place is not in the reborrow list
     BorrowNotInReborrowList(Place),
     TemporaryConflictingBorrow(String),

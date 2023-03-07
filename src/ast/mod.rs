@@ -330,7 +330,7 @@ pub enum ExprKind {
     // TODO branches must be blocks or treated like blocks
     Indep(Box<Indep>),
     Sched(Box<Sched>),
-    Sync,
+    Sync(Option<Ident>),
     Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),
@@ -665,19 +665,10 @@ impl ExecExpr {
     }
 
     pub fn is_sub_exec_of(&self, exec: &ExecExpr) -> bool {
-        if self.exec.base == exec.exec.base {
-            if self.exec.path.len() < exec.exec.path.len() {
-                return false;
-            }
-            for (l, r) in self.exec.path.iter().zip(&exec.exec.path) {
-                if l != r {
-                    return false;
-                }
-            }
-            true
-        } else {
-            false
+        if self.exec.base == exec.exec.base && self.exec.path.len() >= exec.exec.path.len() {
+            return &self.exec.path[..exec.exec.path.len()] == &exec.exec.path;
         }
+        false
     }
 }
 

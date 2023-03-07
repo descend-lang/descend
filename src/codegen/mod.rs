@@ -1228,7 +1228,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
             }),
             index: i.clone(),
         }),
-        Sync => CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall::new(
+        Sync(exec) => CheckedExpr::Expr(cu::Expr::FnCall(cu::FnCall::new(
             cu::Expr::Ident("__syncthreads".to_string()),
             vec![],
             vec![],

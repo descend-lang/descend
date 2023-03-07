@@ -268,6 +268,7 @@ impl Constrainable for DataTy {
                 }
             }
             (DataTyKind::Range, DataTyKind::Range) => Ok(()),
+            (_, DataTyKind::Dead(dty)) => self.constrain(dty, constr_map, prv_rels),
             (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
                 unimplemented!()
             }
@@ -520,13 +521,12 @@ impl Constrainable for Provenance {
         // TODO restructure cases for less?
         match (&*self, &*other) {
             (Provenance::Ident(i1), Provenance::Ident(i2)) if i1 == i2 => Ok(()),
-            (Provenance::Ident(i), r) | (r, Provenance::Ident(i)) => {
-                if i.is_implicit {
-                    r.bind_to(i, constr_map)
-                } else {
-                    prv_rels.push(PrvConstr(self.clone(), other.clone()));
-                    Ok(())
-                }
+            (Provenance::Ident(i), r) | (r, Provenance::Ident(i)) if i.is_implicit => {
+                r.bind_to(i, constr_map)
+            }
+            (Provenance::Ident(i), _) | (_, Provenance::Ident(i)) => {
+                prv_rels.push(PrvConstr(self.clone(), other.clone()));
+                Ok(())
             }
             (Provenance::Value(_), Provenance::Value(_)) => {
                 prv_rels.push(PrvConstr(self.clone(), other.clone()));

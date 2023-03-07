@@ -363,8 +363,8 @@ peg::parser! {
                     Ty::new(TyKind::Data(Box::new(utils::type_from_lit(&l))))
                 )
             }
-            "sync" {
-                Expr::new(ExprKind::Sync)
+            "sync" maybe_exec:(_ "(" _ ident:ident() _ ")" { ident })?  {
+                Expr::new(ExprKind::Sync(maybe_exec))
             }
             e:maybe_square_bracket_indexing_assignment() { e }
             "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression()
