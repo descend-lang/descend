@@ -12,6 +12,7 @@ pub(super) struct BorrowCheckCtx<'ctxt> {
     // TODO refactor: move into ctx module and remove public
     pub gl_ctx: &'ctxt GlobalCtx,
     pub kind_ctx: &'ctxt KindCtx,
+    pub ident_exec: &'ctxt IdentExec,
     pub ty_ctx: &'ctxt TyCtx,
     pub access_ctx: &'ctxt AccessCtx,
     pub exec: ExecExpr,
@@ -28,6 +29,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
         BorrowCheckCtx::<'ctxt> {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             kind_ctx: &*expr_ty_ctx.kind_ctx,
+            ident_exec: &*expr_ty_ctx.ident_exec,
             ty_ctx: &*expr_ty_ctx.ty_ctx,
             access_ctx: &*expr_ty_ctx.access_ctx,
             exec: expr_ty_ctx.exec.clone(),
@@ -45,6 +47,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
         BorrowCheckCtx {
             gl_ctx: &*self.gl_ctx,
             kind_ctx: &*self.kind_ctx,
+            ident_exec: &*self.ident_exec,
             ty_ctx: &*self.ty_ctx,
             access_ctx: &*self.access_ctx,
             exec: self.exec.clone(),
@@ -207,36 +210,24 @@ fn ownership_safe_under_exec(
             let from = &ctx.ty_ctx.ident_ty(ident)?.exec;
             no_distrib_in_diff(exec, from)
         }
-        PlaceExprKind::Select(pl_expr, exec_idents) => {
-            let mut exec = exec.clone();
-            let select_execs = exec_idents
-                .iter()
-                .map(|i| ctx.ty_ctx.get_exec_expr(i))
-                .collect::<CtxResult<Vec<_>>>()?;
-            let mut select_exec_slice = select_execs.as_slice();
-            while let Some((from, prevs)) = select_exec_slice.split_last() {
-                if exec.exec.base != from.exec.base {
-                    return Err(BorrowingError::WrongDevice(
-                        exec.exec.base.clone(),
-                        from.exec.base.clone(),
-                    ));
-                }
-                if exec.exec.path.len() < from.exec.path.len() {
-                    panic!(
-                        "Unexpected: Trying to borrow from an execution resource that is \
-                more specific than the current one."
-                    )
-                }
-                for (u, f) in exec.exec.path.iter().zip(&from.exec.path) {
-                    if u != f {
-                        panic!("Unexpected: Trying to borrow from divergent execution resource.")
-                    }
-                }
-                no_distrib_in_diff(&exec, from)?;
-                exec = remove_last_distrib(&exec);
-                select_exec_slice = prevs;
+        PlaceExprKind::Select(pl_expr, select_exec) => {
+            if exec.exec.base != select_exec.exec.base {
+                return Err(BorrowingError::WrongDevice(
+                    exec.exec.base.clone(),
+                    select_exec.exec.base.clone(),
+                ));
             }
-            ownership_safe_under_exec(ctx, pl_expr, &exec)
+            if exec.exec.path.len() != select_exec.exec.path.len() {
+                panic!("Unexpected: Can only select for current execution resource.")
+            }
+            for (u, f) in exec.exec.path.iter().zip(&select_exec.exec.path) {
+                if u != f {
+                    panic!("Unexpected: Trying to borrow from divergent execution resource.")
+                }
+            }
+            no_distrib_in_diff(exec, select_exec)?;
+            let outer_exec = exec.remove_last_distrib();
+            ownership_safe_under_exec(ctx, pl_expr, &outer_exec)
         }
         PlaceExprKind::Deref(pl_expr)
         | PlaceExprKind::Proj(pl_expr, _)
@@ -260,23 +251,6 @@ fn no_distrib_in_diff(under: &ExecExpr, from: &ExecExpr) -> OwnResult<()> {
         }
     }
     Ok(())
-}
-
-fn remove_last_distrib(exec: &ExecExpr) -> ExecExpr {
-    let last_distrib_pos = exec
-        .exec
-        .path
-        .iter()
-        .rposition(|e| matches!(e, ExecPathElem::Distrib(_)));
-    let removed_distrib_path = if let Some(ldp) = last_distrib_pos {
-        exec.exec.path[..ldp].to_vec()
-    } else {
-        vec![]
-    };
-    ExecExpr::new(Exec::with_path(
-        exec.exec.base.clone(),
-        removed_distrib_path,
-    ))
 }
 
 fn pl_ctxs_and_places_in_loans(

@@ -193,7 +193,7 @@ impl Expr {
 pub struct Sched {
     pub dim: DimCompo,
     pub inner_exec_ident: Option<Ident>,
-    pub sched_exec: Ident,
+    pub sched_exec: ExecExpr,
     pub body: Box<Block>,
 }
 
@@ -201,7 +201,7 @@ impl Sched {
     pub fn new(
         dim: DimCompo,
         inner_exec_ident: Option<Ident>,
-        sched_exec: Ident,
+        sched_exec: ExecExpr,
         body: Block,
     ) -> Self {
         Sched {
@@ -217,7 +217,7 @@ impl Sched {
 pub struct Indep {
     pub dim_compo: DimCompo,
     pub pos: Nat,
-    pub split_exec_ident: Ident,
+    pub split_exec: ExecExpr,
     pub branch_idents: Vec<Ident>,
     pub branch_bodies: Vec<Expr>,
 }
@@ -226,14 +226,14 @@ impl Indep {
     pub fn new(
         dim_compo: DimCompo,
         pos: Nat,
-        split_exec_ident: Ident,
+        split_exec: ExecExpr,
         branch_idents: Vec<Ident>,
         branch_bodies: Vec<Expr>,
     ) -> Self {
         Indep {
             dim_compo,
             pos,
-            split_exec_ident,
+            split_exec,
             branch_idents,
             branch_bodies,
         }
@@ -330,7 +330,7 @@ pub enum ExprKind {
     // TODO branches must be blocks or treated like blocks
     Indep(Box<Indep>),
     Sched(Box<Sched>),
-    Sync(Option<Ident>),
+    Sync(Option<ExecExpr>),
     Range(Box<Expr>, Box<Expr>),
     // Deref a non place expression; ONLY for codegen
     Deref(Box<Expr>),
@@ -537,7 +537,7 @@ pub struct PlaceExpr {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExprKind {
     // p[[x]]
-    Select(Box<PlaceExpr>, Vec<Ident>),
+    Select(Box<PlaceExpr>, Box<ExecExpr>),
     // p[..k] | p[k..]
     SplitAt(Box<Nat>, Box<PlaceExpr>),
     // p.0 | p.1
@@ -665,10 +665,42 @@ impl ExecExpr {
     }
 
     pub fn is_sub_exec_of(&self, exec: &ExecExpr) -> bool {
-        if self.exec.base == exec.exec.base && self.exec.path.len() >= exec.exec.path.len() {
-            return &self.exec.path[..exec.exec.path.len()] == &exec.exec.path;
+        if self.exec.path.len() > exec.exec.path.len() {
+            return self.exec.path[..exec.exec.path.len()] == exec.exec.path;
         }
         false
+    }
+
+    pub fn remove_last_distrib(&self) -> ExecExpr {
+        let last_distrib_pos = self
+            .exec
+            .path
+            .iter()
+            .rposition(|e| matches!(e, ExecPathElem::Distrib(_)));
+        let removed_distrib_path = if let Some(ldp) = last_distrib_pos {
+            self.exec.path[..ldp].to_vec()
+        } else {
+            vec![]
+        };
+        ExecExpr::new(Exec::with_path(
+            self.exec.base.clone(),
+            removed_distrib_path,
+        ))
+    }
+}
+
+#[test]
+fn equal_exec_exprs() {
+    let exec1 = ExecExpr::new(Exec::with_path(
+        BaseExec::Ident(Ident::new("grid")),
+        vec![ExecPathElem::Distrib(DimCompo::X)],
+    ));
+    let exec2 = ExecExpr::new(Exec::with_path(
+        BaseExec::Ident(Ident::new("grid")),
+        vec![ExecPathElem::Distrib(DimCompo::X)],
+    ));
+    if exec1 != exec2 {
+        panic!("Unequal execs, that should be equal")
     }
 }
 

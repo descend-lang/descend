@@ -208,9 +208,12 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
     Ok(())
 }
 
-fn ty_check_sync(ctx: &mut ExprTyCtx, exec: &mut Option<Ident>) -> TyResult<Ty> {
+fn ty_check_sync(ctx: &mut ExprTyCtx, exec: &mut Option<ExecExpr>) -> TyResult<Ty> {
     let synced = match exec {
-        Some(ident) => ctx.ty_ctx.get_exec_expr(ident)?,
+        Some(exec) => {
+            exec::ty_check(ctx.kind_ctx, ctx.ty_ctx, ctx.ident_exec, exec)?;
+            exec
+        }
         None => &ctx.exec,
     };
     syncable_under_exec(synced, &ctx.exec)?;
@@ -227,7 +230,7 @@ fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
             "trying to synchronize non-synchronizable execution resource".to_string(),
         ));
     }
-    if under.is_sub_exec_of(synced) {
+    if under.is_sub_exec_of(synced) || under == synced {
         for ep in &under.exec.path[synced.exec.path.len()..] {
             if matches!(ep, ExecPathElem::SplitProj(_)) {
                 return Err(TyError::String(
@@ -560,12 +563,12 @@ fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> Ty
 }
 
 fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
-    if &ctx.exec != ctx.ty_ctx.get_exec_expr(&indep.split_exec_ident)? {
-        return Err(TyError::String(format!(
-            "illegal execution resource: {}",
-            &indep.split_exec_ident
-        )));
-    }
+    exec::ty_check(
+        ctx.kind_ctx,
+        ctx.ty_ctx,
+        ctx.ident_exec,
+        &mut indep.split_exec,
+    )?;
     if indep.branch_idents.len() != indep.branch_bodies.len() {
         panic!(
             "Amount of branch identifiers and amount of branches do not match:\
@@ -613,8 +616,7 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
                 "A par_branch branch must not return a value.".to_string(),
             ));
         }
-        let frame = branch_expr_ty_ctx.ty_ctx.pop_frame();
-        ctx.access_ctx.insert(&branch_exec, frame.unsynced_loans);
+        branch_expr_ty_ctx.ty_ctx.pop_frame();
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
@@ -622,12 +624,12 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
 }
 
 fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
-    if &ctx.exec != ctx.ty_ctx.get_exec_expr(&sched.sched_exec)? {
-        return Err(TyError::String(format!(
-            "illegal execution resource: {}",
-            &sched.sched_exec
-        )));
-    }
+    exec::ty_check(
+        ctx.kind_ctx,
+        ctx.ty_ctx,
+        ctx.ident_exec,
+        &mut sched.sched_exec,
+    )?;
     let mut body_exec = ExecExpr::new(ctx.exec.exec.clone().distrib(sched.dim));
     exec::ty_check(&ctx.kind_ctx, &ctx.ty_ctx, &ctx.ident_exec, &mut body_exec)?;
     let mut schedule_body_ctx = ExprTyCtx {
@@ -639,19 +641,13 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
         access_ctx: &mut *ctx.access_ctx,
     };
     schedule_body_ctx.ty_ctx.push_empty_frame();
-    if let Some(ident) = &sched.inner_exec_ident {
-        schedule_body_ctx
-            .ty_ctx
-            .append_exec_mapping(ident.clone(), body_exec.clone());
-    };
     for prv in &sched.body.prvs {
         schedule_body_ctx
             .ty_ctx
             .append_prv_mapping(PrvMapping::new(prv));
     }
     ty_check_expr(&mut schedule_body_ctx, &mut sched.body.body)?;
-    let frame = schedule_body_ctx.ty_ctx.pop_frame();
-    ctx.access_ctx.insert(&body_exec, frame.unsynced_loans);
+    schedule_body_ctx.ty_ctx.pop_frame();
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
@@ -759,12 +755,7 @@ fn ty_check_block(ctx: &mut ExprTyCtx, block: &mut Block) -> TyResult<Ty> {
         ctx.ty_ctx.append_prv_mapping(PrvMapping::new(prv));
     }
     ty_check_expr(ctx, &mut block.body)?;
-    let frame = ctx.ty_ctx.pop_frame();
-    let valid_loans = collect_valid_loans(ctx.ty_ctx, frame.unsynced_loans);
-    ctx.ty_ctx
-        .last_frame_mut()
-        .unsynced_loans
-        .extend(valid_loans);
+    ctx.ty_ctx.pop_frame();
     Ok(block.body.ty.as_ref().unwrap().as_ref().clone())
 }
 
@@ -1825,18 +1816,6 @@ fn ty_well_formed(kind_ctx: &KindCtx, ty_ctx: &TyCtx, exec_ty: &ExecTy, ty: &Ty)
     }
     Ok(())
 }
-
-// fn exec_ty_size(exec_ty: &ExecTy, dim_compo: DimCompo) -> Nat {
-//     match &exec_ty.ty {
-//         ExecTyKind::CpuThread | ExecTyKind::GpuThread => Nat::Lit(1),
-//         ExecTyKind::GpuGrid(gdim, _) | ExecTyKind::GpuBlockGrp(gdim, _) => {
-//             gdim.proj_size(dim_compo)
-//         }
-//         ExecTyKind::GpuBlock(dim) | ExecTyKind::GpuThreadGrp(dim) => dim.proj_size(dim_compo),
-//         ExecTyKind::GpuGlobalThreads(_) => todo!(),
-//         ExecTyKind::View => unreachable!(),
-//     }
-// }
 
 pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
     if &callee_exec_ty.ty == &ExecTyKind::View {

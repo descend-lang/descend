@@ -111,14 +111,6 @@ impl TyCtx {
         self.frames.pop().expect("There must always be a scope.")
     }
 
-    pub fn append_unsynced_loans<I>(&mut self, loans: I) -> &mut Self
-    where
-        I: IntoIterator<Item = Loan>,
-    {
-        self.last_frame_mut().append_unsynced_loans(loans);
-        self
-    }
-
     pub fn append_ident_typed(&mut self, id_typed: IdentTyped) -> &mut Self {
         self.last_frame_mut()
             .bindings
@@ -238,7 +230,7 @@ impl TyCtx {
 
     pub fn is_empty(&self) -> bool {
         if let Some(frm) = self.frames.last() {
-            self.frames.len() == 1 && frm.bindings.is_empty() && frm.unsynced_loans.is_empty()
+            self.frames.len() == 1 && frm.bindings.is_empty()
         } else {
             false
         }
@@ -450,7 +442,34 @@ impl AccessCtx {
     }
 
     pub fn clear_for(&mut self, exec: &ExecExpr) {
+        let mut outer_accesses = HashSet::new();
+        for (ex, accesses) in &self.ctx {
+            if ex.is_sub_exec_of(exec) {
+                let accs = accesses
+                    .iter()
+                    .filter_map(|acc| {
+                        get_select_for(&ex, &acc.place_expr).map(|select| Loan {
+                            own: acc.own,
+                            place_expr: select,
+                        })
+                    })
+                    .collect::<HashSet<_>>();
+                outer_accesses.extend(accs);
+            }
+        }
+        self.insert(exec, outer_accesses);
         self.ctx.retain(|ex, _| !ex.is_sub_exec_of(exec))
+    }
+}
+
+fn get_select_for(exec: &ExecExpr, pl_expr: &PlaceExpr) -> Option<PlaceExpr> {
+    match &pl_expr.pl_expr {
+        PlaceExprKind::Select(ipl, sel_exec) if &**sel_exec == exec => Some(ipl.as_ref().clone()),
+        PlaceExprKind::Select(ipl, _)
+        | PlaceExprKind::SplitAt(_, ipl)
+        | PlaceExprKind::Proj(ipl, _)
+        | PlaceExprKind::Deref(ipl) => get_select_for(exec, ipl),
+        PlaceExprKind::Ident(_) => None,
     }
 }
 

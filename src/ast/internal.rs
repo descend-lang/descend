@@ -10,7 +10,6 @@ use std::collections::HashSet;
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub bindings: Vec<FrameEntry>,
-    pub unsynced_loans: HashSet<Loan>,
 }
 
 impl Frame {
@@ -25,14 +24,6 @@ impl Frame {
                 .map(FrameEntry::Var)
                 .collect::<Vec<_>>(),
         );
-        self
-    }
-
-    pub fn append_unsynced_loans<I>(&mut self, loans: I) -> &mut Frame
-    where
-        I: IntoIterator<Item = Loan>,
-    {
-        self.unsynced_loans.extend(loans);
         self
     }
 }
@@ -120,7 +111,7 @@ impl Place {
 pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, usize),
     Deref(Box<PlaceCtx>),
-    Select(Box<PlaceCtx>, Vec<Ident>),
+    Select(Box<PlaceCtx>, Box<ExecExpr>),
     SplitAt(Box<Nat>, Box<PlaceCtx>),
     Hole,
 }
@@ -140,9 +131,9 @@ impl PlaceCtx {
                 split_pos.clone(),
                 Box::new(pl_ctx.insert_pl_expr(pl_expr)),
             )),
-            Self::Select(pl_ctx, exec_idents) => PlaceExpr::new(PlaceExprKind::Select(
+            Self::Select(pl_ctx, exec) => PlaceExpr::new(PlaceExprKind::Select(
                 Box::new(pl_ctx.insert_pl_expr(pl_expr)),
-                exec_idents.clone(),
+                exec.clone(),
             )),
         }
     }

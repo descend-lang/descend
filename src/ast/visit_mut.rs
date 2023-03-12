@@ -31,7 +31,7 @@ pub trait VisitMut: Sized {
     fn visit_ident(&mut self, _ident: &mut Ident) {}
     fn visit_pattern(&mut self, pattern: &mut Pattern) { walk_pattern(self, pattern) }
     fn visit_indep(&mut self, indep: &mut Indep) { walk_indep(self, indep) }
-    fn visit_par_for(&mut self, par_for: &mut Sched) { walk_sched(self, par_for) }
+    fn visit_sched(&mut self, sched: &mut Sched) { walk_sched(self, sched) }
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
     fn visit_app_kernel(&mut self, app_kernel: &mut AppKernel) { walk_app_kernel(self, app_kernel) }
     fn visit_block(&mut self, block: &mut Block) { walk_block(self, block) }
@@ -190,9 +190,9 @@ pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
     match &mut pl_expr.pl_expr {
         PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
-        PlaceExprKind::Select(p, distrib_exec_idents) => {
+        PlaceExprKind::Select(p, distrib_exec) => {
             visitor.visit_pl_expr(p);
-            walk_list!(visitor, visit_ident, distrib_exec_idents);
+            visitor.visit_exec_expr(distrib_exec);
         }
         PlaceExprKind::SplitAt(split_pos, pl_expr) => {
             visitor.visit_nat(split_pos);
@@ -231,29 +231,29 @@ pub fn walk_indep<V: VisitMut>(visitor: &mut V, indep: &mut Indep) {
     let Indep {
         dim_compo,
         pos,
-        split_exec_ident,
+        split_exec,
         branch_idents,
         branch_bodies,
     } = indep;
     visitor.visit_dim_compo(dim_compo);
     visitor.visit_nat(pos);
-    visitor.visit_ident(split_exec_ident);
+    visitor.visit_exec_expr(split_exec);
     walk_list!(visitor, visit_ident, branch_idents);
     walk_list!(visitor, visit_expr, branch_bodies);
 }
 
-pub fn walk_sched<V: VisitMut>(visitor: &mut V, par_for: &mut Sched) {
+pub fn walk_sched<V: VisitMut>(visitor: &mut V, sched: &mut Sched) {
     let Sched {
         dim,
         inner_exec_ident,
         sched_exec,
         body,
-    } = par_for;
+    } = sched;
     visitor.visit_dim_compo(dim);
     for ident in inner_exec_ident {
         visitor.visit_ident(ident)
     }
-    visitor.visit_ident(sched_exec);
+    visitor.visit_exec_expr(sched_exec);
     visitor.visit_block(body);
 }
 
@@ -341,8 +341,8 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Indep(par_branch) => {
             visitor.visit_indep(par_branch);
         }
-        ExprKind::Sched(par_for) => {
-            visitor.visit_par_for(par_for);
+        ExprKind::Sched(sched) => {
+            visitor.visit_sched(sched);
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(ident);
@@ -368,8 +368,8 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::Deref(expr) => visitor.visit_expr(expr),
         ExprKind::Sync(exec) => {
-            for i in exec {
-                visitor.visit_ident(i)
+            for e in exec {
+                visitor.visit_exec_expr(e)
             }
         }
         ExprKind::Range(_, _) => (),

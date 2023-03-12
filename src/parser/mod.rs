@@ -14,15 +14,12 @@ use crate::ast::visit_mut::VisitMut;
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
-    Ok(CompilUnit::new(
-        parser
-            .parse()
-            .map_err(|err| err.emit())?
-            .into_iter()
-            .map(replace_arg_kinded_idents)
-            .collect::<Vec<FunDef>>(),
-        source,
-    ))
+    let mut fun_defs = parser.parse().map_err(|err| err.emit())?;
+    for fun_def in &mut fun_defs {
+        replace_arg_kinded_idents(fun_def);
+        replace_exec_idents_with_specific_execs(fun_def);
+    }
+    Ok(CompilUnit::new(fun_defs, source))
 }
 
 #[derive(Debug)]
@@ -40,7 +37,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
+fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
     struct ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap<Box<str>, Kind>,
     }
@@ -118,8 +115,95 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
     let mut replace = ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap::new(),
     };
-    replace.visit_fun_def(&mut fun_def);
-    fun_def
+    replace.visit_fun_def(fun_def);
+}
+
+fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
+    struct ReplaceExecIdents {
+        ident_names_to_exec_expr: Vec<(Box<str>, ExecExpr)>,
+    }
+    impl VisitMut for ReplaceExecIdents {
+        fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
+            match &mut pl_expr.pl_expr {
+                PlaceExprKind::Select(ple, exec) => {
+                    self.visit_pl_expr(ple);
+                    expand_exec_expr(&self.ident_names_to_exec_expr, exec);
+                }
+                _ => visit_mut::walk_pl_expr(self, pl_expr),
+            }
+        }
+
+        fn visit_indep(&mut self, indep: &mut Indep) {
+            expand_exec_expr(&self.ident_names_to_exec_expr, &mut indep.split_exec);
+            for (i, (ident, branch)) in indep
+                .branch_idents
+                .iter()
+                .zip(&mut indep.branch_bodies)
+                .enumerate()
+            {
+                let branch_exec_expr = ExecExpr::new(indep.split_exec.exec.clone().split_proj(
+                    indep.dim_compo,
+                    indep.pos.clone(),
+                    i as u8,
+                ));
+                self.ident_names_to_exec_expr
+                    .push((ident.name.clone(), branch_exec_expr));
+                self.visit_expr(branch);
+                self.ident_names_to_exec_expr.pop();
+            }
+        }
+
+        fn visit_sched(&mut self, sched: &mut Sched) {
+            expand_exec_expr(&self.ident_names_to_exec_expr, &mut sched.sched_exec);
+            let mut body_exec = ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
+            if let Some(ident) = &sched.inner_exec_ident {
+                self.ident_names_to_exec_expr
+                    .push((ident.name.clone(), body_exec));
+            }
+            self.visit_block(&mut sched.body);
+            self.ident_names_to_exec_expr.pop();
+        }
+
+        fn visit_expr(&mut self, expr: &mut Expr) {
+            match &mut expr.expr {
+                ExprKind::Sync(exec) => {
+                    for exec in exec {
+                        expand_exec_expr(&self.ident_names_to_exec_expr, exec);
+                    }
+                }
+                _ => visit_mut::walk_expr(self, expr),
+            }
+        }
+    }
+
+    fn expand_exec_expr(exec_mapping: &[(Box<str>, ExecExpr)], exec_expr: &mut ExecExpr) {
+        match &exec_expr.exec.base {
+            BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => {}
+            BaseExec::Ident(ident) => {
+                if let Some(exec) = get_exec_expr(exec_mapping, ident) {
+                    let new_base = exec.exec.base.clone();
+                    let mut new_exec_path = exec.exec.path.clone();
+                    new_exec_path.append(&mut exec_expr.exec.path.clone());
+                    exec_expr.exec.base = new_base;
+                    exec_expr.exec.path = new_exec_path;
+                };
+            }
+        }
+    }
+
+    fn get_exec_expr(exec_mapping: &[(Box<str>, ExecExpr)], ident: &Ident) -> Option<ExecExpr> {
+        for (i, exec) in exec_mapping.iter().rev() {
+            if i == &ident.name {
+                return Some(exec.clone());
+            }
+        }
+        None
+    }
+
+    let mut replace_exec_idents = ReplaceExecIdents {
+        ident_names_to_exec_expr: vec![],
+    };
+    replace_exec_idents.visit_fun_def(fun_def);
 }
 
 pub mod error {
@@ -363,7 +447,7 @@ peg::parser! {
                     Ty::new(TyKind::Data(Box::new(utils::type_from_lit(&l))))
                 )
             }
-            "sync" maybe_exec:(_ "(" _ ident:ident() _ ")" { ident })?  {
+            "sync" maybe_exec:(_ "(" _ exec:exec_expr() _ ")" { exec })?  {
                 Expr::new(ExprKind::Sync(maybe_exec))
             }
             e:maybe_square_bracket_indexing_assignment() { e }
@@ -394,7 +478,7 @@ peg::parser! {
             "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block_expr() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:ident() _ "{" _
+            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:exec_expr() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
@@ -404,7 +488,7 @@ peg::parser! {
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
             }
             "sched" sched:(_ "(" _ dim:dim_component() _ ")" { dim })? __
-                inner_exec_ident:maybe_ident() __ "in" __ sched_exec:ident() _ body:block() {
+                inner_exec_ident:maybe_ident() __ "in" __ sched_exec:exec_expr() _ body:block() {
                 Expr::new(ExprKind::Sched(Box::new(Sched::new(match sched {
                     Some(d) => d,
                     None => DimCompo::X,
@@ -488,8 +572,8 @@ peg::parser! {
                 "*" _ deref:@ {
                     PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref)))
                 }
-                pl_expr:@ idents:(_ "[" _ "[" _ ident:ident() _ "]" _ "]"{ ident }) **<1,> _ {
-                    PlaceExpr::new(PlaceExprKind::Select(Box::new(pl_expr), idents))
+                pl_expr:@ exec:(_ "[" _ "[" _ exec:exec_expr() _ "]" _ "]"{ exec }) {
+                    PlaceExpr::new(PlaceExprKind::Select(Box::new(pl_expr), Box::new(exec)))
                 }
                 --
                 proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
@@ -615,7 +699,12 @@ peg::parser! {
             }
 
         rule exec() -> Exec =
-            base:base_exec() _ "." _  exec_path_elem: exec_path_elem() { Exec::new(base) }
+            base:base_exec()
+            maybe_exec_path_elems:(_ "." _  exec_path_elems: exec_path_elem() **<1,> _ "." _ { exec_path_elems })? {
+                if let Some(path) = maybe_exec_path_elems {
+                    Exec::with_path(base, path)
+                } else { Exec::new(base) }
+            }
 
         rule base_exec() -> BaseExec =
             ident:ident() { BaseExec::Ident(ident) }

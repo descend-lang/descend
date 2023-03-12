@@ -1,24 +1,3 @@
-fn reverse_block_elems<m: nat, n1: nat, k: nat, r: prv>(
-    vec: &r uniq gpu.global [f64; k]
-) -[grid: gpu.grid<X<m>, X<n1>>]-> () {
-    // FIXME, if n is used instead of n1, then k is generated, probably because n is part of the
-    //  type definition of group_mut
-    sched block in grid {
-        sched thread in block {
-            let mut tmp: f64;
-            {
-                // FIXME multiple distribs
-                tmp = *rev_mut(group_mut::<n1>(to_view_mut(&uniq *vec)))[[block]][[thread]];
-            };
-            sync(block);
-            // FIXME multiple distribs
-            let grouped = group_mut::<n1>(to_view_mut(&uniq *vec));
-            let elem_ref = &uniq *grouped[[block]][[thread]];
-            *elem_ref = tmp
-        }
-    }
-}
-
 fn reverse_block_elems_multiple_sched<m: nat, n1: nat, k: nat, r: prv>(
     vec: &r uniq gpu.global [f64; k]
 ) -[grid: gpu.grid<X<m>, X<n1>>]-> () {
@@ -40,3 +19,16 @@ fn reverse_block_elems_multiple_sched<m: nat, n1: nat, k: nat, r: prv>(
         }
     }
 }
+
+// fn reverse_block_elems<m: nat, n1: nat, k: nat, r: prv>(
+//     vec: &r uniq gpu.global [f64; k]
+// ) -[grid: gpu.grid<X<m>, X<n1>>]-> () where sync vec {
+//     sched block in grid {
+//         sched thread in block {
+//             let mut tmp = vec.group(n1).rev[[block]][[thread]];
+//             sync(block);
+//             vec.group(n1)[[block]][[thread]] = tmp
+//         }
+//     }
+//     // thread -> vec
+// }

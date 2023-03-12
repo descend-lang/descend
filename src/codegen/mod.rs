@@ -2,8 +2,8 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
-use crate::ast::utils;
 use crate::ast::visit::Visit;
+use crate::ast::visit_mut::VisitMut;
 use crate::ty_check;
 use crate::ty_check::matches_dty;
 use cu_ast as cu;
@@ -14,14 +14,15 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
-    let initial_fns_to_generate = collect_initial_fns_to_generate(comp_unit);
+    let mut initial_fns_to_generate = collect_initial_fns_to_generate(comp_unit);
     let mut codegen_ctx = CodegenCtx::new(
         // CpuThread is only a dummy and will be set according to the generated function.
         desc::ExecExpr::new(desc::Exec::new(desc::BaseExec::CpuThread)),
         &comp_unit.fun_defs,
     );
-    let mut initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 2);
-    for fun_def in &initial_fns_to_generate {
+    let mut generated_initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 4);
+    for fun_def in &mut initial_fns_to_generate {
+        inline_unit_exec_ty_value(fun_def);
         let exec = match &fun_def.exec_decl.ty.ty {
             desc::ExecTyKind::CpuThread => desc::BaseExec::CpuThread,
             desc::ExecTyKind::GpuGrid(gdim, bdim) => {
@@ -31,7 +32,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         };
         codegen_ctx.push_scope();
         codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(exec));
-        initial_fns.push(gen_fun_def(fun_def, &mut codegen_ctx));
+        generated_initial_fns.push(gen_fun_def(fun_def, &mut codegen_ctx));
         codegen_ctx.drop_scope();
         debug_assert_eq!(codegen_ctx.shape_ctx.map.len(), 0);
     }
@@ -39,7 +40,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let cu_fn_defs = codegen_ctx
         .inst_fn_ctx
         .into_values()
-        .chain(initial_fns.into_iter())
+        .chain(generated_initial_fns.into_iter())
         // mark kernel functions global
         .map(|mut f| {
             if let Some(ki) = codegen_ctx
@@ -91,6 +92,40 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         })
         .cloned()
         .collect::<Vec<desc::FunDef>>()
+}
+
+fn inline_unit_exec_ty_value(fun_def: &mut desc::FunDef) {
+    struct InlineUnitExecTy {
+        ident: desc::Ident,
+        base_exec: desc::BaseExec,
+    }
+    impl VisitMut for InlineUnitExecTy {
+        fn visit_exec_expr(&mut self, exec_expr: &mut desc::ExecExpr) {
+            match &mut exec_expr.exec.base {
+                desc::BaseExec::Ident(i) if i.name == self.ident.name => {
+                    exec_expr.exec.base = self.base_exec.clone();
+                }
+                _ => desc::visit_mut::walk_exec_expr(self, exec_expr),
+            }
+        }
+    }
+    let mut inline_unit_exec_ty = InlineUnitExecTy {
+        ident: fun_def.exec_decl.ident.clone(),
+        base_exec: exec_from_unit_exec_ty(&fun_def.exec_decl.ty),
+    };
+    inline_unit_exec_ty.visit_fun_def(fun_def)
+}
+
+fn exec_from_unit_exec_ty(exec_ty: &desc::ExecTy) -> desc::BaseExec {
+    match &exec_ty.ty {
+        desc::ExecTyKind::GpuGrid(gdim, bdim) => {
+            desc::BaseExec::GpuGrid(gdim.clone(), bdim.clone())
+        }
+        desc::ExecTyKind::CpuThread => desc::BaseExec::CpuThread,
+        _ => {
+            panic!("Expected unit exec type, but found type that is inhibited by multiple values.")
+        }
+    }
 }
 
 fn mv_shrd_mem_params_into_decls(
@@ -1619,19 +1654,16 @@ fn gen_pl_expr(pl_expr: &desc::PlaceExpr, codegen_ctx: &mut CodegenCtx) -> cu::E
             desc::PlaceExprKind::Deref(ple) => {
                 cu::Expr::Deref(Box::new(gen_pl_expr(ple.as_ref(), codegen_ctx)))
             }
-            desc::PlaceExprKind::Select(ple, exec_idents) => {
+            desc::PlaceExprKind::Select(ple, exec) => {
                 let ple = gen_pl_expr(ple.as_ref(), codegen_ctx);
-                exec_idents.iter().fold(ple, |expr, i| {
-                    let exec = codegen_ctx.exec_mapping.get(&i.name);
-                    let dim_compo = exec.exec.active_distrib_dim().unwrap();
-                    cu::Expr::ArraySubscript {
-                        array: Box::new(expr),
-                        index: parall_idx(
-                            dim_compo,
-                            codegen_ctx.exec_mapping.get(&i.name),
-                        ),
-                    }
-                })
+                let dim_compo = exec.exec.active_distrib_dim().unwrap();
+                cu::Expr::ArraySubscript {
+                    array: Box::new(ple),
+                    index: parall_idx(
+                        dim_compo,
+                        exec,
+                    ),
+                }
             }
         }
     }
@@ -2251,7 +2283,7 @@ impl ShapeExpr {
         K: Iterator<Item = &'a str>,
     {
         let mut subst_body = body.clone();
-        utils::subst_idents_kinded(gen_idents, gen_args, &mut subst_body);
+        desc::utils::subst_idents_kinded(gen_idents, gen_args, &mut subst_body);
         let param_substs = HashMap::from_iter(param_idents.zip(args));
         subst_body.subst_idents(&param_substs);
         ShapeExpr::create_from(&subst_body, codegen_ctx)
@@ -2288,18 +2320,15 @@ impl ShapeExpr {
                 ..
             } => Self::create_split_at_shape(pos, pl_expr, codegen_ctx),
             desc::PlaceExpr {
-                pl_expr: desc::PlaceExprKind::Select(pl_expr, exec_idents),
+                pl_expr: desc::PlaceExprKind::Select(pl_expr, exec),
                 ..
             } => {
                 let pl_shape = ShapeExpr::create_from(
                     &desc::Expr::new(desc::ExprKind::PlaceExpr(pl_expr.clone())),
                     codegen_ctx,
                 );
-                exec_idents.iter().fold(pl_shape, |s, i| {
-                    let exec = codegen_ctx.exec_mapping.get(&i.name);
-                    let dim_compo = exec.exec.active_distrib_dim().unwrap();
-                    s.par_distrib_shape(dim_compo, exec)
-                })
+                let dim_compo = exec.exec.active_distrib_dim().unwrap();
+                pl_shape.par_distrib_shape(dim_compo, exec)
             }
             desc::PlaceExpr {
                 pl_expr: desc::PlaceExprKind::Deref(ple),
