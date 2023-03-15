@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
 use crate::ast::{ArgKinded, DataTy, DataTyKind, Expr, ExprKind, Ident, Ty, TyKind};
-use crate::codegen::cu::{ParamDecl, TemplateArg};
+use crate::codegen::cu::{ParamDecl, ScalarTy, TemplateArg};
+use crate::codegen::cu::ScalarTy::{Auto, Void};
+use crate::codegen::cu::Ty::Scalar;
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -436,11 +438,21 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                 _ => panic!("Currently ranges are assumed to be predeclared functions. \n{:?}", range),
             };
 
-            cu::Stmt::ForLoop {
-                init: Box::new(init),
-                cond, // TODO needs some kind of checking
-                iter,
-                stmt: Box::new(gen_stmt(body, false, codegen_ctx)),
+            match range {
+                desc::Nat::App(r_name, input) => {
+                    if r_name.name.as_ref() == "range" {
+                        gen_for_nat(ident, input, body, codegen_ctx)
+                    }
+                    else {
+                        cu::Stmt::ForLoop {
+                            init: Box::new(init),
+                            cond, // TODO needs some kind of checking
+                            iter,
+                            stmt: Box::new(gen_stmt(body, false, codegen_ctx)),
+                        }
+                    }
+                }
+                _ => panic!("Currently ranges are assumed to be predeclared functions. \n{:?}", range),
             }
         }
         While(cond, body) => cu::Stmt::While {
@@ -668,41 +680,34 @@ fn gen_for_each(
     for_loop
 }
 
-// fn gen_for_nat(
-//     range: &desc::Expr,
-//     body: &desc::Expr,
-//     codegen_ctx: &mut CodegenCtx,
-// ) -> cu::FnCall {
-//     if let desc::ExprKind::Range(first, last) = &range.expr {
-//         let ident = Box::new(cu::Expr::Ident::new("static_for"));
-//         let first = TemplateArg::Expr(descend::codegen::cu_ast::Expr(first));
-//         let last = TemplateArg::Expr(descend::codegen::cu_ast::Expr(last));
-//         let lambda_function = descend::codegen::cu_ast::Expr::Lambda(
-//             vec![],
-//             vec![ParamDecl::new("i", )],
-//             Box::new(body),
-//             Ty::new(TyKind::)
-//         );
-//
-//         // template_args: gen_args_kinded(&vec![ArgKinded::DataTy(DataTy::new(
-//         //     DataTyKind::Scalar(ScalarTy::I32),
-//         // ))]),
-//         // args: vec![
-//         //     cu::Expr::Ident("global_failure".to_string()),
-//         //     cu::Expr::Lit(cu::Lit::I32(incr_idx_check_counter())),
-//         // ],
-//
-//         cu::FnCall {
-//             fun: ident,
-//             template_args: vec![first, last],
-//             args: vec![]
-//         }
-//     } else {
-//         panic!("Expected range expression")
-//     }
-//
-//
-// }
+fn gen_for_nat(
+    ident: &desc::Ident,
+    range: &Box<[desc::Nat]>,
+    body: &desc::Expr,
+    codegen_ctx: &mut CodegenCtx,
+) -> cu::Stmt {
+        let ident_method = Box::new(cu::Expr::Ident("static_for".to_string()));
+        let first = TemplateArg::Expr(cu::Expr::Nat(range[0].clone()));
+        let last = TemplateArg::Expr(cu::Expr::Nat(range[1].clone()));
+        let param_decl = cu::ParamDecl {
+            name: ident.name.to_string(),
+            ty: Scalar(Auto)
+        };
+
+        let lambda_function = cu::Expr::Lambda {
+            captures: vec![],
+            params: vec![param_decl],
+            body: Box::new(gen_stmt(body, false, codegen_ctx) ),
+            ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
+            is_dev_fun: false
+        };
+
+        cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
+            fun: ident_method,
+            template_args: vec![first, last],
+            args: vec![lambda_function],
+        }))
+}
 
 fn gen_for_range(
     ident: &desc::Ident,
