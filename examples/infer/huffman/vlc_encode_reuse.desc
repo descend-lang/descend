@@ -114,8 +114,6 @@ fn gpu_vlc_encode<gs:nat>(
             }
         };
 
-        sync;
-
         // calculate exclusive prefix sum (scan) of thread output lengths
         // (required for position of encoded symbols in output)
         // work-efficient shared memory implementation
@@ -126,6 +124,7 @@ fn gpu_vlc_encode<gs:nat>(
                 let tmp_up_sweep_view = group_mut::<256/d, 'a, gpu.shared, 256, u32>(
                     to_view_mut(&uniq *s_scan_ref)
                 );
+                sync;
                 indep(X) d block {
                     active_threads => {
                         sched thread in active_threads {
@@ -134,8 +133,7 @@ fn gpu_vlc_encode<gs:nat>(
                         }
                     },
                     rest => { () }
-                };
-                sync
+                }
             }
         };
 
@@ -156,8 +154,6 @@ fn gpu_vlc_encode<gs:nat>(
             }
         };
 
-        sync;
-
         // step 3: down-sweep phase
         {
             let mut s_scan_ref = &uniq *s_scan_and_block_out;
@@ -166,6 +162,7 @@ fn gpu_vlc_encode<gs:nat>(
                     to_view_mut::<'b, gpu.shared, 256, u32 >(
                         &'b uniq *s_scan_ref
                 ));
+                sync;
                 indep(X) d block {
                     active_threads => {
                         sched thread in active_threads {
@@ -177,10 +174,11 @@ fn gpu_vlc_encode<gs:nat>(
                         }
                     },
                     rest => { () }
-                };
-                sync
+                }
             }
         };
+
+        sync;
 
         // output the bit-index after the last codeword of the block for every block
         // (g_out_idx_block_item)
@@ -204,8 +202,6 @@ fn gpu_vlc_encode<gs:nat>(
                 }
             }
         };
-
-        sync;
 
         // l_thread_start_value =
         //     index of the value in the output array (32 bits per value) where the codeword
@@ -254,14 +250,13 @@ fn gpu_vlc_encode<gs:nat>(
                     } else {
                         wrbits = l_thread_out_len
                     };
-                    l_thread_out_len = l_thread_out_len - wrbits;
-                    tmpcw = ( l_thread_out >> l_thread_out_len ) as u32
+                    tmpcw = ( l_thread_out >> (l_thread_out_len - wrbits) ) as u32
                             & ( ( 1u32 << wrbits ) - 1u32 );
                     atomic_fetch_or(
                         &shrd (*s_block_out)[l_thread_start_value+1],
                         tmpcw << ( 32u32 - wrbits )
                     );
-                    ()
+                    l_thread_out_len = l_thread_out_len - wrbits
                 };
 
                 // Part 3 (third value in gpu.shared)
@@ -270,8 +265,7 @@ fn gpu_vlc_encode<gs:nat>(
                     atomic_fetch_or(
                         &shrd (*s_block_out)[l_thread_start_value+2],
                         tmpcw << ( 32u32 - l_thread_out_len )
-                    );
-                    ()
+                    ); ()
                 }
             }
         };

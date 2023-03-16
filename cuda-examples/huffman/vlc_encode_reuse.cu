@@ -70,7 +70,7 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
 
     {
 
-        auto l_thread_out = ((descend::u64)0);
+        auto l_thread_out = 0ull;
         auto l_thread_out_len = 0u;
         auto l_thread_start_value = 0u;
         auto l_thread_start_bit = 0u;
@@ -112,10 +112,10 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
             }
         }
 
-        __syncthreads();
         {
             auto s_scan_ref = (&(*s_scan_and_block_out));
-            for (std::size_t d = 128; (d > 0u); d = (d / 2u)) {
+            for (std::size_t d = 128; (d > 0u); d = (d >> 1)) {
+                __syncthreads();
                 if (((threadIdx.x - 0) < d)) {
                     {
                         (&(*s_scan_ref))[(((threadIdx.x - 0) * (256 / d)) +
@@ -127,8 +127,6 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                     }
                 } else {
                 }
-
-                __syncthreads();
             }
         }
 
@@ -144,10 +142,10 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
             }
         }
 
-        __syncthreads();
         {
             auto s_scan_ref = (&(*s_scan_and_block_out));
             for (std::size_t d = 1; (d <= 128); d = (d * 2u)) {
+                __syncthreads();
                 if (((threadIdx.x - 0) < d)) {
                     {
                         const auto t = (&(*s_scan_ref))[(((threadIdx.x - 0) * (256 / d)) +
@@ -164,11 +162,10 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                     }
                 } else {
                 }
-
-                __syncthreads();
             }
         }
 
+        __syncthreads();
         {
 
             if (((threadIdx.x - 0) < 255)) {
@@ -186,7 +183,6 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
             }
         }
 
-        __syncthreads();
         {
             {
                 const auto s_scan_and_block_out_item =
@@ -222,18 +218,18 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                         wrbits = l_thread_out_len;
                     }
 
-                    l_thread_out_len = (l_thread_out_len - wrbits);
-                    tmpcw = ((descend::u32)((l_thread_out >> l_thread_out_len)) &
+                    tmpcw =
+                            ((descend::u32)((l_thread_out >> (l_thread_out_len - wrbits))) &
                              ((1u << wrbits) - 1u));
                     descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
                                                      s_block_out[(l_thread_start_value + 1)]),
                                              (tmpcw << (32u - wrbits)));
+                    l_thread_out_len = (l_thread_out_len - wrbits);
                 }
 
                 if ((l_thread_out_len > 0u)) {
                     tmpcw = (descend::u32)(
-                            (l_thread_out &
-                             ((((descend::u64)1) << l_thread_out_len) - ((descend::u64)1))));
+                            (l_thread_out & ((1ull << l_thread_out_len) - 1ull)));
                     descend::atomic_fetch_or(descend::atomic_ref<descend::u32>(
                                                      s_block_out[(l_thread_start_value + 2)]),
                                              (tmpcw << (32u - l_thread_out_len)));
@@ -248,7 +244,7 @@ __global__ auto gpu_vlc_encode(const descend::u32 *const g_source_data,
                         (&g_out[(((blockIdx.x - 0) * 256) + (threadIdx.x - 0))]);
                 const auto s_block_out_item =
                         (&(&(*s_scan_and_block_out))[(threadIdx.x - 0)]);
-                if ((descend::thread_id_x() <= s_last_index_to_copy[0])) {
+                if ((threadIdx.x <= s_last_index_to_copy[0])) {
                     (*g_out_item) = (*s_block_out_item);
                 }
             }

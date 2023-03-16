@@ -408,9 +408,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let iter = cu::Expr::Assign {
                                 lhs: Box::new(i.clone()),
                                 rhs: Box::new(cu::Expr::BinOp {
-                                    op: cu::BinOp::Div,
+                                    op: cu::BinOp::Shr,
                                     lhs: Box::new(i),
-                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(2))),
+                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
                                 }),
                             };
                             (init_decl, cond, iter)
@@ -1459,6 +1459,8 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
                         gen_to_atomic_array(args, codegen_ctx)
                     } else if *ident.name == *"shfl_up" {
                         gen_shfl_up(args, kinded_args, codegen_ctx)
+                    } else if *ident.name == *"thread_id_x" {
+                        CheckedExpr::Expr(cu::Expr::Nat(Nat::ThreadIdx(DimCompo::X)))
                     } else {
                         let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
                         CheckedExpr::Expr(cu::Expr::FnCall(create_fn_call(

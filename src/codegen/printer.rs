@@ -263,7 +263,7 @@ impl std::fmt::Display for Lit {
             Lit::I32(i) => write!(f, "{}", i),
             Lit::U8(uc) => write!(f, "((descend::u8){})", uc),
             Lit::U32(u) => write!(f, "{}u", u),
-            Lit::U64(ul) => write!(f, "((descend::u64){})", ul),
+            Lit::U64(ul) => write!(f, "{}ull", ul),
             Lit::F32(fl) => {
                 // This is supposed to be a strict comparison. It is equal if fl is an integer.
                 if &fl.ceil() == fl {

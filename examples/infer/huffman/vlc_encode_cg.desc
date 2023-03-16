@@ -97,7 +97,6 @@ fn gpu_vlc_encode<gs: nat>(
 
             // four symbols are stored in g_source_data_item
             let tmp_source_data_item = *g_source_data_item;
-
             // declare temporary variables
 
             let mut tmp_source_data_item_i: u8 = 0u8;
@@ -142,12 +141,12 @@ fn gpu_vlc_encode<gs: nat>(
         indep(X) 7 block.to_warps {
             active_warps => {
                 sched warp in active_warps {
-                    let s_scan_arr_item = s_scan_arr_view[[warp]];
+                    let s_scan_arr_warp_item_1 = s_scan_arr_view[[warp]];
                     indep(X) 31 warp {
                         inactive_lanes => { () },
                         active_lane => {
                             sched lane in active_lane {
-                                *s_scan_arr_item = l_thread_out_len_scan
+                                *s_scan_arr_warp_item_1 = l_thread_out_len_scan
                             }
                         }
                     }
@@ -166,8 +165,8 @@ fn gpu_vlc_encode<gs: nat>(
                     indep(X) 7 warp {
                         input_lanes => {
                             sched lane in input_lanes {
-                                let s_scan_arr_item = s_scan_arr_view[[lane]];
-                                tmp_scan_block = *s_scan_arr_item
+                                let s_scan_arr_lane_item = s_scan_arr_view[[lane]];
+                                tmp_scan_block = *s_scan_arr_lane_item
                             }
                         },
                         zero_lanes => {
@@ -190,8 +189,8 @@ fn gpu_vlc_encode<gs: nat>(
                     indep(X) 7 warp {
                         active_lanes => {
                             sched lane in active_lanes {
-                                let s_scan_arr_item = s_scan_arr_view[[lane]];
-                                *s_scan_arr_item = tmp_scan_block
+                                let s_scan_arr_lane_item = s_scan_arr_view[[lane]];
+                                *s_scan_arr_lane_item = tmp_scan_block
                             }
                         },
                         inactive_lanes => { () }
@@ -217,10 +216,8 @@ fn gpu_vlc_encode<gs: nat>(
         };
 
         // inclusive scan -> exclusive scan
-        sched warp in block.to_warps {
-            sched lane in warp {
-                l_thread_out_len_scan = l_thread_out_len_scan - l_thread_out_len
-            }
+        sched thread in block {
+            l_thread_out_len_scan = l_thread_out_len_scan - l_thread_out_len
         };
         // ---------------------------------------------------------------------------------
 
@@ -246,8 +243,6 @@ fn gpu_vlc_encode<gs: nat>(
                 }
             }
         };
-
-        sync;
 
         // l_thread_start_value =
         //     index of the value in the output array (32 bits per value) where the codeword
@@ -294,14 +289,13 @@ fn gpu_vlc_encode<gs: nat>(
                 } else {
                     wrbits = l_thread_out_len
                 };
-                l_thread_out_len = l_thread_out_len - wrbits;
-                tmpcw = ( l_thread_out >> l_thread_out_len ) as u32
+                tmpcw = ( l_thread_out >> (l_thread_out_len - wrbits) ) as u32
                         & ( ( 1u32 << wrbits ) - 1u32 );
                 atomic_fetch_or(
                     &shrd (*s_block_out)[l_thread_start_value+1],
                     tmpcw << ( 32u32 - wrbits )
                 );
-                ()
+                l_thread_out_len = l_thread_out_len - wrbits
             };
 
             // Part 3 (third value in gpu.shared)
@@ -310,8 +304,7 @@ fn gpu_vlc_encode<gs: nat>(
                 atomic_fetch_or(
                     &shrd (*s_block_out)[l_thread_start_value+2],
                     tmpcw << ( 32u32 - l_thread_out_len )
-                );
-                ()
+                ); ()
             };
 
             sync;

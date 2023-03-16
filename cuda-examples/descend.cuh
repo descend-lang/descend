@@ -516,10 +516,6 @@ inline __host__ __device__ T* offset_raw_ptr(T* ptr, i32 off) {
     return ptr + off;
 }
 
-inline __device__ descend::u32 thread_id_x() {
-    return threadIdx.x;
-}
-
 };
 
 
