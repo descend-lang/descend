@@ -4,6 +4,7 @@ use super::cu_ast::{
 };
 use std::env;
 use std::fmt::Formatter;
+use crate::codegen::cu::LambdaCaptures;
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
@@ -215,7 +216,10 @@ impl std::fmt::Display for Expr {
             } => {
                 let dev_qual = if *is_dev_fun { "__device__" } else { "" };
                 writeln!(f, "[")?;
-                fmt_vec(f, captures, ",")?;
+                match captures {
+                    LambdaCaptures::List(captures) => fmt_vec(f, captures, ",")?,
+                    LambdaCaptures::Default => write!(f, "&")?,
+                }
                 writeln!(f, "] {} (", dev_qual)?;
                 fmt_vec(f, params, ",\n")?;
                 writeln!(f, ") -> {}", ret_ty)?;

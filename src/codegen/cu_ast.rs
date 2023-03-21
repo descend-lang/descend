@@ -109,6 +109,12 @@ pub(super) struct ExecKernel {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum LambdaCaptures {
+    List(Vec<crate::ast::Ident>),
+    Default
+}
+
+#[derive(Clone, Debug)]
 pub(super) enum Expr {
     Empty,
     Ident(String),
@@ -118,7 +124,7 @@ pub(super) enum Expr {
         rhs: Box<Expr>,
     },
     Lambda { //für static_for
-        captures: Vec<crate::ast::Ident>, //leer
+        captures: LambdaCaptures, //leer
         params: Vec<ParamDecl>, //einen: auto j
         body: Box<Stmt>, //genStmt bei body von fornat
         ret_ty: Ty, //void

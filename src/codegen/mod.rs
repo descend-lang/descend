@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
 use crate::ast::{ArgKinded, DataTy, DataTyKind, Expr, ExprKind, Ident, Ty, TyKind};
-use crate::codegen::cu::{ParamDecl, ScalarTy, TemplateArg};
+use crate::codegen::cu::{LambdaCaptures, ParamDecl, ScalarTy, TemplateArg};
 use crate::codegen::cu::ScalarTy::{Auto, Void};
 use crate::codegen::cu::Ty::Scalar;
 
@@ -695,7 +695,7 @@ fn gen_for_nat(
         };
 
         let lambda_function = cu::Expr::Lambda {
-            captures: vec![],
+            captures: cu::LambdaCaptures::List(vec![]),
             params: vec![param_decl],
             body: Box::new(gen_stmt(body, false, codegen_ctx) ),
             ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
@@ -1033,7 +1033,7 @@ fn gen_exec(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> Check
             codegen_ctx.drop_scope();
             (
                 cu::Expr::Lambda {
-                    captures: vec![],
+                    captures: LambdaCaptures::List(vec![]),
                     params: all_param_decls,
                     body: Box::new(if codegen_ctx.idx_checks {
                         global_failure_init.push(gpu_fun_body);
@@ -1358,11 +1358,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> CheckedExpr {
             codegen_ctx,
         )))),
         Lambda(params, exec_decl, dty, body) => CheckedExpr::Expr(cu::Expr::Lambda {
-            captures: {
+            captures: LambdaCaptures::List({
                 let mut free_idents = desc::utils::FreeKindedIdents::new();
                 free_idents.visit_expr(body);
                 free_idents.set.iter().map(|ki| ki.ident.clone()).collect()
-            },
+            }),
             params: gen_param_decls(params.as_slice()),
             body: Box::new(gen_stmt(
                 body,
