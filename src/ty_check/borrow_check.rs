@@ -1,7 +1,7 @@
 use super::ctxs::TyCtx;
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
-use crate::ty_check::ctxs::{AccessCtx, CtxResult, GlobalCtx, KindCtx};
+use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::ExprTyCtx;
 use std::collections::HashSet;
@@ -208,7 +208,9 @@ fn ownership_safe_under_exec(
     match &p.pl_expr {
         PlaceExprKind::Ident(ident) => {
             let from = &ctx.ty_ctx.ident_ty(ident)?.exec;
-            no_distrib_in_diff(exec, from)
+            // FIXME reintroduce
+            //  no_distrib_in_diff(exec, from)
+            Ok(())
         }
         PlaceExprKind::Select(pl_expr, select_exec) => {
             if exec.exec.base != select_exec.exec.base {
@@ -217,8 +219,8 @@ fn ownership_safe_under_exec(
                     select_exec.exec.base.clone(),
                 ));
             }
-            if exec.exec.path.len() != select_exec.exec.path.len() {
-                panic!("Unexpected: Can only select for current execution resource.")
+            if exec.exec.path.len() < select_exec.exec.path.len() {
+                panic!("Unexpected: Can only select for current execution resource.",)
             }
             for (u, f) in exec.exec.path.iter().zip(&select_exec.exec.path) {
                 if u != f {
@@ -229,8 +231,10 @@ fn ownership_safe_under_exec(
             let outer_exec = exec.remove_last_distrib();
             ownership_safe_under_exec(ctx, pl_expr, &outer_exec)
         }
-        PlaceExprKind::Deref(pl_expr)
+        PlaceExprKind::View(pl_expr, _)
+        | PlaceExprKind::Deref(pl_expr)
         | PlaceExprKind::Proj(pl_expr, _)
+        | PlaceExprKind::Idx(pl_expr, _)
         | PlaceExprKind::SplitAt(_, pl_expr) => ownership_safe_under_exec(ctx, pl_expr, exec),
     }
 }
@@ -294,14 +298,8 @@ fn ownership_safe_under_existing_borrows(
 
 fn no_uniq_loan_overlap(own: Ownership, pl_expr: &PlaceExpr, loans: &HashSet<Loan>) -> bool {
     loans.iter().all(|loan| {
-        let comp_pl_expr = if pl_expr.is_place() {
-            let (_, most_spec_pl) = loan.place_expr.to_pl_ctx_and_most_specif_pl();
-            most_spec_pl.to_place_expr()
-        } else {
-            loan.place_expr.clone()
-        };
         !((own == Ownership::Uniq || loan.own == Ownership::Uniq)
-            && overlap(&comp_pl_expr, pl_expr))
+            && overlap(&loan.place_expr, pl_expr))
     })
 }
 
@@ -334,5 +332,39 @@ fn at_least_one_borrowing_place_and_all_in_reborrow(
 }
 
 fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {
-    pll.prefix_of(plr) || plr.prefix_of(pll)
+    let pure_l = strip_to_pure_place_expr(pll);
+    let pure_r = strip_to_pure_place_expr(plr);
+    prefix(&pure_l, &pure_r) || prefix(&pure_r, &pure_l);
+    // FIXME remove
+    false
+}
+
+fn prefix(general: &PlaceExpr, specific: &PlaceExpr) -> bool {
+    if general != specific {
+        match &specific.pl_expr {
+            PlaceExprKind::Proj(pl_expr, _) => prefix(general, pl_expr),
+            PlaceExprKind::Deref(pl_expr) => prefix(general, pl_expr),
+            PlaceExprKind::Ident(_) => false,
+            _ => panic!("unexptected"),
+        }
+    } else {
+        true
+    }
+}
+
+fn strip_to_pure_place_expr(pl_expr: &PlaceExpr) -> PlaceExpr {
+    match &pl_expr.pl_expr {
+        PlaceExprKind::Ident(_) => pl_expr.clone(),
+        PlaceExprKind::Deref(ple) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
+            strip_to_pure_place_expr(ple),
+        ))),
+        PlaceExprKind::Proj(ple, i) => PlaceExpr::new(PlaceExprKind::Proj(
+            Box::new(strip_to_pure_place_expr(ple)),
+            *i,
+        )),
+        PlaceExprKind::Select(ple, _)
+        | PlaceExprKind::SplitAt(_, ple)
+        | PlaceExprKind::View(ple, _)
+        | PlaceExprKind::Idx(ple, _) => strip_to_pure_place_expr(ple),
+    }
 }

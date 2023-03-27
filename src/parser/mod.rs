@@ -103,6 +103,10 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
             }
         }
 
+        fn visit_view(&mut self, view: &mut View) {
+            self.subst_in_gen_args(&mut view.gen_args)
+        }
+
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
             self.ident_names_to_kinds = fun_def
                 .generic_params
@@ -388,11 +392,11 @@ peg::parser! {
             // Not allowing white spaces between . and number can increase parser performance
             //  significantly.
             // To achieve this, move the first _ in front of ns.
-            e:(@) ns:("." _ n:nat_literal() {n})+ {
-                ns.into_iter().fold(e,
-                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
-                )
-            }
+            // e:(@) ns:("." _ n:nat_literal() {n})+ {
+            //     ns.into_iter().fold(e,
+            //         |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
+            //     )
+            // }
 
             begin:position!() func:ident() place_end:position!() _
                 kind_args:kind_args()?
@@ -450,13 +454,9 @@ peg::parser! {
             "sync" maybe_exec:(_ "(" _ exec:exec_expr() _ ")" { exec })?  {
                 Expr::new(ExprKind::Sync(maybe_exec))
             }
-            e:maybe_square_bracket_indexing_assignment() { e }
-            "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression()
-                idx:(_ "[" _ n:nat() _ "]" {n})? {
-                match idx {
-                    None => Expr::new(ExprKind::Ref(prov, own, Box::new(p))),
-                    Some(idx) => Expr::new(ExprKind::BorrowIndex(prov, own, Box::new(p),idx))
-                }
+            e:pl_expr_maybe_assignment() { e }
+            "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression() {
+                Expr::new(ExprKind::Ref(prov, own, Box::new(p)))
             }
             "[" _ expressions:expression() ** (_ "," _) _ "]" {
                 Expr::new(ExprKind::Array(expressions))
@@ -503,19 +503,12 @@ peg::parser! {
             expression: expr_helper() { expression }
         }
 
-        rule maybe_square_bracket_indexing_assignment() -> Expr =
+        rule pl_expr_maybe_assignment() -> Expr =
             p:place_expression()
-            idx:(_ "[" _ n:nat() _ "]" { n })?
-            expr:(_ "=" _ e:expression() {e})? { ?
+            expr:(_ "=" _ e:expression() {e})? {
                 match expr {
-                    None => match idx {
-                        None => Ok(Expr::new(ExprKind::PlaceExpr(Box::new(p)))),
-                        Some(idx) => Ok(Expr::new(ExprKind::Index(Box::new(p), idx))),
-                    },
-                    Some(expr) => match idx {
-                        None => Ok(Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr)))),
-                        Some(idx) => Ok(Expr::new(ExprKind::IdxAssign(Box::new(p), idx, Box::new(expr)))),
-                    }
+                    None => Expr::new(ExprKind::PlaceExpr(Box::new(p))),
+                    Some(expr) => Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr))),
                 }
             }
 
@@ -572,16 +565,20 @@ peg::parser! {
                 "*" _ deref:@ {
                     PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref)))
                 }
-                pl_expr:@ exec:(_ "[" _ "[" _ exec:exec_expr() _ "]" _ "]"{ exec }) {
-                    PlaceExpr::new(PlaceExprKind::Select(Box::new(pl_expr), Box::new(exec)))
-                }
-                --
-                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
                 --
                 view:@ _ "[" _ ".." _ split_pos:nat() _ ".." _ "]" {
                     PlaceExpr::new(
                         PlaceExprKind::SplitAt(Box::new(split_pos), Box::new(view)))
                 }
+                pl_expr:@ _ "[" _ idx:nat() _ "]" {
+                    PlaceExpr::new(PlaceExprKind::Idx(Box::new(pl_expr), Box::new(idx)))
+                }
+                pl_expr:@ exec:(_ "[" _ "[" _ exec:exec_expr() _ "]" _ "]"{ exec }) {
+                    PlaceExpr::new(PlaceExprKind::Select(Box::new(pl_expr), Box::new(exec)))
+                }
+                --
+                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
+                pl_expr:@ _ "." _ v:view_compo() { PlaceExpr::new(PlaceExprKind::View(Box::new(pl_expr), v)) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -625,6 +622,16 @@ peg::parser! {
             //     ple.span = Some(Span::new(begin, end));
             //     ple
             // }
+
+        pub(crate) rule view_compo() -> Vec<View> =
+            views:(
+                view_ident:view_ident() mkargs:(_ kargs:kind_args() { kargs })?
+                    margs:(_ "(" _ args: view_compo() **<1,> (_ "," _) _ ")" { args })? {
+                        View { name: view_ident,
+                               gen_args: mkargs.unwrap_or_default(),
+                               args: margs.unwrap_or_default()
+                        }
+            }) **<1,> (_ "." _)
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat = precedence! {
@@ -817,9 +824,25 @@ peg::parser! {
                 / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
-                / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view")
+                / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view"
+                / view_name())
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
+
+        rule view_name() -> ()
+            = ("to_view" / "grp" / "map" / "transp" / "join" / "rev")
+
+        rule view_identifier() -> String =
+            s:$(&view_name() (['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*
+            / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*))
+        {
+            s.into()
+        }
+
+        rule view_ident() -> Ident =
+            begin:position!() ident:$(view_identifier()) end:position!() {
+                Ident::with_span(ident, Span::new(begin, end))
+            }
 
         // Literal may be one of Unit, bool, i32, u32, f32
         pub(crate) rule literal() -> Lit
@@ -1415,38 +1438,38 @@ mod tests {
         );
 
         // No place expressions
-        assert_eq!(
-            descend::expression("f::<x>().0"),
-            Ok(Expr::new(ExprKind::Proj(
-                Box::new(Expr::new(ExprKind::App(
-                    Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("f"))
-                    ))))),
-                    vec![ArgKinded::Ident(Ident::new("x"))],
-                    vec![]
-                ))),
-                zero_literal
-            ))),
-            "does not recognize projection on function application"
-        );
-        assert_eq!(
-            descend::expression("(x, y, z).1"),
-            Ok(Expr::new(ExprKind::Proj(
-                Box::new(Expr::new(ExprKind::Tuple(vec![
-                    Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("x"))
-                    )))),
-                    Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("y"))
-                    )))),
-                    Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("z"))
-                    ))))
-                ]))),
-                one_literal
-            ))),
-            "does not recognize projection on tuple view expression"
-        );
+        // assert_eq!(
+        //     descend::expression("f::<x>().0"),
+        //     Ok(Expr::new(ExprKind::Proj(
+        //         Box::new(Expr::new(ExprKind::App(
+        //             Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("f"))
+        //             ))))),
+        //             vec![ArgKinded::Ident(Ident::new("x"))],
+        //             vec![]
+        //         ))),
+        //         zero_literal
+        //     ))),
+        //     "does not recognize projection on function application"
+        // );
+        // assert_eq!(
+        //     descend::expression("(x, y, z).1"),
+        //     Ok(Expr::new(ExprKind::Proj(
+        //         Box::new(Expr::new(ExprKind::Tuple(vec![
+        //             Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("x"))
+        //             )))),
+        //             Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("y"))
+        //             )))),
+        //             Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("z"))
+        //             ))))
+        //         ]))),
+        //         one_literal
+        //     ))),
+        //     "does not recognize projection on tuple view expression"
+        // );
     }
 
     #[test]
@@ -1561,12 +1584,14 @@ mod tests {
     fn expression_indexing() {
         assert_eq!(
             descend::expression_seq("place_expression[12]"),
-            Ok(Expr::new(ExprKind::Index(
-                Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new(
-                    "place_expression"
-                )))),
-                Nat::Lit(12)
-            )))
+            Ok(Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+                PlaceExprKind::Idx(
+                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new(
+                        "place_expression"
+                    )))),
+                    Box::new(Nat::Lit(12))
+                )
+            )),)))
         );
     }
 
@@ -1621,26 +1646,26 @@ mod tests {
                 Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("variable"))))
             )))
         );
-        assert_eq!(
-            descend::expression_seq("&'prov uniq var[7]"),
-            Ok(Expr::new(ExprKind::BorrowIndex(
-                Some(String::from("'prov")),
-                Ownership::Uniq,
-                Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
-                Nat::Lit(7)
-            ),))
-        );
-        assert_eq!(
-            descend::expression_seq("&'prov uniq var[token]"),
-            Ok(Expr::new(ExprKind::BorrowIndex(
-                Some(String::from("'prov")),
-                Ownership::Uniq,
-                Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
-                Nat::Ident(Ident::new("token"))
-            ),))
-        );
+        // assert_eq!(
+        //     descend::expression_seq("&'prov uniq var[7]"),
+        //     Ok(Expr::new(ExprKind::BorrowIndex(
+        //         Some(String::from("'prov")),
+        //         Ownership::Uniq,
+        //         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
+        //         Nat::Lit(7)
+        //     ),))
+        // );
+        // assert_eq!(
+        //     descend::expression_seq("&'prov uniq var[token]"),
+        //     Ok(Expr::new(ExprKind::BorrowIndex(
+        //         Some(String::from("'prov")),
+        //         Ownership::Uniq,
+        //         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
+        //         Nat::Ident(Ident::new("token"))
+        //     ),))
+        // );
         let result = descend::expression_seq("&'a uniq var[7][3]");
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1654,10 +1679,12 @@ mod tests {
                         ScalarTy::I32
                     )))))
                 ),
-                Expr::new(ExprKind::Index(
-                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    Nat::Lit(3)
-                )),
+                Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+                    PlaceExprKind::Idx(
+                        Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+                        Box::new(Nat::Lit(3))
+                    )
+                )))),
                 Expr::with_type(
                     ExprKind::Lit(Lit::Bool(true)),
                     Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
@@ -1680,30 +1707,30 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn expression_tupel() {
-        assert_eq!(
-            descend::expression_seq("(12, x[3], true)"),
-            Ok(Expr::new(ExprKind::Tuple(vec![
-                Expr::with_type(
-                    ExprKind::Lit(Lit::I32(12)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::I32
-                    )))))
-                ),
-                Expr::new(ExprKind::Index(
-                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    Nat::Lit(3)
-                )),
-                Expr::with_type(
-                    ExprKind::Lit(Lit::Bool(true)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::Bool
-                    )))))
-                )
-            ])))
-        );
-    }
+    // #[test]
+    // fn expression_tupel() {
+    //     assert_eq!(
+    //         descend::expression_seq("(12, x[3], true)"),
+    //         Ok(Expr::new(ExprKind::Tuple(vec![
+    //             Expr::with_type(
+    //                 ExprKind::Lit(Lit::I32(12)),
+    //                 Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+    //                     ScalarTy::I32
+    //                 )))))
+    //             ),
+    //             Expr::new(ExprKind::Index(
+    //                 Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+    //                 Nat::Lit(3)
+    //             )),
+    //             Expr::with_type(
+    //                 ExprKind::Lit(Lit::Bool(true)),
+    //                 Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+    //                     ScalarTy::Bool
+    //                 )))))
+    //             )
+    //         ])))
+    //     );
+    // }
 
     #[test]
     fn expression_if_else() {

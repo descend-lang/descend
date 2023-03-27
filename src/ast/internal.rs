@@ -4,7 +4,7 @@
 // TODO specific access modifiers
 
 use super::{Ident, Ownership, PlaceExpr, Ty};
-use crate::ast::{ExecExpr, Mutability, Nat, PlaceExprKind};
+use crate::ast::{ExecExpr, Mutability, Nat, PlaceExprKind, View};
 use std::collections::HashSet;
 
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -106,13 +106,22 @@ impl Place {
             },
         )
     }
+
+    pub fn prefix_of(&self, other: &Self) -> bool {
+        if self.path.len() > other.path.len() {
+            return false;
+        }
+        self.ident == other.ident && &self.path == &other.path[..self.path.len()]
+    }
 }
 
 pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, usize),
     Deref(Box<PlaceCtx>),
     Select(Box<PlaceCtx>, Box<ExecExpr>),
+    View(Box<PlaceCtx>, Vec<View>),
     SplitAt(Box<Nat>, Box<PlaceCtx>),
+    Idx(Box<PlaceCtx>, Box<Nat>),
     Hole,
 }
 
@@ -134,6 +143,14 @@ impl PlaceCtx {
             Self::Select(pl_ctx, exec) => PlaceExpr::new(PlaceExprKind::Select(
                 Box::new(pl_ctx.insert_pl_expr(pl_expr)),
                 exec.clone(),
+            )),
+            Self::Idx(pl_ctx, idx) => PlaceExpr::new(PlaceExprKind::Idx(
+                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
+                idx.clone(),
+            )),
+            Self::View(pl_ctx, view) => PlaceExpr::new(PlaceExprKind::View(
+                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
+                view.clone(),
             )),
         }
     }
@@ -166,6 +183,15 @@ impl PlaceCtx {
             PlaceCtx::Select(pl_ctx, exec_idents) => {
                 let inner_ctx = pl_ctx.without_innermost_deref();
                 PlaceCtx::Select(Box::new(inner_ctx), exec_idents.clone())
+            }
+            PlaceCtx::View(pl_ctx, view) => {
+                let inner_ctx = pl_ctx.without_innermost_deref();
+                PlaceCtx::View(Box::new(inner_ctx), view.clone())
+            }
+
+            PlaceCtx::Idx(pl_ctx, idx) => {
+                let inner_ctx = pl_ctx.without_innermost_deref();
+                PlaceCtx::Idx(Box::new(inner_ctx), idx.clone())
             }
         }
     }

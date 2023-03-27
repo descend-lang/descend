@@ -398,19 +398,22 @@ impl TyCtx {
     pub(super) fn without_reborrow_loans(&mut self, pl_expr: &PlaceExpr) -> &mut Self {
         for frame_entry in self.flat_bindings_mut() {
             if let FrameEntry::PrvMapping(PrvMapping { prv: _, loans }) = frame_entry {
-                let without_reborrow: HashSet<Loan> = loans
-                    .iter()
-                    .filter_map(|loan| {
-                        if !PlaceExpr::new(PlaceExprKind::Deref(Box::new(pl_expr.clone())))
-                            .prefix_of(&loan.place_expr)
-                        {
-                            Some(loan.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                *loans = without_reborrow;
+                // FIXME not prefix_of but *x within p?
+                // let without_reborrow: HashSet<Loan> = loans
+                //     .iter()
+                //     .filter_map(|loan| {
+                //         // if !PlaceExpr::new(PlaceExprKind::Deref(Box::new(pl_expr.clone())))
+                //         //     .prefix_of(&loan.place_expr)
+                //         // {
+                //         //     Some(loan.clone())
+                //         // } else {
+                //         //     None
+                //         // }
+                //         Some(loan)
+                //     })
+                //     .collect();
+                // *loans = without_reborrow;
+                ()
             }
         }
         self
@@ -466,8 +469,10 @@ fn get_select_for(exec: &ExecExpr, pl_expr: &PlaceExpr) -> Option<PlaceExpr> {
     match &pl_expr.pl_expr {
         PlaceExprKind::Select(ipl, sel_exec) if &**sel_exec == exec => Some(ipl.as_ref().clone()),
         PlaceExprKind::Select(ipl, _)
+        | PlaceExprKind::View(ipl, _)
         | PlaceExprKind::SplitAt(_, ipl)
         | PlaceExprKind::Proj(ipl, _)
+        | PlaceExprKind::Idx(ipl, _)
         | PlaceExprKind::Deref(ipl) => get_select_for(exec, ipl),
         PlaceExprKind::Ident(_) => None,
     }

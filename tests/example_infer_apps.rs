@@ -5,6 +5,22 @@ extern crate descend;
 type Res = Result<(), descend::error::ErrorReported>;
 
 #[test]
+fn transpose() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/transpose.desc")?
+    ))
+}
+
+#[test]
+fn transpose_shrd_mem() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/transpose_shrd_mem.desc")?
+    ))
+}
+
+#[test]
 fn scale_vec() -> Res {
     Ok(println!(
         "{}",

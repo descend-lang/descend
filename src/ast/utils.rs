@@ -2,8 +2,8 @@ use crate::ast::visit::walk_list;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    visit, visit_mut, ArgKinded, DataTy, DataTyKind, Dim, ExecTy, Expr, ExprKind, FunDef, Ident,
-    IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    visit, visit_mut, ArgKinded, DataTy, DataTyKind, Dim, ExecTy, Expr, ExprKind, FnTy, FunDef,
+    Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -213,6 +213,7 @@ macro_rules! visitable {
     };
 }
 visitable!(Ty, visit_ty);
+visitable!(FnTy, visit_fn_ty);
 visitable!(DataTy, visit_dty);
 visitable!(Memory, visit_mem);
 visitable!(Provenance, visit_prv);

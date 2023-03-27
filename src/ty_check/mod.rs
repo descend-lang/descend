@@ -160,12 +160,13 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         ExprKind::Lit(l) => ty_check_literal(l),
         ExprKind::Array(elems) => ty_check_array(ctx, elems)?,
         ExprKind::Tuple(elems) => ty_check_tuple(ctx, elems)?,
-        ExprKind::Proj(e, i) => ty_check_proj(ctx, e, *i)?,
+        // ExprKind::Proj(e, i) => ty_check_proj(ctx, e, *i)?,
         ExprKind::App(ef, k_args, args) => ty_check_app(ctx, ef, k_args, args)?,
-        ExprKind::DepApp(ef, k_args) => ty_check_dep_app(ctx, ef, k_args)?.3,
+        ExprKind::DepApp(ef, k_args) => {
+            Ty::new(TyKind::FnTy(Box::new(ty_check_dep_app(ctx, ef, k_args)?.3)))
+        }
         ExprKind::AppKernel(app_kernel) => ty_check_app_kernel(ctx, app_kernel)?,
         ExprKind::Ref(prv, own, pl_expr) => ty_check_borrow(ctx, prv, *own, pl_expr)?,
-        ExprKind::Index(pl_expr, index) => ty_check_index_copy(ctx, pl_expr, index)?,
         ExprKind::Assign(pl_expr, e) => {
             if pl_expr.is_place() {
                 ty_check_assign_place(ctx, &pl_expr, e)?
@@ -190,14 +191,7 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         ExprKind::UnOp(un_op, e) => ty_check_unary_op(ctx, un_op, e)?,
         ExprKind::Sync(exec) => ty_check_sync(ctx, exec)?,
         ExprKind::Range(l, u) => ty_check_range(ctx, l, u)?,
-        ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
-        ExprKind::Idx(_, _) => {
-            unimplemented!("This is helper syntax to index into non-place expressions.")
-        }
-        ExprKind::Deref(_) => panic!(
-            "Dereferencing a non place expression is not a valid Descend \
-        program and only exists for codegen."
-        ),
+        // ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
     };
 
     // TODO reintroduce!!!!
@@ -853,8 +847,8 @@ fn ty_check_assign_deref(
             "Trying to assign through reference, to a type which is not fully alive.".to_string(),
         ));
     }
+    // FIXME needs subtyping check on p, e types
     if let TyKind::Data(_) = &deref_ty.ty {
-        ctx.ty_ctx.without_reborrow_loans(deref_expr);
         Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
             DataTyKind::Scalar(ScalarTy::Unit),
         )))))
@@ -948,85 +942,6 @@ fn ty_check_idx_assign(
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
-}
-
-fn ty_check_index_copy(
-    ctx: &mut ExprTyCtx,
-    pl_expr: &mut PlaceExpr,
-    idx: &mut Nat,
-) -> TyResult<Ty> {
-    let potential_accesses =
-        borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], Ownership::Shrd), pl_expr)
-            .map_err(|err| {
-            TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Shrd, err)
-        })?;
-    ctx.access_ctx.insert(&ctx.exec, potential_accesses);
-    pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Shrd), pl_expr)?;
-    let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
-        dty
-    } else {
-        return Err(TyError::String(
-            "Trying to index into non array type.".to_string(),
-        ));
-    };
-    let (elem_dty, n) = match pl_expr_dty.dty.clone() {
-        DataTyKind::Array(elem_dty, n) => (*elem_dty, n),
-        DataTyKind::At(arr_dty, _) => {
-            if let DataTyKind::Array(elem_ty, n) = &arr_dty.dty {
-                (elem_ty.as_ref().clone(), n.clone())
-            } else {
-                return Err(TyError::String(
-                    "Trying to index into non array type.".to_string(),
-                ));
-            }
-        }
-        DataTyKind::Ref(reff) => {
-            match &reff.dty.dty {
-                DataTyKind::ArrayShape(sty, n) if matches!(&sty.dty, DataTyKind::Scalar(_)) => {
-                    (sty.as_ref().clone(), n.clone())
-                }
-                DataTyKind::ArrayShape(view_ty, n) => {
-                    accessible_memory(ctx.exec.ty.as_ref().unwrap().as_ref(), &reff.mem)?;
-                    // TODO is ownership checking necessary here?
-                    (
-                        DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-                            reff.rgn,
-                            reff.own,
-                            reff.mem,
-                            view_ty.as_ref().clone(),
-                        )))),
-                        n.clone(),
-                    )
-                }
-                DataTyKind::Array(elem_ty, n) => (elem_ty.as_ref().clone(), n.clone()),
-                _ => {
-                    return Err(TyError::String(
-                        "Expected a reference as element type of array view.".to_string(),
-                    ))
-                }
-            }
-        }
-        _ => {
-            return Err(TyError::String(
-                "Trying to index into non array type.".to_string(),
-            ))
-        }
-    };
-
-    if &n < idx {
-        return Err(TyError::String(
-            "Trying to access array out-of-bounds.".to_string(),
-        ));
-    }
-
-    if elem_dty.copyable() {
-        Ok(Ty::new(TyKind::Data(Box::new(elem_dty))))
-    } else {
-        Err(TyError::String(format!(
-            "Cannot move out of array type: {:?}",
-            elem_dty
-        )))
-    }
 }
 
 // FIXME currently assumes that binary operators exist only for f32 and i32 and that both
@@ -1142,14 +1057,14 @@ fn ty_check_app(
         DataTyKind::Ident,
     )))));
     unify::unify(
-        &mut Ty::new(TyKind::FnTy(Box::new(FnTy::new(
+        &mut FnTy::new(
             vec![],
             args.iter()
                 .map(|arg| arg.ty.as_ref().unwrap().as_ref().clone())
                 .collect(),
             exec_f,
             ret_dty,
-        )))),
+        ),
         &mut f_mono_ty,
     )?;
     let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
@@ -1160,19 +1075,15 @@ fn ty_check_app(
     );
     k_args.append(&mut inferred_k_args);
 
-    if let TyKind::FnTy(fn_ty) = &f_mono_ty.ty {
-        // TODO check provenance relations
-        return Ok(fn_ty.ret_ty.as_ref().clone());
-    }
-
-    panic!("Expected function type but found something else.")
+    // TODO check provenance relations
+    return Ok(f_mono_ty.ret_ty.as_ref().clone());
 }
 
 fn ty_check_dep_app(
     ctx: &mut ExprTyCtx,
     ef: &mut Expr,
     k_args: &mut [ArgKinded],
-) -> TyResult<(Vec<IdentKinded>, Vec<Ty>, Ty, Ty)> {
+) -> TyResult<(Vec<IdentKinded>, Vec<Ty>, Ty, FnTy)> {
     ty_check_expr(ctx, ef)?;
     if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
         if fn_ty.generics.len() < k_args.len() {
@@ -1330,12 +1241,12 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         ScalarTy::Unit,
     )))));
     unify::unify(
-        &mut Ty::new(TyKind::FnTy(Box::new(FnTy::new(
+        &mut FnTy::new(
             vec![],
             extended_arg_tys,
             *kernel_ctx.exec.ty.unwrap(),
             unit_ty.clone(),
-        )))),
+        ),
         &mut f_mono_ty,
     )?;
     let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
@@ -1483,8 +1394,8 @@ fn ty_check_let(
     ty_check_expr(ctx, expr)?;
     let e_ty = expr.ty.as_mut().unwrap();
     infer_tys_and_append_idents(
-        &ctx.kind_ctx,
-        &mut ctx.ty_ctx,
+        ctx.kind_ctx,
+        ctx.ty_ctx,
         &ctx.exec,
         pattern,
         pattern_ty,
@@ -1608,9 +1519,9 @@ fn ty_check_borrow(
     if !ctx.ty_ctx.loans_in_prv(&prv_val_name)?.is_empty() {
         return Err(TyError::PrvValueAlreadyInUse(prv_val_name));
     }
+    let mems = pl_expr::ty_check_and_passed_mems(&PlExprTyCtx::new(ctx, own), pl_expr)?;
     let loans = borrow_check::ownership_safe(&BorrowCheckCtx::new(ctx, vec![], own), pl_expr)
         .map_err(|err| TyError::ConflictingBorrow(Box::new(pl_expr.clone()), own, err))?;
-    let mems = pl_expr::ty_check_and_passed_mems(&PlExprTyCtx::new(ctx, own), pl_expr)?;
     mems.iter()
         .try_for_each(|mem| accessible_memory(ctx.exec.ty.as_ref().unwrap().as_ref(), mem))?;
     let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
@@ -1669,7 +1580,7 @@ fn allowed_mem_for_exec(exec_ty: &ExecTyKind) -> Vec<Memory> {
     }
 }
 
-fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
+pub fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
     if allowed_mem_for_exec(&exec_ty.ty).contains(mem) {
         Ok(())
     } else {

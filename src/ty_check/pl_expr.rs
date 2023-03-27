@@ -2,12 +2,12 @@ use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
-    BinOpNat, DataTy, DataTyKind, ExecExpr, ExecTyKind, Ident, IdentExec, Memory, Nat, Ownership,
-    PlaceExpr, PlaceExprKind, Provenance, Ty, TyKind,
+    utils, BinOpNat, DataTy, DataTyKind, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident, IdentExec,
+    Memory, Nat, Ownership, PlaceExpr, PlaceExprKind, Provenance, RefDty, Ty, TyKind, View,
 };
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 
-use crate::ty_check::{exec, ExprTyCtx};
+use crate::ty_check::{accessible_memory, exec, unify, ExprTyCtx};
 
 pub(super) struct PlExprTyCtx<'ctxt> {
     gl_ctx: &'ctxt GlobalCtx,
@@ -81,9 +81,127 @@ fn ty_check_and_passed_mems_prvs(
         PlaceExprKind::SplitAt(split_pos, split_pl_expr) => {
             ty_check_split_at(ctx, split_pl_expr, split_pos)?
         }
+        PlaceExprKind::View(pl_expr, view) => ty_check_view_pl_expr(ctx, pl_expr, view)?,
+        PlaceExprKind::Idx(pl_expr, idx) => ty_check_index_copy(ctx, pl_expr, idx)?,
     };
     pl_expr.ty = Some(Box::new(ty));
     Ok((mem, prvs))
+}
+
+fn ty_check_view_pl_expr(
+    ctx: &PlExprTyCtx,
+    pl_expr: &mut PlaceExpr,
+    view: &mut [View],
+) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
+    let composed_views_fn_ty = ty_check_composed_views(ctx, view)?;
+    let in_dty = pl_expr.ty.as_ref().unwrap().dty().clone();
+    let res_dty = ty_check_app_view_fn_ty(ctx, &in_dty, composed_views_fn_ty)?;
+    Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
+}
+
+fn ty_check_composed_views(ctx: &PlExprTyCtx, views: &mut [View]) -> TyResult<FnTy> {
+    let fst_view_fn_ty = ty_check_view(ctx, &mut views[0])?;
+    let mut ret_dty = fst_view_fn_ty.ret_ty.dty().clone();
+    for v in &mut views[1..] {
+        let view_fn_ty = ty_check_view(ctx, v)?;
+        ret_dty = ty_check_app_view_fn_ty(ctx, &ret_dty, view_fn_ty)?;
+    }
+    let res_fn_ty = FnTy::new(
+        vec![],
+        vec![fst_view_fn_ty.param_tys.last().unwrap().clone()],
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(ret_dty))),
+    );
+    Ok(res_fn_ty)
+}
+
+fn ty_check_app_view_fn_ty(
+    ctx: &PlExprTyCtx,
+    in_dty: &DataTy,
+    mut view_fn_ty: FnTy,
+) -> TyResult<DataTy> {
+    let mut arg_dty_fn_ty = FnTy::new(
+        vec![],
+        vec![Ty::new(TyKind::Data(Box::new(in_dty.clone())))],
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
+            Ident::new_impli("ret_dty"),
+        ))))),
+    );
+    unify::unify(&mut view_fn_ty, &mut arg_dty_fn_ty)?;
+    let res_dty = arg_dty_fn_ty.ret_ty.dty().clone();
+    Ok(res_dty)
+}
+
+fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
+    let arg_tys = view
+        .args
+        .iter_mut()
+        .map(|v| -> TyResult<Ty> {
+            Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_composed_views(
+                ctx, v,
+            )?))))
+        })
+        .collect::<TyResult<Vec<_>>>()?;
+    let fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?.clone();
+    if fn_ty.generics.len() < view.gen_args.len() {
+        return Err(TyError::String(format!(
+            "Wrong amount of generic arguments. Expected {}, found {}",
+            fn_ty.generics.len(),
+            view.gen_args.len()
+        )));
+    }
+    for (gp, kv) in fn_ty.generics.iter().zip(&*view.gen_args) {
+        super::check_arg_has_correct_kind(&ctx.kind_ctx, &gp.kind, kv)?;
+    }
+    let mut subst_param_tys = fn_ty.param_tys.clone();
+    for ty in &mut subst_param_tys {
+        utils::subst_idents_kinded(fn_ty.generics.iter(), view.gen_args.iter(), ty);
+    }
+    let mut subst_out_ty = fn_ty.ret_ty.as_ref().clone();
+    utils::subst_idents_kinded(
+        fn_ty.generics.iter(),
+        view.gen_args.iter(),
+        &mut subst_out_ty,
+    );
+    let mut mono_fn_ty = unify::inst_fn_ty_scheme(
+        &fn_ty.generics[view.gen_args.len()..],
+        &subst_param_tys,
+        &fn_ty.exec_ty,
+        &subst_out_ty,
+    )?;
+    let mut actual_view_fn_ty = view_ty_with_input_view_and_free_ret(arg_tys);
+    unify::unify(&mut actual_view_fn_ty, &mut mono_fn_ty)?;
+    let mut inferred_k_args = super::infer_kinded_args::infer_kinded_args_from_mono_ty(
+        fn_ty.generics[view.gen_args.len()..].to_vec(),
+        subst_param_tys,
+        &subst_out_ty,
+        &mono_fn_ty,
+    );
+    // TODO reintroduce. Problem: may contain implicit identifiers that are not substituted later
+    // view.gen_args.append(&mut inferred_k_args);
+    let res_view_ty = FnTy::new(
+        vec![],
+        vec![actual_view_fn_ty.param_tys.pop().unwrap()],
+        ExecTy::new(ExecTyKind::View),
+        actual_view_fn_ty.ret_ty.as_ref().clone(),
+    );
+    Ok(res_view_ty)
+}
+
+fn view_ty_with_input_view_and_free_ret(mut arg_tys: Vec<Ty>) -> FnTy {
+    arg_tys.push(Ty::new(TyKind::Data(Box::new(DataTy::new(
+        DataTyKind::Ident(Ident::new_impli("in_view_dty")),
+    )))));
+    FnTy::new(
+        vec![],
+        arg_tys,
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
+            Ident::new_impli("view_out_dty"),
+        ))))),
+    )
 }
 
 fn ty_check_ident(
@@ -286,5 +404,52 @@ fn ty_check_split_at(
         ))
     } else {
         Err(TyError::UnexpectedType)
+    }
+}
+
+fn ty_check_index_copy(
+    ctx: &PlExprTyCtx,
+    pl_expr: &mut PlaceExpr,
+    idx: &mut Nat,
+) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
+    let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
+        dty
+    } else {
+        return Err(TyError::String(
+            "Trying to index into non array type.".to_string(),
+        ));
+    };
+    let (elem_dty, n) = match pl_expr_dty.dty.clone() {
+        DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => (*elem_dty, n),
+        DataTyKind::At(arr_dty, _) => {
+            if let DataTyKind::Array(elem_ty, n) = &arr_dty.dty {
+                (elem_ty.as_ref().clone(), n.clone())
+            } else {
+                return Err(TyError::String(
+                    "Trying to index into non array type.".to_string(),
+                ));
+            }
+        }
+        _ => {
+            return Err(TyError::String(
+                "Trying to index into non array type.".to_string(),
+            ))
+        }
+    };
+
+    if &n < idx {
+        return Err(TyError::String(
+            "Trying to access array out-of-bounds.".to_string(),
+        ));
+    }
+
+    if elem_dty.copyable() {
+        Ok((Ty::new(TyKind::Data(Box::new(elem_dty))), mems, passed_prvs))
+    } else {
+        Err(TyError::String(format!(
+            "Cannot move out of array type: {:?}",
+            elem_dty
+        )))
     }
 }

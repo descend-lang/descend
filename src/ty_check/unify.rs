@@ -48,7 +48,7 @@ pub(super) fn inst_fn_ty_scheme(
     param_tys: &[Ty],
     exec_ty: &ExecTy,
     ret_ty: &Ty,
-) -> UnifyResult<Ty> {
+) -> UnifyResult<FnTy> {
     let mono_idents: Vec<_> = idents_kinded
         .iter()
         .map(|i| match i.kind {
@@ -71,12 +71,12 @@ pub(super) fn inst_fn_ty_scheme(
     let mut mono_ret_ty = ret_ty.clone();
     utils::subst_idents_kinded(idents_kinded, mono_idents.as_slice(), &mut mono_ret_ty);
 
-    Ok(Ty::new(TyKind::FnTy(Box::new(FnTy::new(
+    Ok(FnTy::new(
         vec![],
         mono_param_tys,
         exec_ty.clone(),
         mono_ret_ty,
-    )))))
+    ))
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -146,6 +146,54 @@ pub(super) trait Constrainable: Visitable {
     }
 }
 
+impl Constrainable for FnTy {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> UnifyResult<()> {
+        assert!(self.generics.is_empty());
+        assert!(other.generics.is_empty());
+
+        self.exec_ty
+            .constrain(&mut other.exec_ty, constr_map, prv_rels)?;
+
+        if self.param_tys.len() != other.param_tys.len() {
+            return Err(UnifyError::CannotUnify);
+        }
+        // substitute result of unification for every following unification
+        let mut i = 0;
+        let mut remain_lhs = &mut self.param_tys[i..];
+        let mut remain_rhs = &mut other.param_tys[i..];
+        while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
+            (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
+        {
+            next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
+            tail_lhs
+                .iter_mut()
+                .for_each(|ty| substitute(constr_map, ty));
+            tail_rhs
+                .iter_mut()
+                .for_each(|ty| substitute(constr_map, ty));
+
+            i += 1;
+            remain_lhs = &mut self.param_tys[i..];
+            remain_rhs = &mut other.param_tys[i..];
+        }
+
+        substitute(constr_map, &mut *self.ret_ty);
+        substitute(constr_map, &mut *other.ret_ty);
+        self.ret_ty
+            .constrain(&mut other.ret_ty, constr_map, prv_rels)
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_fn_ty(self);
+    }
+}
+
 impl Constrainable for Ty {
     fn constrain(
         &mut self,
@@ -155,39 +203,7 @@ impl Constrainable for Ty {
     ) -> UnifyResult<()> {
         match (&mut self.ty, &mut other.ty) {
             (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
-                assert!(fn_ty1.generics.is_empty());
-                assert!(fn_ty2.generics.is_empty());
-
-                fn_ty1
-                    .exec_ty
-                    .constrain(&mut fn_ty2.exec_ty, constr_map, prv_rels)?;
-
-                if fn_ty1.param_tys.len() != fn_ty2.param_tys.len() {
-                    return Err(UnifyError::CannotUnify);
-                }
-                // substitute result of unification for every following unification
-                let mut i = 0;
-                let mut remain_lhs = &mut fn_ty1.param_tys[i..];
-                let mut remain_rhs = &mut fn_ty2.param_tys[i..];
-                while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
-                    (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
-                {
-                    next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
-                    tail_lhs
-                        .iter_mut()
-                        .for_each(|ty| substitute(constr_map, ty));
-                    tail_rhs
-                        .iter_mut()
-                        .for_each(|ty| substitute(constr_map, ty));
-
-                    i += 1;
-                    remain_lhs = &mut fn_ty1.param_tys[i..];
-                    remain_rhs = &mut fn_ty2.param_tys[i..];
-                }
-
-                fn_ty1
-                    .ret_ty
-                    .constrain(&mut fn_ty2.ret_ty, constr_map, prv_rels)
+                fn_ty1.constrain(fn_ty2, constr_map, prv_rels)
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
             _ => Err(UnifyError::CannotUnify),

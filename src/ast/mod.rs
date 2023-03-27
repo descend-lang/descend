@@ -112,81 +112,86 @@ impl Expr {
         }
     }
 
-    pub fn subst_idents(&mut self, subst_map: &HashMap<&str, &Expr>) {
-        fn pl_expr_contains_name_in<'a, I>(pl_expr: &PlaceExpr, mut idents: I) -> bool
-        where
-            I: Iterator<Item = &'a &'a str>,
-        {
-            match &pl_expr.pl_expr {
-                PlaceExprKind::Ident(ident) => idents.any(|name| ident.name.as_ref() == *name),
-                PlaceExprKind::Proj(tuple, _) => pl_expr_contains_name_in(tuple, idents),
-                PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
-                PlaceExprKind::Select(pl_expr, _) => pl_expr_contains_name_in(pl_expr, idents),
-                PlaceExprKind::SplitAt(_, pl_expr) => pl_expr_contains_name_in(pl_expr, idents),
-            }
-        }
-
-        struct SubstIdents<'a> {
-            subst_map: &'a HashMap<&'a str, &'a Expr>,
-        }
-        impl VisitMut for SubstIdents<'_> {
-            fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
-                if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
-                    match &pl_expr.pl_expr {
-                        PlaceExprKind::Ident(ident) => {
-                            let subst_expr =
-                                self.subst_map.get::<str>(ident.name.as_ref()).unwrap();
-                            if let ExprKind::PlaceExpr(pl_e) = &subst_expr.expr {
-                                *pl_expr = pl_e.as_ref().clone();
-                            } else {
-                                // TODO can this happen?
-                                panic!("How did this happen?")
-                            }
-                        }
-                        _ => visit_mut::walk_pl_expr(self, pl_expr),
-                    }
-                }
-            }
-
-            fn visit_expr(&mut self, expr: &mut Expr) {
-                match &expr.expr {
-                    ExprKind::PlaceExpr(pl_expr) => {
-                        if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
-                            match &pl_expr.pl_expr {
-                                PlaceExprKind::Ident(ident) => {
-                                    if let Some(&subst_expr) =
-                                        self.subst_map.get::<str>(ident.name.as_ref())
-                                    {
-                                        *expr = subst_expr.clone();
-                                    }
-                                }
-                                PlaceExprKind::Proj(tuple, i) => {
-                                    let mut tuple_expr = Expr::new(ExprKind::PlaceExpr(Box::new(
-                                        tuple.as_ref().clone(),
-                                    )));
-                                    self.visit_expr(&mut tuple_expr);
-                                    *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), *i));
-                                }
-                                PlaceExprKind::Deref(deref_expr) => {
-                                    let mut ref_expr = Expr::new(ExprKind::PlaceExpr(Box::new(
-                                        deref_expr.as_ref().clone(),
-                                    )));
-                                    self.visit_expr(&mut ref_expr);
-                                    *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
-                                }
-                                PlaceExprKind::Select(_, _) | PlaceExprKind::SplitAt(_, _) => {
-                                    unimplemented!()
-                                }
-                            }
-                        }
-                    }
-                    _ => visit_mut::walk_expr(self, expr),
-                }
-            }
-        }
-        let mut subst_idents = SubstIdents { subst_map };
-        subst_idents.visit_expr(self);
-    }
+    // pub fn subst_idents(&mut self, subst_map: &HashMap<&str, &Expr>) {
+    //     fn pl_expr_contains_name_in<'a, I>(pl_expr: &PlaceExpr, mut idents: I) -> bool
+    //     where
+    //         I: Iterator<Item = &'a &'a str>,
+    //     {
+    //         match &pl_expr.pl_expr {
+    //             PlaceExprKind::Ident(ident) => idents.any(|name| ident.name.as_ref() == *name),
+    //             PlaceExprKind::Proj(tuple, _) => pl_expr_contains_name_in(tuple, idents),
+    //             PlaceExprKind::Deref(deref) => pl_expr_contains_name_in(deref, idents),
+    //             PlaceExprKind::Select(pl_expr, _) => pl_expr_contains_name_in(pl_expr, idents),
+    //             PlaceExprKind::SplitAt(_, pl_expr) => pl_expr_contains_name_in(pl_expr, idents),
+    //             PlaceExprKind::View(pl_expr, _) => pl_expr_contains_name_in(pl_expr, idents),
+    //             PlaceExprKind::Idx(pl_expr, _) => pl_expr_contains_name_in(pl_expr, idents),
+    //         }
+    //     }
+    //
+    //     struct SubstIdents<'a> {
+    //         subst_map: &'a HashMap<&'a str, &'a Expr>,
+    //     }
+    //     impl VisitMut for SubstIdents<'_> {
+    //         fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
+    //             if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
+    //                 match &pl_expr.pl_expr {
+    //                     PlaceExprKind::Ident(ident) => {
+    //                         let subst_expr =
+    //                             self.subst_map.get::<str>(ident.name.as_ref()).unwrap();
+    //                         if let ExprKind::PlaceExpr(pl_e) = &subst_expr.expr {
+    //                             *pl_expr = pl_e.as_ref().clone();
+    //                         } else {
+    //                             // TODO can this happen?
+    //                             panic!("How did this happen?")
+    //                         }
+    //                     }
+    //                     _ => visit_mut::walk_pl_expr(self, pl_expr),
+    //                 }
+    //             }
+    //         }
+    //
+    //         fn visit_expr(&mut self, expr: &mut Expr) {
+    //             match &expr.expr {
+    //                 ExprKind::PlaceExpr(pl_expr) => {
+    //                     if pl_expr_contains_name_in(pl_expr, self.subst_map.keys()) {
+    //                         match &pl_expr.pl_expr {
+    //                             PlaceExprKind::Ident(ident) => {
+    //                                 if let Some(&subst_expr) =
+    //                                     self.subst_map.get::<str>(ident.name.as_ref())
+    //                                 {
+    //                                     *expr = subst_expr.clone();
+    //                                 }
+    //                             }
+    //                             PlaceExprKind::Proj(tuple, i) => {
+    //                                 let mut tuple_expr = Expr::new(ExprKind::PlaceExpr(Box::new(
+    //                                     tuple.as_ref().clone(),
+    //                                 )));
+    //                                 self.visit_expr(&mut tuple_expr);
+    //                                 *expr = Expr::new(ExprKind::Proj(Box::new(tuple_expr), *i));
+    //                             }
+    //                             PlaceExprKind::Deref(deref_expr) => {
+    //                                 let mut ref_expr = Expr::new(ExprKind::PlaceExpr(Box::new(
+    //                                     deref_expr.as_ref().clone(),
+    //                                 )));
+    //                                 self.visit_expr(&mut ref_expr);
+    //                                 *expr = Expr::new(ExprKind::Deref(Box::new(ref_expr)));
+    //                             }
+    //                             PlaceExprKind::Select(_, _)
+    //                             | PlaceExprKind::SplitAt(_, _)
+    //                             | PlaceExprKind::Idx(_, _)
+    //                             | PlaceExprKind::View(_, _) => {
+    //                                 unimplemented!()
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //                 _ => visit_mut::walk_expr(self, expr),
+    //             }
+    //         }
+    //     }
+    //     let mut subst_idents = SubstIdents { subst_map };
+    //     subst_idents.visit_expr(self);
+    // }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -278,16 +283,11 @@ pub enum ExprKind {
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
     PlaceExpr(Box<PlaceExpr>),
-    // Index into array, e.g., arr[i]
-    Index(Box<PlaceExpr>, Nat),
-    // Projection, e.g. e.1, for non place expressions, e.g. f(x).1
-    Proj(Box<Expr>, usize),
     // e.g., [1, 2 + 3, 4]
     Array(Vec<Expr>),
     Tuple(Vec<Expr>),
     // Borrow Expressions
     Ref(Option<String>, Ownership, Box<PlaceExpr>),
-    BorrowIndex(Option<String>, Ownership, Box<PlaceExpr>, Nat),
     Block(Block),
     // Variable declaration
     // let mut x: ty;
@@ -332,10 +332,6 @@ pub enum ExprKind {
     Sched(Box<Sched>),
     Sync(Option<ExecExpr>),
     Range(Box<Expr>, Box<Expr>),
-    // Deref a non place expression; ONLY for codegen
-    Deref(Box<Expr>),
-    // Index into an array; ONLY for codegen
-    Idx(Box<Expr>, Nat),
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -502,7 +498,7 @@ pub enum Kind {
     Provenance,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArgKinded {
     Ident(Ident),
     Nat(Nat),
@@ -535,7 +531,29 @@ pub struct PlaceExpr {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct View {
+    pub name: Ident,
+    pub gen_args: Vec<ArgKinded>,
+    pub args: Vec<Vec<View>>,
+}
+
+// TODO create generic View struct to enable easier extensibility by introducing only
+//  new predeclared types
+// #[derive(PartialEq, Eq, Hash, Debug, Clone)]
+// pub enum View {
+//     ToView,
+//     Group(Nat),
+//     SplitAt(Nat),
+//     Transpose,
+//     Rev,
+//     Map(Box<View>),
+// }
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExprKind {
+    View(Box<PlaceExpr>, Vec<View>),
+    // similar to a projection, but it projects an element for each provided execution resource
+    // (similar to indexing)
     // p[[x]]
     Select(Box<PlaceExpr>, Box<ExecExpr>),
     // p[..k] | p[k..]
@@ -544,6 +562,8 @@ pub enum PlaceExprKind {
     Proj(Box<PlaceExpr>, usize),
     // *p
     Deref(Box<PlaceExpr>),
+    // Index into array, e.g., arr[i]
+    Idx(Box<PlaceExpr>, Box<Nat>),
     // x
     Ident(Ident),
 }
@@ -571,22 +591,9 @@ impl PlaceExpr {
             PlaceExprKind::Proj(ple, _) => ple.is_place(),
             PlaceExprKind::Select(_, _)
             | PlaceExprKind::Deref(_)
-            | PlaceExprKind::SplitAt(_, _) => false,
-        }
-    }
-
-    // The inner constructs are prefixes of the outer constructs.
-    pub fn prefix_of(&self, other: &Self) -> bool {
-        if self != other {
-            match &other.pl_expr {
-                PlaceExprKind::Proj(pl_expr, _) => self.prefix_of(pl_expr),
-                PlaceExprKind::Deref(pl_expr) => self.prefix_of(pl_expr),
-                PlaceExprKind::Select(pl_expr, _) => self.prefix_of(pl_expr),
-                PlaceExprKind::SplitAt(_, pl_expr) => self.prefix_of(pl_expr),
-                PlaceExprKind::Ident(_) => false,
-            }
-        } else {
-            true
+            | PlaceExprKind::SplitAt(_, _)
+            | PlaceExprKind::Idx(_, _)
+            | PlaceExprKind::View(_, _) => false,
         }
     }
 
@@ -620,6 +627,10 @@ impl PlaceExpr {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 (internal::PlaceCtx::Deref(Box::new(pl_ctx)), pl)
             }
+            PlaceExprKind::View(inner_ple, view) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (internal::PlaceCtx::View(Box::new(pl_ctx), view.clone()), pl)
+            }
             PlaceExprKind::Proj(inner_ple, n) => {
                 let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
@@ -629,6 +640,10 @@ impl PlaceExpr {
                     }
                     _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
                 }
+            }
+            PlaceExprKind::Idx(inner_ple, idx) => {
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                (internal::PlaceCtx::Idx(Box::new(pl_ctx), idx.clone()), pl)
             }
             PlaceExprKind::Ident(ident) => (
                 internal::PlaceCtx::Hole,

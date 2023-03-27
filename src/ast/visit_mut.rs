@@ -20,6 +20,7 @@ pub trait VisitMut: Sized {
     fn visit_dty(&mut self, dty: &mut DataTy) { walk_dty(self, dty) }
     fn visit_fn_ty(&mut self, fn_ty: &mut FnTy) { walk_fn_ty(self, fn_ty) }
     fn visit_ty(&mut self, ty: &mut Ty) { walk_ty(self, ty) }
+    fn visit_view(&mut self, view: &mut View) { walk_view(self, view) }
     fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) { walk_pl_expr(self, pl_expr) }
     fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) { walk_arg_kinded(self, arg_kinded) }
     fn visit_kind(&mut self, _kind: &mut Kind) {}
@@ -186,6 +187,14 @@ pub fn walk_ty<V: VisitMut>(visitor: &mut V, ty: &mut Ty) {
     }
 }
 
+pub fn walk_view<V: VisitMut>(visitor: &mut V, view: &mut View) {
+    visitor.visit_ident(&mut view.name);
+    walk_list!(visitor, visit_arg_kinded, &mut view.gen_args);
+    for v in &mut view.args {
+        walk_list!(visitor, visit_view, v);
+    }
+}
+
 pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
     match &mut pl_expr.pl_expr {
         PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
@@ -200,6 +209,14 @@ pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
         }
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
+        }
+        PlaceExprKind::View(pl_expr, view) => {
+            visitor.visit_pl_expr(pl_expr);
+            walk_list!(visitor, visit_view, view);
+        }
+        PlaceExprKind::Idx(pl_expr, n) => {
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_nat(n)
         }
     }
 }
@@ -262,10 +279,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
     match &mut expr.expr {
         ExprKind::Lit(l) => visitor.visit_lit(l),
         ExprKind::PlaceExpr(pl_expr) => visitor.visit_pl_expr(pl_expr),
-        ExprKind::Index(pl_expr, n) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
-        }
+
         ExprKind::Ref(_, own, pl_expr) => {
             visitor.visit_own(own);
             visitor.visit_pl_expr(pl_expr);
@@ -281,11 +295,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
                 visitor.visit_ty(ty);
             }
             visitor.visit_expr(e);
-        }
-        ExprKind::BorrowIndex(_, own, pl_expr, n) => {
-            visitor.visit_own(own);
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
         }
         ExprKind::Assign(pl_expr, expr) => {
             visitor.visit_pl_expr(pl_expr);
@@ -332,7 +341,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Tuple(elems) => {
             walk_list!(visitor, visit_expr, elems);
         }
-        ExprKind::Proj(e, _) => visitor.visit_expr(e),
         ExprKind::For(ident, coll, body) => {
             visitor.visit_ident(ident);
             visitor.visit_expr(coll);
@@ -362,11 +370,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_unary_op(op);
             visitor.visit_expr(expr)
         }
-        ExprKind::Idx(e, i) => {
-            visitor.visit_expr(e);
-            visitor.visit_nat(i);
-        }
-        ExprKind::Deref(expr) => visitor.visit_expr(expr),
         ExprKind::Sync(exec) => {
             for e in exec {
                 visitor.visit_exec_expr(e)
