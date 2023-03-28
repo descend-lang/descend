@@ -1,5 +1,5 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Ident, IdentKinded, Memory, Nat, Provenance, Ty, TyKind,
+    ArgKinded, DataTy, DataTyKind, FnTy, Ident, IdentKinded, Memory, Nat, Provenance, Ty, TyKind,
 };
 use std::collections::HashMap;
 
@@ -11,29 +11,25 @@ pub fn infer_kinded_args_from_mono_ty(
     remain_gen_args: Vec<IdentKinded>,
     subst_param_tys: Vec<Ty>,
     subst_ret_ty: &Ty,
-    mono_ty: &Ty,
+    mono_fn_ty: &FnTy,
 ) -> Vec<ArgKinded> {
-    if let TyKind::FnTy(mono_fn_ty) = &mono_ty.ty {
-        if mono_fn_ty.param_tys.len() != subst_param_tys.len() {
-            panic!("Unexpected difference in amount of paramters.")
-        }
-        let mut res_map = HashMap::new();
-        for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
-            infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
-        }
-        infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
-        let mut res_vec = Vec::new();
-        for gen_arg in remain_gen_args {
-            let res_karg = res_map.get(&gen_arg.ident).unwrap();
-            if gen_arg.kind != res_karg.kind() {
-                panic!("Unexpected: Kinds of identifier and argument do not match.")
-            }
-            res_vec.push(res_karg.clone());
-        }
-        res_vec
-    } else {
-        panic!("Expected function type.")
+    if mono_fn_ty.param_tys.len() != subst_param_tys.len() {
+        panic!("Unexpected difference in amount of paramters.")
     }
+    let mut res_map = HashMap::new();
+    for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
+        infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
+    }
+    infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
+    let mut res_vec = Vec::new();
+    for gen_arg in remain_gen_args {
+        let res_karg = res_map.get(&gen_arg.ident).unwrap();
+        if gen_arg.kind != res_karg.kind() {
+            panic!("Unexpected: Kinds of identifier and argument do not match.")
+        }
+        res_vec.push(res_karg.clone());
+    }
+    res_vec
 }
 
 macro_rules! infer_from_lists {

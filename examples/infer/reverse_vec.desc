@@ -1,18 +1,17 @@
-fn reverse_block_elems<m: nat, n1: nat, k: nat>(
-    vec: &uniq gpu.global [f64; k]
+// view rev_groupes(n1) = to_view.group(n1).rev
+
+fn reverse_blocks<m: nat, n1: nat, k: nat, r: prv>(
+    vec: &r uniq gpu.global [f64; k]
 ) -[grid: gpu.grid<X<m>, X<n1>>]-> () {
     // FIXME, if n is used instead of n1, then k is generated, probably because n is part of the
     //  type definition of group_mut
-    let rev_block_view = rev_mut(group_mut::<n1>(to_view_mut(&uniq *vec)));
     sched block in grid {
-        let block_group = rev_block_view[[block]];
+        let block_mem = &uniq (*vec).to_view.grp::<n1>[[block]];
         sched thread in block {
-            let rev_elem_ref = block_group[[thread]];
-            let tmp = *rev_elem_ref;
-            sync // TODO must be enforced!
-            // TODO
-            // let elem_ref = vec[[thread]];
-            // *elem_ref = tmp // ERROR: vec is already borrowed
+            let tmp = (*block_mem).rev::<n1>[[thread]];
+            // sync(block);
+            let elem_ref = &uniq (*block_mem)[[thread]];
+            *elem_ref = tmp
         }
     }
 }

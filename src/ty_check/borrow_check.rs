@@ -1,250 +1,260 @@
-use super::ctxs::{KindCtx, TyCtx};
+use super::ctxs::TyCtx;
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
-use crate::ty_check::ctxs::ExecBorrowCtx;
+use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
-use crate::ty_check::TyChecker;
+use crate::ty_check::ExprTyCtx;
 use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
+
+pub(super) struct BorrowCheckCtx<'ctxt> {
+    // TODO refactor: move into ctx module and remove public
+    pub gl_ctx: &'ctxt GlobalCtx,
+    pub kind_ctx: &'ctxt KindCtx,
+    pub ident_exec: &'ctxt IdentExec,
+    pub ty_ctx: &'ctxt TyCtx,
+    pub access_ctx: &'ctxt AccessCtx,
+    pub exec: ExecExpr,
+    pub reborrows: Vec<internal::Place>,
+    pub own: Ownership,
+}
+
+impl<'ctxt> BorrowCheckCtx<'ctxt> {
+    pub(super) fn new(
+        expr_ty_ctx: &'ctxt ExprTyCtx,
+        reborrows: Vec<internal::Place>,
+        own: Ownership,
+    ) -> Self {
+        BorrowCheckCtx::<'ctxt> {
+            gl_ctx: &*expr_ty_ctx.gl_ctx,
+            kind_ctx: &*expr_ty_ctx.kind_ctx,
+            ident_exec: &*expr_ty_ctx.ident_exec,
+            ty_ctx: &*expr_ty_ctx.ty_ctx,
+            access_ctx: &*expr_ty_ctx.access_ctx,
+            exec: expr_ty_ctx.exec.clone(),
+            reborrows: reborrows.to_vec(),
+            own,
+        }
+    }
+
+    fn extend_reborrows<I>(&self, iter: I) -> Self
+    where
+        I: Iterator<Item = internal::Place>,
+    {
+        let mut extended_reborrows = self.reborrows.clone();
+        extended_reborrows.extend(iter);
+        BorrowCheckCtx {
+            gl_ctx: &*self.gl_ctx,
+            kind_ctx: &*self.kind_ctx,
+            ident_exec: &*self.ident_exec,
+            ty_ctx: &*self.ty_ctx,
+            access_ctx: &*self.access_ctx,
+            exec: self.exec.clone(),
+            reborrows: extended_reborrows,
+            own: self.own,
+        }
+    }
+}
 
 //
 // Ownership Safety
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
-pub(super) fn ownership_safe(
-    ty_checker: &TyChecker,
-    kind_ctx: &KindCtx,
-    exec_borrow_ctx: &ExecBorrowCtx,
-    ty_ctx: &TyCtx,
-    exec: &ExecExpr,
-    reborrows: &[internal::Place],
-    own: Ownership,
-    p: &PlaceExpr,
-) -> OwnResult<HashSet<Loan>> {
+pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
+    ownership_safe_under_exec(ctx, p, &ctx.exec)?;
+    no_conflicting_accesses(ctx, p)?;
+    // no conflict with existing borrows
+    // no conflicting access:
+    //  no overlapping access with any exec != this.exec
+    //  if exec = this.exec: then no access through different view
+    let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
     if p.is_place() {
-        ownership_safe_place(exec_borrow_ctx, ty_ctx, reborrows, exec, own, p)
+        ownership_safe_place(ctx, p)
     } else {
-        let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
         let pl_ctx_no_deref = pl_ctx.without_innermost_deref();
         // Γ(π) = &r ωπ τπ
-        match &ty_ctx.place_dty(&most_spec_pl)?.dty {
+        match &ctx.ty_ctx.place_dty(&most_spec_pl)?.dty {
             DataTyKind::Ref(reff) => match &reff.rgn {
                 Provenance::Value(prv_val_name) => ownership_safe_deref(
-                    ty_checker,
-                    kind_ctx,
-                    exec_borrow_ctx,
-                    ty_ctx,
-                    exec,
-                    reborrows,
-                    own,
+                    ctx,
                     &pl_ctx_no_deref,
                     &most_spec_pl,
                     prv_val_name.as_str(),
                     reff.own,
-                    &p.split_tag_path,
                 ),
-                Provenance::Ident(_) => ownership_safe_deref_abs(
-                    ty_checker,
-                    kind_ctx,
-                    exec_borrow_ctx,
-                    ty_ctx,
-                    exec,
-                    reborrows,
-                    own,
-                    &pl_ctx_no_deref,
-                    &most_spec_pl,
-                    reff.own,
-                    &p.split_tag_path,
-                ),
+                Provenance::Ident(_) => {
+                    ownership_safe_deref_abs(ctx, &pl_ctx_no_deref, &most_spec_pl, reff.own)
+                }
             },
-            DataTyKind::RawPtr(_) => ownership_safe_deref_raw(
-                ty_checker,
-                kind_ctx,
-                ty_ctx,
-                exec,
-                reborrows,
-                own,
-                &pl_ctx_no_deref,
-                &most_spec_pl,
-            ),
+            DataTyKind::RawPtr(_) => ownership_safe_deref_raw(ctx, &pl_ctx_no_deref, &most_spec_pl),
             // TODO improve error message
             t => panic!("Is the type dead? `{:?}`", t),
         }
     }
 }
 
-// TODO remove!
+// TODO remove?
 fn ownership_safe_deref_raw(
-    _ty_checker: &TyChecker,
-    _kind_ctx: &KindCtx,
-    _ty_ctx: &TyCtx,
-    _exec: &ExecExpr,
-    _reborrows: &[internal::Place],
-    own: Ownership,
+    ctx: &BorrowCheckCtx,
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
 ) -> OwnResult<HashSet<Loan>> {
-    // TODO is anything here correct?
+    // TODO is this correct?
     let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
     let mut passed_through_prvs = HashSet::new();
     passed_through_prvs.insert(Loan {
         place_expr: currently_checked_pl_expr,
-        own,
+        own: ctx.own,
     });
     Ok(passed_through_prvs)
 }
 
-fn ownership_safe_place(
-    exec_borrow_ctx: &ExecBorrowCtx,
-    ty_ctx: &TyCtx,
-    reborrows: &[internal::Place],
-    exec: &ExecExpr,
-    own: Ownership,
-    p: &PlaceExpr,
-) -> OwnResult<HashSet<Loan>> {
-    ownership_safe_under_existing_loans(exec_borrow_ctx, ty_ctx, reborrows, exec, own, p)?;
+fn ownership_safe_place(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
+    ownership_safe_under_existing_borrows(ctx, p)?;
     let mut loan_set = HashSet::new();
     loan_set.insert(Loan {
         place_expr: p.clone(),
-        own,
+        own: ctx.own,
     });
     Ok(loan_set)
 }
 
 fn ownership_safe_deref(
-    ty_checker: &TyChecker,
-    kind_ctx: &KindCtx,
-    exec_borrow_ctx: &ExecBorrowCtx,
-    ty_ctx: &TyCtx,
-    exec: &ExecExpr,
-    reborrows: &[internal::Place],
-    own: Ownership,
+    ctx: &BorrowCheckCtx,
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
     prv_val_name: &str,
     ref_own: Ownership,
-    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
     // Γ(r) = { ω′pi }
-    let loans_in_prv = ty_ctx.loans_in_prv(prv_val_name)?;
+    let loans_in_prv = ctx.ty_ctx.loans_in_prv(prv_val_name)?;
     // ω ≲ ωπ
-    new_own_weaker_equal(own, ref_own)?;
+    new_own_weaker_equal(ctx.own, ref_own)?;
     // List<pi = pi□ [πi]>
     let pl_ctxs_and_places_in_loans = pl_ctxs_and_places_in_loans(loans_in_prv);
     // List<πe>, List<πi>, π
-    // TODO Refactor into own function
-    let mut extended_reborrows = Vec::from(reborrows);
-    extended_reborrows.extend(pl_ctxs_and_places_in_loans.map(|(_, pl)| pl));
-    extended_reborrows.extend(std::iter::once(most_spec_pl.clone()));
+    let ext_reborrow_ctx = ctx.extend_reborrows(
+        pl_ctxs_and_places_in_loans
+            .map(|(_, pl)| pl)
+            .chain(std::iter::once(most_spec_pl.clone())),
+    );
+    // ext_reborrow_ctx.exec = from_exec.clone();
 
     // ∀i ∈ {1...n}.Δ;Γ ⊢ω List<πe>,List<πi>,π  p□[pi] ⇒ {ω pi′}
     let mut potential_prvs_after_subst = subst_pl_with_potential_prvs_ownership_safe(
-        ty_checker,
-        kind_ctx,
-        exec_borrow_ctx,
-        ty_ctx,
-        exec,
-        &extended_reborrows,
-        own,
+        &ext_reborrow_ctx,
         pl_ctx_no_deref,
         loans_in_prv,
-        split_tag_path,
     )?;
 
-    let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+    let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
-    currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
-    ownership_safe_under_existing_loans(
-        exec_borrow_ctx,
-        ty_ctx,
-        &extended_reborrows,
-        exec,
-        own,
-        &currently_checked_pl_expr,
-    )?;
+    ownership_safe_under_existing_borrows(&ext_reborrow_ctx, &currently_checked_pl_expr)?;
     potential_prvs_after_subst.insert(Loan {
         place_expr: currently_checked_pl_expr,
-        own,
+        own: ctx.own,
     });
     Ok(potential_prvs_after_subst)
 }
 
 fn subst_pl_with_potential_prvs_ownership_safe(
-    ty_checker: &TyChecker,
-    kind_ctx: &KindCtx,
-    exec_borrow_ctx: &ExecBorrowCtx,
-    ty_ctx: &TyCtx,
-    exec: &ExecExpr,
-    reborrows: &[internal::Place],
-    own: Ownership,
+    ctx: &BorrowCheckCtx,
     pl_ctx_no_deref: &PlaceCtx,
     loans_in_prv: &HashSet<Loan>,
-    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
     let mut loans: HashSet<Loan> = HashSet::new();
     for pl_expr in loans_in_prv.iter().map(|loan| &loan.place_expr) {
-        let mut insert_dereferenced_pl_expr = pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
-        insert_dereferenced_pl_expr
-            .split_tag_path
-            .append(&mut split_tag_path.to_vec());
-        let loans_for_possible_prv_pl_expr = ownership_safe(
-            ty_checker,
-            kind_ctx,
-            exec_borrow_ctx,
-            ty_ctx,
-            exec,
-            reborrows,
-            own,
-            &insert_dereferenced_pl_expr,
-        )?;
+        let insert_dereferenced_pl_expr = pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
+        let loans_for_possible_prv_pl_expr = ownership_safe(ctx, &insert_dereferenced_pl_expr)?;
         loans.extend(loans_for_possible_prv_pl_expr);
     }
     Ok(loans)
 }
 
 fn ownership_safe_deref_abs(
-    ty_checker: &TyChecker,
-    kind_ctx: &KindCtx,
-    exec_borrow_ctx: &ExecBorrowCtx,
-    ty_ctx: &TyCtx,
-    exec: &ExecExpr,
-    reborrows: &[internal::Place],
-    own: Ownership,
+    ctx: &BorrowCheckCtx,
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
     ref_own: Ownership,
-    split_tag_path: &[SplitTag],
 ) -> OwnResult<HashSet<Loan>> {
-    let mut currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
+    let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
-    currently_checked_pl_expr.split_tag_path = split_tag_path.to_vec();
-    ty_checker.place_expr_ty_under_exec_own(
-        kind_ctx,
-        ty_ctx,
-        exec,
-        own,
-        &mut currently_checked_pl_expr,
-    )?;
-    new_own_weaker_equal(own, ref_own)?;
-    ownership_safe_under_existing_loans(
-        exec_borrow_ctx,
-        ty_ctx,
-        reborrows,
-        exec,
-        own,
-        &currently_checked_pl_expr,
-    )?;
+    // FIXME the type check should not have any effect, however guaranteeing that every place
+    //  expression even those which are formed recursively seem cleaner
+    // pl_expr::ty_check(&PlExprTyCtx::from(ctx), &mut currently_checked_pl_expr)?;
+    new_own_weaker_equal(ctx.own, ref_own)?;
+    ownership_safe_under_existing_borrows(ctx, &currently_checked_pl_expr)?;
     let mut passed_through_prvs = HashSet::new();
     passed_through_prvs.insert(Loan {
         place_expr: currently_checked_pl_expr,
-        own,
+        own: ctx.own,
     });
     Ok(passed_through_prvs)
+}
+
+fn ownership_safe_under_exec(
+    ctx: &BorrowCheckCtx,
+    p: &PlaceExpr,
+    exec: &ExecExpr,
+) -> OwnResult<()> {
+    if ctx.own == Ownership::Shrd {
+        return Ok(());
+    }
+    match &p.pl_expr {
+        PlaceExprKind::Ident(ident) => {
+            let from = &ctx.ty_ctx.ident_ty(ident)?.exec;
+            // FIXME reintroduce
+            //  no_distrib_in_diff(exec, from)
+            Ok(())
+        }
+        PlaceExprKind::Select(pl_expr, select_exec) => {
+            if exec.exec.base != select_exec.exec.base {
+                return Err(BorrowingError::WrongDevice(
+                    exec.exec.base.clone(),
+                    select_exec.exec.base.clone(),
+                ));
+            }
+            if exec.exec.path.len() < select_exec.exec.path.len() {
+                panic!("Unexpected: Can only select for current execution resource.",)
+            }
+            for (u, f) in exec.exec.path.iter().zip(&select_exec.exec.path) {
+                if u != f {
+                    panic!("Unexpected: Trying to borrow from divergent execution resource.")
+                }
+            }
+            no_distrib_in_diff(exec, select_exec)?;
+            let outer_exec = exec.remove_last_distrib();
+            ownership_safe_under_exec(ctx, pl_expr, &outer_exec)
+        }
+        PlaceExprKind::View(pl_expr, _)
+        | PlaceExprKind::Deref(pl_expr)
+        | PlaceExprKind::Proj(pl_expr, _)
+        | PlaceExprKind::Idx(pl_expr, _)
+        | PlaceExprKind::SplitAt(_, pl_expr) => ownership_safe_under_exec(ctx, pl_expr, exec),
+    }
+}
+
+fn no_conflicting_accesses(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
+    for (ex, loans) in ctx.access_ctx.iter().filter(|(exec, _)| *exec != &ctx.exec) {
+        if !no_uniq_loan_overlap(ctx.own, p, loans) {
+            return Err(BorrowingError::ConflictingAccess);
+        }
+    }
+    Ok(())
+}
+
+fn no_distrib_in_diff(under: &ExecExpr, from: &ExecExpr) -> OwnResult<()> {
+    for e in &under.exec.path[from.exec.path.len()..] {
+        if let ExecPathElem::Distrib(_) = e {
+            return Err(BorrowingError::MultipleDistribs);
+        }
+    }
+    Ok(())
 }
 
 fn pl_ctxs_and_places_in_loans(
@@ -264,22 +274,19 @@ fn new_own_weaker_equal(checked_own: Ownership, ref_own: Ownership) -> OwnResult
     }
 }
 
-fn ownership_safe_under_existing_loans(
-    exec_borrow_ctx: &ExecBorrowCtx,
-    ty_ctx: &TyCtx,
-    reborrows: &[internal::Place],
-    exec: &ExecExpr,
-    own: Ownership,
+fn ownership_safe_under_existing_borrows(
+    ctx: &BorrowCheckCtx,
     pl_expr: &PlaceExpr,
 ) -> OwnResult<()> {
-    // TODO am I allowed to borrow the place from this exec (place must be from same distrib-level in exec)
-    //  for select:
-
-    for prv_mapping in ty_ctx.prv_mappings() {
+    for prv_mapping in ctx.ty_ctx.prv_mappings() {
         let PrvMapping { prv, loans } = prv_mapping;
-        let no_uniq_overlap = no_uniq_loan_overlap(own, pl_expr, loans);
+        let no_uniq_overlap = no_uniq_loan_overlap(ctx.own, pl_expr, loans);
         if !no_uniq_overlap {
-            return at_least_one_borrowing_place_and_all_in_reborrow(ty_ctx, prv, reborrows);
+            return at_least_one_borrowing_place_and_all_in_reborrow(
+                ctx.ty_ctx,
+                prv,
+                &ctx.reborrows,
+            );
         }
     }
     // for (_, loans) in exec_borrow_ctx.iter() {
@@ -291,14 +298,8 @@ fn ownership_safe_under_existing_loans(
 
 fn no_uniq_loan_overlap(own: Ownership, pl_expr: &PlaceExpr, loans: &HashSet<Loan>) -> bool {
     loans.iter().all(|loan| {
-        let comp_pl_expr = if pl_expr.is_place() {
-            let (_, most_spec_pl) = loan.place_expr.to_pl_ctx_and_most_specif_pl();
-            most_spec_pl.to_place_expr()
-        } else {
-            loan.place_expr.clone()
-        };
         !((own == Ownership::Uniq || loan.own == Ownership::Uniq)
-            && overlap(&comp_pl_expr, pl_expr))
+            && overlap(&loan.place_expr, pl_expr))
     })
 }
 
@@ -331,5 +332,39 @@ fn at_least_one_borrowing_place_and_all_in_reborrow(
 }
 
 fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {
-    pll.prefix_of(plr) || plr.prefix_of(pll)
+    let pure_l = strip_to_pure_place_expr(pll);
+    let pure_r = strip_to_pure_place_expr(plr);
+    prefix(&pure_l, &pure_r) || prefix(&pure_r, &pure_l);
+    // FIXME remove
+    false
+}
+
+fn prefix(general: &PlaceExpr, specific: &PlaceExpr) -> bool {
+    if general != specific {
+        match &specific.pl_expr {
+            PlaceExprKind::Proj(pl_expr, _) => prefix(general, pl_expr),
+            PlaceExprKind::Deref(pl_expr) => prefix(general, pl_expr),
+            PlaceExprKind::Ident(_) => false,
+            _ => panic!("unexptected"),
+        }
+    } else {
+        true
+    }
+}
+
+fn strip_to_pure_place_expr(pl_expr: &PlaceExpr) -> PlaceExpr {
+    match &pl_expr.pl_expr {
+        PlaceExprKind::Ident(_) => pl_expr.clone(),
+        PlaceExprKind::Deref(ple) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
+            strip_to_pure_place_expr(ple),
+        ))),
+        PlaceExprKind::Proj(ple, i) => PlaceExpr::new(PlaceExprKind::Proj(
+            Box::new(strip_to_pure_place_expr(ple)),
+            *i,
+        )),
+        PlaceExprKind::Select(ple, _)
+        | PlaceExprKind::SplitAt(_, ple)
+        | PlaceExprKind::View(ple, _)
+        | PlaceExprKind::Idx(ple, _) => strip_to_pure_place_expr(ple),
+    }
 }

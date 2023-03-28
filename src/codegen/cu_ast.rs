@@ -1,7 +1,5 @@
 use crate::ast::Nat;
 
-pub(super) type CuProgram<'a> = Vec<Item<'a>>;
-
 pub(super) enum Item<'a> {
     Include(String),
     FunDecl(&'a FnSig),
@@ -95,7 +93,6 @@ pub(super) enum Stmt {
     },
     Return(Option<Expr>),
     ExecKernel(Box<ExecKernel>),
-    Label(String),
 }
 
 #[derive(Clone, Debug)]
@@ -223,9 +220,9 @@ pub(super) enum TemplateArg {
 
 #[derive(Clone, Debug)]
 pub(super) enum GpuAddrSpace {
-    Device,
+    // Device,
     Shared,
-    Constant,
+    // Constant,
 }
 
 #[derive(Clone, Debug)]
