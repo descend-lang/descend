@@ -104,7 +104,10 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
         }
 
         fn visit_view(&mut self, view: &mut View) {
-            self.subst_in_gen_args(&mut view.gen_args)
+            self.subst_in_gen_args(&mut view.gen_args);
+            for v in &mut view.args {
+                visit_mut::walk_list!(self, visit_view, v);
+            }
         }
 
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
