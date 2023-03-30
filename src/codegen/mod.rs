@@ -4,7 +4,6 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::ExprKind;
 use crate::ty_check;
 use crate::ty_check::matches_dty;
 use cu_ast as cu;
@@ -12,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
 use crate::ast::{ArgKinded, DataTy, DataTyKind, Expr, ExprKind, Ident, Ty, TyKind};
+use crate::ast::utils::free_kinded_idents;
 use crate::codegen::cu::{LambdaCaptures, ParamDecl, ScalarTy, TemplateArg};
 use crate::codegen::cu::ScalarTy::{Auto, Void};
 use crate::codegen::cu::Ty::Scalar;
@@ -1111,9 +1111,8 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> GenState {
         }),
         Lambda(params, exec_decl, dty, body) => GenState::Gened(cu::Expr::Lambda {
             captures: LambdaCaptures::List({
-                let mut free_idents = desc::utils::FreeKindedIdents::new();
-                free_idents.visit_expr(body);
-                free_idents.set.iter().map(|ki| ki.ident.clone()).collect()
+                let free_idents = free_kinded_idents(body.as_ref());
+                free_idents.iter().map(|ki| ki.ident.clone()).collect()
             }),
             //{ TODO Bastians neue Version
                 // FIXME should list all captures not just generic arguments
@@ -2140,31 +2139,6 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
     contained.visit_nat(n);
     contained.par_idx
 }
-
-//TODO 2 Zeilen wurden von mir bearbeitet: Inwiefern beeinflusst das? Genauso in methode create_from die entfern wurde (in alter Version Zeile 2479)
-
-// fn create_pl_expr_shape(shape: &desc::PlaceExpr, codegen_ctx: &CodegenCtx) -> ShapeExpr {
-//     match shape {
-//         desc::PlaceExpr {
-//             pl_expr: desc::PlaceExprKind::Ident(ident),
-//             ..
-//         } => codegen_ctx.shape_ctx.get(&ident.name).clone(),
-//         desc::PlaceExpr {
-//             pl_expr: desc::PlaceExprKind::Proj(vv, i),
-//             ..
-//         } => ShapeExpr::Proj {
-//             shape: Box::new(ShapeExpr::create_pl_expr_shape(vv, codegen_ctx)),
-//             i: *i,
-//         },
-//         desc::PlaceExpr {
-//             pl_expr: desc::PlaceExprKind::Deref(pl_expr),
-//             ..
-//         } => {
-//             ShapeExpr::create_pl_expr_shape(pl_expr, codegen_ctx)
-//         }
-//     }
-// }
-
 
 fn set_distrib_idx(idx: &mut desc::Nat, parall_idx: desc::Nat, shift: &mut desc::Nat) {
     *idx = shift_idx_by(parall_idx, shift.clone());

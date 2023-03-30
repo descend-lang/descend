@@ -191,20 +191,6 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         ExprKind::UnOp(un_op, e) => ty_check_unary_op(ctx, un_op, e)?,
         ExprKind::Sync(exec) => ty_check_sync(ctx, exec)?,
         ExprKind::Range(l, u) => ty_check_range(ctx, l, u)?,
-        // ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
-        //TODO in meinem branch implementiert -> wie hier implementieren? In eigener Methode oder was ist der Unterschied?
-
-        // ExprKind::BorrowIndex(prv_name, own, arr_expr, idx) => self.ty_check_borrow_idx(
-        //     kind_ctx,
-        //     exec_borrow_ctx,
-        //     ty_ctx,
-        //     ident_exec,
-        //     exec,
-        //     prv_name,
-        //     *own,
-        //     arr_expr,
-        //     idx,
-        // )?,
     };
 
     // TODO reintroduce!!!!
@@ -1515,50 +1501,6 @@ fn ty_check_pl_expr_without_deref(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr) -> T
     };
     Ok(pl_ty)
 }
-
-//TODO alte version ist von mir ziemlich verändert worden
-
-// fn ty_check_borrow_idx(
-//     &self,
-//     kind_ctx: &KindCtx,
-//     exec_borrow_ctx: &mut ExecBorrowCtx,
-//     ty_ctx: TyCtx,
-//     ident_exec: &IdentExec,
-//     exec: &ExecExpr,
-//     prv_val_name: &Option<String>,
-//     own: Ownership,
-//     arr_expr: &mut PlaceExpr,
-//     idx: &Nat,
-// ) -> TyResult<(TyCtx, Ty)> {
-//     let (arr_ty_ctx, ref_dty) = self.ty_check_borrow(
-//         kind_ctx,
-//         exec_borrow_ctx,
-//         ty_ctx,
-//         ident_exec,
-//         exec,
-//         prv_val_name,
-//         own,
-//         arr_expr,
-//     )?;
-//     if let DataTyKind::Ref(ref_dty) = &ref_dty.dty().dty {
-//         match &ref_dty.dty.dty {
-//             DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => Ok((
-//                 arr_ty_ctx,
-//                 Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-//                     Box::new(RefDty::new(
-//                         ref_dty.rgn.clone(),
-//                         ref_dty.own,
-//                         ref_dty.mem.clone(),
-//                         elem_dty.as_ref().clone(),
-//                     )),
-//                 ))))),
-//             )),
-//             _ => Err(TyError::String("Expected an array or view.".to_string())),
-//         }
-//     } else {
-//         unreachable!();
-//     }
-// }
 
 fn ty_check_borrow(
     ctx: &mut ExprTyCtx,

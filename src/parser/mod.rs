@@ -104,7 +104,10 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
         }
 
         fn visit_view(&mut self, view: &mut View) {
-            self.subst_in_gen_args(&mut view.gen_args)
+            self.subst_in_gen_args(&mut view.gen_args);
+            for v in &mut view.args {
+                visit_mut::walk_list!(self, visit_view, v);
+            }
         }
 
         fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
@@ -376,9 +379,6 @@ peg::parser! {
             x:(@) _ "/" _ y:@ { utils::make_binary(BinOp::Div, x, y) }
             x:(@) _ "%" _ y:@ { utils::make_binary(BinOp::Mod, x, y) }
             --
-            // x: (@) _ ".." _ y: @ { TODO warum nochmal entfernt?
-            //     Expr::new(ExprKind::Range(Box::new(x), Box::new(y)))
-            // }
             "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
             "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
             --
