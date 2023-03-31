@@ -577,20 +577,39 @@ fn gen_decl_init(
                 return cu::Stmt::Skip;
             }
         },
-        _ => match gen_expr(e, codegen_ctx) {
-            GenState::Gened(cu_e) => (
-                cu_e,
-                if mutbl == desc::Mutability::Mut {
-                    cu::Ty::Scalar(cu::ScalarTy::Auto)
-                } else {
-                    cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
-                },
-            ),
-            GenState::View(pl_expr) => {
-                codegen_ctx.view_ctx.insert(&ident.name, pl_expr.clone());
-                return cu::Stmt::Skip;
+        _ => {
+            if let desc::ExprKind::Ref(_, _, ple) = &e.expr {
+                match gen_pl_expr(ple, &mut vec![], codegen_ctx) {
+                    GenState::Gened(cu_e) => (
+                        cu_e,
+                        if mutbl == desc::Mutability::Mut {
+                            cu::Ty::Scalar(cu::ScalarTy::Auto)
+                        } else {
+                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                        },
+                    ),
+                    GenState::View(pl_expr) => {
+                        codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
+                        return cu::Stmt::Skip;
+                    }
+                }
+            } else {
+                match gen_expr(e, codegen_ctx) {
+                    GenState::Gened(cu_e) => (
+                        cu_e,
+                        if mutbl == desc::Mutability::Mut {
+                            cu::Ty::Scalar(cu::ScalarTy::Auto)
+                        } else {
+                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                        },
+                    ),
+                    GenState::View(pl_expr) => {
+                        codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
+                        return cu::Stmt::Skip;
+                    }
+                }
             }
-        },
+        }
     };
     cu::Stmt::VarDecl {
         name: ident.name.to_string(),
