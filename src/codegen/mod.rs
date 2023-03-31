@@ -2,19 +2,19 @@ mod cu_ast;
 mod printer;
 
 use crate::ast as desc;
+use crate::ast::utils::free_kinded_idents;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
+use crate::ast::{ArgKinded, DataTy, DataTyKind, Expr, ExprKind, Ident, Ty, TyKind};
+use crate::codegen::cu::ScalarTy::{Auto, Void};
+use crate::codegen::cu::Ty::Scalar;
+use crate::codegen::cu::{LambdaCaptures, ParamDecl, ScalarTy, TemplateArg};
 use crate::ty_check;
 use crate::ty_check::matches_dty;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
-use crate::ast::{ArgKinded, DataTy, DataTyKind, Expr, ExprKind, Ident, Ty, TyKind};
-use crate::ast::utils::free_kinded_idents;
-use crate::codegen::cu::{LambdaCaptures, ParamDecl, ScalarTy, TemplateArg};
-use crate::codegen::cu::ScalarTy::{Auto, Void};
-use crate::codegen::cu::Ty::Scalar;
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -472,15 +472,17 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                     (init_decl, cond, iter)
                 }
 
-                _ => panic!("Currently ranges are assumed to be predeclared functions. \n{:?}", range),
+                _ => panic!(
+                    "Currently ranges are assumed to be predeclared functions. \n{:?}",
+                    range
+                ),
             };
 
             match range {
                 desc::Nat::App(r_name, input) => {
                     if r_name.name.as_ref() == "range" {
                         gen_for_nat(ident, input, body, codegen_ctx)
-                    }
-                    else {
+                    } else {
                         cu::Stmt::ForLoop {
                             init: Box::new(init),
                             cond, // TODO needs some kind of checking
@@ -489,7 +491,10 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                         }
                     }
                 }
-                _ => panic!("Currently ranges are assumed to be predeclared functions. \n{:?}", range),
+                _ => panic!(
+                    "Currently ranges are assumed to be predeclared functions. \n{:?}",
+                    range
+                ),
             }
         }
         While(cond, body) => cu::Stmt::While {
@@ -592,20 +597,39 @@ fn gen_decl_init(
                 return cu::Stmt::Skip;
             }
         },
-        _ => match gen_expr(e, codegen_ctx) {
-            GenState::Gened(cu_e) => (
-                cu_e,
-                if mutbl == desc::Mutability::Mut {
-                    cu::Ty::Scalar(cu::ScalarTy::Auto)
-                } else {
-                    cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
-                },
-            ),
-            GenState::View(pl_expr) => {
-                codegen_ctx.view_ctx.insert(&ident.name, pl_expr.clone());
-                return cu::Stmt::Skip;
+        _ => {
+            if let desc::ExprKind::Ref(_, _, ple) = &e.expr {
+                match gen_pl_expr(ple, &mut vec![], codegen_ctx) {
+                    GenState::Gened(cu_e) => (
+                        cu_e,
+                        if mutbl == desc::Mutability::Mut {
+                            cu::Ty::Scalar(cu::ScalarTy::Auto)
+                        } else {
+                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                        },
+                    ),
+                    GenState::View(pl_expr) => {
+                        codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
+                        return cu::Stmt::Skip;
+                    }
+                }
+            } else {
+                match gen_expr(e, codegen_ctx) {
+                    GenState::Gened(cu_e) => (
+                        cu_e,
+                        if mutbl == desc::Mutability::Mut {
+                            cu::Ty::Scalar(cu::ScalarTy::Auto)
+                        } else {
+                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                        },
+                    ),
+                    GenState::View(pl_expr) => {
+                        codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
+                        return cu::Stmt::Skip;
+                    }
+                }
             }
-        },
+        }
     };
     cu::Stmt::VarDecl {
         name: ident.name.to_string(),
@@ -699,27 +723,27 @@ fn gen_for_nat(
     body: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
-        let ident_method = Box::new(cu::Expr::Ident("static_for".to_string()));
-        let first = TemplateArg::Expr(cu::Expr::Nat(range[0].clone()));
-        let last = TemplateArg::Expr(cu::Expr::Nat(range[1].clone()));
-        let param_decl = cu::ParamDecl {
-            name: ident.name.to_string(),
-            ty: Scalar(Auto)
-        };
+    let ident_method = Box::new(cu::Expr::Ident("static_for".to_string()));
+    let first = TemplateArg::Expr(cu::Expr::Nat(range[0].clone()));
+    let last = TemplateArg::Expr(cu::Expr::Nat(range[1].clone()));
+    let param_decl = cu::ParamDecl {
+        name: ident.name.to_string(),
+        ty: Scalar(Auto),
+    };
 
-        let lambda_function = cu::Expr::Lambda {
-            captures: cu::LambdaCaptures::List(vec![]),
-            params: vec![param_decl],
-            body: Box::new(gen_stmt(body, false, codegen_ctx) ),
-            ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
-            is_dev_fun: false
-        };
+    let lambda_function = cu::Expr::Lambda {
+        captures: cu::LambdaCaptures::List(vec![]),
+        params: vec![param_decl],
+        body: Box::new(gen_stmt(body, false, codegen_ctx)),
+        ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
+        is_dev_fun: false,
+    };
 
-        cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
-            fun: ident_method,
-            template_args: vec![first, last],
-            args: vec![lambda_function],
-        }))
+    cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
+        fun: ident_method,
+        template_args: vec![first, last],
+        args: vec![lambda_function],
+    }))
 }
 
 fn gen_for_range(
@@ -1115,11 +1139,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> GenState {
                 free_idents.iter().map(|ki| ki.ident.clone()).collect()
             }),
             //{ TODO Bastians neue Version
-                // FIXME should list all captures not just generic arguments
-                // free_idents(body)
-                //     .iter()
-                //     .map(|ki| ki.ident.clone())
-                //     .collect()
+            // FIXME should list all captures not just generic arguments
+            // free_idents(body)
+            //     .iter()
+            //     .map(|ki| ki.ident.clone())
+            //     .collect()
             //    vec![]
             //},
             params: gen_param_decls(params.as_slice()),
