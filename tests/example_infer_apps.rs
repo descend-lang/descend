@@ -2,6 +2,8 @@
 
 extern crate descend;
 
+use std::fs;
+
 type Res = Result<(), descend::error::ErrorReported>;
 
 #[test]
@@ -101,8 +103,13 @@ fn computed_indexing() -> Res {
 
 #[test]
 fn lu_decomposition_test() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/lu_decomposition.desc")?,
-    ))
+    let compiled = descend::compile("examples/infer/lu_decomposition.desc")?;
+    let file_path = "cuda-examples/lud.cu";
+
+    fs::write(
+        file_path,
+        compiled,
+    ).expect("Cant write in the file");
+
+    Ok(println!("{}", descend::compile("examples/infer/lu_decomposition.desc")?))
 }

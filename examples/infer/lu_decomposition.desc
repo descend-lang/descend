@@ -1,52 +1,52 @@
 //#define TILE_SIZE 16 //so noch nicht möglich
 
-// fn lud_descend<tile_size: nat, matrix_dim: nat, r:prv>(
-//     m5: &r uniq cpu.mem [[f64; matrix_dim]; matrix_dim]
-//     ) -[t: cpu.thread]-> ()
-// {
-//     let mut gpu = gpu_device(0);
-//     let mut m_gpu = gpu_alloc_copy(&uniq gpu, &shrd *m5);
-//
-//     for_nat it in 0..(matrix_dim/tile_size-1) {
-//
-//         //1-D Grid mit 1-D Threads
-//         lud_diagonal::<<<X<1>, X<tile_size>; [[[f64; tile_size]; tile_size]; 1]>>>::<it, tile_size, matrix_dim>(&uniq m_gpu);
-//
-//         lud_perimeter::<it, tile_size, matrix_dim>(&uniq m_gpu);
-//
-//         lud_internal::<it, tile_size, matrix_dim>(&uniq m_gpu)
-//     };
-//
-//     lud_diagonal::<<<X<1>, X<tile_size>; [[[f64; tile_size]; tile_size]; 1]>>>::<(matrix_dim/tile_size)-1, tile_size, matrix_dim>(&uniq m_gpu); //::<(matrix_dim/tile_size) ,tile_size, matrix_dim>
-//
-//     copy_to_host(&shrd m_gpu, m5)
-// }
-//
-//
-// fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat, r: prv, p: prv>(
-//     m: &r uniq gpu.global [[f64; matrix_dim]; matrix_dim],
-//     local_tile: &p uniq gpu.shared [[[f64; tile_size]; tile_size]; 1]
-//     ) -[grid: gpu.grid<X<1>, X<tile_size>>]-> () <'a, 'e, 'f, 'g>
-// {
-//     //let tiles_per_dim = matrix_dim / tile_size;
-//     let matrix_view: &'e uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; (matrix_dim / tile_size)]]; (matrix_dim / tile_size) ]] = &'e uniq (*m).to_view.grp::<tile_size>.map::<[[ [f64; matrix_dim]; tile_size]]>(map::<[f64; matrix_dim]>(to_view).transp.grp::<tile_size>.map::<[[ [[f64; tile_size]]; tile_size]]>(transp)); //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile s_per_dim]]; tiles_p er_dim]]
-//
-//     //Berechnung des Diagonal tiles
-//     let row_of_tiles: &'f uniq gpu.global [[ [[ [[f64; tile_size]]; tile_size]]; (matrix_dim / tile_size) ]]= &'f uniq *matrix_view[it];
-//     let position_of_tile: &'a uniq gpu.global [[ [[ [[f64; tile_size]]; tile_size]]; 1]] = &'a uniq (*row_of_tile)[..it..].1[..1..].0;
-//
-//     let local_tile_view: &'g uniq gpu.shared [[ [[ [[f64; tile_size]]; tile_size]]; 1]] = &'g uniq (*local_tile).to_view.map::<[ [f64; tile_size]; tile_size]>(to_view.map::<[f64; tile_size]>(to_view));
-//
-//     sched block in grid {// m: &uniq [[ [[f64; tile_size]]; tile_size]]
-//         let tile = (*position_of_tile).0[[block]];
-//         let local_tile_in_block =  local_tile_view[[block]];
-//
-//         diagonal_copy_to_local_mem::<tile_size>(tile, local_tile_in_block);
-//         diagonal_block::<tile_size>(local_tile_in_block);
-//         diagonal_copy_to_global_mem::<tile_size>(tile, local_tile_in_block)
-//     }
-// }
-//
+fn lud_descend<tile_size: nat, matrix_dim: nat, r:prv>(
+    m5: &r uniq cpu.mem [[f64; matrix_dim]; matrix_dim]
+    ) -[t: cpu.thread]-> ()
+{
+    let mut gpu = gpu_device(0);
+    let mut m_gpu = gpu_alloc_copy(&uniq gpu, &shrd *m5);
+
+    for_nat it in 0..(matrix_dim/tile_size-1) {
+
+        //1-D Grid mit 1-D Threads
+        lud_diagonal::<<<X<1>, X<tile_size>; [[[f64; tile_size]; tile_size]; 1]>>>::<it, tile_size, matrix_dim>(&uniq m_gpu);
+
+        lud_perimeter::<it, tile_size, matrix_dim>(&uniq m_gpu);
+
+        lud_internal::<it, tile_size, matrix_dim>(&uniq m_gpu)
+    };
+
+    lud_diagonal::<<<X<1>, X<tile_size>; [[[f64; tile_size]; tile_size]; 1]>>>::<(matrix_dim/tile_size)-1, tile_size, matrix_dim>(&uniq m_gpu); //::<(matrix_dim/tile_size) ,tile_size, matrix_dim>
+
+    copy_to_host(&shrd m_gpu, m5)
+}
+
+
+fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat, r: prv, p: prv>(
+    m: &r uniq gpu.global [[f64; matrix_dim]; matrix_dim],
+    local_tile: &p uniq gpu.shared [[[f64; tile_size]; tile_size]; 1]
+    ) -[grid: gpu.grid<X<1>, X<tile_size>>]-> () <'a, 'e, 'f, 'g>
+{
+    //let tiles_per_dim = matrix_dim / tile_size;
+    let matrix_view: &'e uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; (matrix_dim / tile_size)]]; (matrix_dim / tile_size) ]] = &'e uniq (*m).to_view.grp::<tile_size>.map::<[[ [f64; matrix_dim]; tile_size]]>(map::<[f64; matrix_dim]>(to_view).transp.grp::<tile_size>.map::<[[ [[f64; tile_size]]; tile_size]]>(transp)); //&uniq gpu.global [[ [[ [[ [[f64; tile_size]]; tile_size]]; tile s_per_dim]]; tiles_p er_dim]]
+
+    //Berechnung des Diagonal tiles
+    let row_of_tiles: &'f uniq gpu.global [[ [[ [[f64; tile_size]]; tile_size]]; (matrix_dim / tile_size) ]]= &'f uniq (*matrix_view)[it];
+    let position_of_tile: &'a uniq gpu.global [[ [[ [[f64; tile_size]]; tile_size]]; 1]] = &'a uniq (*row_of_tiles)[..it..].1[..1..].0;
+
+    let local_tile_view: &'g uniq gpu.shared [[ [[ [[f64; tile_size]]; tile_size]]; 1]] = &'g uniq (*local_tile).to_view.map::<[ [f64; tile_size]; tile_size]>(to_view.map::<[f64; tile_size]>(to_view));
+
+    sched block in grid <'b, 'c> {// m: &uniq [[ [[f64; tile_size]]; tile_size]]
+        let tile: &'c uniq gpu.global [[ [[f64; tile_size]]; tile_size]] = &'c uniq (*position_of_tile)[[block]];
+        let local_tile_in_block: &'b uniq gpu.shared [[ [[f64; tile_size]]; tile_size]] =  &'b uniq (*local_tile_view)[[block]];
+
+        diagonal_copy_to_local_mem::<tile_size>(&uniq *tile, &uniq *local_tile_in_block);
+        diagonal_block::<tile_size>(&uniq *local_tile_in_block);
+        diagonal_copy_to_global_mem::<tile_size>(tile, local_tile_in_block)
+    }
+}
+
 fn diagonal_copy_to_global_mem<tile_size: nat, a: prv, b: prv>(
     global_tile: &a uniq gpu.global [[ [[f64; tile_size]]; tile_size]],
     local_tile: &b uniq gpu.shared [[ [[f64; tile_size]]; tile_size]]
@@ -67,7 +67,6 @@ fn diagonal_copy_to_local_mem<tile_size: nat, a: prv, b: prv>(
     local_tile: &b uniq gpu.shared [[ [[f64; tile_size]]; tile_size]]
     ) -[block: gpu.block<X<tile_size>>]-> ()
 {
-
     sched thread in block <'a, 'b> { //TODO kann so aliasing benutzt werden zur Optimierung?
         let global_thread_tile: &'a uniq gpu.global [[f64;tile_size]] = &'a uniq (*global_tile)[[thread]];
         let local_thread_tile: &'b uniq gpu.shared [[f64;tile_size]] = &'b uniq (*local_tile)[[thread]];
@@ -94,50 +93,50 @@ fn diagonal_block<tile_size: nat, a: prv>(
         //3.transpose -> damit die Zeilen passend zu den thread_elementen auf die threads verteilt werden
         {
             let rhs_tile_transposed: & 'm uniq gpu.shared [[ [[f64; tile_size - (i +1)]]; tile_size]] = &'m uniq (*mat_view_partition).1.transp;
-            //(split_columnl, split_columnr)
-            let split_column: & 'f uniq gpu.shared  ([[ [[f64; tile_size - (i + 1)]]; i]], [[ [[f64; tile_size -(i + 1)]]; tile_size -i]]) = &'f uniq (*rhs_tile_transposed)[..i..];
-            let thread_elements: & 'l uniq gpu.shared [[f64; tile_size - (i + 1)]] = &'l uniq (*split_column).1[0]
-            //
-            // //für indiviuelle Zugriffe: -> die nicht veränderbar sein sollen
-            // let indiv_access: & 'd shrd gpu.shared [[ [[f64; i]]; tile_size - (i+ 1)]] = &'d shrd (*split_column).0.transp
 
-            // indep(X) (tile_size-(i+1)) block { //elem: &uniq f64, shrd_row: &shrd [[f64, i]]
-            //     active_threads => { () },
-            //     inactive_threads => {
-            //         sched thread in inactive_threads <'a, 'b, 'c, 'd> {
-            //             let elem: &'a uniq gpu.shared f64 = &'a uniq (*thread_elements)[[thread]];
-            //             let shrd_row: &'d uniq gpu.shared [[f64; i]] = &'d uniq (*indiv_access)[[thread]];
-            //
-            //             let row_i: &'b shrd gpu.shared [[f64; tile_size]] = &'b shrd (*mat_view_partition).0[i];
-            //             let column_il: &'c shrd gpu.shared [[f64; i + 1]] = &'c shrd row_i[..i+1..].0;
-            //             diagonal_below_HD::<i, a >(elem, shrd_row, column_il)
-            //         }
-            //     }
-            // };
-            // sync
-        }
-    //     //2. Berechnung
-    //     //Elemente [i+1, i+1],..., [i+1, tile_size]
-    //     let row_i1: &'o uniq gpu.shared [[f64; tile_size]] = &'o uniq (*mat_view_partition).1[0];
-    //     let split_row_i1: &'e uniq gpu.shared ([[f64; i+1]], [[f64; tile_size-(i+1)]])  = &'e uniq (*row_i1)[..i+1..]; //-> (0..i, i+1..ende)
-    //     let thread_elements: &'j uniq gpu.shared [[f64; tile_size-(i+1)]] = &'j uniq (*split_row_i1).1;
-    //     let shrd_row: &'k shrd gpu.shared [[f64; i+1]] = &'k shrd (*split_row_i1).0;
-    //
-    //     //(shrd_row_access, thread_elements):
-    //     let indiv_access: &'i shrd gpu.shared [[ [[f64; i+1]]; tile_size-(i+1)]]  = &'i shrd (*mat_view_partition).0.transp[..i+1..].1;
-    //
-    //     indep(X) (i+1) block  {
-    //         active_threads => { () },
-    //         inactive_threads => {
-    //             sched thread in inactive_threads <'a, 'b, 'n> {
-    //                 let elem: &'a uniq gpu.shared f64  = &'a uniq (*thread_elements)[[thread]];
-    //                 let shrd_column: &'b uniq gpu.shared [[f64; i+1]] = &'a uniq (*indiv_access)[[thread]];
-    //
-    //                 diagonal_above_HD::<i, a>(elem, shrd_column, shrd_row)
-    //             }
-    //         }
-    //     };
-    //     sync
+            let split_column: & 'f uniq gpu.shared  ([[ [[f64; tile_size - (i + 1)]]; i]], [[ [[f64; tile_size -(i + 1)]]; tile_size -i]]) = &'f uniq (*rhs_tile_transposed)[..i..];
+            let thread_elements: & 'l uniq gpu.shared [[f64; tile_size - (i + 1)]] = &'l uniq (*split_column).1[0];
+
+            //für indiviuelle Zugriffe: -> die nicht veränderbar sein sollen
+            let indiv_access: & 'd shrd gpu.shared [[ [[f64; i]]; tile_size - (i+ 1)]] = &'d shrd (*split_column).0.transp;
+
+            indep(X) (tile_size-(i+1)) block { //elem: &uniq f64, shrd_row: &shrd [[f64, i]]
+                active_threads => { () },
+                inactive_threads => {
+                    sched thread in inactive_threads <'a, 'b, 'c, 'd> {
+                        let elem: &'a uniq gpu.shared f64 = &'a uniq (*thread_elements)[[thread]];
+                        let shrd_row: &'d shrd gpu.shared [[f64; i]] = &'d shrd (*indiv_access)[[thread]];
+
+                        let row_i: &'b shrd gpu.shared [[f64; tile_size]] = &'b shrd (*mat_view_partition).0[i];
+                        let column_il: &'c shrd gpu.shared [[f64; i + 1]] = &'c shrd (*row_i)[..i+1..].0;
+                        diagonal_below_HD::<i, a >(elem, shrd_row, column_il)
+                    }
+                }
+            };
+            sync
+        };
+        //2. Berechnung
+        //Elemente [i+1, i+1],..., [i+1, tile_size]
+        let row_i1: &'o uniq gpu.shared [[f64; tile_size]] = &'o uniq (*mat_view_partition).1[0];
+        let split_row_i1: &'e uniq gpu.shared ([[f64; i+1]], [[f64; tile_size-(i+1)]])  = &'e uniq (*row_i1)[..i+1..]; //-> (0..i, i+1..ende)
+        let thread_elements: &'j uniq gpu.shared [[f64; tile_size-(i+1)]] = &'j uniq (*split_row_i1).1;
+        let shrd_row: &'k shrd gpu.shared [[f64; i+1]] = &'k shrd (*split_row_i1).0;
+
+        //(shrd_row_access, thread_elements):
+        let indiv_access: &'i shrd gpu.shared [[ [[f64; i+1]]; tile_size-(i+1)]]  = &'i shrd (*mat_view_partition).0.transp[..i+1..].1;
+
+        indep(X) (i+1) block  {
+            active_threads => { () },
+            inactive_threads => {
+                sched thread in inactive_threads <'a, 'b, 'n> {
+                    let elem: &'a uniq gpu.shared f64  = &'a uniq (*thread_elements)[[thread]];
+                    let shrd_column: &'b shrd gpu.shared [[f64; i+1]] = &'b shrd (*indiv_access)[[thread]];
+
+                    diagonal_above_HD::<i, a>(elem, shrd_column, shrd_row)
+                }
+            }
+        };
+        sync
     }
 }
 

@@ -444,12 +444,12 @@ fn ty_check_index_copy(
         ));
     }
 
-    if elem_dty.copyable() {
+    //if elem_dty.copyable() {
         Ok((Ty::new(TyKind::Data(Box::new(elem_dty))), mems, passed_prvs))
-    } else {
-        Err(TyError::String(format!(
-            "Cannot move out of array type: {:?}",
-            elem_dty
-        )))
-    }
+    // } else {
+    //     Err(TyError::String(format!(
+    //         "Cannot move out of array type: {:?}",
+    //         elem_dty
+    //     )))
+    // }
 }
