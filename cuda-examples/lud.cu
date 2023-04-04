@@ -9,16 +9,10 @@ template <std::size_t it, std::size_t tile_size, std::size_t matrix_dim>
 __global__ auto lud_diagonal(descend::array<descend::f32, matrix_dim> *const m)
     -> void;
 template <std::size_t it, std::size_t tile_size, std::size_t matrix_dim>
-__device__ auto
-lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2,
-              descend::array<descend::array<descend::f32, tile_size>, tile_size>
-                  *const peri_row,
-              descend::array<descend::array<descend::f32, tile_size>, tile_size>
-                  *const peri_col,
-              descend::array<descend::array<descend::f32, tile_size>, tile_size>
-                  *const dia) -> void;
+__global__ auto
+lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void;
 template <std::size_t it, std::size_t tile_size, std::size_t matrix_dim>
-__host__ auto lud_internal(descend::array<descend::f32, matrix_dim> *const m3)
+__global__ auto lud_internal(descend::array<descend::f32, matrix_dim> *const m3)
     -> void;
 /*
 function definitions
@@ -34,7 +28,20 @@ __host__ auto lud_descend(descend::array<descend::f32, matrix_dim> *const m5)
     lud_diagonal<it, tile_size, matrix_dim>
         <<<dim3(1, 1, 1), dim3(tile_size, 1, 1),
            0 + 4 * 1 * tile_size * tile_size * 1>>>((&m_gpu));
-    lud_internal<it, tile_size, matrix_dim>((&m_gpu));
+    lud_perimeter<it, tile_size, matrix_dim><<<
+        dim3(matrix_dim / tile_size - it - 1, 1, 1), dim3(tile_size * 2, 1, 1),
+        0 + 4 * 1 * tile_size * tile_size * matrix_dim / tile_size - it - 1 +
+            4 * 1 * tile_size * tile_size * matrix_dim / tile_size - it - 1 +
+            4 * 1 * tile_size * tile_size * matrix_dim / tile_size - it - 1>>>(
+        (&m_gpu));
+    lud_internal<it, tile_size, matrix_dim>
+        <<<dim3(matrix_dim / tile_size - it - 1,
+                matrix_dim / tile_size - it - 1, 1),
+           dim3(tile_size, tile_size, 1),
+           0 + 4 * 1 * tile_size * tile_size * matrix_dim / tile_size - it -
+               1 * matrix_dim / tile_size - it - 1 +
+               4 * 1 * tile_size * tile_size * matrix_dim / tile_size - it -
+               1 * matrix_dim / tile_size - it - 1>>>((&m_gpu));
   });
   lud_diagonal<matrix_dim / tile_size - 1, tile_size, matrix_dim>
       <<<dim3(1, 1, 1), dim3(tile_size, 1, 1),
@@ -64,14 +71,18 @@ __global__ auto lud_diagonal(descend::array<descend::f32, matrix_dim> *const m)
 }
 
 template <std::size_t it, std::size_t tile_size, std::size_t matrix_dim>
-__device__ auto
-lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2,
-              descend::array<descend::array<descend::f32, tile_size>, tile_size>
-                  *const peri_row,
-              descend::array<descend::array<descend::f32, tile_size>, tile_size>
-                  *const peri_col,
-              descend::array<descend::array<descend::f32, tile_size>, tile_size>
-                  *const dia) -> void {
+__global__ auto
+lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
+  extern __shared__ descend::byte $buffer[];
+  descend::f32 *const peri_row = (descend::f32 *)(&$buffer[0]);
+  descend::f32 *const peri_col =
+      (descend::f32
+           *)(&peri_row[1 * tile_size * tile_size * matrix_dim / tile_size -
+                        it - 1]);
+  descend::f32 *const dia =
+      (descend::f32
+           *)(&peri_col[1 * tile_size * tile_size * matrix_dim / tile_size -
+                        it - 1]);
 
   const auto position_of_tile = (*(*(*m2[0 + it * tile_size])));
   const auto dia_global = (*position_of_tile .0 [0]);
@@ -81,7 +92,15 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2,
 }
 
 template <std::size_t it, std::size_t tile_size, std::size_t matrix_dim>
-__host__ auto lud_internal(descend::array<descend::f32, matrix_dim> *const m3)
+__global__ auto lud_internal(descend::array<descend::f32, matrix_dim> *const m3)
     -> void {
-  const auto a = 1;
+  extern __shared__ descend::byte $buffer[];
+  descend::f32 *const peri_row = (descend::f32 *)(&$buffer[0]);
+  descend::f32 *const peri_col =
+      (descend::f32
+           *)(&peri_row[1 * tile_size * tile_size * matrix_dim / tile_size -
+                        it - 1 * matrix_dim / tile_size - it - 1]);
+
+  const auto position_of_tile = (*(*(*m3[0 + it * tile_size])));
+  const auto peri_row_global = (*position_of_tile .1);
 }
