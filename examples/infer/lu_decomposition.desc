@@ -396,9 +396,9 @@ fn lud_internal<it:nat, tile_size: nat, matrix_dim: nat, r:prv, a: prv, b:prv>(
 
     let inner_tiles: &'j uniq gpu.global [[ [[ [[ [[f32; tile_size]]; tile_size]]; matrix_dim/tile_size - it-1]]; matrix_dim/tile_size - it-1]] = &'j uniq (*position_of_inner_tiles).1.transp;
     let peri_row_view_rb2 = &shrd *peri_row_view;
-    let peri_col_view_rb2 = &shrd *peri_col_view;
+    let peri_col_view_rb2 = &shrd *peri_col_view
 
-    internal_calc::<tile_size, matrix_dim>(peri_row_view_rb2, peri_col_view_rb2, inner_tiles)
+    //internal_calc::<tile_size, matrix_dim>(peri_row_view_rb2, peri_col_view_rb2, inner_tiles)
 }
 
 fn internal_copy_to_local_mem<tile_size: nat, matrix_dim: nat, a: prv, b: prv, c:prv, d: prv>(

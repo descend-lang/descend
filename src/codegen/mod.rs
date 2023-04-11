@@ -8,7 +8,7 @@ use crate::ast::visit_mut::VisitMut;
 use crate::ast::{ArgKinded, DataTy, DataTyKind, Expr, ExprKind, Ident, Ty, TyKind};
 use crate::codegen::cu::ScalarTy::{Auto, Void};
 use crate::codegen::cu::Ty::Scalar;
-use crate::codegen::cu::{LambdaCaptures, ParamDecl, ScalarTy, TemplateArg};
+use crate::codegen::cu::{DevAnnotation, LambdaCaptures, ParamDecl, ScalarTy, TemplateArg};
 use crate::ty_check;
 use crate::ty_check::matches_dty;
 use cu_ast as cu;
@@ -732,11 +732,11 @@ fn gen_for_nat(
     };
 
     let lambda_function = cu::Expr::Lambda {
-        captures: cu::LambdaCaptures::List(vec![]),
+        captures: cu::LambdaCaptures::Default,
         params: vec![param_decl],
         body: Box::new(gen_stmt(body, false, codegen_ctx)),
         ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
-        is_dev_fun: false,
+        dev_annotation: DevAnnotation::HostDevice,
     };
 
     cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {
@@ -1159,7 +1159,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> GenState {
                 codegen_ctx,
             )),
             ret_ty: gen_ty(&desc::TyKind::Data(dty.clone()), desc::Mutability::Mut),
-            is_dev_fun: is_dev_fun(&exec_decl.ty),
+            dev_annotation: if is_dev_fun(&exec_decl.ty) {DevAnnotation::Device} else {DevAnnotation::Host},
         }),
         App(fun, kinded_args, args) => match &fun.expr {
             PlaceExpr(pl_expr) => match &pl_expr.pl_expr {

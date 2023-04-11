@@ -112,6 +112,13 @@ pub(super) enum LambdaCaptures {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum DevAnnotation {
+    Device,
+    Host,
+    HostDevice
+}
+
+#[derive(Clone, Debug)]
 pub(super) enum Expr {
     Empty,
     Ident(String),
@@ -125,7 +132,7 @@ pub(super) enum Expr {
         params: Vec<ParamDecl>, //einen: auto j
         body: Box<Stmt>, //genStmt bei body von fornat
         ret_ty: Ty, //void
-        is_dev_fun: bool, //false
+        dev_annotation: DevAnnotation, //false
     },
     FnCall(FnCall),
     UnOp {

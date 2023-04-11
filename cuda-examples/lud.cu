@@ -24,7 +24,8 @@ __host__ auto lud_descend(descend::array<descend::f32, matrix_dim> *const m5)
   auto m_gpu = descend::gpu_alloc_copy<
       descend::array<descend::array<descend::f32, matrix_dim>, matrix_dim>>(
       (&gpu), (&(*m5)));
-  static_for<0, matrix_dim / tile_size - 1>([](auto it) -> void {
+  static_for<0, matrix_dim / tile_size - 1>([&] __device__ __host__(
+                                                auto it) -> void {
     lud_diagonal<it, tile_size, matrix_dim>
         <<<dim3(1, 1, 1), dim3(tile_size, 1, 1),
            0 + 4 * 1 * tile_size * tile_size * 1>>>((&m_gpu));

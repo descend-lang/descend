@@ -5,7 +5,7 @@ use super::cu_ast::{
 use crate::ast::{BinOpNat, DimCompo, Ident, Nat};
 use std::env;
 use std::fmt::Formatter;
-use crate::codegen::cu::LambdaCaptures;
+use crate::codegen::cu::{DevAnnotation, LambdaCaptures};
 
 // function cuda_fmt takes Formatter and recursively formats
 // trait CudaFormat has function cuda_fmt so that cuda_fmt_vec can be implemented (alias for fmt_vec)
@@ -218,9 +218,14 @@ impl std::fmt::Display for Expr {
                 params,
                 body,
                 ret_ty,
-                is_dev_fun,
+                dev_annotation,
             } => {
-                let dev_qual = if *is_dev_fun { "__device__" } else { "" };
+                //let dev_qual = if *is_dev_fun { "__device__" } else { "" };
+                let dev_qual = match dev_annotation {
+                    DevAnnotation::Device => "__device__",
+                    DevAnnotation::Host => "",
+                    DevAnnotation::HostDevice => "__device__ __host__"
+                };
                 writeln!(f, "[")?;
                 match captures {
                     LambdaCaptures::List(captures) => fmt_vec(f, captures, ",")?,
