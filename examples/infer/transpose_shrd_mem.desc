@@ -11,9 +11,9 @@ fn transpose<n: nat, r: prv, r2: prv>(
 // view rect_tile<width: nat, height: nat> = map(grp::<width>).grp::<height>.map(transpose).transpose
 // view tile<size: nat> = rect_tile::<size, size>
 // view block_tile<size: nat> = grp<8>.transpose
-fn par_transpose<r: prv>(
+fn par_transpose<r: prv, n: nat>(
     in_vec: &r shrd gpu.global [[f64; n]; n],
-    out_vec: &r uniq gpu.global [[f64; 2048]; 2048],
+    out_vec: &r uniq gpu.global [[f64; n]; n],
     tmp: &r2 uniq gpu.shared [[f64; 32]; 32]
 ) -[grid: gpu.grid<XY<64, 64>, XY<32, 8>>]-> () {
     sched(Y) block_y in grid {

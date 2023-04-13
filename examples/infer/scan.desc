@@ -1,8 +1,8 @@
 fn scan_inplace<m: nat, a: prv>(
     data: &a uniq cpu.mem [i32; m]
-) -[t: cpu.thread]-> () <>{
+) -[t: cpu.thread]-> () {
     let mut accum = 0;
-    for d in data <>{
+    for d in data {
         let next = *d + accum;
         *d = accum;
         accum = next
@@ -12,45 +12,145 @@ fn scan_inplace<m: nat, a: prv>(
 fn upsweep<a: prv>(
     arr_ref: &a uniq gpu.shared [i32; 64]
 ) -[block: gpu.block<X<32>>]-> () {
-    for_nat d in halved_range(32) {
+    for_nat dd in halved_range(32) {
 // FIXME the next line uses d:nat but group_mut is defined via d:dty, which clashes
-        let tmp_up_view = group_mut::<64/d>(to_view_mut(&uniq *arr_ref));
-        indep split_exec(X) d block {
+        let tmp_up_view = &uniq (*arr_ref).to_view.grp::<(64/dd)>;
+        indep(X) dd block {
             active =>
-                sched arr in tmp_up_view to _ in active {
-                    arr[64/d-1] = arr[64/d-1] + arr[32/d-1]
+                sched thread in active {
+                    let arr = &uniq (*tmp_up_view)[[thread]];
+                    (*arr)[64/dd-1] = (*arr)[64/dd-1] + (*arr)[32/dd-1]
                 },
             inactive => { () }
         }
     }
 }
 
-fn downsweep_inplace_red_add<a: prv, d: nat>(
-    arr: &a uniq gpu.shared [[i32; 64/d]]
-) -[gt: gpu.thread]-> () <>{
-    let t = arr[32/d-1];
-    arr[32/d-1] = arr[64/d-1];
-    arr[64/d-1] = arr[64/d-1] + t
+fn downsweep_inplace_red_add<a: prv, dd: nat>(
+    arr: &a uniq gpu.shared [[i32; 64/dd]]
+) -[gt: gpu.thread]-> () {
+    let t = (*arr)[32/dd-1];
+    (*arr)[32/dd-1] = (*arr)[64/dd-1];
+    (*arr)[64/dd-1] = (*arr)[64/dd-1] + t
 }
 
 fn downsweep<a: prv>(
     arr_ref: &a uniq gpu.shared [i32; 64]
-) -[block: gpu.block<X<32>>]-> () <>{
-    for_nat d in doubled_range(32) {
-        let tmp_down_view = group_mut::<64 / d>(
-            to_view_mut(&uniq *arr_ref));
+) -[block: gpu.block<X<32>>]-> () {
+    for_nat dd in doubled_range(32) {
+        let tmp_down_view = &uniq (*arr_ref).to_view.grp::<64/dd>;
 
-        indep split_exec(X) d block {
+        indep(X) dd block {
             active =>
-                sched arr in tmp_down_view to _ in active {
-                    let t = arr[32/d-1];
-                    arr[32/d-1] = arr[64/d-1];
-                    arr[64/d-1] = arr[64/d-1] + t
+                sched thread in active {
+                    let arr = &uniq (*tmp_down_view)[[thread]];
+                    let t = (*arr)[32/dd-1];
+                    (*arr)[32/dd-1] = (*arr)[64/dd-1];
+                    (*arr)[64/dd-1] = (*arr)[64/dd-1] + t
                 },
             inactive => { () }
         }
     }
 }
+
+fn par_scan<n: nat, r1: prv, r2: prv, r3: prv, r4: prv>(
+    input: &r1 shrd gpu.global [i32; n],
+    output: &r2 uniq gpu.global [i32; n],
+    block_sums: &r3 uniq gpu.global [i32; gridDim],
+    tmp: &r4 uniq gpu.shared [i32; 64]
+) -[grid: gpu.grid<X<gridDim>, X<32>>]-> () {
+    let block_group = &shrd (*input).to_view.grp::<64>;
+    let out_grp = &uniq (*output).to_view.grp::<64>;
+    // n/64 == 256
+    let block_sums_grp = &uniq (*block_sums).to_view.grp::<1>;
+
+    sched block in grid {
+        let ib = &shrd (*block_group)[[block]];
+        let block_out = &uniq (*out_grp)[[block]];
+        let bsum = &uniq (*block_sums_grp)[[block]];
+        {
+            let tmp_halves = &uniq (*tmp).to_view[..32..];
+            let input_halves = &shrd (*ib)[..32..];
+
+            // Copy to temporary shared memory storage
+            sched thread in block {
+                (*tmp_halves).0[[thread]] = (*input_halves).0[[thread]];
+                (*tmp_halves).1[[thread]] = (*input_halves).1[[thread]]
+            }
+        };
+
+        // upsweep(&uniq *tmp);
+        for_nat dd in halved_range(32) {
+            let tmp_up_view = &uniq (*tmp).to_view.grp::<(64/dd)>;
+            indep(X) dd block {
+                active =>
+                    sched thread in active {
+                        let arr = &uniq (*tmp_up_view)[[thread]];
+                        (*arr)[64/dd-1] = (*arr)[64/dd-1] + (*arr)[32/dd-1]
+                    },
+                inactive => { () }
+            }
+        };
+
+        //
+        // Clear last elemen and record block sum
+        //
+        {
+            let tmp_last = &uniq (*tmp).to_view[..63..].1;
+            indep(X) 1 block {
+                active =>
+                    sched thread in active {
+                        (*bsum)[[thread]] = (*tmp_last)[[thread]];
+                        (*tmp_last)[[thread]] = 0
+                    },
+                inactive => { () }
+            }
+        };
+
+        // downsweep(&uniq *tmp);
+       for_nat dd in doubled_range(32) {
+            let tmp_down_view = &uniq (*tmp).to_view.grp::<64/dd>;
+
+            indep(X) dd block {
+                active =>
+                    sched thread in active {
+                        let arr = &uniq (*tmp_down_view)[[thread]];
+                        let t = (*arr)[32/dd-1];
+                        (*arr)[32/dd-1] = (*arr)[64/dd-1];
+                        (*arr)[64/dd-1] = (*arr)[64/dd-1] + t
+                    },
+                inactive => { () }
+            }
+        };
+
+       {
+            let tmp_halves = &uniq (*tmp).to_view[..32..];
+            // Copy results to global memory
+            let output_halves = &uniq (*block_out)[..32..];
+            sched thread in block {
+                (*output_halves).0[[thread]] = (*tmp_halves).0[[thread]];
+                (*output_halves).1[[thread]] = (*tmp_halves).1[[thread]]
+            }
+        }
+    }
+}
+
+fn par_scan2<r1: prv, r2: prv>(
+    input: &r1 uniq gpu.global [i32; n],
+    block_sums: &r2 shrd gpu.global [i32; gridDim]
+) -[grid: gpu.grid<X<gridDim>, X<64>>]-> () {
+    let scanned_vals = &uniq (*input).to_view.grp::<64>;
+    let block_sum_grps = &shrd (*block_sums).to_view.grp::<1>;
+    sched block in grid {
+        let block_sum = &shrd (*block_sum_grps)[[block]];
+        let val = &uniq (*scanned_vals)[[block]];
+        sched thread in block {
+            let scanned_val = &uniq (*val)[[thread]];
+             *scanned_val = (*scanned_val) + (*block_sum)[[thread]]
+        }
+    }
+}
+
 
 // blockDim.x == 32
 // n == 256 * blockDim.x * 2
@@ -66,88 +166,13 @@ fn scan<n: nat, gridDim: nat, a: prv, b: prv, c: prv>(
     let mut out_array = gpu_alloc_copy(&uniq gpu, &shrd *h_output);
     let mut block_sums = gpu_alloc_copy(&uniq gpu, &shrd *h_block_sums);
 
-    exec::<gridDim, 32>(
-        &uniq gpu,
-        (&shrd a_array, &uniq out_grp, &uniq block_sums_grp),
-        | inputs: (&shrd gpu.global [i32; n],
-                  &uniq gpu.global [i32; n],
-                  &uniq gpu.global [i32; gridDim])
-        | -[grid: gpu.grid<X<gridDim>, X<32>>]-> () {
-            let block_group = group::<64>(to_view(inputs.0));
-            let out_grp = group_mut::<64>(to_view_mut(inputs.1));
-            // n/64 == 256
-            let block_sums_grp = group_mut::<1>(to_view_mut(inputs.2));
-
-            decl {
-                let mut tmp: [i32; 64] @ gpu.shared
-            } sched ib, block_out, bsum in block_group, out_grp, block_sums_grp to block in grid {
-                {
-                    let tmp_view = to_view_mut(&uniq tmp);
-                    let tmp_halves = split uniq 32 (*tmp_view);
-                    let input_halves = split shrd 32 (*ib);
-
-                    // Copy to temporary shared memory storage
-                    sched s0, s1, d0, d1 in input_halves.0, input_halves.1, tmp_halves.0, tmp_halves.1
-                    to _ in block {
-                        *d0 = *s0;
-                        *d1 = *s1
-                    }
-                };
-
-                upsweep(block, &uniq tmp);
-
-                //
-                // Clear last elemen and record block sum
-                //
-                {
-                    let tmp_view2 = to_view_mut(&uniq tmp);
-                    let tmp_last = (split uniq 63 (*tmp_view2)).1;
-                    indep split_exec(X) 1 block {
-                        active =>
-                            sched sum, last in bsum, tmp_last to _ in active {
-                                *sum = *last;
-                                *last = 0
-                            },
-                        inactive => { () }
-                    }
-                };
-
-                downsweep(block, &uniq tmp);
-
-                {
-                    let tmp_view3 = to_view_mut(&uniq tmp);
-                    let tmp_halves3 = split uniq 32 (*tmp_view3);
-                    // Copy results to global memory
-                    let output_halves = split uniq 32 (*block_out);
-                    sched d0, d1, s0, s1 in output_halves.0, output_halves.1, tmp_halves3.0, tmp_halves3.1
-                    to _ in block {
-                        *d0 = *s0;
-                        *d1 = *s1
-                    }
-                }
-            }
-        }
-    );
+    par_scan::<<<X<gridDim>, X<32>; [i32; 64]>>>(&shrd a_array, &uniq out_array, &uniq block_sums);
 
     copy_to_host(&shrd block_sums, &uniq *h_block_sums);
     scan_inplace::<gridDim>(&uniq *h_block_sums);
     copy_to_gpu(&uniq block_sums, &shrd *h_block_sums);
 
-    exec::<gridDim, 64>(
-        &uniq gpu,
-        (&uniq out_array, &shrd block_sums),
-        | inputs: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; gridDim]) |
-            -[grid: gpu.grid<X<gridDim>, X<64>>]-> () {
-            let scanned_vals =
-                group_mut::<64>(to_view_mut(inputs.0));
-            let block_sums = group::<1>(to_view(inputs.1));
-
-            sched scanned_vals_blocked, block_sum in scanned_vals, block_sums to block in grid {
-                sched scanned_val, sum in scanned_vals_blocked, block_sum to _ in block {
-                    *scanned_val = *scanned_val + *sum
-                }
-            }
-        });
+    par_scan2::<<<X<gridDim>, X<64>>>>(&uniq out_array, &shrd block_sums);
 
     copy_to_host(&shrd out_array, &uniq *h_output)
 }

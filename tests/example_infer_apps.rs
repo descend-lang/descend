@@ -45,7 +45,6 @@ fn bitonic_sort() -> Res {
     ))
 }
 
-#[ignore]
 #[test]
 fn scan() -> Res {
     eprintln!(

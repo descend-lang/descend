@@ -418,7 +418,7 @@ impl std::fmt::Display for Nat {
             }
             Self::Lit(n) => write!(f, "{}", n),
             Self::BinOp(op, lhs, rhs) => {
-                write!(f, "{} {} {}", lhs, op, rhs)
+                write!(f, "({} {} {})", lhs, op, rhs)
             }
             Self::App(func, args) => {
                 write!(f, "{}(", func)?;
