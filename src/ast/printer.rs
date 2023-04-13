@@ -252,9 +252,11 @@ impl PrintState {
             }
             Nat::Lit(n) => write!(&mut self.string, "{}", n).unwrap(),
             Nat::BinOp(op, lhs, rhs) => {
+                self.string.push('(');
                 self.print_nat(lhs);
                 self.print_bin_op_nat(op);
                 self.print_nat(rhs);
+                self.string.push(')');
             }
             Nat::App(func, args) => {
                 self.string.push_str("{}(");

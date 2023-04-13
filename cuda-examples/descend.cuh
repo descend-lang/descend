@@ -17,6 +17,16 @@ inline void check_cuda_err(const cudaError_t err, const char * const file, const
     }
 }
 
+template <int First, int Last, typename Lambda>
+inline void static_for(Lambda const& f)
+{
+    if constexpr (First < Last)
+    {
+        f(std::integral_constant<int, First>{});
+        static_for<First + 1, Last>(f);
+    }
+}
+
 //
 // Define BENCH in order to enable benchmarking (of kernels).
 // If BENCH is defined, the file that is including this header must define the variable `benchmark`.
@@ -185,6 +195,11 @@ public:
         }
         sstr << std::endl;
         return sstr.str();
+    }
+
+    auto reset() {
+        runs_.clear();
+        runs_.push_back(BenchRun{cfg_.num_kernels()});
     }
 };
 #endif

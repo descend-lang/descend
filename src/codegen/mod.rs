@@ -449,13 +449,13 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                                 name: ident.name.to_string(),
                                 ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
                                 addr_space: None,
-                                expr: Some(cu::Expr::Nat(input[0].clone())),
+                                expr: Some(cu::Expr::Lit(cu::Lit::U32(1))),
                                 is_extern: false,
                             };
                             let cond = cu::Expr::BinOp {
                                 op: cu::BinOp::Le,
                                 lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::Nat(input[1].clone())),
+                                rhs: Box::new(cu::Expr::Nat(input[0].clone())),
                             };
                             let iter = cu::Expr::Assign {
                                 lhs: Box::new(i.clone()),
@@ -502,7 +502,6 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             stmt: Box::new(gen_stmt(body, false, codegen_ctx)),
         },
         For(ident, coll_expr, body) => {
-            todo!()
             // if matches_dty!(
             //     coll_expr.ty.as_ref().unwrap(),
             //     desc::DataTy {
@@ -512,8 +511,10 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             // ) {
             //     gen_for_range(ident, coll_expr, body, codegen_ctx)
             // } else {
-            //     gen_for_each(ident, coll_expr, body, codegen_ctx)
+            // gen_for_each(ident, coll_expr, body, codegen_ctx)
             // }
+            // TODO
+            cu::Stmt::Skip
         }
         AppKernel(app_kernel) => gen_app_kernel(app_kernel, codegen_ctx),
         Indep(pb) => gen_indep(pb.dim_compo, &pb.pos, &pb.branch_bodies, codegen_ctx),
@@ -601,7 +602,7 @@ fn gen_decl_init(
             if let desc::ExprKind::Ref(_, _, ple) = &e.expr {
                 match gen_pl_expr(ple, &mut vec![], codegen_ctx) {
                     GenState::Gened(cu_e) => (
-                        cu_e,
+                        cu::Expr::Ref(Box::new(cu_e)),
                         if mutbl == desc::Mutability::Mut {
                             cu::Ty::Scalar(cu::ScalarTy::Auto)
                         } else {
@@ -1159,7 +1160,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> GenState {
                 codegen_ctx,
             )),
             ret_ty: gen_ty(&desc::TyKind::Data(dty.clone()), desc::Mutability::Mut),
-            dev_annotation: if is_dev_fun(&exec_decl.ty) {DevAnnotation::Device} else {DevAnnotation::Host},
+            dev_annotation: if is_dev_fun(&exec_decl.ty) {
+                DevAnnotation::Device
+            } else {
+                DevAnnotation::Host
+            },
         }),
         App(fun, kinded_args, args) => match &fun.expr {
             PlaceExpr(pl_expr) => match &pl_expr.pl_expr {
@@ -1609,7 +1614,10 @@ fn gen_pl_expr(
         }
         desc::PlaceExprKind::Proj(ple, n) => {
             path.push(IdxOrProj::Proj(*n));
-            gen_pl_expr(ple, path, codegen_ctx)
+            match gen_pl_expr(ple, path, codegen_ctx) {
+                GenState::Gened(expr) => GenState::Gened(expr),
+                GenState::View(_) => GenState::View(inlined_view_pl_expr.clone()),
+            }
         }
         desc::PlaceExprKind::Deref(ple) => match gen_pl_expr(ple, path, codegen_ctx) {
             GenState::Gened(expr) => GenState::Gened(cu::Expr::Deref(Box::new(expr))),
@@ -1632,8 +1640,11 @@ fn gen_pl_expr(
             gen_pl_expr(pl_expr, path, codegen_ctx)
         }
         desc::PlaceExprKind::SplitAt(k, pl_expr) => {
-            transform_path_with_split_at(k, path);
-            gen_pl_expr(pl_expr, path, codegen_ctx)
+            if transform_path_with_split_at(k, path) {
+                gen_pl_expr(pl_expr, path, codegen_ctx)
+            } else {
+                GenState::View(inlined_view_pl_expr.clone())
+            }
         }
     };
     match pl_expr_gen_state {
@@ -1660,7 +1671,14 @@ fn insert_into_pl_expr(mut pl_expr: desc::PlaceExpr, insert: &desc::PlaceExpr) -
     }
     impl VisitMut for InsertIntoPlExpr<'_> {
         fn visit_pl_expr(&mut self, pl_expr: &mut desc::PlaceExpr) {
-            match &pl_expr.pl_expr {
+            match &mut pl_expr.pl_expr {
+                desc::PlaceExprKind::Deref(ple) => {
+                    if let desc::PlaceExprKind::Ident(_) = ple.pl_expr {
+                        *pl_expr = self.insert.clone();
+                    } else {
+                        self.visit_pl_expr(ple);
+                    }
+                }
                 desc::PlaceExprKind::Ident(_) => *pl_expr = self.insert.clone(),
                 // desc::ExprKind::Ref(_, _, ple) => match &pl_expr.pl_expr {
                 //     desc::PlaceExprKind::Deref(i)

@@ -19,8 +19,8 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
     out_vec: &r2 uniq gpu.global [i32; gs],
     tmp: &r3 uniq gpu.shared [i32; bs]
 ) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-    let block_group = group::<1024>(to_view(vec));
-    let view_out = group_mut::<1>(to_view_mut(out_vec));
+    let block_group = &shrd (*vec).to_view.grp::<1024>;
+    let view_out = &uniq out_vec.to_view.grp::<1>;
     sched block in grid {
         let ib = &shrd *block_group[[block]];
         let out_elem = &uniq *view_out[[block]];
@@ -32,11 +32,10 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
         };
 
         for_nat k in halved_range(bs/2) {
-            let split_tmp_view = (split uniq 2*k (*tmp_view)).0;
-            let active_halves = split uniq k (*split_tmp_view);
-
-            let active_half0 = active_halves.0;
-            let active_half1 = active_halves.1;
+            let split_tmp_view = &uniq (*tmp_view)[..2*k..].0;
+            let active_halves = &uniq (*split_tmp_view)[..k..];
+            let active_half0 = &uniq (*active_halves).0;
+            let active_half1 = &uniq (*active_halves).1;
 
             // Fixme: At this point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
             indep(X) k block {
@@ -50,7 +49,7 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
             }
         };
 
-        let tmp_res = (split uniq 1 (*tmp_view)).0;
+        let tmp_res = &uniq (*tmp_view)[..1..].0;
         indep(X) 1 block {
             single_thread =>
                 sched thread in single_thread {
