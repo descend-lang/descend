@@ -115,13 +115,13 @@ fn lu_decomposition_test() -> Res {
 
 #[test]
 fn lud_inline_test() -> Res {
-    //let compiled = descend::compile("examples/infer/lud_inline.desc")?;
-    //let file_path = "cuda-examples/lud.cu";
+    let compiled = descend::compile("examples/infer/lud_inline.desc")?;
+    let file_path = "cuda-examples/lud.cu";
 
-    // fs::write(
-    //     file_path,
-    //     compiled,
-    // ).expect("Cant write in the file");
+    fs::write(
+        file_path,
+        compiled,
+    ).expect("Cant write in the file");
 
     Ok(println!("{}", descend::compile("examples/infer/lud_inline.desc")?))
 }
