@@ -76,7 +76,8 @@ fn diagonal_copy_to_local_mem<tile_size: nat, a: prv, b: prv>(
         for_nat i in 0..tile_size {
             (*local_thread_tile)[i] = (*global_thread_tile)[i]
         }
-    }
+    };
+    sync
 }
 
 
