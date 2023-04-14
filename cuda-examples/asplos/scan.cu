@@ -3,7 +3,8 @@
 #include <cuda_runtime.h>
 #include <sstream> 
 
-
+#define BENCH
+#include "descend.cuh"
 /* General idea:
  * This file mostly implements the parallel scan presented in the NVidia guide found at
  * https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-39-parallel-prefix-sum-scan-cuda.
@@ -19,8 +20,8 @@
 */
 
 
-// The size in floats of each local block. This must be a power of 2 to work.
-const int BLOCK_SIZE = 64;
+// The size in int of each local block. This must be a power of 2 to work.
+const int BLOCK_SIZE = 2048;
 
 // Helper for checking CUDA error codes
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -43,8 +44,8 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 // Postcondition: g_odata contains the local scans of the block, g_sums contains each block's sum.
 // WARNING: This code requires a grid size of input_size/BLOCK_SIZE, and a blockDim of BLOCK_SIZE/2
 */
-__global__ void cuda_block_scans(float *g_odata, float *g_sums, float *g_idata) {
-    __shared__ float temp[BLOCK_SIZE];
+__global__ void cuda_block_scans(int *g_odata, int *g_sums, int *g_idata) {
+    __shared__ int temp[BLOCK_SIZE];
 
     int thid = threadIdx.x;
     int block_offset = blockIdx.x * (2 * blockDim.x);
@@ -78,7 +79,7 @@ __global__ void cuda_block_scans(float *g_odata, float *g_sums, float *g_idata) 
          if (thid < d) {
              int ai = offset * (2 * thid + 1) - 1;
              int bi = offset * (2 * thid + 2) - 1;
-             float t = temp[ai];
+             int t = temp[ai];
              temp[ai] = temp[bi];
              temp[bi] += t;
          }
@@ -91,10 +92,10 @@ __global__ void cuda_block_scans(float *g_odata, float *g_sums, float *g_idata) 
 }
 
 // CPU-local scan
-void local_scan_inplace(std::vector<float>& data) {
-    float accum = 0.0;
+void local_scan_inplace(std::vector<int>& data) {
+    int accum = 0;
     for (auto i = 0; i < data.size(); i++) {
-        float next = data[i] + accum;
+        int next = data[i] + accum;
         data[i] = accum;
         accum = next;
     }
@@ -102,7 +103,7 @@ void local_scan_inplace(std::vector<float>& data) {
 
 // Feed back the block sums into each partial.
 // WARNING: This is a trivial implementation. For reasonable perf, do coalescing!
-__global__ void cuda_add(float* partials, float* block_sums, int block_size) {
+__global__ void cuda_add(int* partials, int* block_sums, int block_size) {
     auto value = block_sums[blockIdx.x];
     auto chunk = partials + (block_size * blockIdx.x);
 
@@ -168,7 +169,7 @@ struct GoldCheck {
     
     public:
 
-    GoldCheck(const std::vector<float>& output, const std::vector<float>& gold) {
+    GoldCheck(const std::vector<int>& output, const std::vector<int>& gold) {
         auto gold_check = true;
         int err_count = 0;
         for (int i = 0; i < output.size(); i++) {
@@ -200,12 +201,12 @@ struct GoldCheck {
 
 class TestRun {
     private:
-    std::vector<float> result;
+    std::vector<int> result;
     Timing timing;
     GoldCheck check;
 
     public:
-    TestRun(std::vector<float>&& result, Timing timing, GoldCheck check): timing(timing), check(check) {
+    TestRun(std::vector<int>&& result, Timing timing, GoldCheck check): timing(timing), check(check) {
         this->result = result;    
     }
 
@@ -229,7 +230,7 @@ class TestRun {
  * 
  */
 
-TestRun runTest(std::vector<float> input) {
+TestRun runTest(std::vector<int> input) {
     auto input_size = input.size();
 
     const int NUM_BLOCKS = input_size / BLOCK_SIZE;
@@ -240,114 +241,98 @@ TestRun runTest(std::vector<float> input) {
     }
 
     // Compute the Gold value by running a local scan
-    std::vector<float> gold = input;
+    std::vector<int> gold = input;
     local_scan_inplace(gold);
 
+    // Load block sums to host, sequentially scan, re-upload
+    std::vector<int> block_sums(NUM_BLOCKS);
 
     // Allocate device memory
-    float* d_input;
-    float *d_output;
-    float *d_block_sums;
-    gpuErrchk(cudaMalloc((void **)&d_input, sizeof(float) * input_size));
-    gpuErrchk(cudaMalloc((void **)&d_output, sizeof(float) * input_size));
-    gpuErrchk(cudaMalloc((void **)&d_block_sums, sizeof(float) * NUM_BLOCKS));
+    int* d_input;
+    int *d_output;
+    int *d_block_sums;
+    gpuErrchk(cudaMalloc((void **)&d_input, sizeof(int) * input_size));
+    gpuErrchk(cudaMalloc((void **)&d_output, sizeof(int) * input_size));
+    gpuErrchk(cudaMalloc((void **)&d_block_sums, sizeof(int) * NUM_BLOCKS));
 
     // Load input to GPU
-    gpuErrchk(cudaMemcpy(d_input, input.data(), sizeof(float) * input_size, cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_input, input.data(), sizeof(int) * input_size, cudaMemcpyHostToDevice));
     
     // Execute local block scans
     cudaEvent_t cuda_block_scans_start, cuda_block_scans_end;
     gpuErrchk(cudaEventCreate(&cuda_block_scans_start));
     gpuErrchk(cudaEventCreate(&cuda_block_scans_end));
 
-    gpuErrchk(cudaEventRecord(cuda_block_scans_start));
-    cuda_block_scans<<<input_size/BLOCK_SIZE, BLOCK_SIZE/2>>>(d_output, d_block_sums, d_input);
-    gpuErrchk(cudaEventRecord(cuda_block_scans_end));
-    gpuErrchk(cudaDeviceSynchronize());
-
-    
-    // Load block sums to host, sequentially scan, re-upload
-    std::vector<float> block_sums(NUM_BLOCKS);
-    gpuErrchk(cudaMemcpy(block_sums.data(), d_block_sums, sizeof(float) * NUM_BLOCKS, cudaMemcpyDeviceToHost));
-    gpuErrchk(cudaMemcpy(input.data(), d_output, sizeof(float) * input_size, cudaMemcpyDeviceToHost));
-    std::cout << "block_sums = " << block_sums[0] << std::endl;
-    for (std::size_t j = 0; j < 32; j++) {
-      std::cout << "h_output[" << j << "] = " << input[j] << std::endl;
+    // BENCHMARK
+    {
+      descend::Timing timing{};
+      timing.record_begin();
+      cuda_block_scans<<<input_size/BLOCK_SIZE, BLOCK_SIZE/2>>>(d_output, d_block_sums, d_input);
+      CHECK_CUDA_ERR( cudaDeviceSynchronize() );
+      timing.record_end();
+      benchmark.current_run().insert_timing(timing);
     }
+    
+    gpuErrchk(cudaMemcpy(block_sums.data(), d_block_sums, sizeof(int) * NUM_BLOCKS, cudaMemcpyDeviceToHost));
 
     local_scan_inplace(block_sums);
-    for (std::size_t j = 0; j < 32; j++)
-      std::cout << "Block sum after scan_inplace at " << j << ": " << block_sums[j] << std::endl;
 
-    gpuErrchk(cudaMemcpy(d_block_sums, block_sums.data(), sizeof(float) * NUM_BLOCKS, cudaMemcpyHostToDevice));
-
-    // Add in the block sums
-    gpuErrchk(cudaDeviceSynchronize());
-    cudaEvent_t cuda_add_start, cuda_add_end;
-    gpuErrchk(cudaEventCreate(&cuda_add_start));
-    gpuErrchk(cudaEventCreate(&cuda_add_end));
-
-    gpuErrchk(cudaEventRecord(cuda_add_start));
-    cuda_add<<<NUM_BLOCKS, 1>>>(d_output, d_block_sums, BLOCK_SIZE);
-    gpuErrchk(cudaEventRecord(cuda_add_end));
-    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(d_block_sums, block_sums.data(), sizeof(int) * NUM_BLOCKS, cudaMemcpyHostToDevice));
+    // BENCHMARK
+    {
+      descend::Timing timing{};
+      timing.record_begin();
+      cuda_add<<<NUM_BLOCKS, 1>>>(d_output, d_block_sums, BLOCK_SIZE);
+      CHECK_CUDA_ERR( cudaDeviceSynchronize() );
+      timing.record_end();
+      benchmark.current_run().insert_timing(timing);
+    }
 
     // Copy final output to device
-    gpuErrchk(cudaMemcpy(input.data(), d_output, sizeof(float) * input_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(input.data(), d_output, sizeof(int) * input_size, cudaMemcpyDeviceToHost));
 
     // Cleanup after kernel execution
     gpuErrchk(cudaFree(d_input));
     gpuErrchk(cudaFree(d_output));
     gpuErrchk(cudaFree(d_block_sums));
 
-    // Collect timing 
-    float block_scans_time;
-    gpuErrchk(cudaEventElapsedTime(&block_scans_time, cuda_block_scans_start, cuda_block_scans_end));
-    float add_time;
-    gpuErrchk(cudaEventElapsedTime(&add_time, cuda_add_start, cuda_add_end));
-    Timing timing(block_scans_time, add_time);
-
     // Perform gold checking
     GoldCheck gold_check(input, gold);
 
     // Done!
-    return TestRun(std::move(input), timing, gold_check);
+    return TestRun(std::move(input), Timing{0.0, 0.0}, gold_check);
 }
 
+descend::Benchmark benchmark{descend::BenchConfig({"scan", "add"})};
 int main() {
-    auto base_size = 256;
-    auto run_per_size = 1;
-    auto num_sizes = 1;
+    static constexpr std::size_t grid_size[] = {16384, 32768, 65536};
+    static constexpr std::size_t run_per_size = 100;
 
-    std::vector<std::string> output(num_sizes);
+    // Construct input
+    static_for<0, 3>([](auto i) {
+      auto input_size = BLOCK_SIZE * grid_size[i];
+      std::vector<int> sample_input(input_size);
+      for (auto i = 0; i < input_size; i++) {
+          sample_input[i] = i%32;
+      }
 
-    // For each size we have...
-    for (int size_n = 0; size_n < num_sizes; size_n++) {
-        // Construct input
-        auto input_size = (size_n + 1) * BLOCK_SIZE * base_size;
-        std::vector<float> sample_input(input_size);
-        for (auto i = 0; i < input_size; i++) {
-            sample_input[i] = i%32;
-        }
+      for (auto i = 0; i < run_per_size; i++) {
+          auto run = runTest(sample_input);
+          run.notify_problems();
+      }
 
-        std::cout << "Input Size:\t" << input_size << "\tRun number:\t" << (size_n + 1) << "/" << num_sizes << std::endl;
+      std::size_t size_in_mib = input_size * sizeof(int)/1024/1024;
+      std::size_t footprint_in_mib = size_in_mib * 2;
+      float block_sum_size_in_mib = (float)(input_size/(BLOCK_SIZE)) * sizeof(descend::i32)/1024/1024;
+      std::cout << "Input Size: " << size_in_mib << " MiB" << std::endl;
+      std::cout << "Footprint: " << footprint_in_mib << " MiB" << std::endl;
+      std::cout << "+ Block Sum size in MiB: " << block_sum_size_in_mib << " MiB" << std::endl;
+      std::cout << benchmark.to_csv();
+      std::cout << "--------------" << std::endl;
+      
+      benchmark.reset();
 
-        // Execute each run and collect its timing
-        std::vector<Timing> runs;
-        for (auto i = 0; i < run_per_size; i++) {
-            auto run = runTest(sample_input);
-            run.notify_problems();
-            runs.push_back(run.get_timing());
-        }
-        auto average = Timing::average(runs);
-        //average.printout();
-        output.push_back(average.csv_line(input_size));
-    }
-
-    // Printout results as csv to stdout
-    for (const auto& line:output) {
-        std::cout << line;
-    }
+    });
 
     return 0;
 }
