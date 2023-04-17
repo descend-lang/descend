@@ -165,8 +165,9 @@ fn add<n: nat, gs: nat, bs: nat, r1: prv, r2: prv>(
         let chunk_grp = &uniq (*input).to_view.grp::<2*bs>[[block]];
         sched thread in block {
             let chunk = &uniq (*chunk_grp).grp::<2*bs>[[thread]];
+            let value = (*value_grp)[[thread]];
             for c in &uniq *chunk {
-                let cc = *c + (*value_grp)[[thread]];
+                let cc = *c + value;
                 *c = cc
             }
         }

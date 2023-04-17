@@ -333,17 +333,21 @@ fn ty_check_deref(
     }
 }
 
+// FIXME needs to be qualified over ownership
+//  whether a selct is possible also depends on the ownership that we are selecting with
 fn ty_check_select(
     ctx: &PlExprTyCtx,
     p: &mut PlaceExpr,
     select_exec: &mut ExecExpr,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
     exec::ty_check(ctx.kind_ctx, ctx.ty_ctx, ctx.ident_exec, select_exec)?;
-    if &ctx.exec != select_exec {
-        return Err(TyError::String(
-            "Trying select memory for illegal combination of excution resources.".to_string(),
-        ));
-    }
+    // FIXME this check is required for uniq accesses, but not for shared accesses because there
+    //  the duplication of accesses is fine. Move this check into ownership/borrow checking?
+    //    if &ctx.exec != select_exec {
+    //        return Err(TyError::String(
+    //            "Trying select memory for illegal combination of excution resources.".to_string(),
+    //        ));
+    //    }
     let mut outer_exec = select_exec.remove_last_distrib();
     exec::ty_check(ctx.kind_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
     let outer_ctx = PlExprTyCtx {

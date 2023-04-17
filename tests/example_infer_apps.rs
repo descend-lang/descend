@@ -21,6 +21,14 @@ fn transpose_shrd_mem() -> Res {
 }
 
 #[test]
+fn matmul() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/matmul.desc")?
+    ))
+}
+
+#[test]
 fn scale_vec() -> Res {
     Ok(println!(
         "{}",

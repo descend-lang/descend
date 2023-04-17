@@ -106,12 +106,24 @@ __global__ auto add(descend::i32 *const input,
     const auto chunk_grp = (&(input[((blockIdx.x - 0) * (2*bs))]));
     {
       const auto chunk = (&(chunk_grp[((threadIdx.x - 0) * (2*bs))]));
+      const auto value = value_grp[threadIdx.x];
       for (std::size_t i = 0; i < 2*bs; i++) {
-        const auto cc = chunk[i] + value_grp[threadIdx.x];
+        const auto cc = chunk[i] + value;
         chunk[i] = cc;
       }
     }
   }
+}
+
+
+template <std::size_t block_size>
+__global__ void cuda_add(int* partials, int* block_sums) {
+    auto value = block_sums[blockIdx.x];
+    auto chunk = partials + (block_size * blockIdx.x);
+
+    for (auto i = 0; i < block_size; i++) {
+        chunk[i] += value;
+    }
 }
 
 template <std::size_t n, std::size_t gs, std::size_t bs>
@@ -148,7 +160,9 @@ __host__ auto scan(const descend::i32 *const ha_array,
   {
     descend::Timing timing{};
     timing.record_begin();
-    add<n, (n / (2 * bs)), bs><<<dim3((n / (2 * bs)), 1, 1), dim3(1, 1, 1), 0>>>(
+//    add<n, (n / (2 * bs)), bs><<<dim3((n / (2 * bs)), 1, 1), dim3(1, 1, 1), 0>>>(
+//        (&out_array), (&block_sums));
+    cuda_add<2 * bs><<<dim3((n / (2 * bs)), 1, 1), dim3(1, 1, 1)>>>(
         (&out_array), (&block_sums));
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
     timing.record_end();
