@@ -55,8 +55,8 @@ fn diagonal_copy_to_global_mem<tile_size: nat, a: prv, b: prv>(
 ) -[block: gpu.block<X<tile_size>>]-> ()
 {
     sched thread in block <'a, 'b> { //TODO kann so aliasing benutzt werden zur Optimierung?
-        let global_thread_tile: &'a uniq gpu.global [[f32;tile_size]] = &'a uniq (*global_tile)[[thread]];
-        let local_thread_tile: &'b uniq gpu.shared [[f32;tile_size]] = &'b uniq (*local_tile)[[thread]];
+        let global_thread_tile: &'a uniq gpu.global [[f32;tile_size]] = &'a uniq (*global_tile).transp[[thread]];
+        let local_thread_tile: &'b uniq gpu.shared [[f32;tile_size]] = &'b uniq (*local_tile).transp[[thread]];
 
         for_nat i in 0..tile_size {
             (*global_thread_tile)[i] = (*local_thread_tile)[i]
@@ -70,8 +70,8 @@ fn diagonal_copy_to_local_mem<tile_size: nat, a: prv, b: prv>(
     ) -[block: gpu.block<X<tile_size>>]-> ()
 {
     sched thread in block <'a, 'b> { //TODO kann so aliasing benutzt werden zur Optimierung?
-        let global_thread_tile: &'a uniq gpu.global [[f32;tile_size]] = &'a uniq (*global_tile)[[thread]];
-        let local_thread_tile: &'b uniq gpu.shared [[f32;tile_size]] = &'b uniq (*local_tile)[[thread]];
+        let global_thread_tile: &'a uniq gpu.global [[f32;tile_size]] = &'a uniq (*global_tile).transp[[thread]];
+        let local_thread_tile: &'b uniq gpu.shared [[f32;tile_size]] = &'b uniq (*local_tile).transp[[thread]];
 
         for_nat i in 0..tile_size {
             (*local_thread_tile)[i] = (*global_thread_tile)[i]
