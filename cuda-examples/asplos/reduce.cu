@@ -4,18 +4,20 @@
 #define BENCH
 #include "descend.cuh"
 
-__global__ auto gpu_reduce(int *array, std::size_t bs) -> void {
+template <std::size_t bs>
+__global__ auto gpu_reduce(int *const array) -> void {
   for (std::size_t k = bs/2; k > 0; k = k / 2) {
     if (threadIdx.x < k) {
-      array[blockIdx.x * 1024 + threadIdx.x] =
-                        array[blockIdx.x * 1024 + threadIdx.x] +
-                        array[blockIdx.x * 1024 + threadIdx.x];
+      array[blockIdx.x * bs + threadIdx.x] =
+                        array[blockIdx.x * bs + threadIdx.x] +
+                        array[blockIdx.x * bs + threadIdx.x + k];
     }
     __syncthreads();
   }
 }
 
-auto reduce(int *ha_array, std::size_t gs, std::size_t bs) -> void {
+template <std::size_t gs, std::size_t bs>
+auto reduce(int *ha_array) -> void {
   std::size_t bytes = sizeof(int) * gs * bs;
   int *a_array;
   CHECK_CUDA_ERR(cudaMalloc(&a_array, bytes));
@@ -24,7 +26,8 @@ auto reduce(int *ha_array, std::size_t gs, std::size_t bs) -> void {
    // BENCHMARK
   descend::Timing timing{};
   timing.record_begin();
-  gpu_reduce<<<gs, bs>>>(a_array, bs); 
+  gpu_reduce<bs><<<gs, bs>>>(a_array); 
+  CHECK_CUDA_ERR( cudaPeekAtLastError() );
   CHECK_CUDA_ERR( cudaDeviceSynchronize() );
   timing.record_end();
   benchmark.current_run().insert_timing(timing);
@@ -44,7 +47,7 @@ auto main() -> int {
     for (std::size_t iter = 0; iter < 100; iter++) {
       std::fill(ha_array, ha_array + gs[i]*bs, 1);
 
-      reduce(ha_array, gs[i], bs);
+      reduce<gs[i], bs>(ha_array);
 
       for (std::size_t block_num = 0; block_num < gs[i]; block_num++) {
         if (ha_array[block_num * bs] != bs) {

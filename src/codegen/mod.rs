@@ -209,7 +209,13 @@ struct KernelInfo {
     num_shrd_mem_decls: usize,
 }
 
-type ViewCtx = ScopeCtx<desc::PlaceExpr>;
+#[derive(Debug, Clone)]
+enum ViewExpr {
+    Pl(desc::PlaceExpr),
+    Ref(desc::PlaceExpr),
+}
+
+type ViewCtx = ScopeCtx<ViewExpr>;
 type ExecMapping = ScopeCtx<desc::ExecExpr>;
 
 #[derive(Default, Clone, Debug)]
@@ -589,54 +595,114 @@ fn gen_decl_init(
     e: &desc::Expr,
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
-    let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
-    let (init_expr, cu_ty) = match gened_ty {
-        cu::Ty::Array(_, _) => match gen_expr(e, codegen_ctx) {
-            GenState::Gened(cu_e) => (cu_e, gened_ty),
-            GenState::View(pl_expr) => {
-                codegen_ctx.view_ctx.insert(&ident.name, pl_expr.clone());
+    //let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
+    let (init_expr, cu_ty) = if let desc::ExprKind::Ref(_, _, pl_expr) = &e.expr {
+        match &pl_expr.ty.as_ref().unwrap().dty().dty {
+            desc::DataTyKind::Tuple(dtys) => {
+                let mut is_view = false;
+                for dty in dtys {
+                    if !matches!(&dty.dty, desc::DataTyKind::ArrayShape(_, _)) {
+                        is_view = false;
+                        break;
+                    } else {
+                        is_view = true
+                    }
+                }
+                if is_view {
+                    codegen_ctx
+                        .view_ctx
+                        .insert(&ident.name, ViewExpr::Ref(pl_expr.as_ref().clone()));
+                    return cu::Stmt::Skip;
+                } else {
+                    (
+                        gen_expr(e, codegen_ctx),
+                        if mutbl == desc::Mutability::Mut {
+                            cu::Ty::Scalar(cu::ScalarTy::Auto)
+                        } else {
+                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                        },
+                    )
+                }
+            }
+            desc::DataTyKind::ArrayShape(_, _) => {
+                codegen_ctx
+                    .view_ctx
+                    .insert(&ident.name, ViewExpr::Ref(pl_expr.as_ref().clone()));
                 return cu::Stmt::Skip;
             }
-        },
-        _ => {
-            if let desc::ExprKind::Ref(_, _, ple) = &e.expr {
-                match gen_pl_expr(ple, &mut vec![], codegen_ctx) {
-                    GenState::Gened(cu_e) => (
-                        cu::Expr::Ref(Box::new(cu_e)),
-                        if mutbl == desc::Mutability::Mut {
-                            cu::Ty::Scalar(cu::ScalarTy::Auto)
-                        } else {
-                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
-                        },
-                    ),
-                    GenState::View(pl_expr) => {
-                        codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
-                        return cu::Stmt::Skip;
-                    }
-                }
-            } else {
-                match gen_expr(e, codegen_ctx) {
-                    GenState::Gened(cu_e) => (
-                        cu_e,
-                        if mutbl == desc::Mutability::Mut {
-                            cu::Ty::Scalar(cu::ScalarTy::Auto)
-                        } else {
-                            cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
-                        },
-                    ),
-                    GenState::View(pl_expr) => {
-                        codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
-                        return cu::Stmt::Skip;
-                    }
-                }
-            }
+            _ => (
+                gen_expr(e, codegen_ctx),
+                if mutbl == desc::Mutability::Mut {
+                    cu::Ty::Scalar(cu::ScalarTy::Auto)
+                } else {
+                    cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+                },
+            ),
         }
+    } else {
+        (
+            gen_expr(e, codegen_ctx),
+            if mutbl == desc::Mutability::Mut {
+                cu::Ty::Scalar(cu::ScalarTy::Auto)
+            } else {
+                cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+            },
+        )
     };
+
+    // let (init_expr, cu_ty) = match gened_ty {
+    //     cu::Ty::Array(_, _) => match gen_expr(e, codegen_ctx) {
+    //         GenState::Gened(cu_e) => (cu_e, gened_ty),
+    //         GenState::View(pl_expr) => {
+    //             codegen_ctx
+    //                 .view_ctx
+    //                 .insert(&ident.name, ViewExpr::Pl(pl_expr.clone()));
+    //             return cu::Stmt::Skip;
+    //         }
+    //     },
+    //     _ => {
+    //         if let desc::ExprKind::Ref(_, _, ple) = &e.expr {
+    //             match gen_pl_expr(ple, &mut vec![], codegen_ctx) {
+    //                 GenState::Gened(cu_e) => (
+    //                     cu::Expr::Ref(Box::new(cu_e)),
+    //                     if mutbl == desc::Mutability::Mut {
+    //                         cu::Ty::Scalar(cu::ScalarTy::Auto)
+    //                     } else {
+    //                         cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+    //                     },
+    //                 ),
+    //                 GenState::View(pl_expr) => {
+    //                     codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
+    //                     return cu::Stmt::Skip;
+    //                 }
+    //             }
+    //         } else {
+    //             match gen_expr(e, codegen_ctx) {
+    //                 GenState::Gened(cu_e) => (
+    //                     cu_e,
+    //                     if mutbl == desc::Mutability::Mut {
+    //                         cu::Ty::Scalar(cu::ScalarTy::Auto)
+    //                     } else {
+    //                         cu::Ty::Const(Box::new(cu::Ty::Scalar(cu::ScalarTy::Auto)))
+    //                     },
+    //                 ),
+    //                 GenState::View(pl_expr) => {
+    //                     codegen_ctx.view_ctx.insert(&ident.name, pl_expr);
+    //                     return cu::Stmt::Skip;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // };
     cu::Stmt::VarDecl {
         name: ident.name.to_string(),
         ty: cu_ty,
         addr_space: None,
-        expr: Some(init_expr),
+        expr: Some(if let GenState::Gened(cu_expr) = init_expr {
+            cu_expr
+        } else {
+            panic!()
+        }),
         is_extern: false,
     }
 }
@@ -1658,7 +1724,11 @@ fn inline_view_expr(pl_expr: &desc::PlaceExpr, codegen_ctx: &CodegenCtx) -> desc
     if codegen_ctx.view_ctx.contains_key(&most_spec_pl.ident.name) {
         insert_into_pl_expr(
             pl_expr.clone(),
-            codegen_ctx.view_ctx.get(&most_spec_pl.ident.name),
+            if let ViewExpr::Ref(pl_expr) = codegen_ctx.view_ctx.get(&most_spec_pl.ident.name) {
+                pl_expr
+            } else {
+                panic!()
+            },
         )
     } else {
         pl_expr.clone()

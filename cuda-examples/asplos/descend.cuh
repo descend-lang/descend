@@ -481,15 +481,5 @@ inline __host__ __device__ T* offset_raw_ptr(T* ptr, i32 off) {
 
 };
 
-template <int First, int Last, typename Lambda>
-inline __device__ __host__ void static_for(Lambda const& f)
-{
-    if constexpr (First < Last)
-    {
-        f(std::integral_constant<int, First>{});
-        static_for<First + 1, Last>(f);
-    }
-}
-
 
 #endif //DESCEND_DESCEND_CUH
