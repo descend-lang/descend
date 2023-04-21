@@ -737,7 +737,7 @@ fn gen_for_nat(
         params: vec![param_decl],
         body: Box::new(gen_stmt(body, false, codegen_ctx)),
         ret_ty: cu::Ty::Scalar(cu::ScalarTy::Void),
-        dev_annotation: DevAnnotation::HostDevice,
+        dev_annotation: DevAnnotation::Host,
     };
 
     cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall {

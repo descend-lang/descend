@@ -24,31 +24,30 @@ __host__ auto lud_descend(descend::array<descend::f32, matrix_dim> *const m5)
   auto m_gpu = descend::gpu_alloc_copy<
       descend::array<descend::array<descend::f32, matrix_dim>, matrix_dim>>(
       (&gpu), (&(*m5)));
-  static_for<0, ((matrix_dim / tile_size) - 1)>(
-      [&] __device__ __host__(auto it) -> void {
-        lud_diagonal<it, tile_size, matrix_dim>
-            <<<dim3(1, 1, 1), dim3(tile_size, 1, 1),
-               (0 + (4 * (((1 * tile_size) * tile_size) * 1)))>>>((&m_gpu));
-        lud_perimeter<it, tile_size, matrix_dim>
-            <<<dim3((((matrix_dim / tile_size) - it) - 1), 1, 1),
-               dim3((tile_size * 2), 1, 1),
-               (((0 + (4 * (((1 * tile_size) * tile_size) *
-                            (((matrix_dim / tile_size) - it) - 1)))) +
-                 (4 * (((1 * tile_size) * tile_size) *
+  static_for<0, ((matrix_dim / tile_size) - 1)>([&](auto it) -> void {
+    lud_diagonal<it, tile_size, matrix_dim>
+        <<<dim3(1, 1, 1), dim3(tile_size, 1, 1),
+           (0 + (4 * (((1 * tile_size) * tile_size) * 1)))>>>((&m_gpu));
+    lud_perimeter<it, tile_size, matrix_dim>
+        <<<dim3((((matrix_dim / tile_size) - it) - 1), 1, 1),
+           dim3((tile_size * 2), 1, 1),
+           (((0 + (4 * (((1 * tile_size) * tile_size) *
+                        (((matrix_dim / tile_size) - it) - 1)))) +
+             (4 * (((1 * tile_size) * tile_size) *
+                   (((matrix_dim / tile_size) - it) - 1)))) +
+            (4 * (((1 * tile_size) * tile_size) *
+                  (((matrix_dim / tile_size) - it) - 1))))>>>((&m_gpu));
+    lud_internal<it, tile_size, matrix_dim>
+        <<<dim3((((matrix_dim / tile_size) - it) - 1),
+                (((matrix_dim / tile_size) - it) - 1), 1),
+           dim3(tile_size, tile_size, 1),
+           ((0 + (4 * ((((1 * tile_size) * tile_size) *
+                        (((matrix_dim / tile_size) - it) - 1)) *
                        (((matrix_dim / tile_size) - it) - 1)))) +
-                (4 * (((1 * tile_size) * tile_size) *
-                      (((matrix_dim / tile_size) - it) - 1))))>>>((&m_gpu));
-        lud_internal<it, tile_size, matrix_dim>
-            <<<dim3((((matrix_dim / tile_size) - it) - 1),
-                    (((matrix_dim / tile_size) - it) - 1), 1),
-               dim3(tile_size, tile_size, 1),
-               ((0 + (4 * ((((1 * tile_size) * tile_size) *
-                            (((matrix_dim / tile_size) - it) - 1)) *
-                           (((matrix_dim / tile_size) - it) - 1)))) +
-                (4 * ((((1 * tile_size) * tile_size) *
-                       (((matrix_dim / tile_size) - it) - 1)) *
-                      (((matrix_dim / tile_size) - it) - 1))))>>>((&m_gpu));
-      });
+            (4 * ((((1 * tile_size) * tile_size) *
+                   (((matrix_dim / tile_size) - it) - 1)) *
+                  (((matrix_dim / tile_size) - it) - 1))))>>>((&m_gpu));
+  });
   lud_diagonal<((matrix_dim / tile_size) - 1), tile_size, matrix_dim>
       <<<dim3(1, 1, 1), dim3(tile_size, 1, 1),
          (0 + (4 * (((1 * tile_size) * tile_size) * 1)))>>>((&m_gpu));
@@ -63,22 +62,20 @@ __global__ auto lud_diagonal(descend::array<descend::f32, matrix_dim> *const m)
   extern __shared__ descend::byte $buffer[];
   descend::f32 *const local_tile = (descend::f32 *)(&$buffer[0]);
 
-  const auto row_of_tiles = (&(*m[(it * tile_size)]));
-
   {
-    const auto tile = (&(*row_of_tiles[((blockIdx.x - 0) + it)]));
+    const auto tile = (&(*m[(((blockIdx.x - 0) + it) * tile_size)]));
     const auto local_tile_in_block = (&(*local_tile[(blockIdx.x - 0)]));
     {
       const auto global_thread_tile = (&(*tile[(threadIdx.x - 0)]));
       const auto local_thread_tile =
           (&(*local_tile_in_block[(threadIdx.x - 0)]));
-      static_for<0, tile_size>([&] __device__ __host__(auto i) -> void {
+      static_for<0, tile_size>([&](auto i) -> void {
         (*local_thread_tile[i]) = (*global_thread_tile[i]);
       });
     }
 
     __syncthreads();
-    static_for<0, (tile_size - 1)>([&] __device__ __host__(auto i) -> void {
+    static_for<0, (tile_size - 1)>([&](auto i) -> void {
       {
 
         if ((threadIdx.x - 0) < (tile_size - (i + 1))) {
@@ -90,7 +87,7 @@ __global__ auto lud_diagonal(descend::array<descend::f32, matrix_dim> *const m)
 
             const auto row_i = (&(*local_tile_in_block[i]));
 
-            static_for<0, i>([&] __device__ __host__(auto j) -> void {
+            static_for<0, i>([&](auto j) -> void {
               (*elem) =
                   (*elem) - (*local_tile_in_block[(
                                 (threadIdx.x - (0 + (tile_size - (i + 1)))) +
@@ -112,7 +109,7 @@ __global__ auto lud_diagonal(descend::array<descend::f32, matrix_dim> *const m)
           const auto elem =
               (&(*row_i1[((threadIdx.x - (0 + (i + 1))) + (i + 1))]));
 
-          static_for<0, (i + 1)>([&] __device__ __host__(auto j) -> void {
+          static_for<0, (i + 1)>([&](auto j) -> void {
             (*elem) =
                 (*elem) -
                 (*row_i1[j]) * (*local_tile_in_block[j][(
@@ -127,7 +124,7 @@ __global__ auto lud_diagonal(descend::array<descend::f32, matrix_dim> *const m)
       const auto global_thread_tile = (&(*tile[(threadIdx.x - 0)]));
       const auto local_thread_tile =
           (&(*local_tile_in_block[(threadIdx.x - 0)]));
-      static_for<0, tile_size>([&] __device__ __host__(auto i) -> void {
+      static_for<0, tile_size>([&](auto i) -> void {
         (*global_thread_tile[i]) = (*local_thread_tile[i]);
       });
     }
@@ -147,9 +144,9 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
   const auto dia_global = (&(*m2[((0 + it) * tile_size)]));
 
   {
-    const auto peri_row_global_tile = (&(*m2[((0 + it) * tile_size)]));
-    const auto peri_col_global_tile =
+    const auto peri_row_global_tile =
         (&(*m2[((((blockIdx.x - 0) + 1) + it) * tile_size)]));
+    const auto peri_col_global_tile = (&(*m2[((0 + it) * tile_size)]));
     const auto peri_row_shared_tile = (&(*peri_row[(blockIdx.x - 0)]));
     const auto peri_col_shared_tile = (&(*peri_col[(blockIdx.x - 0)]));
     const auto dia_tile = (&(*dia[(blockIdx.x - 0)]));
@@ -161,11 +158,11 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
         const auto peri_row_shared_tile_thread =
             (&(*peri_row_shared_tile[(threadIdx.x - 0)]));
 
-        static_for<0, (tile_size / 2)>([&] __device__ __host__(auto i) -> void {
+        static_for<0, (tile_size / 2)>([&](auto i) -> void {
           (*dia_tile[i][(threadIdx.x - 0)]) =
               (*dia_global[i][(threadIdx.x - 0)]);
         });
-        static_for<0, tile_size>([&] __device__ __host__(auto i) -> void {
+        static_for<0, tile_size>([&](auto i) -> void {
           (*peri_row_shared_tile_thread[i]) = (*peri_row_global_tile_thread[i]);
         });
       }
@@ -176,13 +173,12 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
         const auto peri_col_shared_tile_thread =
             (&(*peri_col_shared_tile[(threadIdx.x - (0 + tile_size))]));
 
-        static_for<0, (tile_size - (tile_size / 2))>([&] __device__ __host__(
-                                                         auto i) -> void {
+        static_for<0, (tile_size - (tile_size / 2))>([&](auto i) -> void {
           (*dia_tile[(i + (tile_size / 2))][(threadIdx.x - (0 + tile_size))]) =
               (*dia_global[(i + (tile_size / 2))]
                           [(threadIdx.x - (0 + tile_size))]);
         });
-        static_for<0, tile_size>([&] __device__ __host__(auto i) -> void {
+        static_for<0, tile_size>([&](auto i) -> void {
           (*peri_col_shared_tile_thread[i]) = (*peri_col_global_tile_thread[i]);
         });
       }
@@ -193,8 +189,8 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
     if ((threadIdx.x - 0) < tile_size) {
       {
         const auto peri_row_column = (&(*peri_row_transp[(threadIdx.x - 0)]));
-        static_for<1, tile_size>([&] __device__ __host__(auto i) -> void {
-          static_for<0, i>([&] __device__ __host__(auto j) -> void {
+        static_for<1, tile_size>([&](auto i) -> void {
+          static_for<0, i>([&](auto j) -> void {
             (*peri_row_column[i]) = (*peri_row_column[i]) -
                                     (*dia_tile[i][j]) * (*peri_row_column[j]);
           });
@@ -204,8 +200,8 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
       {
         const auto peri_col_row =
             (&(*peri_col_shared_tile[(threadIdx.x - (0 + tile_size))]));
-        static_for<1, tile_size>([&] __device__ __host__(auto i) -> void {
-          static_for<0, i>([&] __device__ __host__(auto j) -> void {
+        static_for<1, tile_size>([&](auto i) -> void {
+          static_for<0, i>([&](auto j) -> void {
             (*peri_col_row[i]) =
                 (*peri_col_row[i]) - (*dia_tile[i][j]) * (*peri_col_row[j]);
           });
@@ -221,7 +217,7 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
             (&(*peri_row_global_tile[(threadIdx.x - 0)]));
         const auto peri_row_shared_tile_thread =
             (&(*peri_row_shared_tile[(threadIdx.x - 0)]));
-        static_for<0, tile_size>([&] __device__ __host__(auto i) -> void {
+        static_for<0, tile_size>([&](auto i) -> void {
           (*peri_row_global_tile_thread[i]) = (*peri_row_shared_tile_thread[i]);
         });
       }
@@ -231,7 +227,7 @@ lud_perimeter(descend::array<descend::f32, matrix_dim> *const m2) -> void {
             (&(*peri_col_global_tile[(threadIdx.x - (0 + tile_size))]));
         const auto peri_col_shared_tile_thread =
             (&(*peri_col_shared_tile[(threadIdx.x - (0 + tile_size))]));
-        static_for<0, tile_size>([&] __device__ __host__(auto i) -> void {
+        static_for<0, tile_size>([&](auto i) -> void {
           (*peri_col_global_tile_thread[i]) = (*peri_col_shared_tile_thread[i]);
         });
       }
@@ -249,8 +245,7 @@ __global__ auto lud_internal(descend::array<descend::f32, matrix_dim> *const m3)
       (((matrix_dim / tile_size) - it) - 1))]);
 
   {
-    const auto peri_col_global_block_y =
-        (&(*m3[((((blockIdx.y - 0) + 1) + it) * tile_size)]));
+    const auto peri_col_global_block_y = (&(*m3[((0 + it) * tile_size)]));
     {
       {
         {
@@ -261,9 +256,9 @@ __global__ auto lud_internal(descend::array<descend::f32, matrix_dim> *const m3)
               (&(*peri_col[(blockIdx.y - 0)][(blockIdx.x - 0)]
                           [(threadIdx.y - 0)][(threadIdx.x - 0)]));
           const auto peri_row_global_block =
-              (&(*m3[(((0 + it) * tile_size) + (threadIdx.y - 0))]
-                    [(((((blockIdx.x - 0) + 1) + it) * tile_size) +
-                      (threadIdx.x - 0))]));
+              (&(*m3[(((((blockIdx.x - 0) + 1) + it) * tile_size) +
+                      (threadIdx.y - 0))]
+                    [(((0 + it) * tile_size) + (threadIdx.x - 0))]));
           const auto peri_col_global_block = (&(
               *peri_col_global_block_y[(threadIdx.y - 0)][(threadIdx.x - 0)]));
           (*peri_row_shared_block) = (*peri_row_global_block);
@@ -283,12 +278,12 @@ __global__ auto lud_internal(descend::array<descend::f32, matrix_dim> *const m3)
         {
           const auto peri_row_t = (&(*peri_row_block[(threadIdx.x - 0)]));
           const auto thread_element =
-              (&(*m3[(((((blockIdx.y - 0) + 1) + it) * tile_size) +
+              (&(*m3[(((((blockIdx.x - 0) + 1) + it) * tile_size) +
                       (threadIdx.y - 0))]
-                    [(((((blockIdx.x - 0) + 1) + it) * tile_size) +
+                    [(((((blockIdx.y - 0) + 1) + it) * tile_size) +
                       (threadIdx.x - 0))]));
           auto sum = (*peri_col_t[0]) * (*peri_row_t[0]);
-          static_for<1, tile_size>([&] __device__ __host__(auto i) -> void {
+          static_for<1, tile_size>([&](auto i) -> void {
             sum = sum + (*peri_col_t[i]) * (*peri_row_t[i]);
           });
           (*thread_element) = (*thread_element) - sum;
