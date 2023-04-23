@@ -412,12 +412,14 @@ impl Constrainable for Nat {
         prv_rels: &mut Vec<PrvConstr>,
     ) -> UnifyResult<()> {
         match (&mut *self, &mut *other) {
-            (Nat::Ident(n1i), Nat::Ident(n2i)) => match (n1i.is_implicit, n2i.is_implicit) {
-                (true, _) => other.bind_to(n1i, constr_map, prv_rels),
-                (false, _) => self.bind_to(n2i, constr_map, prv_rels),
-            },
-            (Nat::Ident(n1i), _) => other.bind_to(n1i, constr_map, prv_rels),
-            (_, Nat::Ident(n2i)) => self.bind_to(n2i, constr_map, prv_rels),
+            (Nat::Ident(n1i), Nat::Ident(n2i)) if n1i.is_implicit || n2i.is_implicit => {
+                match (n1i.is_implicit, n2i.is_implicit) {
+                    (true, _) => other.bind_to(n1i, constr_map, prv_rels),
+                    (false, _) => self.bind_to(n2i, constr_map, prv_rels),
+                }
+            }
+            (Nat::Ident(n1i), _) if n1i.is_implicit => other.bind_to(n1i, constr_map, prv_rels),
+            (_, Nat::Ident(n2i)) if n2i.is_implicit => self.bind_to(n2i, constr_map, prv_rels),
             (Nat::BinOp(op1, n1l, n1r), Nat::BinOp(op2, n2l, n2r)) if op1 == op2 => {
                 n1l.constrain(n2l, constr_map, prv_rels)?;
                 n1r.constrain(n2r, constr_map, prv_rels)
