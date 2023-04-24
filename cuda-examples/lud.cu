@@ -151,14 +151,12 @@ __global__ auto lud_perimeter(descend::f32 *const m2) -> void {
       {
 
         static_for<0, (tile_size / 2)>([&](auto i) -> void {
-          (*dia[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                 (threadIdx.x - 0))]) =
+          (*dia[((i * tile_size) + (threadIdx.x - 0))]) =
               (*m2[(((((0 + it) * tile_size) + i) * matrix_dim) +
                     (((0 + it) * tile_size) + (threadIdx.x - 0)))]);
         });
         static_for<0, tile_size>([&](auto i) -> void {
-          (*peri_row[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                      (threadIdx.x - 0))]) =
+          (*peri_row[((i * tile_size) + (threadIdx.x - 0))]) =
               (*m2[(((((0 + it) * tile_size) + i) * matrix_dim) +
                     (((((blockIdx.x - 0) + 1) + it) * tile_size) +
                      (threadIdx.x - 0)))]);
@@ -168,8 +166,7 @@ __global__ auto lud_perimeter(descend::f32 *const m2) -> void {
       {
 
         static_for<0, (tile_size - (tile_size / 2))>([&](auto i) -> void {
-          (*dia[(((((blockIdx.x - 0) * tile_size) + (i + (tile_size / 2))) *
-                  tile_size) +
+          (*dia[(((i + (tile_size / 2)) * tile_size) +
                  (threadIdx.x - (0 + tile_size)))]) =
               (*m2[(
                   ((((0 + it) * tile_size) + (i + (tile_size / 2))) *
@@ -177,8 +174,7 @@ __global__ auto lud_perimeter(descend::f32 *const m2) -> void {
                   (((0 + it) * tile_size) + (threadIdx.x - (0 + tile_size))))]);
         });
         static_for<0, tile_size>([&](auto i) -> void {
-          (*peri_col[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                      (threadIdx.x - (0 + tile_size)))]) =
+          (*peri_col[((i * tile_size) + (threadIdx.x - (0 + tile_size)))]) =
               (*m2[(
                   ((((((blockIdx.x - 0) + 1) + it) * tile_size) + i) *
                    matrix_dim) +
@@ -193,15 +189,10 @@ __global__ auto lud_perimeter(descend::f32 *const m2) -> void {
       {
         static_for<1, tile_size>([&](auto i) -> void {
           static_for<0, i>([&](auto j) -> void {
-            (*peri_row[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                        (threadIdx.x - 0))]) =
-                (*peri_row[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                            (threadIdx.x - 0))]) -
-                (*dia[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                       j)]) *
-                    (*peri_row[(
-                        ((((blockIdx.x - 0) * tile_size) + j) * tile_size) +
-                        (threadIdx.x - 0))]);
+            (*peri_row[((i * tile_size) + (threadIdx.x - 0))]) =
+                (*peri_row[((i * tile_size) + (threadIdx.x - 0))]) -
+                (*dia[((i * tile_size) + j)]) *
+                    (*peri_row[((j * tile_size) + (threadIdx.x - 0))]);
           });
         });
       }
@@ -209,30 +200,16 @@ __global__ auto lud_perimeter(descend::f32 *const m2) -> void {
       {
         static_for<0, tile_size>([&](auto i) -> void {
           static_for<0, i>([&](auto j) -> void {
-            (*peri_col[(((((blockIdx.x - 0) * tile_size) +
-                          (threadIdx.x - (0 + tile_size))) *
-                         tile_size) +
-                        i)]) =
-                (*peri_col[(((((blockIdx.x - 0) * tile_size) +
-                              (threadIdx.x - (0 + tile_size))) *
-                             tile_size) +
+            (*peri_col[(((threadIdx.x - (0 + tile_size)) * tile_size) + i)]) =
+                (*peri_col[(((threadIdx.x - (0 + tile_size)) * tile_size) +
                             i)]) -
-                (*dia[(((((blockIdx.x - 0) * tile_size) + j) * tile_size) +
-                       i)]) *
-                    (*peri_col[(((((blockIdx.x - 0) * tile_size) +
-                                  (threadIdx.x - (0 + tile_size))) *
-                                 tile_size) +
+                (*dia[((j * tile_size) + i)]) *
+                    (*peri_col[(((threadIdx.x - (0 + tile_size)) * tile_size) +
                                 j)]);
           });
-          (*peri_col[(((((blockIdx.x - 0) * tile_size) +
-                        (threadIdx.x - (0 + tile_size))) *
-                       tile_size) +
-                      i)]) =
-              (*peri_col[(((((blockIdx.x - 0) * tile_size) +
-                            (threadIdx.x - (0 + tile_size))) *
-                           tile_size) +
-                          i)]) /
-              (*dia[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) + i)]);
+          (*peri_col[(((threadIdx.x - (0 + tile_size)) * tile_size) + i)]) =
+              (*peri_col[(((threadIdx.x - (0 + tile_size)) * tile_size) + i)]) /
+              (*dia[((i * tile_size) + i)]);
         });
       }
     }
@@ -245,8 +222,7 @@ __global__ auto lud_perimeter(descend::f32 *const m2) -> void {
           (*m2[(((((0 + it) * tile_size) + i) * matrix_dim) +
                 (((((blockIdx.x - 0) + 1) + it) * tile_size) +
                  (threadIdx.x - 0)))]) =
-              (*peri_row[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                          (threadIdx.x - 0))]);
+              (*peri_row[((i * tile_size) + (threadIdx.x - 0))]);
         });
       }
     } else {
@@ -256,8 +232,7 @@ __global__ auto lud_perimeter(descend::f32 *const m2) -> void {
           (*m2[(
               ((((((blockIdx.x - 0) + 1) + it) * tile_size) + i) * matrix_dim) +
               (((0 + it) * tile_size) + (threadIdx.x - (0 + tile_size))))]) =
-              (*peri_col[(((((blockIdx.x - 0) * tile_size) + i) * tile_size) +
-                          (threadIdx.x - (0 + tile_size)))]);
+              (*peri_col[((i * tile_size) + (threadIdx.x - (0 + tile_size)))]);
         });
       }
     }

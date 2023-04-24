@@ -133,9 +133,9 @@ fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat, r: prv, p: prv>(
 
 fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat, r: prv, a: prv, b: prv, c: prv>(
     m2: &r uniq gpu.global [f32; matrix_dim * matrix_dim],
-    peri_row: &a uniq gpu.shared [f32; tile_size * tile_size * (matrix_dim/tile_size-it-1)],
-    peri_col: &b uniq gpu.shared [f32; tile_size * tile_size * (matrix_dim/tile_size-it-1)],
-    dia: &c uniq gpu.shared [f32; tile_size * tile_size * (matrix_dim/tile_size-it-1)]
+    peri_row: &a uniq gpu.shared [f32; tile_size * tile_size],
+    peri_col: &b uniq gpu.shared [f32; tile_size * tile_size],
+    dia: &c uniq gpu.shared [f32; tile_size * tile_size]
 ) -[grid: gpu.grid<X<matrix_dim/tile_size-it-1>, X<tile_size*2>>]-> ()
 {
     let matrix_view: &uniq gpu.global [[ [[ [[ [[f32; tile_size]]; tile_size]]; (matrix_dim / tile_size)]]; (matrix_dim / tile_size) ]] =
@@ -156,25 +156,22 @@ fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat, r: prv, a: prv, b: prv
             &uniq (*splitted_row_of_tiles_and_rest).1.transp[..it..].1[..1..].0[0];
     //
     // //create shared views
-    let dia_view: &uniq gpu.shared [[ [[ [[f32; tile_size]]; tile_size]]; matrix_dim/tile_size - it-1]] = &uniq (*dia).to_view.grp::<tile_size>.grp::<tile_size>;//.map::<[[f32; tile_size]; tile_size]>(to_view.map::<[f32; tile_size]>(to_view));
-    let peri_row_view: &uniq gpu.shared [[ [[ [[f32; tile_size]]; tile_size]]; matrix_dim/tile_size - it-1]] = &uniq (*peri_row).to_view.grp::<tile_size>.grp::<tile_size>;//.map::<[[f32; tile_size]; tile_size]>(to_view.map::<[f32; tile_size]>(to_view));
-    let peri_col_view: &uniq gpu.shared [[ [[ [[f32; tile_size]]; tile_size]]; matrix_dim/tile_size - it-1]] = &uniq (*peri_col).to_view.grp::<tile_size>.grp::<tile_size>;//.map::<[[f32; tile_size]; tile_size]>(to_view.map::<[f32; tile_size]>(to_view));
+    let dia_view: &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*dia).to_view.grp::<tile_size>;//.map::<[[f32; tile_size]; tile_size]>(to_view.map::<[f32; tile_size]>(to_view));
+    let peri_row_view: &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_row).to_view.grp::<tile_size>;//.map::<[[f32; tile_size]; tile_size]>(to_view.map::<[f32; tile_size]>(to_view));
+    let peri_col_view: &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_col).to_view.grp::<tile_size>;//.map::<[[f32; tile_size]; tile_size]>(to_view.map::<[f32; tile_size]>(to_view));
 
     sched block in grid {
         let peri_row_global_tile: &uniq gpu.global [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_row_global)[[block]];
         let peri_col_global_tile: &uniq gpu.global [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_col_global)[[block]];
-        let peri_row_shared_tile: &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_row_view)[[block]];
-        let peri_col_shared_tile: &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_col_view)[[block]];
-        let dia_tile: &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*dia_view)[[block]];
 
-        let split_dia_tile: &uniq gpu.shared ([[ [[f32; tile_size]]; tile_size/2]], [[ [[f32; tile_size]]; tile_size-tile_size/2]]) = &uniq (*dia_tile)[..tile_size/2..];
+        let split_dia_tile: &uniq gpu.shared ([[ [[f32; tile_size]]; tile_size/2]], [[ [[f32; tile_size]]; tile_size-tile_size/2]]) = &uniq (*dia_view)[..tile_size/2..];
         let split_dia_global: &shrd gpu.global ([[ [[f32; tile_size]]; tile_size/2]], [[ [[f32; tile_size]]; tile_size-tile_size/2]]) = &shrd (*dia_global)[..tile_size/2..];
 
         indep(X) tile_size block {
             active_threads => {
                 sched thread in active_threads {
                     let peri_row_global_tile_thread: &uniq gpu.global [[f32; tile_size]] = &uniq (*peri_row_global_tile).transp[[thread]];
-                    let peri_row_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_row_shared_tile).transp[[thread]];
+                    let peri_row_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_row_view).transp[[thread]];
                     let dia_tile_thread: &uniq gpu.shared [[f32; tile_size/2]] = &uniq ((*split_dia_tile).0.transp)[[thread]];
                     let dia_global_thread: &shrd gpu.global [[f32; tile_size/2]] = &shrd ((*split_dia_global).0.transp)[[thread]];
 
@@ -190,7 +187,7 @@ fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat, r: prv, a: prv, b: prv
             inactive_threads => {
                 sched thread in inactive_threads {
                     let peri_col_global_tile_thread: &uniq gpu.global [[f32; tile_size]] = &uniq (*peri_col_global_tile).transp[[thread]];
-                    let peri_col_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_col_shared_tile).transp[[thread]];
+                    let peri_col_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_col_view).transp[[thread]];
                     let dia_tile_thread: &uniq gpu.shared [[f32; tile_size-tile_size/2]] = &uniq ((*split_dia_tile).1.transp)[[thread]];
                     let dia_global_thread: &shrd gpu.global [[f32; tile_size-tile_size/2]] = &shrd ((*split_dia_global).1.transp)[[thread]];
 
@@ -205,26 +202,26 @@ fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat, r: prv, a: prv, b: prv
             }
         };
         sync;
-        let peri_row_transp:  &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_row_shared_tile).transp;
+        let peri_row_transp:  &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*peri_row_view).transp;
         indep(X) tile_size block {
             active_threads => {
                 sched thread in active_threads {
                     let peri_row_column: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_row_transp)[[thread]];
                     for_nat i in 1..tile_size {
                         for_nat j in 0..i {
-                            (*peri_row_column)[i] = (*peri_row_column)[i] - (*dia_tile)[i][j] * (*peri_row_column)[j]
+                            (*peri_row_column)[i] = (*peri_row_column)[i] - (*dia_view)[i][j] * (*peri_row_column)[j]
                         }
                     }
                 }
             },
             inactive_threads => {
                 sched thread in inactive_threads {
-                    let peri_col_row: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_col_shared_tile)[[thread]];
+                    let peri_col_row: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_col_view)[[thread]];
                     for_nat i in 0..tile_size {
                         for_nat j in 0..i {
-                            (*peri_col_row)[i] = (*peri_col_row)[i] - (*dia_tile)[j][i] * (*peri_col_row)[j]
+                            (*peri_col_row)[i] = (*peri_col_row)[i] - (*dia_view)[j][i] * (*peri_col_row)[j]
                         };
-                        (*peri_col_row)[i] = (*peri_col_row)[i] / (*dia_tile)[i][i]
+                        (*peri_col_row)[i] = (*peri_col_row)[i] / (*dia_view)[i][i]
                     }
                 }
             }
@@ -235,7 +232,7 @@ fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat, r: prv, a: prv, b: prv
             active_threads => {
                 sched thread in active_threads {
                     let peri_row_global_tile_thread: &uniq gpu.global [[f32; tile_size]] = &uniq (*peri_row_global_tile).transp[[thread]];
-                    let peri_row_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_row_shared_tile).transp[[thread]];
+                    let peri_row_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] = &uniq (*peri_row_view).transp[[thread]];
 
                     for_nat i in 1..tile_size {
                         (*peri_row_global_tile_thread)[i] = (*peri_row_shared_tile_thread)[i]
@@ -245,7 +242,7 @@ fn lud_perimeter<it:nat, tile_size: nat, matrix_dim: nat, r: prv, a: prv, b: prv
             inactive_threads => {
                 sched thread in inactive_threads {
                     let peri_col_global_tile_thread: &uniq gpu.global [[f32; tile_size]] =  &uniq (*peri_col_global_tile).transp[[thread]];
-                    let peri_col_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] =  &uniq (*peri_col_shared_tile).transp[[thread]];
+                    let peri_col_shared_tile_thread: &uniq gpu.shared [[f32; tile_size]] =  &uniq (*peri_col_view).transp[[thread]];
 
                     for_nat i in 0..tile_size {
                         (*peri_col_global_tile_thread)[i] = (*peri_col_shared_tile_thread)[i]
