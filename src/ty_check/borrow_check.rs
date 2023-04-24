@@ -62,8 +62,8 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
 pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
-    ownership_safe_under_exec(ctx, p, &ctx.exec)?;
-    no_conflicting_accesses(ctx, p)?;
+    narrowing_check(ctx, p, &ctx.exec)?;
+    access_safety_check(ctx, p)?;
     // no conflict with existing borrows
     // no conflicting access:
     //  no overlapping access with any exec != this.exec
@@ -197,19 +197,14 @@ fn ownership_safe_deref_abs(
     Ok(passed_through_prvs)
 }
 
-fn ownership_safe_under_exec(
-    ctx: &BorrowCheckCtx,
-    p: &PlaceExpr,
-    exec: &ExecExpr,
-) -> OwnResult<()> {
+fn narrowing_check(ctx: &BorrowCheckCtx, p: &PlaceExpr, exec: &ExecExpr) -> OwnResult<()> {
     if ctx.own == Ownership::Shrd {
         return Ok(());
     }
     match &p.pl_expr {
         PlaceExprKind::Ident(ident) => {
             let from = &ctx.ty_ctx.ident_ty(ident)?.exec;
-            // FIXME reintroduce
-            //  no_distrib_in_diff(exec, from)
+            no_distrib_in_diff(exec, from)?;
             Ok(())
         }
         PlaceExprKind::Select(pl_expr, select_exec) => {
@@ -229,17 +224,16 @@ fn ownership_safe_under_exec(
             }
             no_distrib_in_diff(exec, select_exec)?;
             let outer_exec = exec.remove_last_distrib();
-            ownership_safe_under_exec(ctx, pl_expr, &outer_exec)
+            narrowing_check(ctx, pl_expr, &outer_exec)
         }
         PlaceExprKind::View(pl_expr, _)
         | PlaceExprKind::Deref(pl_expr)
         | PlaceExprKind::Proj(pl_expr, _)
-        | PlaceExprKind::Idx(pl_expr, _)
-        | PlaceExprKind::SplitAt(_, pl_expr) => ownership_safe_under_exec(ctx, pl_expr, exec),
+        | PlaceExprKind::Idx(pl_expr, _) => narrowing_check(ctx, pl_expr, exec),
     }
 }
 
-fn no_conflicting_accesses(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
+fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
     for (ex, loans) in ctx.access_ctx.iter().filter(|(exec, _)| *exec != &ctx.exec) {
         if !no_uniq_loan_overlap(ctx.own, p, loans) {
             return Err(BorrowingError::ConflictingAccess);
@@ -331,40 +325,25 @@ fn at_least_one_borrowing_place_and_all_in_reborrow(
     Ok(())
 }
 
-fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {
-    let pure_l = strip_to_pure_place_expr(pll);
-    let pure_r = strip_to_pure_place_expr(plr);
-    prefix(&pure_l, &pure_r) || prefix(&pure_r, &pure_l);
-    // FIXME remove
-    false
-}
-
-fn prefix(general: &PlaceExpr, specific: &PlaceExpr) -> bool {
-    if general != specific {
-        match &specific.pl_expr {
-            PlaceExprKind::Proj(pl_expr, _) => prefix(general, pl_expr),
-            PlaceExprKind::Deref(pl_expr) => prefix(general, pl_expr),
-            PlaceExprKind::Ident(_) => false,
-            _ => panic!("unexptected"),
+fn conflicting_path(pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> bool {
+    for lr in pathl.iter().zip(pathr) {
+        match lr {
+            (PlExprPathElem::Idx(_), _) => return true,
+            (v @ PlExprPathElem::View(_), path_elem) if v != path_elem => return true,
+            (path_eleml, path_elemr) if path_eleml == path_elemr => {}
+            (PlExprPathElem::Proj(i), PlExprPathElem::Proj(j)) if i != j => return false,
+            _ => panic!("unexpected"),
         }
-    } else {
-        true
     }
+    true
 }
 
-fn strip_to_pure_place_expr(pl_expr: &PlaceExpr) -> PlaceExpr {
-    match &pl_expr.pl_expr {
-        PlaceExprKind::Ident(_) => pl_expr.clone(),
-        PlaceExprKind::Deref(ple) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
-            strip_to_pure_place_expr(ple),
-        ))),
-        PlaceExprKind::Proj(ple, i) => PlaceExpr::new(PlaceExprKind::Proj(
-            Box::new(strip_to_pure_place_expr(ple)),
-            *i,
-        )),
-        PlaceExprKind::Select(ple, _)
-        | PlaceExprKind::SplitAt(_, ple)
-        | PlaceExprKind::View(ple, _)
-        | PlaceExprKind::Idx(ple, _) => strip_to_pure_place_expr(ple),
+fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {
+    let (pl_ident, pl_path) = pll.as_ident_and_path();
+    let (pr_ident, pr_path) = plr.as_ident_and_path();
+    if pl_ident == pr_ident {
+        conflicting_path(&pl_path, &pr_path) || conflicting_path(&pr_path, &pl_path)
+    } else {
+        false
     }
 }

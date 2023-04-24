@@ -77,10 +77,6 @@ fn ty_check_and_passed_mems_prvs(
         PlaceExprKind::Deref(borr_expr) => ty_check_deref(ctx, borr_expr)?,
         // TC-Select
         PlaceExprKind::Select(p, select_exec) => ty_check_select(ctx, p, select_exec)?,
-        // TC-Split-Proj
-        PlaceExprKind::SplitAt(split_pos, split_pl_expr) => {
-            ty_check_split_at(ctx, split_pl_expr, split_pos)?
-        }
         PlaceExprKind::View(pl_expr, view) => ty_check_view_pl_expr(ctx, pl_expr, view)?,
         PlaceExprKind::Idx(pl_expr, idx) => ty_check_index_copy(ctx, pl_expr, idx)?,
     };
@@ -91,30 +87,30 @@ fn ty_check_and_passed_mems_prvs(
 fn ty_check_view_pl_expr(
     ctx: &PlExprTyCtx,
     pl_expr: &mut PlaceExpr,
-    view: &mut [View],
+    view: &mut View,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
     let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
-    let composed_views_fn_ty = ty_check_composed_views(ctx, view)?;
+    let view_fn_ty = ty_check_view(ctx, view)?;
     let in_dty = pl_expr.ty.as_ref().unwrap().dty().clone();
-    let res_dty = ty_check_app_view_fn_ty(ctx, &in_dty, composed_views_fn_ty)?;
+    let res_dty = ty_check_app_view_fn_ty(ctx, &in_dty, view_fn_ty)?;
     Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
 }
 
-fn ty_check_composed_views(ctx: &PlExprTyCtx, views: &mut [View]) -> TyResult<FnTy> {
-    let fst_view_fn_ty = ty_check_view(ctx, &mut views[0])?;
-    let mut ret_dty = fst_view_fn_ty.ret_ty.dty().clone();
-    for v in &mut views[1..] {
-        let view_fn_ty = ty_check_view(ctx, v)?;
-        ret_dty = ty_check_app_view_fn_ty(ctx, &ret_dty, view_fn_ty)?;
-    }
-    let res_fn_ty = FnTy::new(
-        vec![],
-        vec![fst_view_fn_ty.param_tys.last().unwrap().clone()],
-        ExecTy::new(ExecTyKind::View),
-        Ty::new(TyKind::Data(Box::new(ret_dty))),
-    );
-    Ok(res_fn_ty)
-}
+// fn ty_check_composed_views(ctx: &PlExprTyCtx, views: &mut [View]) -> TyResult<FnTy> {
+//     let fst_view_fn_ty = ty_check_view(ctx, &mut views[0])?;
+//     let mut ret_dty = fst_view_fn_ty.ret_ty.dty().clone();
+//     for v in &mut views[1..] {
+//         let view_fn_ty = ty_check_view(ctx, v)?;
+//         ret_dty = ty_check_app_view_fn_ty(ctx, &ret_dty, view_fn_ty)?;
+//     }
+//     let res_fn_ty = FnTy::new(
+//         vec![],
+//         vec![fst_view_fn_ty.param_tys.last().unwrap().clone()],
+//         ExecTy::new(ExecTyKind::View),
+//         Ty::new(TyKind::Data(Box::new(ret_dty))),
+//     );
+//     Ok(res_fn_ty)
+// }
 
 fn ty_check_app_view_fn_ty(
     ctx: &PlExprTyCtx,
@@ -138,11 +134,7 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     let arg_tys = view
         .args
         .iter_mut()
-        .map(|v| -> TyResult<Ty> {
-            Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_composed_views(
-                ctx, v,
-            )?))))
-        })
+        .map(|v| -> TyResult<Ty> { Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))) })
         .collect::<TyResult<Vec<_>>>()?;
     let fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?.clone();
     if fn_ty.generics.len() < view.gen_args.len() {

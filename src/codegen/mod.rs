@@ -1335,8 +1335,7 @@ fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
             desc::PlaceExprKind::Idx(pl_expr, _)
             | desc::PlaceExprKind::Select(pl_expr, _)
             | desc::PlaceExprKind::Deref(pl_expr)
-            | desc::PlaceExprKind::Proj(pl_expr, _)
-            | desc::PlaceExprKind::SplitAt(_, pl_expr) => {
+            | desc::PlaceExprKind::Proj(pl_expr, _) => {
                 current = pl_expr.as_ref().clone();
             }
             desc::PlaceExprKind::Ident(_) => unreachable!(),
@@ -1648,13 +1647,6 @@ fn gen_pl_expr(
             path.push(IdxOrProj::Idx(idx.as_ref().clone()));
             gen_pl_expr(pl_expr, path, codegen_ctx)
         }
-        desc::PlaceExprKind::SplitAt(k, pl_expr) => {
-            if transform_path_with_split_at(k, path) {
-                gen_pl_expr(pl_expr, path, codegen_ctx)
-            } else {
-                GenState::View(inlined_view_pl_expr.clone())
-            }
-        }
     };
     match pl_expr_gen_state {
         GenState::View(_) => GenState::View(inlined_view_pl_expr),
@@ -1710,46 +1702,52 @@ fn insert_into_pl_expr(mut pl_expr: desc::PlaceExpr, insert: &desc::PlaceExpr) -
     pl_expr
 }
 
-fn transform_path_with_view(view: &[desc::View], path: &mut Vec<IdxOrProj>) -> bool {
-    for v in view.iter().rev() {
-        if v.name.name.as_ref() == ty_check::pre_decl::TO_VIEW {
-        } else if v.name.name.as_ref() == ty_check::pre_decl::GROUP {
-            if let desc::ArgKinded::Nat(s) = &v.gen_args[0] {
-                if !transform_path_with_group(s, path) {
-                    return false;
-                }
-            } else {
-                panic!("Unexpected argument.")
-            }
-        } else if v.name.name.as_ref() == ty_check::pre_decl::JOIN {
-            if let desc::ArgKinded::Nat(n) = &v.gen_args[1] {
-                if !transform_path_with_join(n, path) {
-                    return false;
-                }
-            } else {
-                panic!("Cannot create `to_view` from the provided arguments.");
-            }
-        } else if v.name.name.as_ref() == ty_check::pre_decl::TRANSPOSE {
-            transform_path_with_transpose(path);
-        } else if v.name.name.as_ref() == ty_check::pre_decl::REVERSE {
-            if let desc::ArgKinded::Nat(n) = &v.gen_args[0] {
-                if !transform_path_with_rev(n, path) {
-                    return false;
-                }
-            } else {
-                panic!("Cannot create `reverse` from the provided arguments.");
-            }
-        } else if v.name.name.as_ref() == ty_check::pre_decl::MAP {
-            if let Some(f) = v.args.first() {
-                if !transform_path_with_map(f, path) {
-                    return false;
-                }
-            } else {
-                panic!("Cannot create `map` from provided arguments.");
+fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
+    if view.name.name.as_ref() == ty_check::pre_decl::TO_VIEW {
+    } else if view.name.name.as_ref() == ty_check::pre_decl::GROUP {
+        if let desc::ArgKinded::Nat(s) = &view.gen_args[0] {
+            if !transform_path_with_group(s, path) {
+                return false;
             }
         } else {
-            unimplemented!("There exists no implementation for this view.")
+            panic!("Unexpected argument.")
         }
+    } else if view.name.name.as_ref() == ty_check::pre_decl::JOIN {
+        if let desc::ArgKinded::Nat(n) = &view.gen_args[1] {
+            if !transform_path_with_join(n, path) {
+                return false;
+            }
+        } else {
+            panic!("Cannot create `to_view` from the provided arguments.");
+        }
+    } else if view.name.name.as_ref() == ty_check::pre_decl::TRANSPOSE {
+        transform_path_with_transpose(path);
+    } else if view.name.name.as_ref() == ty_check::pre_decl::REVERSE {
+        if let desc::ArgKinded::Nat(n) = &view.gen_args[0] {
+            if !transform_path_with_rev(n, path) {
+                return false;
+            }
+        } else {
+            panic!("Cannot create `reverse` from the provided arguments.");
+        }
+    } else if view.name.name.as_ref() == ty_check::pre_decl::SPLIT_AT {
+        if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
+            if !transform_path_with_split_at(k, path) {
+                return false;
+            }
+        } else {
+            panic!("Cannot create `split_at` from the provided arguments.");
+        }
+    } else if view.name.name.as_ref() == ty_check::pre_decl::MAP {
+        if let Some(f) = view.args.first() {
+            if !transform_path_with_map(f, path) {
+                return false;
+            }
+        } else {
+            panic!("Cannot create `map` from provided arguments.");
+        }
+    } else {
+        unimplemented!("There exists no implementation for this view.")
     }
     true
 }
@@ -1857,7 +1855,7 @@ fn transform_path_with_split_at(split_pos: &desc::Nat, path: &mut Vec<IdxOrProj>
     }
 }
 
-fn transform_path_with_map(f: &[desc::View], path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_map(f: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
     let i = path.pop();
     match i {
         Some(i @ IdxOrProj::Idx(_)) => {

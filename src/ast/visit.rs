@@ -190,7 +190,7 @@ pub fn walk_view<V: Visit>(visitor: &mut V, view: &View) {
     visitor.visit_ident(&view.name);
     walk_list!(visitor, visit_arg_kinded, &view.gen_args);
     for v in &view.args {
-        walk_list!(visitor, visit_view, v);
+        visitor.visit_view(v)
     }
 }
 
@@ -202,16 +202,12 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
             visitor.visit_pl_expr(p);
             visitor.visit_exec_expr(distrib_exec);
         }
-        PlaceExprKind::SplitAt(split_pos, pl_expr) => {
-            visitor.visit_nat(split_pos);
-            visitor.visit_pl_expr(pl_expr);
-        }
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
         }
         PlaceExprKind::View(pl_expr, view) => {
             visitor.visit_pl_expr(pl_expr);
-            walk_list!(visitor, visit_view, view);
+            visitor.visit_view(view);
         }
         PlaceExprKind::Idx(pl_expr, n) => {
             visitor.visit_pl_expr(pl_expr);

@@ -470,7 +470,6 @@ fn get_select_for(exec: &ExecExpr, pl_expr: &PlaceExpr) -> Option<PlaceExpr> {
         PlaceExprKind::Select(ipl, sel_exec) if &**sel_exec == exec => Some(ipl.as_ref().clone()),
         PlaceExprKind::Select(ipl, _)
         | PlaceExprKind::View(ipl, _)
-        | PlaceExprKind::SplitAt(_, ipl)
         | PlaceExprKind::Proj(ipl, _)
         | PlaceExprKind::Idx(ipl, _)
         | PlaceExprKind::Deref(ipl) => get_select_for(exec, ipl),

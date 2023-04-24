@@ -106,7 +106,7 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
         fn visit_view(&mut self, view: &mut View) {
             self.subst_in_gen_args(&mut view.gen_args);
             for v in &mut view.args {
-                visit_mut::walk_list!(self, visit_view, v);
+                self.visit_view(v)
             }
         }
 
@@ -569,9 +569,11 @@ peg::parser! {
                     PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref)))
                 }
                 --
-                view:@ _ "[" _ ".." _ split_pos:nat() _ ".." _ "]" {
+                pl_expr:@ _ "[" _ ".." _ split_pos:nat() _ ".." _ "]" {
                     PlaceExpr::new(
-                        PlaceExprKind::SplitAt(Box::new(split_pos), Box::new(view)))
+                        PlaceExprKind::View(Box::new(pl_expr),
+                            Box::new(View { name: Ident::new("split_at"),
+                                gen_args: vec![ArgKinded::Nat(split_pos)], args: vec![] })))
                 }
                 pl_expr:@ _ "[" _ idx:nat() _ "]" {
                     PlaceExpr::new(PlaceExprKind::Idx(Box::new(pl_expr), Box::new(idx)))
@@ -581,7 +583,7 @@ peg::parser! {
                 }
                 --
                 proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
-                pl_expr:@ _ "." _ v:view_compo() { PlaceExpr::new(PlaceExprKind::View(Box::new(pl_expr), v)) }
+                pl_expr:@ _ "." _ v:view_app() { PlaceExpr::new(PlaceExprKind::View(Box::new(pl_expr), Box::new(v))) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -626,15 +628,14 @@ peg::parser! {
             //     ple
             // }
 
-        pub(crate) rule view_compo() -> Vec<View> =
-            views:(
-                view_ident:view_ident() mkargs:(_ kargs:kind_args() { kargs })?
-                    margs:(_ "(" _ args: view_compo() **<1,> (_ "," _) _ ")" { args })? {
-                        View { name: view_ident,
-                               gen_args: mkargs.unwrap_or_default(),
-                               args: margs.unwrap_or_default()
-                        }
-            }) **<1,> (_ "." _)
+        pub(crate) rule view_app() -> View =
+            view_ident:view_ident() mkargs:(_ kargs:kind_args() { kargs })?
+                margs:(_ "(" _ args: view_app() **<1,> (_ "," _) _ ")" { args })? {
+                    View { name: view_ident,
+                        gen_args: mkargs.unwrap_or_default(),
+                        args: margs.unwrap_or_default()
+                    }
+            }
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat = precedence! {

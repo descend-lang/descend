@@ -534,7 +534,7 @@ pub struct PlaceExpr {
 pub struct View {
     pub name: Ident,
     pub gen_args: Vec<ArgKinded>,
-    pub args: Vec<Vec<View>>,
+    pub args: Vec<View>,
 }
 
 // TODO create generic View struct to enable easier extensibility by introducing only
@@ -551,13 +551,11 @@ pub struct View {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlaceExprKind {
-    View(Box<PlaceExpr>, Vec<View>),
+    View(Box<PlaceExpr>, Box<View>),
     // similar to a projection, but it projects an element for each provided execution resource
     // (similar to indexing)
     // p[[x]]
     Select(Box<PlaceExpr>, Box<ExecExpr>),
-    // p[..k] | p[k..]
-    SplitAt(Box<Nat>, Box<PlaceExpr>),
     // p.0 | p.1
     Proj(Box<PlaceExpr>, usize),
     // *p
@@ -565,6 +563,17 @@ pub enum PlaceExprKind {
     // Index into array, e.g., arr[i]
     Idx(Box<PlaceExpr>, Box<Nat>),
     // x
+    Ident(Ident),
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum PlExprPathElem {
+    View(View),
+    Select(Box<ExecExpr>),
+    SplitAt(Box<Nat>),
+    Proj(usize),
+    Deref,
+    Idx(Box<Nat>),
     Ident(Ident),
 }
 
@@ -591,7 +600,6 @@ impl PlaceExpr {
             PlaceExprKind::Proj(ple, _) => ple.is_place(),
             PlaceExprKind::Select(_, _)
             | PlaceExprKind::Deref(_)
-            | PlaceExprKind::SplitAt(_, _)
             | PlaceExprKind::Idx(_, _)
             | PlaceExprKind::View(_, _) => false,
         }
@@ -613,13 +621,6 @@ impl PlaceExpr {
                 let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 (
                     internal::PlaceCtx::Select(Box::new(pl_ctx), exec_idents.clone()),
-                    pl,
-                )
-            }
-            PlaceExprKind::SplitAt(split_pos, inner_ple) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                (
-                    internal::PlaceCtx::SplitAt(split_pos.clone(), Box::new(pl_ctx)),
                     pl,
                 )
             }
@@ -658,6 +659,41 @@ impl PlaceExpr {
         } else {
             false
         }
+    }
+
+    pub fn as_ident_and_path(&self) -> (Ident, Vec<PlExprPathElem>) {
+        fn as_ident_and_path_rec(
+            pl_expr: &PlaceExpr,
+            mut path: Vec<PlExprPathElem>,
+        ) -> (Ident, Vec<PlExprPathElem>) {
+            match &pl_expr.pl_expr {
+                PlaceExprKind::Ident(i) => {
+                    path.reverse();
+                    (i.clone(), path)
+                }
+                PlaceExprKind::Select(inner_ple, exec_idents) => {
+                    path.push(PlExprPathElem::Select(exec_idents.clone()));
+                    as_ident_and_path_rec(inner_ple, path)
+                }
+                PlaceExprKind::Deref(inner_ple) => {
+                    path.push(PlExprPathElem::Deref);
+                    as_ident_and_path_rec(inner_ple, path)
+                }
+                PlaceExprKind::View(inner_ple, view) => {
+                    path.push(PlExprPathElem::View(view.as_ref().clone()));
+                    as_ident_and_path_rec(inner_ple, path)
+                }
+                PlaceExprKind::Proj(inner_ple, n) => {
+                    path.push(PlExprPathElem::Proj(*n));
+                    as_ident_and_path_rec(inner_ple, path)
+                }
+                PlaceExprKind::Idx(inner_ple, idx) => {
+                    path.push(PlExprPathElem::Idx(idx.clone()));
+                    as_ident_and_path_rec(inner_ple, path)
+                }
+            }
+        }
+        as_ident_and_path_rec(self, vec![])
     }
 }
 

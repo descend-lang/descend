@@ -119,8 +119,7 @@ pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, usize),
     Deref(Box<PlaceCtx>),
     Select(Box<PlaceCtx>, Box<ExecExpr>),
-    View(Box<PlaceCtx>, Vec<View>),
-    SplitAt(Box<Nat>, Box<PlaceCtx>),
+    View(Box<PlaceCtx>, Box<View>),
     Idx(Box<PlaceCtx>, Box<Nat>),
     Hole,
 }
@@ -136,10 +135,6 @@ impl PlaceCtx {
             Self::Deref(pl_ctx) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
                 pl_ctx.insert_pl_expr(pl_expr),
             ))),
-            Self::SplitAt(split_pos, pl_ctx) => PlaceExpr::new(PlaceExprKind::SplitAt(
-                split_pos.clone(),
-                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
-            )),
             Self::Select(pl_ctx, exec) => PlaceExpr::new(PlaceExprKind::Select(
                 Box::new(pl_ctx.insert_pl_expr(pl_expr)),
                 exec.clone(),
@@ -175,10 +170,6 @@ impl PlaceCtx {
                     let inner_ctx = pl_ctx.without_innermost_deref();
                     PlaceCtx::Deref(Box::new(inner_ctx))
                 }
-            }
-            PlaceCtx::SplitAt(split_pos, pl_ctx) => {
-                let inner_ctx = pl_ctx.without_innermost_deref();
-                PlaceCtx::SplitAt(split_pos.clone(), Box::new(inner_ctx))
             }
             PlaceCtx::Select(pl_ctx, exec_idents) => {
                 let inner_ctx = pl_ctx.without_innermost_deref();
