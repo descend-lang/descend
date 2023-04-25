@@ -59,6 +59,7 @@ macro_rules! visitable_mut {
 }
 visitable_mut!(Ty, visit_ty);
 visitable_mut!(Expr, visit_expr);
+visitable_mut!(ExecTy, visit_exec_ty);
 
 pub fn subst_idents_kinded<'a, I, J, T: VisitableMut>(gen_params: I, k_args: J, t: &mut T)
 where

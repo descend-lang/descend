@@ -8,7 +8,7 @@ fn matmul<m: nat, n: nat, k: nat, bs: nat, a: prv, b: prv, c: prv>(
     let a_mat = gpu_alloc_copy(&uniq gpu, &shrd *ha_mat);
     let b_mat = gpu_alloc_copy(&uniq gpu, &shrd *hb_mat);
     let mut c_mat = gpu_alloc_copy(&uniq gpu, &shrd *hc_mat);
-    gpu_matmul::<<<XY<k/bs, m/bs>, XY<bs, bs>>>>::<m, n, k, bs>(&shrd a_mat, &shrd b_mat, &uniq c_mat);
+    gpu_matmul::<<<XY<k/bs, m/bs>, XY<bs, bs>>>>(&shrd a_mat, &shrd b_mat, &uniq c_mat);
     copy_to_host(&shrd c_mat, hc_mat)
 }
 

@@ -1556,7 +1556,7 @@ fn gen_pl_expr(
         }
         desc::PlaceExprKind::Select(ple, exec) => {
             let dim_compo = exec.exec.active_distrib_dim().unwrap();
-            path.push(IdxOrProj::Idx(parall_idx(dim_compo, &exec)));
+            path.push(IdxOrProj::Idx(parall_idx(dim_compo, exec)));
             gen_pl_expr(ple.as_ref(), path, codegen_ctx)
         }
         desc::PlaceExprKind::View(ple, view) => {
@@ -1935,8 +1935,8 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 d::Ref(reff) => {
                     let tty = Box::new(gen_ty(
                         &Data(match &reff.dty.dty {
-                            // Pointers to arrays point to the element type.
-                            d::Array(elem_ty, _) => elem_ty.clone(),
+                            // Pointers to arrays point to the base element type.
+                            d::Array(elem_ty, _) => Box::new(base_dty(&reff.dty)),
                             _ => reff.dty.clone(),
                         }),
                         m,
@@ -1978,6 +1978,14 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         cu_ty
     } else {
         cu::Ty::Const(Box::new(cu_ty))
+    }
+}
+
+fn base_dty(dty: &desc::DataTy) -> desc::DataTy {
+    if let desc::DataTyKind::Array(elem_dty, _) = &dty.dty {
+        base_dty(elem_dty)
+    } else {
+        dty.clone()
     }
 }
 

@@ -163,7 +163,7 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         // ExprKind::Proj(e, i) => ty_check_proj(ctx, e, *i)?,
         ExprKind::App(ef, k_args, args) => ty_check_app(ctx, ef, k_args, args)?,
         ExprKind::DepApp(ef, k_args) => {
-            Ty::new(TyKind::FnTy(Box::new(ty_check_dep_app(ctx, ef, k_args)?.3)))
+            Ty::new(TyKind::FnTy(Box::new(ty_check_dep_app(ctx, ef, k_args)?.4)))
         }
         ExprKind::AppKernel(app_kernel) => ty_check_app_kernel(ctx, app_kernel)?,
         ExprKind::Ref(prv, own, pl_expr) => ty_check_borrow(ctx, prv, *own, pl_expr)?,
@@ -1030,7 +1030,7 @@ fn ty_check_app(
     args: &mut [Expr],
 ) -> TyResult<Ty> {
     // TODO check well-kinded: FrameTyping, Prv, Ty
-    let (f_remain_gen_args, f_subst_param_tys, f_subst_ret_ty, mut f_mono_ty) =
+    let (f_remain_gen_args, f_subst_param_tys, f_subst_exec_level, f_subst_ret_ty, mut f_mono_ty) =
         ty_check_dep_app(ctx, ef, k_args)?;
     let exec_f = if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
         if !callable_in(&fn_ty.exec_ty, ctx.exec.ty.as_ref().unwrap()) {
@@ -1070,6 +1070,7 @@ fn ty_check_app(
     let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
         f_remain_gen_args,
         f_subst_param_tys,
+        &f_subst_exec_level,
         &f_subst_ret_ty,
         &f_mono_ty,
     );
@@ -1083,7 +1084,7 @@ fn ty_check_dep_app(
     ctx: &mut ExprTyCtx,
     ef: &mut Expr,
     k_args: &mut [ArgKinded],
-) -> TyResult<(Vec<IdentKinded>, Vec<Ty>, Ty, FnTy)> {
+) -> TyResult<(Vec<IdentKinded>, Vec<Ty>, ExecTy, Ty, FnTy)> {
     ty_check_expr(ctx, ef)?;
     if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
         if fn_ty.generics.len() < k_args.len() {
@@ -1100,6 +1101,8 @@ fn ty_check_dep_app(
         for ty in &mut subst_param_tys {
             utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), ty);
         }
+        let mut subst_exec_level = fn_ty.exec_ty.clone();
+        utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), &mut subst_exec_level);
         let mut subst_out_ty = fn_ty.ret_ty.as_ref().clone();
         utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), &mut subst_out_ty);
         let mono_fun_ty = unify::inst_fn_ty_scheme(
@@ -1111,6 +1114,7 @@ fn ty_check_dep_app(
         Ok((
             fn_ty.generics[k_args.len()..].to_vec(),
             subst_param_tys,
+            subst_exec_level,
             subst_out_ty,
             mono_fun_ty,
         ))
@@ -1215,11 +1219,12 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         .chain(refs_to_shrd.into_iter().map(|a| *a.ty.unwrap()))
         .collect::<Vec<_>>();
     // type check function application for generic args and extended argument list
-    let (f_remain_gen_args, f_subst_param_tys, f_subst_ret_ty, mut f_mono_ty) = ty_check_dep_app(
-        &mut kernel_ctx,
-        &mut app_kernel.fun,
-        &mut app_kernel.gen_args,
-    )?;
+    let (f_remain_gen_args, f_subst_param_tys, f_subst_exec_level, f_subst_ret_ty, mut f_mono_ty) =
+        ty_check_dep_app(
+            &mut kernel_ctx,
+            &mut app_kernel.fun,
+            &mut app_kernel.gen_args,
+        )?;
     // Get functions execution resource and check that it can be applied (i.e, that it must be
     //   exectuted on an appropriate grid).
     if let TyKind::FnTy(fn_ty) = &app_kernel.fun.ty.as_ref().unwrap().ty {
@@ -1252,6 +1257,7 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
     let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
         f_remain_gen_args,
         f_subst_param_tys,
+        &f_subst_exec_level,
         &f_subst_ret_ty,
         &f_mono_ty,
     );

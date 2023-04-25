@@ -151,6 +151,12 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     for ty in &mut subst_param_tys {
         utils::subst_idents_kinded(fn_ty.generics.iter(), view.gen_args.iter(), ty);
     }
+    let mut subst_exec_level = fn_ty.exec_ty.clone();
+    utils::subst_idents_kinded(
+        fn_ty.generics.iter(),
+        view.gen_args.iter(),
+        &mut subst_exec_level,
+    );
     let mut subst_out_ty = fn_ty.ret_ty.as_ref().clone();
     utils::subst_idents_kinded(
         fn_ty.generics.iter(),
@@ -168,6 +174,7 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     let mut inferred_k_args = super::infer_kinded_args::infer_kinded_args_from_mono_ty(
         fn_ty.generics[view.gen_args.len()..].to_vec(),
         subst_param_tys,
+        &subst_exec_level,
         &subst_out_ty,
         &mono_fn_ty,
     );

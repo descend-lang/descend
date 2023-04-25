@@ -6,7 +6,7 @@ fn transpose<width: nat, gs: nat, bsx: nat, bsy: nat, r: prv>(
     let mut d_vec_out = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
     // FIXME it looks like generic nats are not inferred if they only appear in the execution resource level
     // FIXME the parser subsitutes identifiers that are generic parametres. It crashes if the identifier was not declared.
-    par_transpose::<<<XY<gs, gs>, XY<bsx, bsy>; [[f32; bsx]; bsx]>>>::<width, gs, bsx, bsy>(&shrd d_vec, &uniq d_vec_out);
+    par_transpose::<<<XY<gs, gs>, XY<bsx, bsy>; [[f32; bsx]; bsx]>>>(&shrd d_vec, &uniq d_vec_out);
     copy_to_host(&shrd d_vec_out, h_vec)
 }
 
@@ -20,8 +20,8 @@ fn par_transpose<width: nat, gs: nat, bsx: nat, bsy: nat, r: prv, r2: prv>(
 ) -[grid: gpu.grid<XY<gs, gs>, XY<bsx, bsy>>]-> () {
     sched(Y) block_y in grid {
         sched(X) block_x in block_y {
-            let block_tile = &shrd (*in_vec).to_view.map::<[f32; width]>(to_view.grp::<bsx>).grp::<bsx>.map(transp).transp[[block_y]][[block_x]];
-            let out_block_tile = &uniq (*out_vec).to_view.map::<[f32; width]>(to_view.grp::<bsx>).grp::<bsx>.map(transp)[[block_y]][[block_x]];
+            let block_tile = &shrd (*in_vec).to_view.map::<[f32; width]>(to_view).map::<[[f32; width]]>(grp::<bsx>).grp::<bsx>.map(transp).transp[[block_y]][[block_x]];
+            let out_block_tile = &uniq (*out_vec).to_view.map::<[f32; width]>(to_view).map::<[[f32; width]]>(grp::<bsx>).grp::<bsx>.map(transp)[[block_y]][[block_x]];
             sched(Y) thread_y in block_x {
                 sched(X) thread_x in thread_y {
                     for_nat i in range(0, bsx/bsy) {
