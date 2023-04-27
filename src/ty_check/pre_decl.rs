@@ -26,6 +26,7 @@ pub static REVERSE: &str = "rev";
 pub static GROUP: &str = "grp";
 pub static JOIN: &str = "join";
 pub static TRANSPOSE: &str = "transp";
+pub static SPLIT_AT: &str = "split_at";
 pub static MAP: &str = "map";
 
 pub static AS_I32_CPU: &str = "as_i32_cpu";
@@ -64,6 +65,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         //(AS_I32_BLOCK, as_i32(ExecTy::new(ExecTyKind::GpuBlock(Dim::X())))),
         //(AS_I32_GRID, as_i32(ExecTy::GpuGrid)),
         (AS_I32_CPU, as_i32(ExecTy::new(ExecTyKind::CpuThread))),
+        (SPLIT_AT, split_at_ty()),
     ];
 
     decls.to_vec()
@@ -763,6 +765,52 @@ fn group_ty() -> FnTy {
                 Box::new(Nat::Ident(n)),
                 Box::new(Nat::Ident(s)),
             ),
+        ))))),
+    )
+}
+
+// split_at:
+//  <split_pos: nat, n: nat, d: dty>([[d; n]]) -> ([[d; split_pos]], [[d; n-split_pos]])
+fn split_at_ty() -> FnTy {
+    let s = Ident::new("s");
+    let n = Ident::new("n");
+    let d = Ident::new("d");
+    let s_nat = IdentKinded {
+        ident: s.clone(),
+        kind: Kind::Nat,
+    };
+    let n_nat = IdentKinded {
+        ident: n.clone(),
+        kind: Kind::Nat,
+    };
+    let d_ty = IdentKinded {
+        ident: d.clone(),
+        kind: Kind::DataTy,
+    };
+    FnTy::new(
+        vec![s_nat, n_nat, d_ty],
+        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+            DataTyKind::ArrayShape(
+                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+                Nat::Ident(n.clone()),
+            ),
+        ))))],
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
+            vec![
+                DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+                    Nat::Ident(s.clone()),
+                )),
+                DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d))),
+                    Nat::BinOp(
+                        BinOpNat::Sub,
+                        Box::new(Nat::Ident(n)),
+                        Box::new(Nat::Ident(s)),
+                    ),
+                )),
+            ],
         ))))),
     )
 }
