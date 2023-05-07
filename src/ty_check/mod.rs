@@ -7,6 +7,7 @@ mod pl_expr;
 pub mod pre_decl;
 mod subty;
 mod unify;
+mod wf;
 
 use self::pl_expr::PlExprTyCtx;
 use crate::ast::internal::{Frame, IdentTyped, Loan, Place, PrvMapping};
@@ -83,9 +84,9 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> TyResult<()> 
     let param_idents_ty: Vec<_> = gf
         .param_decls
         .iter()
-        .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
+        .map(|ParamDecl { ident, dty, mutbl }| IdentTyped {
             ident: ident.clone(),
-            ty: ty.as_ref().unwrap().clone(),
+            dty: dty.as_ref().unwrap().as_ref().clone(),
             mutbl: *mutbl,
             exec: ExecExpr::new(Exec::new(BaseExec::Ident(gf.exec_decl.ident.clone()))),
         })
@@ -154,8 +155,8 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
             }
         }
         ExprKind::Block(block) => ty_check_block(ctx, block)?,
-        ExprKind::Let(pattern, ty, e) => ty_check_let(ctx, pattern, ty, e)?,
-        ExprKind::LetUninit(ident, ty) => ty_check_let_uninit(ctx, ident, ty)?,
+        ExprKind::Let(pattern, dty, e) => ty_check_let(ctx, pattern, dty, e)?,
+        ExprKind::LetUninit(ident, dty) => ty_check_let_uninit(ctx, ident, dty)?,
         ExprKind::Seq(es) => ty_check_seq(ctx, es)?,
         ExprKind::Lit(l) => ty_check_literal(l),
         ExprKind::Array(elems) => ty_check_array(ctx, elems)?,
@@ -376,7 +377,7 @@ fn ty_check_for(
     let mut frame = Frame::new();
     frame.append_idents_typed(vec![IdentTyped::new(
         ident.clone(),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(ident_dty)))),
+        DataTy::new(ident_dty),
         Mutability::Const,
         ExecExpr::new(Exec::new(BaseExec::Ident(ctx.ident_exec.ident.clone()))),
     )]);
@@ -659,14 +660,11 @@ fn ty_check_lambda(
     fun_frame.append_idents_typed(
         params
             .iter()
-            .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
+            .map(|ParamDecl { ident, dty, mutbl }| IdentTyped {
                 ident: ident.clone(),
-                ty: match ty {
-                    Some(tty) => tty.clone(),
-                    None => Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
-                        "param_ty",
-                        DataTyKind::Ident,
-                    ))))),
+                dty: match dty {
+                    Some(dty) => dty.as_ref().clone(),
+                    None => DataTy::new(utils::fresh_ident("param_dty", DataTyKind::Ident)),
                 },
                 mutbl: *mutbl,
                 exec: ExecExpr::new(Exec::new(BaseExec::Ident(lambda_ident_exec.ident.clone()))),
@@ -734,7 +732,7 @@ fn ty_check_lambda(
         vec![],
         params
             .iter()
-            .map(|decl| decl.ty.as_ref().unwrap().clone())
+            .map(|decl| Ty::new(TyKind::Data(decl.dty.as_ref().unwrap().clone())))
             .collect(),
         lambda_ident_exec.ty.as_ref().clone(),
         Ty::new(TyKind::Data(Box::new(ret_dty.clone()))),
@@ -1177,10 +1175,7 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         .map(|dty| {
             IdentTyped::new(
                 Ident::new_impli(&utils::fresh_name("shared_mem")),
-                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::At(
-                    Box::new(dty.clone()),
-                    Memory::GpuShared,
-                ))))),
+                DataTy::new(DataTyKind::At(Box::new(dty.clone()), Memory::GpuShared)),
                 Mutability::Mut,
                 kernel_ctx.exec.clone(),
             )
@@ -1336,37 +1331,23 @@ fn ty_check_literal(l: &mut Lit) -> Ty {
     )))))
 }
 
-fn infer_pattern_ident_tys(
+fn infer_pattern_ident_dtys(
     ty_ctx: &mut TyCtx,
     exec: &ExecExpr,
     pattern: &Pattern,
-    pattern_ty: &Ty,
+    pattern_dty: &DataTy,
 ) -> TyResult<()> {
-    let pattern_dty = if let TyKind::Data(dty) = &pattern_ty.ty {
-        dty.as_ref()
-    } else {
-        return Err(TyError::UnexpectedType);
-    };
     match (pattern, &pattern_dty.dty) {
         (Pattern::Ident(mutbl, ident), _) => {
-            let ident_with_annotated_ty = IdentTyped::new(
-                ident.clone(),
-                Ty::new(TyKind::Data(Box::new(pattern_dty.clone()))),
-                *mutbl,
-                exec.clone(),
-            );
+            let ident_with_annotated_ty =
+                IdentTyped::new(ident.clone(), pattern_dty.clone(), *mutbl, exec.clone());
             ty_ctx.append_ident_typed(ident_with_annotated_ty);
             Ok(())
         }
         (Pattern::Wildcard, _) => Ok(()),
-        (Pattern::Tuple(patterns), DataTyKind::Tuple(elem_tys)) => {
-            for (p, tty) in patterns.iter().zip(elem_tys) {
-                infer_pattern_ident_tys(
-                    ty_ctx,
-                    exec,
-                    p,
-                    &Ty::new(TyKind::Data(Box::new(tty.clone()))),
-                )?;
+        (Pattern::Tuple(patterns), DataTyKind::Tuple(elem_dtys)) => {
+            for (p, dty) in patterns.iter().zip(elem_dtys) {
+                infer_pattern_ident_dtys(ty_ctx, exec, p, dty)?;
             }
             Ok(())
         }
@@ -1374,63 +1355,56 @@ fn infer_pattern_ident_tys(
     }
 }
 
-fn infer_tys_and_append_idents(
+fn infer_dtys_and_append_idents(
     kind_ctx: &KindCtx,
     ty_ctx: &mut TyCtx,
     exec: &ExecExpr,
     pattern: &Pattern,
-    pattern_ty: &mut Option<Box<Ty>>,
-    assign_ty: &mut Ty,
+    pattern_dty: &mut Option<Box<DataTy>>,
+    assign_dty: &mut DataTy,
 ) -> TyResult<()> {
-    let pattern_ty = if let Some(pty) = pattern_ty {
-        unify::sub_unify(kind_ctx, ty_ctx, assign_ty, pty)?;
+    let pattern_dty = if let Some(pty) = pattern_dty {
+        unify::sub_unify(kind_ctx, ty_ctx, assign_dty, pty)?;
         pty.as_ref().clone()
     } else {
-        assign_ty.clone()
+        assign_dty.clone()
     };
-    infer_pattern_ident_tys(ty_ctx, exec, pattern, &pattern_ty)
+    infer_pattern_ident_dtys(ty_ctx, exec, pattern, &pattern_dty)
 }
 
 fn ty_check_let(
     ctx: &mut ExprTyCtx,
     pattern: &Pattern,
-    pattern_ty: &mut Option<Box<Ty>>,
+    pattern_dty: &mut Option<Box<DataTy>>,
     expr: &mut Expr,
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, expr)?;
     let e_ty = expr.ty.as_mut().unwrap();
-    infer_tys_and_append_idents(
+    infer_dtys_and_append_idents(
         ctx.kind_ctx,
         ctx.ty_ctx,
         &ctx.exec,
         pattern,
-        pattern_ty,
-        e_ty,
+        pattern_dty,
+        e_ty.dty_mut(),
     )?;
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
 }
 
-// TODO respect exec?
-fn ty_check_let_uninit(ctx: &mut ExprTyCtx, ident: &Ident, ty: &Ty) -> TyResult<Ty> {
+fn ty_check_let_uninit(ctx: &mut ExprTyCtx, ident: &Ident, dty: &DataTy) -> TyResult<Ty> {
     // TODO is the type well-formed?
-    if let TyKind::Data(dty) = &ty.ty {
-        let ident_with_ty = IdentTyped::new(
-            ident.clone(),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Dead(
-                dty.clone(),
-            ))))),
-            Mutability::Mut,
-            ctx.exec.clone(),
-        );
-        ctx.ty_ctx.append_ident_typed(ident_with_ty);
-        Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Scalar(ScalarTy::Unit),
-        )))))
-    } else {
-        Err(TyError::MutabilityNotAllowed(ty.clone()))
-    }
+    let ident_with_dty = IdentTyped::new(
+        ident.clone(),
+        DataTy::new(DataTyKind::Dead(Box::new(dty.clone()))),
+        Mutability::Mut,
+        ctx.exec.clone(),
+    );
+    ctx.ty_ctx.append_ident_typed(ident_with_dty);
+    Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+        DataTyKind::Scalar(ScalarTy::Unit),
+    )))))
 }
 
 fn ty_check_seq(ctx: &mut ExprTyCtx, es: &mut [Expr]) -> TyResult<Ty> {
@@ -1453,7 +1427,7 @@ fn ty_check_pl_expr_with_deref(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> 
         pl_expr.ty.as_mut().unwrap().as_mut(),
         &mut Ty::new(TyKind::Data(Box::new(DataTy::with_constr(
             utils::fresh_ident("pl_deref", DataTyKind::Ident),
-            vec![Constraint::Copyable],
+            vec![TyConstr::Copyable],
         )))),
     )?;
     let potential_accesses =
@@ -1595,143 +1569,6 @@ pub fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
             mem, &exec_ty.ty
         )))
     }
-}
-
-// TODO respect memory
-fn ty_well_formed(kind_ctx: &KindCtx, ty_ctx: &TyCtx, exec_ty: &ExecTy, ty: &Ty) -> TyResult<()> {
-    match &ty.ty {
-        TyKind::Data(dty) => match &dty.dty {
-            // TODO variables of Dead types can be reassigned. So why do we not have to check
-            //  well-formedness of the type in Dead(ty)? (According paper).
-            DataTyKind::Scalar(_)
-            | DataTyKind::Atomic(_)
-            | DataTyKind::Range
-            | DataTyKind::RawPtr(_)
-            | DataTyKind::Dead(_) => {}
-            DataTyKind::Ident(ident) => {
-                if !kind_ctx.ident_of_kind_exists(ident, Kind::DataTy) {
-                    Err(CtxError::KindedIdentNotFound(ident.clone()))?
-                }
-            }
-            DataTyKind::Ref(reff) => {
-                match &reff.rgn {
-                    Provenance::Value(prv) => {
-                        let elem_ty = Ty::new(TyKind::Data(reff.dty.clone()));
-                        if !elem_ty.is_fully_alive() {
-                            return Err(TyError::ReferenceToDeadTy);
-                        }
-                        let loans = ty_ctx.loans_in_prv(prv)?;
-                        if !loans.is_empty() {
-                            let mut exists = false;
-                            for loan in loans {
-                                let Loan {
-                                    place_expr,
-                                    own: l_own,
-                                } = loan;
-                                if l_own != &reff.own {
-                                    return Err(TyError::ReferenceToWrongOwnership);
-                                }
-                                let mut borrowed_pl_expr = place_expr.clone();
-                                // self.place_expr_ty_under_exec_own(
-                                //     kind_ctx,
-                                //     ty_ctx,
-                                //     exec_ty,
-                                //     *l_own,
-                                //     &mut borrowed_pl_expr,
-                                // )?;
-                                if let TyKind::Data(pl_expr_dty) = borrowed_pl_expr.ty.unwrap().ty {
-                                    if !pl_expr_dty.is_fully_alive() {
-                                        return Err(TyError::ReferenceToDeadTy);
-                                    }
-                                    if dty.occurs_in(&pl_expr_dty) {
-                                        exists = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if !exists {
-                                if let DataTyKind::ArrayShape(_, _) = &dty.dty {
-                                    eprintln!(
-                                        "WARNING: Did not check well-formedness of\
-                                            view type reference."
-                                    )
-                                } else {
-                                    return Err(TyError::ReferenceToIncompatibleType);
-                                }
-                            }
-                        }
-                        ty_well_formed(kind_ctx, ty_ctx, exec_ty, &elem_ty)?;
-                    }
-                    Provenance::Ident(ident) => {
-                        let elem_ty = Ty::new(TyKind::Data(reff.dty.clone()));
-                        if !kind_ctx.ident_of_kind_exists(ident, Kind::Provenance) {
-                            Err(CtxError::KindedIdentNotFound(ident.clone()))?
-                        }
-                        ty_well_formed(kind_ctx, ty_ctx, exec_ty, &elem_ty)?;
-                    }
-                };
-            }
-            DataTyKind::Tuple(elem_dtys) => {
-                for elem_dty in elem_dtys {
-                    ty_well_formed(
-                        kind_ctx,
-                        ty_ctx,
-                        exec_ty,
-                        &Ty::new(TyKind::Data(Box::new(elem_dty.clone()))),
-                    )?;
-                }
-            }
-            DataTyKind::Array(elem_dty, n) => {
-                ty_well_formed(
-                    kind_ctx,
-                    ty_ctx,
-                    exec_ty,
-                    &Ty::new(TyKind::Data(elem_dty.clone())),
-                )?;
-                // TODO well-formed nat
-            }
-            DataTyKind::ArrayShape(elem_dty, n) => {
-                ty_well_formed(
-                    kind_ctx,
-                    ty_ctx,
-                    exec_ty,
-                    &Ty::new(TyKind::Data(elem_dty.clone())),
-                )?
-                // TODO well-formed nat
-            }
-            DataTyKind::At(elem_dty, Memory::Ident(ident)) => {
-                if !kind_ctx.ident_of_kind_exists(ident, Kind::Memory) {
-                    return Err(TyError::CtxError(CtxError::KindedIdentNotFound(
-                        ident.clone(),
-                    )));
-                }
-                ty_well_formed(
-                    kind_ctx,
-                    ty_ctx,
-                    exec_ty,
-                    &Ty::new(TyKind::Data(elem_dty.clone())),
-                )?;
-            }
-            DataTyKind::At(elem_dty, _) => {
-                ty_well_formed(
-                    kind_ctx,
-                    ty_ctx,
-                    exec_ty,
-                    &Ty::new(TyKind::Data(elem_dty.clone())),
-                )?;
-            }
-        },
-        // TODO check well-formedness of Nats
-        TyKind::FnTy(fn_ty) => {
-            let mut extended_kind_ctx = kind_ctx.clone();
-            extended_kind_ctx.append_idents(fn_ty.generics.clone());
-            ty_well_formed(&extended_kind_ctx, ty_ctx, exec_ty, &fn_ty.ret_ty)?;
-            for param_ty in &fn_ty.param_tys {
-                ty_well_formed(&extended_kind_ctx, ty_ctx, exec_ty, param_ty)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {

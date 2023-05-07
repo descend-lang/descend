@@ -132,7 +132,7 @@ impl TyCtx {
         self
     }
 
-    fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
+    pub fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
         self.flat_bindings().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
@@ -239,13 +239,7 @@ impl TyCtx {
     // ∀π:τ ∈ Γ
     pub fn all_places(&self) -> Vec<TypedPlace> {
         self.idents_typed()
-            .filter_map(|IdentTyped { ident, ty, .. }| {
-                if let TyKind::Data(dty) = &ty.ty {
-                    Some(TyCtx::explode_places(ident, dty))
-                } else {
-                    None
-                }
-            })
+            .map(|IdentTyped { ident, dty, .. }| TyCtx::explode_places(ident, dty))
             .flatten()
             .collect()
     }
@@ -267,6 +261,7 @@ impl TyCtx {
                 | d::ArrayShape(_, _)
                 | d::At(_, _)
                 | d::Ref(_)
+                | d::Refine(_, _)
                 | d::RawPtr(_)
                 | d::Ident(_)
                 | d::Dead(_) => vec![(pl, dty.clone())],
@@ -284,8 +279,8 @@ impl TyCtx {
         explode(internal::Place::new(ident.clone(), vec![]), dty.clone())
     }
 
-    pub fn ty_of_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
-        Ok(&self.ident_ty(ident)?.ty)
+    pub fn dty_of_ident(&self, ident: &Ident) -> CtxResult<&DataTy> {
+        Ok(&self.ident_ty(ident)?.dty)
     }
 
     pub fn ident_ty(&self, ident: &Ident) -> CtxResult<&IdentTyped> {
@@ -324,12 +319,8 @@ impl TyCtx {
             }
             Ok(res_dty)
         }
-        let ident_ty = self.ty_of_ident(&place.ident)?;
-        if let TyKind::Data(dty) = &ident_ty.ty {
-            proj_ty(dty.as_ref().clone(), &place.path)
-        } else {
-            panic!("This place is not of a data type.")
-        }
+        let ident_dty = self.dty_of_ident(&place.ident)?;
+        proj_ty(ident_dty.clone(), &place.path)
     }
 
     pub fn set_place_dty(&mut self, pl: &internal::Place, pl_ty: DataTy) -> &mut Self {
@@ -354,13 +345,10 @@ impl TyCtx {
             .rev()
             .find(|ident_typed| ident_typed.ident == pl.ident)
             .unwrap();
-        if let TyKind::Data(dty) = &ident_typed.ty.ty {
-            let updated_dty = set_dty_for_path_in_dty(*dty.clone(), pl.path.as_slice(), pl_ty);
-            ident_typed.ty = Ty::new(TyKind::Data(Box::new(updated_dty)));
-            self
-        } else {
-            panic!("Trying to set data type for identifier without data type.")
-        }
+        let updated_dty =
+            set_dty_for_path_in_dty(ident_typed.dty.clone(), pl.path.as_slice(), pl_ty);
+        ident_typed.dty = updated_dty;
+        self
     }
 
     pub fn kill_place(&mut self, pl: &internal::Place) -> &mut Self {
@@ -377,8 +365,8 @@ impl TyCtx {
             .map(|prv_mapping| &prv_mapping.prv)
             .filter(|prv| {
                 self.idents_typed()
-                    .map(|id_ty| &id_ty.ty)
-                    .all(|ty| !ty.contains_ref_to_prv(prv.as_str()))
+                    .map(|id_dty| &id_dty.dty)
+                    .all(|dty| !dty.contains_ref_to_prv(prv.as_str()))
             })
             .cloned()
             .collect();

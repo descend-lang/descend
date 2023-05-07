@@ -207,14 +207,14 @@ fn ty_check_ident(
     ctx: &PlExprTyCtx,
     ident: &Ident,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-    if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
+    if let Ok(dty) = ctx.ty_ctx.dty_of_ident(ident) {
         // let ident_dty = if let TyKind::Data(dty) = &tty.ty {
         //     dty.as_ref()
         // } else {
         //     return Err(TyError::UnexpectedType);
         // };
 
-        if !&tty.is_fully_alive() {
+        if !&dty.is_fully_alive() {
             return Err(TyError::String(format!(
                 "The value in this identifier `{}` has been moved out.",
                 ident
@@ -224,7 +224,7 @@ fn ty_check_ident(
         //  for example.
         let mem = default_mem_by_exec(&ctx.exec.ty.as_ref().unwrap().ty);
         Ok((
-            tty.clone(),
+            Ty::new(TyKind::Data(Box::new(dty.clone()))),
             if mem.is_some() {
                 vec![mem.unwrap()]
             } else {

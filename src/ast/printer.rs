@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecTy, ExecTyKind, Ident, IdentKinded, Kind,
-    Memory, Nat, Ownership, Provenance, ScalarTy, Ty, TyKind,
+    BaseTy, BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecTy, ExecTyKind, Ident, IdentKinded,
+    Kind, Memory, Nat, Ownership, Predicate, Provenance, Refinement, ScalarTy, Ty, TyKind,
 };
 use std::fmt::Write;
 
@@ -188,11 +188,74 @@ impl PrintState {
                 self.string.push(' ');
                 self.print_dty(&ref_dty.dty);
             }
+            DataTyKind::Refine(base_ty, refinement) => {
+                self.string.push_str(match base_ty {
+                    BaseTy::Bool => "bool",
+                    BaseTy::Usize => "usize",
+                });
+                self.print_refine(refinement)
+            }
             DataTyKind::RawPtr(_) => {
                 unimplemented!()
             }
             DataTyKind::Range => self.string.push_str("Range"),
             DataTyKind::Dead(dty) => self.print_dty(dty),
+        }
+    }
+
+    fn print_refine(&mut self, refine: &Refinement) {
+        self.string.push('[');
+        self.print_ident(&refine.ident);
+        self.string.push_str(" | ");
+        self.print_pred(&refine.pred);
+        self.string.push(']');
+    }
+
+    fn print_pred(&mut self, pred: &Predicate) {
+        match pred {
+            Predicate::Ident(ident) => self.print_ident(ident),
+            Predicate::Add(predl, predr) => {
+                self.print_pred(predl);
+                self.string.push_str(" + ");
+                self.print_pred(predr);
+            }
+            Predicate::And(predl, predr) => {
+                self.print_pred(predl);
+                self.string.push_str(" & ");
+                self.print_pred(predr);
+            }
+            Predicate::Or(predl, predr) => {
+                self.print_pred(predl);
+                self.string.push_str(" | ");
+                self.print_pred(predr);
+            }
+            Predicate::ConstMul(c, pred) => {
+                self.string.push_str(&c.to_string());
+                self.string.push_str(" * ");
+                self.print_pred(pred);
+            }
+            Predicate::IfElse(cond, tt, ff) => {
+                self.string.push_str("if ");
+                self.print_pred(cond);
+                self.string.push_str(" then ");
+                self.print_pred(tt);
+                self.string.push_str(" else ");
+                self.print_pred(ff);
+            }
+            Predicate::Not(pred) => {
+                self.string.push_str("!(");
+                self.print_pred(pred);
+                self.string.push(')');
+            }
+            Predicate::Uninterp(ident, preds) => {
+                self.print_ident(ident);
+                print_list!(self, Self::print_pred, preds);
+            }
+            Predicate::False => self.string.push_str("false"),
+            Predicate::True => self.string.push_str("true"),
+            Predicate::Num(n) => {
+                self.string.push_str(&n.to_string());
+            }
         }
     }
 
@@ -250,7 +313,7 @@ impl PrintState {
                 self.string.push_str("threadIdx.");
                 self.print_dim_compo(d);
             }
-            Nat::Lit(n) => write!(&mut self.string, "{}", n).unwrap(),
+            Nat::Lit(n) => self.string.push_str(&n.to_string()),
             Nat::BinOp(op, lhs, rhs) => {
                 self.string.push('(');
                 self.print_nat(lhs);

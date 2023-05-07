@@ -4,7 +4,7 @@
 // TODO specific access modifiers
 
 use super::{Ident, Ownership, PlaceExpr, Ty};
-use crate::ast::{ExecExpr, Mutability, Nat, PlaceExprKind, View};
+use crate::ast::{DataTy, ExecExpr, Mutability, Nat, PlaceExprKind, View};
 use std::collections::HashSet;
 
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -38,16 +38,16 @@ pub enum FrameEntry {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct IdentTyped {
     pub ident: Ident,
-    pub ty: Ty,
+    pub dty: DataTy,
     pub mutbl: Mutability,
     pub exec: ExecExpr,
 }
 
 impl IdentTyped {
-    pub fn new(ident: Ident, ty: Ty, mutbl: Mutability, exec: ExecExpr) -> Self {
+    pub fn new(ident: Ident, dty: DataTy, mutbl: Mutability, exec: ExecExpr) -> Self {
         IdentTyped {
             ident,
-            ty,
+            dty,
             mutbl,
             exec,
         }

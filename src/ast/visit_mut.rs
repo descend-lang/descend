@@ -41,6 +41,8 @@ pub trait VisitMut: Sized {
     fn visit_exec(&mut self, exec: &mut Exec) { walk_exec(self, exec) }
     fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
+    fn visit_refine(&mut self, refine: &mut Refinement) { walk_refine(self, refine) }
+    fn visit_pred(&mut self, pred: &mut Predicate) { walk_pred(self, pred) }
 }
 
 // Taken from the Rust compiler
@@ -138,6 +140,34 @@ pub fn walk_ref<V: VisitMut>(visitor: &mut V, reff: &mut RefDty) {
     visitor.visit_dty(dty);
 }
 
+pub fn walk_pred<V: VisitMut>(visitor: &mut V, pred: &mut Predicate) {
+    match pred {
+        Predicate::Ident(ident) => visitor.visit_ident(ident),
+        Predicate::Add(pl, pr) | Predicate::And(pl, pr) | Predicate::Or(pl, pr) => {
+            visitor.visit_pred(pl);
+            visitor.visit_pred(pr);
+        }
+        Predicate::ConstMul(_, pred) | Predicate::Not(pred) => {
+            visitor.visit_pred(pred);
+        }
+        Predicate::IfElse(cond, tt, ff) => {
+            visitor.visit_pred(cond);
+            visitor.visit_pred(tt);
+            visitor.visit_pred(ff);
+        }
+        Predicate::Uninterp(ident, preds) => {
+            visitor.visit_ident(ident);
+            walk_list!(visitor, visit_pred, preds);
+        }
+        Predicate::Num(_) | Predicate::True | Predicate::False => {}
+    }
+}
+
+pub fn walk_refine<V: VisitMut>(visitor: &mut V, refine: &mut Refinement) {
+    visitor.visit_ident(&mut refine.ident);
+    visitor.visit_pred(&mut refine.pred);
+}
+
 pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
     match &mut dty.dty {
         DataTyKind::Ident(ident) => visitor.visit_ident(ident),
@@ -159,6 +189,7 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
         DataTyKind::Ref(reff) => {
             visitor.visit_ref(reff);
         }
+        DataTyKind::Refine(_, refine) => visitor.visit_refine(refine),
         DataTyKind::RawPtr(dty) => visitor.visit_dty(dty),
         DataTyKind::Range => {}
         DataTyKind::Dead(dty) => visitor.visit_dty(dty),
@@ -281,14 +312,14 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_pl_expr(pl_expr);
         }
         ExprKind::Block(block) => visitor.visit_block(block),
-        ExprKind::LetUninit(ident, ty) => {
+        ExprKind::LetUninit(ident, dty) => {
             visitor.visit_ident(ident);
-            visitor.visit_ty(ty);
+            visitor.visit_dty(dty);
         }
-        ExprKind::Let(pattern, ty, e) => {
+        ExprKind::Let(pattern, dty, e) => {
             visitor.visit_pattern(pattern);
-            for ty in ty.as_mut() {
-                visitor.visit_ty(ty);
+            for dty in dty.as_mut() {
+                visitor.visit_dty(dty);
             }
             visitor.visit_expr(e);
         }
@@ -441,10 +472,10 @@ pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut Exec) {
 }
 
 pub fn walk_param_decl<V: VisitMut>(visitor: &mut V, param_decl: &mut ParamDecl) {
-    let ParamDecl { ident, ty, mutbl } = param_decl;
+    let ParamDecl { ident, dty, mutbl } = param_decl;
     visitor.visit_ident(ident);
-    if let Some(tty) = ty {
-        visitor.visit_ty(tty);
+    if let Some(ddty) = dty {
+        visitor.visit_dty(ddty);
     }
     visitor.visit_mutability(mutbl)
 }

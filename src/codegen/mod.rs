@@ -4,9 +4,8 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::ExprKind;
+use crate::ast::{Ty, TyKind};
 use crate::ty_check;
-use crate::ty_check::matches_dty;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -83,7 +82,7 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         .filter(|f| {
             f.param_decls
                 .iter()
-                .all(|p| !is_view_dty(p.ty.as_ref().unwrap()))
+                .all(|p| !is_view_dty(p.dty.as_ref().unwrap()))
                 && matches!(
                     &f.exec_decl.ty.ty,
                     desc::ExecTyKind::GpuGrid(_, _)
@@ -333,34 +332,33 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             // Let View
             gen_let(pattern, &e, codegen_ctx)
         }
-        LetUninit(ident, ty) => {
-            let (ty, addr_space) = match &ty.ty {
-                desc::TyKind::Data(dty) => {
-                    if let desc::DataTyKind::At(ddty, desc::Memory::GpuShared) = &dty.dty {
-                        (
-                            if let desc::DataTy {
-                                dty: desc::DataTyKind::Array(d, n),
-                                ..
-                            } = ddty.as_ref()
-                            {
-                                cu::Ty::CArray(
-                                    Box::new(gen_ty(
-                                        &desc::TyKind::Data(Box::new(d.as_ref().clone())),
-                                        desc::Mutability::Mut,
-                                    )),
-                                    Some(n.clone()),
-                                )
-                            } else {
-                                gen_ty(&ty.as_ref().ty, desc::Mutability::Mut)
-                            },
-                            Some(cu::GpuAddrSpace::Shared),
-                        )
-                    } else {
-                        (gen_ty(&ty.as_ref().ty, desc::Mutability::Mut), None)
-                    }
-                }
-                _ => (gen_ty(&ty.as_ref().ty, desc::Mutability::Mut), None),
-            };
+        LetUninit(ident, dty) => {
+            let (ty, addr_space) =
+                if let desc::DataTyKind::At(ddty, desc::Memory::GpuShared) = &dty.dty {
+                    (
+                        if let desc::DataTy {
+                            dty: desc::DataTyKind::Array(d, n),
+                            ..
+                        } = ddty.as_ref()
+                        {
+                            cu::Ty::CArray(
+                                Box::new(gen_ty(
+                                    &desc::TyKind::Data(Box::new(d.as_ref().clone())),
+                                    desc::Mutability::Mut,
+                                )),
+                                Some(n.clone()),
+                            )
+                        } else {
+                            gen_ty(&TyKind::Data(dty.clone()), desc::Mutability::Mut)
+                        },
+                        Some(cu::GpuAddrSpace::Shared),
+                    )
+                } else {
+                    (
+                        gen_ty(&TyKind::Data(dty.clone()), desc::Mutability::Mut),
+                        None,
+                    )
+                };
             cu::Stmt::VarDecl {
                 name: ident.name.to_string(),
                 ty,
@@ -1283,7 +1281,7 @@ fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
 fn view_exprs_in_args(args: &[desc::Expr]) -> Vec<&desc::Expr> {
     let (views, _): (Vec<_>, Vec<_>) = args
         .iter()
-        .partition(|a| is_view_dty(a.ty.as_ref().unwrap()));
+        .partition(|a| is_view_dty(a.ty.as_ref().unwrap().dty()));
     views
 }
 
@@ -1307,7 +1305,7 @@ fn separate_view_params_with_args_from_rest<'a>(
     let (view_params_with_args, _): (Vec<_>, Vec<_>) = param_decls
         .iter()
         .zip(args.iter())
-        .partition(|&(p, _)| is_view_dty(p.ty.as_ref().unwrap()));
+        .partition(|&(p, _)| is_view_dty(p.dty.as_ref().unwrap()));
 
     view_params_with_args
 }
@@ -1838,10 +1836,10 @@ fn gen_param_decls(param_decls: &[desc::ParamDecl]) -> Vec<cu::ParamDecl> {
 }
 
 fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
-    let desc::ParamDecl { ident, ty, mutbl } = param_decl;
+    let desc::ParamDecl { ident, dty, mutbl } = param_decl;
     cu::ParamDecl {
         name: ident.name.to_string(),
-        ty: gen_ty(&ty.as_ref().unwrap().ty, *mutbl),
+        ty: gen_ty(&TyKind::Data(dty.as_ref().unwrap().clone()), *mutbl),
     }
 }
 
@@ -1947,6 +1945,10 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                         cu::Ty::PtrConst(tty)
                     }
                 }
+                d::Refine(base_ty, _) => match base_ty {
+                    desc::BaseTy::Bool => cu::Ty::Scalar(cu::ScalarTy::Bool),
+                    desc::BaseTy::Usize => cu::Ty::Scalar(cu::ScalarTy::Usize),
+                },
                 d::RawPtr(dt) => {
                     let tty = Box::new(gen_ty(
                         &Data(match &dt.dty {
@@ -2152,23 +2154,18 @@ fn gen_dim3(dim: &desc::Dim) -> cu::Expr {
     })
 }
 
-fn is_view_dty(ty: &desc::Ty) -> bool {
-    match &ty.ty {
-        desc::TyKind::Data(dty) => match &dty.dty {
-            desc::DataTyKind::Ref(reff) => {
-                matches!(
-                    reff.dty.as_ref(),
-                    desc::DataTy {
-                        dty: desc::DataTyKind::ArrayShape(_, _),
-                        ..
-                    }
-                )
-            }
-            desc::DataTyKind::Tuple(elem_dtys) => elem_dtys
-                .iter()
-                .all(|d| is_view_dty(&desc::Ty::new(desc::TyKind::Data(Box::new(d.clone()))))),
-            _ => false,
-        },
+fn is_view_dty(dty: &desc::DataTy) -> bool {
+    match &dty.dty {
+        desc::DataTyKind::Ref(reff) => {
+            matches!(
+                reff.dty.as_ref(),
+                desc::DataTy {
+                    dty: desc::DataTyKind::ArrayShape(_, _),
+                    ..
+                }
+            )
+        }
+        desc::DataTyKind::Tuple(elem_dtys) => elem_dtys.iter().all(|d| is_view_dty(&d.clone())),
         _ => false,
     }
 }

@@ -390,6 +390,7 @@ impl std::fmt::Display for ScalarTy {
             Byte => write!(f, "descend::byte"),
             U32 => write!(f, "descend::u32"),
             U64 => write!(f, "descend::u64"),
+            Usize => write!(f, "descend::usize"),
             I32 => write!(f, "descend::i32"),
             I64 => write!(f, "descend::i64"),
             F32 => write!(f, "descend::f32"),

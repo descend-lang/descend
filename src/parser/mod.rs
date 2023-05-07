@@ -309,15 +309,15 @@ peg::parser! {
             }
 
         rule fun_parameter() -> ParamDecl
-            = mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() {
+            = mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ dty:dty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                ParamDecl { ident, ty:Some(ty), mutbl }
+                ParamDecl { ident, dty:Some(Box::new(dty)), mutbl }
             }
 
         rule lambda_parameter() -> ParamDecl
-            = mutbl:(m:mutability() __ {m})? ident:ident() ty:(_ ":" _ tty:ty() { tty })? {
+            = mutbl:(m:mutability() __ {m})? ident:ident() dty:(_ ":" _ tty:dty() { Box::new(tty) })? {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                ParamDecl { ident, ty, mutbl }
+                ParamDecl { ident, dty, mutbl }
         }
 
         /// Parse a sequence of expressions (might also just be one)
@@ -340,7 +340,7 @@ peg::parser! {
         // FIXME: How to integrate this properly into the precedence parser?
         pub(crate) rule expr_helper() -> Expr =
             begin:position!() "let" __ pattern:pattern()
-                typ:(_ ":" _ ty:ty() { ty })? _ "=" _ expr:expression() end:position!()
+                typ:(_ ":" _ dty:dty() { dty })? _ "=" _ expr:expression() end:position!()
             {
                 Expr::with_span(
                     ExprKind::Let(pattern, typ.map(Box::new), Box::new(expr)),
@@ -539,10 +539,10 @@ peg::parser! {
 
         rule let_uninit() -> Expr =
          begin:position!() "let" __ "mut" __ ident:ident() _ ":"
-                _ ty:ty() end:position!()
+                _ dty:dty() end:position!()
             {
                 Expr::with_span(
-                    ExprKind::LetUninit(ident, Box::new(ty)),
+                    ExprKind::LetUninit(ident, Box::new(dty)),
                     Span::new(begin, end)
                 )
             }
@@ -2040,7 +2040,7 @@ mod tests {
         ];
         let params = vec![ParamDecl {
             ident: Ident::new("ha_array"),
-            ty: Some(Ty::new(TyKind::Data(Box::new(DataTy::new(
+            dty: Some(Ty::new(TyKind::Data(Box::new(DataTy::new(
                 DataTyKind::Ref(Box::new(RefDty::new(
                     Provenance::Ident(Ident::new("a")),
                     Ownership::Uniq,

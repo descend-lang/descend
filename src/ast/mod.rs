@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::Write;
 
 use descend_derive::span_derive;
 pub use span::*;
@@ -46,7 +47,7 @@ impl FunDef {
         let param_tys: Vec<_> = self
             .param_decls
             .iter()
-            .map(|p_decl| p_decl.ty.as_ref().unwrap().clone())
+            .map(|p_decl| Ty::new(TyKind::Data(p_decl.dty.as_ref().unwrap().clone())))
             .collect();
         FnTy {
             generics: self.generic_params.clone(),
@@ -74,7 +75,7 @@ impl IdentExec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamDecl {
     pub ident: Ident,
-    pub ty: Option<Ty>,
+    pub dty: Option<Box<DataTy>>,
     pub mutbl: Mutability,
 }
 
@@ -291,10 +292,10 @@ pub enum ExprKind {
     Block(Block),
     // Variable declaration
     // let mut x: ty;
-    LetUninit(Ident, Box<Ty>),
+    LetUninit(Ident, Box<DataTy>),
     // Variable declaration, assignment and sequencing
     // let w x: ty = e1
-    Let(Pattern, Option<Box<Ty>>, Box<Expr>),
+    Let(Pattern, Option<Box<DataTy>>, Box<Expr>),
     // Assignment to existing place [expression]
     Assign(Box<PlaceExpr>, Box<Expr>),
     // e1[i] = e2
@@ -865,7 +866,7 @@ pub enum TyKind {
 
 // TODO remove
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub enum Constraint {
+pub enum TyConstr {
     Copyable,
 }
 
@@ -885,6 +886,15 @@ impl Ty {
         match &self.ty {
             TyKind::Data(dty) => dty,
             _ => panic!("Expected data type but found {:?}", self),
+        }
+    }
+
+    pub fn dty_mut(&mut self) -> &mut DataTy {
+        let mut err_msg = String::new();
+        write!(err_msg, "Expected data type but found {:?}", self).unwrap();
+        match &mut self.ty {
+            TyKind::Data(dty) => dty,
+            _ => panic!("{}", err_msg),
         }
     }
 
@@ -953,12 +963,45 @@ pub enum DimCompo {
     Z,
 }
 
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum Predicate {
+    Ident(Ident),
+    True,
+    False,
+    Num(usize),
+    Add(Box<Predicate>, Box<Predicate>),
+    ConstMul(usize, Box<Predicate>),
+    And(Box<Predicate>, Box<Predicate>),
+    Or(Box<Predicate>, Box<Predicate>),
+    Not(Box<Predicate>),
+    IfElse(Box<Predicate>, Box<Predicate>, Box<Predicate>),
+    Uninterp(Ident, Vec<Predicate>),
+}
+
+pub enum Constraint {
+    Pred(Predicate),
+    And(Box<Constraint>, Box<Constraint>),
+    Implic(Ident, BaseTy, Predicate, Box<Constraint>),
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub enum BaseTy {
+    Usize,
+    Bool,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Refinement {
+    pub ident: Ident,
+    pub pred: Predicate,
+}
+
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct DataTy {
     pub dty: DataTyKind,
     // TODO remove with introduction of traits
-    pub constraints: Vec<Constraint>,
+    pub constraints: Vec<TyConstr>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
@@ -971,7 +1014,7 @@ impl DataTy {
         }
     }
 
-    pub fn with_constr(dty: DataTyKind, constraints: Vec<Constraint>) -> Self {
+    pub fn with_constr(dty: DataTyKind, constraints: Vec<TyConstr>) -> Self {
         DataTy {
             dty,
             constraints,
@@ -995,6 +1038,7 @@ impl DataTy {
             Atomic(_) => false,
             Ident(_) => true,
             Ref(reff) => reff.own == Ownership::Uniq,
+            Refine(_, _) => false,
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
@@ -1021,6 +1065,7 @@ impl DataTy {
             | Atomic(_)
             | Ident(_)
             | Ref(_)
+            | Refine(_, _)
             | At(_, _)
             | Array(_, _)
             | ArrayShape(_, _) => true,
@@ -1036,7 +1081,10 @@ impl DataTy {
             return true;
         }
         match &dty.dty {
-            DataTyKind::Scalar(_) | DataTyKind::Ident(_) | DataTyKind::Range => false,
+            DataTyKind::Scalar(_)
+            | DataTyKind::Ident(_)
+            | DataTyKind::Refine(_, _)
+            | DataTyKind::Range => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
             DataTyKind::Atomic(sty) => &self.dty == &DataTyKind::Scalar(sty.clone()),
             DataTyKind::Ref(reff) => self.occurs_in(&reff.dty),
@@ -1057,7 +1105,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTyKind::*;
         match &self.dty {
-            Scalar(_) | Atomic(_) | Ident(_) | Range | Dead(_) => false,
+            Scalar(_) | Atomic(_) | Ident(_) | Refine(_, _) | Range | Dead(_) => false,
             Ref(reff) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = &reff.rgn {
                     prv_val_name == prv_val_n
@@ -1107,6 +1155,7 @@ pub enum DataTyKind {
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Box<RefDty>),
+    Refine(BaseTy, Box<Refinement>),
     RawPtr(Box<DataTy>),
     Range,
     // TODO remove. This is an attribute of a typing context entry, not the type.
@@ -1351,7 +1400,7 @@ mod size_asserts {
     static_assert_size!(Lit, 16);
     static_assert_size!(Memory, 32);
     static_assert_size!(Nat, 56);
-    static_assert_size!(ParamDecl, 72);
+    static_assert_size!(ParamDecl, 48);
     static_assert_size!(Pattern, 40);
     static_assert_size!(PlaceExpr, 64);
     static_assert_size!(PlaceExprKind, 40);

@@ -254,6 +254,7 @@ pub(super) enum ScalarTy {
     Byte,
     U32,
     U64,
+    Usize,
     I32,
     I64,
     F32,
