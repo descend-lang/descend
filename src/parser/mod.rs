@@ -692,8 +692,8 @@ peg::parser! {
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
             / name:ident() { DataTyKind::Ident(name) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
-            / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTyKind::Array(Box::new(t), n) }
-            / "[" _ "[" _ dty:dty() _ ";" _ n:nat() _ "]" _ "]" {
+            / "[" _ t:dty() _ ";" _ n:ident() _ "]" { DataTyKind::Array(Box::new(t), n) }
+            / "[" _ "[" _ dty:dty() _ ";" _ n:ident() _ "]" _ "]" {
                 DataTyKind::ArrayShape(Box::new(dty), n)
             }
             / "&" _ prov:(prv:provenance() __ { prv })? own:ownership() __ mem:memory_kind() __ dty:dty() {
@@ -788,9 +788,9 @@ peg::parser! {
             / "Y" _ "<" _ dim1d:dim1d() _ ">" { Dim::Y(Box::new(dim1d)) }
             / "Z" _ "<" _ dim1d:dim1d() _ ">" { Dim::Z(Box::new(dim1d)) }
 
-        rule dim3d() -> Dim3d = n1:nat() _ "," _ n2:nat() _ "," _ n3:nat() { Dim3d(n1, n2, n3) }
-        rule dim2d() -> Dim2d = n1:nat() _ "," _ n2:nat() { Dim2d(n1, n2) }
-        rule dim1d() -> Dim1d = n:nat() { Dim1d(n) }
+        rule dim3d() -> Dim3d = n1:ident() _ "," _ n2:ident() _ "," _ n3:ident() { Dim3d(n1, n2, n3) }
+        rule dim2d() -> Dim2d = n1:ident() _ "," _ n2:ident() { Dim2d(n1, n2) }
+        rule dim1d() -> Dim1d = n:ident() { Dim1d(n) }
 
         rule ident() -> Ident
             = begin:position!() ident:$(identifier()) end:position!() {

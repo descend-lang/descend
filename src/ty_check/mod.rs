@@ -159,7 +159,7 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         ExprKind::LetUninit(ident, dty) => ty_check_let_uninit(ctx, ident, dty)?,
         ExprKind::Seq(es) => ty_check_seq(ctx, es)?,
         ExprKind::Lit(l) => ty_check_literal(l),
-        ExprKind::Array(elems) => ty_check_array(ctx, elems)?,
+        ExprKind::Array(elems) => todo!(), //ty_check_array(ctx, elems)?,
         ExprKind::Tuple(elems) => ty_check_tuple(ctx, elems)?,
         // ExprKind::Proj(e, i) => ty_check_proj(ctx, e, *i)?,
         ExprKind::App(ef, k_args, args) => ty_check_app(ctx, ef, k_args, args)?,
@@ -1292,30 +1292,30 @@ fn ty_check_proj(ctx: &mut ExprTyCtx, e: &mut Expr, i: usize) -> TyResult<Ty> {
     Ok(Ty::new(TyKind::Data(Box::new(elem_ty?))))
 }
 
-fn ty_check_array(ctx: &mut ExprTyCtx, elems: &mut Vec<Expr>) -> TyResult<Ty> {
-    assert!(!elems.is_empty());
-    for elem in elems.iter_mut() {
-        ty_check_expr(ctx, elem)?;
-    }
-    let ty = elems.first().unwrap().ty.as_ref();
-    if !matches!(&ty.unwrap().ty, TyKind::Data(_)) {
-        return Err(TyError::String(
-            "Array elements cannot be views.".to_string(),
-        ));
-    }
-    if elems.iter().any(|elem| ty != elem.ty.as_ref()) {
-        Err(TyError::String(
-            "Not all provided elements have the same type.".to_string(),
-        ))
-    } else {
-        Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Array(
-                Box::new(ty.as_ref().unwrap().dty().clone()),
-                Nat::Lit(elems.len()),
-            ),
-        )))))
-    }
-}
+// fn ty_check_array(ctx: &mut ExprTyCtx, elems: &mut Vec<Expr>) -> TyResult<Ty> {
+//     assert!(!elems.is_empty());
+//     for elem in elems.iter_mut() {
+//         ty_check_expr(ctx, elem)?;
+//     }
+//     let ty = elems.first().unwrap().ty.as_ref();
+//     if !matches!(&ty.unwrap().ty, TyKind::Data(_)) {
+//         return Err(TyError::String(
+//             "Array elements cannot be views.".to_string(),
+//         ));
+//     }
+//     if elems.iter().any(|elem| ty != elem.ty.as_ref()) {
+//         Err(TyError::String(
+//             "Not all provided elements have the same type.".to_string(),
+//         ))
+//     } else {
+//         Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+//             DataTyKind::Array(
+//                 Box::new(ty.as_ref().unwrap().dty().clone()),
+//                 Nat::Lit(elems.len()),
+//             ),
+//         )))))
+//     }
+// }
 
 fn ty_check_literal(l: &mut Lit) -> Ty {
     let scalar_data = match l {

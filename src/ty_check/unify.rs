@@ -86,18 +86,18 @@ pub(super) struct PrvConstr(pub Provenance, pub Provenance);
 pub(super) struct ConstrainMap {
     // TODO swap Box<str> for something more abstract, like Symbol or Identifier
     pub dty_unifier: HashMap<Box<str>, DataTy>,
-    pub nat_unifier: HashMap<Box<str>, Nat>,
     pub mem_unifier: HashMap<Box<str>, Memory>,
     pub prv_unifier: HashMap<Box<str>, Provenance>,
+    pub nat_constraints: Vec<Constraint>,
 }
 
 impl ConstrainMap {
     fn new() -> Self {
         ConstrainMap {
             dty_unifier: HashMap::new(),
-            nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
             prv_unifier: HashMap::new(),
+            nat_constraints: Vec::new(),
         }
     }
 }
@@ -260,17 +260,39 @@ impl Constrainable for DataTy {
                 mem1.constrain(mem2, constr_map, prv_rels)?;
                 dty1.constrain(dty2, constr_map, prv_rels)
             }
+            (DataTyKind::Refine(base_tyl, refinel), DataTyKind::Refine(base_tyr, refiner)) => {
+                if base_tyl != base_tyr {
+                    return Err(UnifyError::CannotUnify);
+                }
+                constr_map.nat_constraints.push(Constraint::Implic(
+                    refinel.ident.clone(),
+                    *base_tyl,
+                    refinel.pred,
+                    Box::new(Constraint::Pred({
+                        let mut subst_pred = refiner.pred.clone();
+                        subst_pred.subst_ident(&refiner.ident, &refinel.ident);
+                        subst_pred
+                    })),
+                ));
+                Ok(())
+            }
             (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => elem_dtys1
                 .iter_mut()
                 .zip(elem_dtys2)
                 .try_for_each(|(dty1, dty2)| dty1.constrain(dty2, constr_map, prv_rels)),
-            (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
+            (DataTyKind::Array(dty1, ident1), DataTyKind::Array(dty2, ident2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
-                n1.constrain(n2, constr_map, prv_rels)
+                if ident1 != ident2 {
+                    return Err(UnifyError::CannotUnify);
+                }
+                Ok(())
             }
-            (DataTyKind::ArrayShape(dty1, n1), DataTyKind::ArrayShape(dty2, n2)) => {
+            (DataTyKind::ArrayShape(dty1, ident1), DataTyKind::ArrayShape(dty2, ident2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
-                n1.constrain(n2, constr_map, prv_rels)
+                if ident1 != ident2 {
+                    return Err(UnifyError::CannotUnify);
+                }
+                Ok(())
             }
             (DataTyKind::At(dty1, mem1), DataTyKind::At(dty2, mem2)) => {
                 dty1.constrain(dty2, constr_map, prv_rels)?;
@@ -341,18 +363,21 @@ impl Constrainable for Dim {
     ) -> UnifyResult<()> {
         match (self, other) {
             (Dim::XYZ(ldim), Dim::XYZ(rdim)) => {
-                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
-                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)?;
-                ldim.2.constrain(&mut rdim.2, constr_map, prv_rels)
+                todo!()
+                // ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
+                // ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)?;
+                // ldim.2.constrain(&mut rdim.2, constr_map, prv_rels)
             }
             (Dim::XY(ldim), Dim::XY(rdim))
             | (Dim::XZ(ldim), Dim::XZ(rdim))
             | (Dim::YZ(ldim), Dim::YZ(rdim)) => {
-                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
-                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)
+                todo!()
+                // ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
+                // ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)
             }
             (Dim::X(ld), Dim::X(rd)) | (Dim::Y(ld), Dim::Y(rd)) | (Dim::Z(ld), Dim::Z(rd)) => {
-                ld.0.constrain(&mut rd.0, constr_map, prv_rels)
+                // ld.0.constrain(&mut rd.0, constr_map, prv_rels)
+                todo!()
             }
             _ => Err(UnifyError::CannotUnify),
         }
@@ -364,81 +389,81 @@ impl Constrainable for Dim {
     }
 }
 
-impl Nat {
-    fn bind_to(
-        &self,
-        ident: &Ident,
-        constr_map: &mut ConstrainMap,
-        _: &mut Vec<PrvConstr>,
-    ) -> UnifyResult<()> {
-        // No occurs check.
-        // Nats can be equal to an expression in which the nat appears again. E.g., a = a * 1
-        if let Some(old) = constr_map
-            .nat_unifier
-            .insert(ident.name.clone(), self.clone())
-        {
-            if &old != self {
-                println!(
-                    "WARNING: Not able to check equality of Nats `{}` and `{}`",
-                    old, self
-                )
-            }
-        }
-        constr_map
-            .nat_unifier
-            .values_mut()
-            .for_each(|n| SubstIdent::new(ident, self).visit_nat(n));
-        Ok(())
-    }
-
-    fn unify(n1: &Nat, n2: &Nat, _constr_map: &mut ConstrainMap) -> UnifyResult<()> {
-        if n1 == n2 {
-            Ok(())
-        } else {
-            println!(
-                "WARNING: Not able to check equality of Nats `{}` and `{}`",
-                n1, n2
-            );
-            Ok(())
-        }
-    }
-}
-
-impl Constrainable for Nat {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &mut ConstrainMap,
-        prv_rels: &mut Vec<PrvConstr>,
-    ) -> UnifyResult<()> {
-        match (&mut *self, &mut *other) {
-            (Nat::Ident(n1i), Nat::Ident(n2i)) if n1i.is_implicit || n2i.is_implicit => {
-                match (n1i.is_implicit, n2i.is_implicit) {
-                    (true, _) => other.bind_to(n1i, constr_map, prv_rels),
-                    (false, _) => self.bind_to(n2i, constr_map, prv_rels),
-                }
-            }
-            (Nat::Ident(n1i), _) if n1i.is_implicit => other.bind_to(n1i, constr_map, prv_rels),
-            (_, Nat::Ident(n2i)) if n2i.is_implicit => self.bind_to(n2i, constr_map, prv_rels),
-            (Nat::BinOp(op1, n1l, n1r), Nat::BinOp(op2, n2l, n2r)) if op1 == op2 => {
-                n1l.constrain(n2l, constr_map, prv_rels)?;
-                n1r.constrain(n2r, constr_map, prv_rels)
-            }
-            (Nat::App(f1, ns1), Nat::App(f2, ns2)) if f1 == f2 => {
-                for (n1, n2) in ns1.iter_mut().zip(ns2.iter_mut()) {
-                    n1.constrain(n2, constr_map, prv_rels)?;
-                }
-                Ok(())
-            }
-            _ => Self::unify(self, other, constr_map),
-        }
-    }
-
-    fn substitute(&mut self, subst: &ConstrainMap) {
-        let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_nat(self);
-    }
-}
+// impl Nat {
+//     fn bind_to(
+//         &self,
+//         ident: &Ident,
+//         constr_map: &mut ConstrainMap,
+//         _: &mut Vec<PrvConstr>,
+//     ) -> UnifyResult<()> {
+//         // No occurs check.
+//         // Nats can be equal to an expression in which the nat appears again. E.g., a = a * 1
+//         if let Some(old) = constr_map
+//             .nat_unifier
+//             .insert(ident.name.clone(), self.clone())
+//         {
+//             if &old != self {
+//                 println!(
+//                     "WARNING: Not able to check equality of Nats `{}` and `{}`",
+//                     old, self
+//                 )
+//             }
+//         }
+//         constr_map
+//             .nat_unifier
+//             .values_mut()
+//             .for_each(|n| SubstIdent::new(ident, self).visit_nat(n));
+//         Ok(())
+//     }
+//
+//     fn unify(n1: &Nat, n2: &Nat, _constr_map: &mut ConstrainMap) -> UnifyResult<()> {
+//         if n1 == n2 {
+//             Ok(())
+//         } else {
+//             println!(
+//                 "WARNING: Not able to check equality of Nats `{}` and `{}`",
+//                 n1, n2
+//             );
+//             Ok(())
+//         }
+//     }
+// }
+//
+// impl Constrainable for Nat {
+//     fn constrain(
+//         &mut self,
+//         other: &mut Self,
+//         constr_map: &mut ConstrainMap,
+//         prv_rels: &mut Vec<PrvConstr>,
+//     ) -> UnifyResult<()> {
+//         match (&mut *self, &mut *other) {
+//             (Nat::Ident(n1i), Nat::Ident(n2i)) if n1i.is_implicit || n2i.is_implicit => {
+//                 match (n1i.is_implicit, n2i.is_implicit) {
+//                     (true, _) => other.bind_to(n1i, constr_map, prv_rels),
+//                     (false, _) => self.bind_to(n2i, constr_map, prv_rels),
+//                 }
+//             }
+//             (Nat::Ident(n1i), _) if n1i.is_implicit => other.bind_to(n1i, constr_map, prv_rels),
+//             (_, Nat::Ident(n2i)) if n2i.is_implicit => self.bind_to(n2i, constr_map, prv_rels),
+//             (Nat::BinOp(op1, n1l, n1r), Nat::BinOp(op2, n2l, n2r)) if op1 == op2 => {
+//                 n1l.constrain(n2l, constr_map, prv_rels)?;
+//                 n1r.constrain(n2r, constr_map, prv_rels)
+//             }
+//             (Nat::App(f1, ns1), Nat::App(f2, ns2)) if f1 == f2 => {
+//                 for (n1, n2) in ns1.iter_mut().zip(ns2.iter_mut()) {
+//                     n1.constrain(n2, constr_map, prv_rels)?;
+//                 }
+//                 Ok(())
+//             }
+//             _ => Self::unify(self, other, constr_map),
+//         }
+//     }
+//
+//     fn substitute(&mut self, subst: &ConstrainMap) {
+//         let mut apply_subst = ApplySubst::new(subst);
+//         apply_subst.visit_nat(self);
+//     }
+// }
 
 impl Memory {
     fn bind_to(&self, ident: &Ident, constr_map: &mut ConstrainMap) -> UnifyResult<()> {
@@ -574,14 +599,14 @@ impl<'a> ApplySubst<'a> {
 }
 
 impl<'a> VisitMut for ApplySubst<'a> {
-    fn visit_nat(&mut self, nat: &mut Nat) {
-        match nat {
-            Nat::Ident(ident) if self.subst.nat_unifier.contains_key(&ident.name) => {
-                *nat = self.subst.nat_unifier.get(&ident.name).unwrap().clone();
-            }
-            _ => visit_mut::walk_nat(self, nat),
-        }
-    }
+    // fn visit_nat(&mut self, nat: &mut Nat) {
+    //     match nat {
+    //         Nat::Ident(ident) if self.subst.nat_unifier.contains_key(&ident.name) => {
+    //             *nat = self.subst.nat_unifier.get(&ident.name).unwrap().clone();
+    //         }
+    //         _ => visit_mut::walk_nat(self, nat),
+    //     }
+    // }
 
     fn visit_mem(&mut self, mem: &mut Memory) {
         match mem {
@@ -622,14 +647,14 @@ impl<'a, S: Constrainable> SubstIdent<'a, S> {
     }
 }
 
-impl<'a> VisitMut for SubstIdent<'a, Nat> {
-    fn visit_nat(&mut self, nat: &mut Nat) {
-        match nat {
-            Nat::Ident(ident) if ident.name == self.ident.name => *nat = self.term.clone(),
-            _ => visit_mut::walk_nat(self, nat),
-        }
-    }
-}
+// impl<'a> VisitMut for SubstIdent<'a, Nat> {
+//     fn visit_nat(&mut self, nat: &mut Nat) {
+//         match nat {
+//             Nat::Ident(ident) if ident.name == self.ident.name => *nat = self.term.clone(),
+//             _ => visit_mut::walk_nat(self, nat),
+//         }
+//     }
+// }
 
 impl<'a> VisitMut for SubstIdent<'a, Memory> {
     fn visit_mem(&mut self, mem: &mut Memory) {
@@ -669,7 +694,7 @@ mod tests {
             Memory::GpuGlobal,
             DataTy::new(DataTyKind::Array(
                 Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                Nat::Ident(Ident::new("n")),
+                Ident::new("n"),
             )),
         ))))
     }

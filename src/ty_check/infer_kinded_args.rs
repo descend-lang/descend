@@ -1,6 +1,6 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Dim, ExecTy, ExecTyKind, FnTy, Ident, IdentKinded, Memory, Nat,
-    Provenance, Ty, TyKind,
+    ArgKinded, DataTy, DataTyKind, ExecTy, FnTy, Ident, IdentKinded, Memory, Nat, Provenance, Ty,
+    TyKind,
 };
 use std::collections::HashMap;
 
@@ -22,7 +22,7 @@ pub fn infer_kinded_args_from_mono_ty(
     for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
         infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
     }
-    infer_kargs_exec_level(&mut res_map, subst_exec_level, &mono_fn_ty.exec_ty);
+    // infer_kargs_exec_level(&mut res_map, subst_exec_level, &mono_fn_ty.exec_ty);
     infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
     let mut res_vec = Vec::new();
     for gen_arg in remain_gen_args {
@@ -77,56 +77,56 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
                 panic!("Unexpected top-level function type.")
             }
             infer_from_lists!(infer_kargs_tys, map, &fn_ty1.param_tys, &fn_ty2.param_tys);
-            infer_kargs_exec_level(map, &fn_ty1.exec_ty, &fn_ty2.exec_ty);
+            // infer_kargs_exec_level(map, &fn_ty1.exec_ty, &fn_ty2.exec_ty);
             infer_kargs_tys(map, &fn_ty1.ret_ty, &fn_ty2.ret_ty)
         }
         _ => panic_no_inst!(),
     }
 }
 
-fn infer_kargs_exec_level(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_exec_level: &ExecTy,
-    mono_exec_level: &ExecTy,
-) {
-    match (&poly_exec_level.ty, &mono_exec_level.ty) {
-        (ExecTyKind::GpuGrid(gdim1, bdim1), ExecTyKind::GpuGrid(gdim2, bdim2))
-        | (ExecTyKind::GpuBlockGrp(gdim1, bdim1), ExecTyKind::GpuBlockGrp(gdim2, bdim2)) => {
-            infer_kargs_dims(map, gdim1, gdim2);
-            infer_kargs_dims(map, bdim1, bdim2);
-        }
-        (ExecTyKind::GpuBlock(dim1), ExecTyKind::GpuBlock(dim2))
-        | (ExecTyKind::GpuThreadGrp(dim1), ExecTyKind::GpuThreadGrp(dim2)) => {
-            infer_kargs_dims(map, dim1, dim2);
-        }
-        (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
-        | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
-        | (ExecTyKind::View, ExecTyKind::View) => {}
-        _ => panic_no_inst!(),
-    }
-}
-
-fn infer_kargs_dims(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
-    match (poly_dim, mono_dim) {
-        (Dim::XYZ(d3d1), Dim::XYZ(d3d2)) => {
-            infer_kargs_nats(map, &d3d1.0, &d3d2.0);
-            infer_kargs_nats(map, &d3d1.1, &d3d2.1);
-            infer_kargs_nats(map, &d3d1.2, &d3d2.2);
-        }
-        (Dim::XY(d2d1), Dim::XY(d2d2))
-        | (Dim::XZ(d2d1), Dim::XZ(d2d2))
-        | (Dim::YZ(d2d1), Dim::YZ(d2d2)) => {
-            infer_kargs_nats(map, &d2d1.0, &d2d2.0);
-            infer_kargs_nats(map, &d2d1.1, &d2d2.1);
-        }
-        (Dim::X(d1d1), Dim::X(d1d2))
-        | (Dim::Y(d1d1), Dim::Y(d1d2))
-        | (Dim::Z(d1d1), Dim::Z(d1d2)) => {
-            infer_kargs_nats(map, &d1d1.0, &d1d2.0);
-        }
-        _ => panic_no_inst!(),
-    }
-}
+// fn infer_kargs_exec_level(
+//     map: &mut HashMap<Ident, ArgKinded>,
+//     poly_exec_level: &ExecTy,
+//     mono_exec_level: &ExecTy,
+// ) {
+//     match (&poly_exec_level.ty, &mono_exec_level.ty) {
+//         (ExecTyKind::GpuGrid(gdim1, bdim1), ExecTyKind::GpuGrid(gdim2, bdim2))
+//         | (ExecTyKind::GpuBlockGrp(gdim1, bdim1), ExecTyKind::GpuBlockGrp(gdim2, bdim2)) => {
+//             infer_kargs_dims(map, gdim1, gdim2);
+//             infer_kargs_dims(map, bdim1, bdim2);
+//         }
+//         (ExecTyKind::GpuBlock(dim1), ExecTyKind::GpuBlock(dim2))
+//         | (ExecTyKind::GpuThreadGrp(dim1), ExecTyKind::GpuThreadGrp(dim2)) => {
+//             infer_kargs_dims(map, dim1, dim2);
+//         }
+//         (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
+//         | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
+//         | (ExecTyKind::View, ExecTyKind::View) => {}
+//         _ => panic_no_inst!(),
+//     }
+// }
+//
+// fn infer_kargs_dims(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
+//     match (poly_dim, mono_dim) {
+//         (Dim::XYZ(d3d1), Dim::XYZ(d3d2)) => {
+//             infer_kargs_nats(map, &d3d1.0, &d3d2.0);
+//             infer_kargs_nats(map, &d3d1.1, &d3d2.1);
+//             infer_kargs_nats(map, &d3d1.2, &d3d2.2);
+//         }
+//         (Dim::XY(d2d1), Dim::XY(d2d2))
+//         | (Dim::XZ(d2d1), Dim::XZ(d2d2))
+//         | (Dim::YZ(d2d1), Dim::YZ(d2d2)) => {
+//             infer_kargs_nats(map, &d2d1.0, &d2d2.0);
+//             infer_kargs_nats(map, &d2d1.1, &d2d2.1);
+//         }
+//         (Dim::X(d1d1), Dim::X(d1d2))
+//         | (Dim::Y(d1d1), Dim::Y(d1d2))
+//         | (Dim::Z(d1d1), Dim::Z(d1d2)) => {
+//             infer_kargs_nats(map, &d1d1.0, &d1d2.0);
+//         }
+//         _ => panic_no_inst!(),
+//     }
+// }
 
 fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono_dty: &DataTy) {
     match (&poly_dty.dty, &mono_dty.dty) {
@@ -142,11 +142,11 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         }
         (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
             infer_kargs_dtys(map, dty1, dty2);
-            infer_kargs_nats(map, n1, n2);
+            // infer_kargs_nats(map, n1, n2);
         }
         (DataTyKind::ArrayShape(dty1, n1), DataTyKind::ArrayShape(dty2, n2)) => {
             infer_kargs_dtys(map, dty1, dty2);
-            infer_kargs_nats(map, n1, n2);
+            // infer_kargs_nats(map, n1, n2);
         }
         (DataTyKind::At(dty1, mem1), DataTyKind::At(dty2, mem2)) => {
             infer_kargs_dtys(map, dty1, dty2);

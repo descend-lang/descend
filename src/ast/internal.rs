@@ -3,7 +3,7 @@
 
 // TODO specific access modifiers
 
-use super::{Ident, Ownership, PlaceExpr, Ty};
+use super::{Ident, Ownership, PlaceExpr};
 use crate::ast::{DataTy, ExecExpr, Mutability, Nat, PlaceExprKind, View};
 use std::collections::HashSet;
 

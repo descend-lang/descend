@@ -1,7 +1,6 @@
 use crate::ast::internal::Loan;
 use crate::ast::{
-    BaseTy, DataTy, DataTyKind, ExecTy, Ident, Kind, Memory, Predicate, Provenance, ScalarTy, Ty,
-    TyKind,
+    BaseTy, DataTyKind, ExecTy, Ident, Kind, Memory, Predicate, Provenance, Ty, TyKind,
 };
 use crate::ty_check::ctxs::{CtxResult, KindCtx, TyCtx};
 use crate::ty_check::error::CtxError;

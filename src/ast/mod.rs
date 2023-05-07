@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
 
@@ -927,11 +926,11 @@ impl Ty {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Dim1d(pub Nat);
+pub struct Dim1d(pub Ident);
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Dim2d(pub Nat, pub Nat);
+pub struct Dim2d(pub Ident, pub Ident);
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Dim3d(pub Nat, pub Nat, pub Nat);
+pub struct Dim3d(pub Ident, pub Ident, pub Ident);
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Dim {
     XYZ(Box<Dim3d>),
@@ -944,14 +943,14 @@ pub enum Dim {
 }
 
 impl Dim {
-    pub fn new_3d(n1: Nat, n2: Nat, n3: Nat) -> Self {
+    pub fn new_3d(n1: Ident, n2: Ident, n3: Ident) -> Self {
         Dim::XYZ(Box::new(Dim3d(n1, n2, n3)))
     }
 
-    pub fn new_2d<F: Fn(Box<Dim2d>) -> Self>(constr: F, n1: Nat, n2: Nat) -> Self {
+    pub fn new_2d<F: Fn(Box<Dim2d>) -> Self>(constr: F, n1: Ident, n2: Ident) -> Self {
         constr(Box::new(Dim2d(n1, n2)))
     }
-    pub fn new_1d<F: Fn(Box<Dim1d>) -> Self>(constr: F, n: Nat) -> Self {
+    pub fn new_1d<F: Fn(Box<Dim1d>) -> Self>(constr: F, n: Ident) -> Self {
         constr(Box::new(Dim1d(n)))
     }
 }
@@ -978,6 +977,28 @@ pub enum Predicate {
     Uninterp(Ident, Vec<Predicate>),
 }
 
+impl Predicate {
+    pub fn subst_ident(mut self, ident: &Ident, for_ident: &Ident) {
+        struct SubstIdent<'a> {
+            ident: &'a Ident,
+            for_ident: &'a Ident,
+        }
+        impl<'a> VisitMut for SubstIdent<'a> {
+            fn visit_pred(&mut self, pred: &mut Predicate) {
+                match pred {
+                    Predicate::Ident(ident) if ident == self.ident => {
+                        *ident = self.for_ident.clone();
+                    }
+                    _ => visit_mut::walk_pred(self, pred),
+                }
+            }
+        }
+        let mut subst_ident = SubstIdent { ident, for_ident };
+        subst_ident.visit_pred(&mut self);
+    }
+}
+
+#[derive(Debug)]
 pub enum Constraint {
     Pred(Predicate),
     And(Box<Constraint>, Box<Constraint>),
@@ -1149,9 +1170,9 @@ pub enum DataTyKind {
     Ident(Ident),
     Scalar(ScalarTy),
     Atomic(ScalarTy),
-    Array(Box<DataTy>, Nat),
+    Array(Box<DataTy>, Ident),
     // [[ dty; n ]]
-    ArrayShape(Box<DataTy>, Nat),
+    ArrayShape(Box<DataTy>, Ident),
     Tuple(Vec<DataTy>),
     At(Box<DataTy>, Memory),
     Ref(Box<RefDty>),
@@ -1385,8 +1406,8 @@ mod size_asserts {
         };
     }
     static_assert_size!(Dim, 16);
-    static_assert_size!(DataTy, 112);
-    static_assert_size!(DataTyKind, 72);
+    static_assert_size!(DataTy, 88);
+    static_assert_size!(DataTyKind, 48);
     static_assert_size!(ExecExpr, 32);
     static_assert_size!(Exec, 64);
     static_assert_size!(ExecPathElem, 16);
@@ -1394,7 +1415,7 @@ mod size_asserts {
     static_assert_size!(ExecTyKind, 40);
     static_assert_size!(Expr, 128);
     static_assert_size!(ExprKind, 104);
-    static_assert_size!(FunDef, 264);
+    static_assert_size!(FunDef, 240);
     static_assert_size!(Ident, 32); // maybe too large?
     static_assert_size!(IdentExec, 40);
     static_assert_size!(Lit, 16);

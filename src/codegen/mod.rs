@@ -346,7 +346,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                                     &desc::TyKind::Data(Box::new(d.as_ref().clone())),
                                     desc::Mutability::Mut,
                                 )),
-                                Some(n.clone()),
+                                Some(desc::Nat::Ident(n.clone())),
                             )
                         } else {
                             gen_ty(&TyKind::Data(dty.clone()), desc::Mutability::Mut)
@@ -899,8 +899,11 @@ fn get_elem_ty_and_amount(dty: &desc::DataTy) -> (desc::Ty, desc::Nat) {
         ),
         desc::DataTyKind::Array(arr_elem_dty, n) => {
             let (elem_ty, amount) = get_elem_ty_and_amount(&arr_elem_dty);
-            let multiplied_amount =
-                desc::Nat::BinOp(desc::BinOpNat::Mul, Box::new(amount), Box::new(n.clone()));
+            let multiplied_amount = desc::Nat::BinOp(
+                desc::BinOpNat::Mul,
+                Box::new(amount),
+                Box::new(desc::Nat::Ident(n.clone())),
+            );
             (elem_ty, multiplied_amount)
         }
         desc::DataTyKind::Scalar(desc::ScalarTy::Unit)
@@ -1901,7 +1904,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 ),
                 d::Array(dt, n) => cu::Ty::Array(
                     Box::new(gen_ty(&Data(Box::new(dt.as_ref().clone())), m)),
-                    n.clone(),
+                    desc::Nat::Ident(n.clone()),
                 ),
                 d::At(dt, mem) => {
                     if let desc::Memory::GpuShared = mem {
@@ -1963,7 +1966,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 d::Ident(ident) => cu::Ty::Ident(ident.name.to_string()),
                 d::ArrayShape(dt, n) => cu::Ty::Array(
                     Box::new(gen_ty(&Data(Box::new(dt.as_ref().clone())), m)),
-                    n.clone(),
+                    desc::Nat::Ident(n.clone()),
                 ),
                 d::Dead(_) => {
                     panic!("Dead types are only for type checking and cannot be generated.")
@@ -2004,18 +2007,19 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
 }
 
 fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
-    match &ty.ty {
-        desc::TyKind::Data(dty) => match &dty.dty {
-            desc::DataTyKind::Array(_, n) => Some(n.clone()),
-            desc::DataTyKind::Ref(reff) => match &reff.dty.dty {
-                desc::DataTyKind::Array(_, n) => Some(n.clone()),
-                desc::DataTyKind::ArrayShape(_, n) => Some(n.clone()),
-                _ => None,
-            },
-            _ => None,
-        },
-        _ => None,
-    }
+    todo!()
+    // match &ty.ty {
+    //     desc::TyKind::Data(dty) => match &dty.dty {
+    //         desc::DataTyKind::Array(_, n) => Some(n.clone()),
+    //         desc::DataTyKind::Ref(reff) => match &reff.dty.dty {
+    //             desc::DataTyKind::Array(_, n) => Some(n.clone()),
+    //             desc::DataTyKind::ArrayShape(_, n) => Some(n.clone()),
+    //             _ => None,
+    //         },
+    //         _ => None,
+    //     },
+    //     _ => None,
+    // }
 }
 
 fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat) {

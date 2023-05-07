@@ -104,20 +104,20 @@ pub fn walk_prv<V: VisitMut>(visitor: &mut V, prv: &mut Provenance) {
 
 pub fn walk_dim3d<V: VisitMut>(visitor: &mut V, dim3d: &mut Dim3d) {
     let Dim3d(n1, n2, n3) = dim3d;
-    visitor.visit_nat(n1);
-    visitor.visit_nat(n2);
-    visitor.visit_nat(n3);
+    visitor.visit_ident(n1);
+    visitor.visit_ident(n2);
+    visitor.visit_ident(n3);
 }
 
 pub fn walk_dim2d<V: VisitMut>(visitor: &mut V, dim2d: &mut Dim2d) {
     let Dim2d(n1, n2) = dim2d;
-    visitor.visit_nat(n1);
-    visitor.visit_nat(n2);
+    visitor.visit_ident(n1);
+    visitor.visit_ident(n2);
 }
 
 pub fn walk_dim1d<V: VisitMut>(visitor: &mut V, dim1d: &mut Dim1d) {
     let Dim1d(n) = dim1d;
-    visitor.visit_nat(n);
+    visitor.visit_ident(n);
 }
 
 pub fn walk_dim<V: VisitMut>(visitor: &mut V, dim: &mut Dim) {
@@ -176,11 +176,11 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
-            visitor.visit_nat(n)
+            visitor.visit_ident(n)
         }
         DataTyKind::ArrayShape(dty, n) => {
             visitor.visit_dty(dty);
-            visitor.visit_nat(n);
+            visitor.visit_ident(n);
         }
         DataTyKind::At(dty, mem) => {
             visitor.visit_dty(dty);

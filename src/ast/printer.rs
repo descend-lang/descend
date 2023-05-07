@@ -2,7 +2,6 @@ use crate::ast::{
     BaseTy, BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecTy, ExecTyKind, Ident, IdentKinded,
     Kind, Memory, Nat, Ownership, Predicate, Provenance, Refinement, ScalarTy, Ty, TyKind,
 };
-use std::fmt::Write;
 
 pub struct PrintState {
     string: String,
@@ -107,31 +106,31 @@ impl PrintState {
         match dim {
             Dim::XYZ(dim3d) => {
                 self.string.push_str("XYZ<");
-                print_static_list!(self, Self::print_nat, &dim3d.0, &dim3d.1, &dim3d.2);
+                print_static_list!(self, Self::print_ident, &dim3d.0, &dim3d.1, &dim3d.2);
             }
             Dim::XY(dim2d) => {
                 self.string.push_str("XY<");
-                print_static_list!(self, Self::print_nat, &dim2d.0, &dim2d.1);
+                print_static_list!(self, Self::print_ident, &dim2d.0, &dim2d.1);
             }
             Dim::XZ(dim2d) => {
                 self.string.push_str("XZ<");
-                print_static_list!(self, Self::print_nat, &dim2d.0, &dim2d.1);
+                print_static_list!(self, Self::print_ident, &dim2d.0, &dim2d.1);
             }
             Dim::YZ(dim2d) => {
                 self.string.push_str("YZ<");
-                print_static_list!(self, Self::print_nat, &dim2d.0, &dim2d.1);
+                print_static_list!(self, Self::print_ident, &dim2d.0, &dim2d.1);
             }
             Dim::X(dim1d) => {
                 self.string.push_str("X<");
-                self.print_nat(&dim1d.0)
+                self.print_ident(&dim1d.0)
             }
             Dim::Y(dim1d) => {
                 self.string.push_str("Y<");
-                self.print_nat(&dim1d.0)
+                self.print_ident(&dim1d.0)
             }
             Dim::Z(dim1d) => {
                 self.string.push_str("Z<");
-                self.print_nat(&dim1d.0)
+                self.print_ident(&dim1d.0)
             }
         }
         self.string.push('>');
@@ -158,14 +157,14 @@ impl PrintState {
                 self.string.push('[');
                 self.print_dty(dty);
                 self.string.push(';');
-                self.print_nat(n);
+                self.print_ident(n);
                 self.string.push(']');
             }
             DataTyKind::ArrayShape(dty, n) => {
                 self.string.push_str("[[");
                 self.print_dty(dty);
                 self.string.push(';');
-                self.print_nat(n);
+                self.print_ident(n);
                 self.string.push_str("]]");
             }
             DataTyKind::Tuple(dtys) => {
