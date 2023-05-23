@@ -22,6 +22,7 @@ pub static ATOMIC_LOAD: &str = "atomic_load";
 pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
 pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
 pub static TO_ATOMIC_ARRAY: &str = "to_atomic_array";
+pub static TO_ATOMIC: &str = "to_atomic";
 
 pub static CREATE_ARRAY: &str = "create_array";
 
@@ -59,6 +60,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
         (ATOMIC_FETCH_ADD, atomic_fetch_add_ty()),
         (TO_ATOMIC_ARRAY, to_atomic_array_ty()),
+        (TO_ATOMIC, to_atomic_ty()),
         // View constructors
         (TO_VIEW, to_view_ty(Ownership::Shrd)),
         (TO_VIEW_MUT, to_view_ty(Ownership::Uniq)),
@@ -275,6 +277,42 @@ fn to_atomic_array_ty() -> FnTy {
                     Box::new(DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32))),
                     Nat::Ident(n.clone()),
                 )),
+            )),
+        ))))),
+    )
+}
+
+// to_atomic:
+//  <r: prv, m: mem>(&r uniq m u32) -[view]-> &r uniq m AtomicU32
+fn to_atomic_ty() -> FnTy {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let n = Ident::new("n");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    FnTy::new(
+        vec![r_prv, m_mem],
+        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
+            DataTyKind::Ref(Box::new(RefDty::new(
+                Provenance::Ident(r.clone()),
+                Ownership::Uniq,
+                Memory::Ident(m.clone()),
+                DataTy::new(DataTyKind::Scalar(ScalarTy::U32)),
+            ))),
+        ))))],
+        ExecTy::new(ExecTyKind::View),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+            Box::new(RefDty::new(
+                Provenance::Ident(r),
+                Ownership::Uniq,
+                Memory::Ident(m),
+                DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
             )),
         ))))),
     )

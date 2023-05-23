@@ -1,29 +1,27 @@
-fn inplace_vector_add<n: nat, a: prv, b: prv>(
-    // TODO global fun params into same frame as top level declaration in body
-    ha_array: &a uniq cpu.mem [i32; n],
-    hb_array: &b shrd cpu.mem [i32; n]
+fn vector_add<gs: nat, bs: nat>(
+    h_vec_a: &uniq cpu.mem [u32; gs*bs],
+    h_vec_b: &shrd cpu.mem [u32; gs*bs]
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
+    let mut g_vec_a = gpu_alloc_copy(&uniq gpu, &shrd *h_vec_a);
+    let g_vec_b = gpu_alloc_copy(&uniq gpu, &shrd *h_vec_b);
+    vector_add_gpu::<<<X<gs>, X<bs>>>>(&uniq g_vec_a, &shrd g_vec_b);
+    copy_to_host(&shrd g_vec_a, h_vec_a)
+}
 
-    let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
-    let b_array = gpu_alloc_copy(&uniq gpu, &shrd *hb_array);
-    exec::<64, 1024>(
-        &uniq gpu,
-        (&uniq a_array, &shrd b_array),
-        | input: (&uniq gpu.global [i32; n], &shrd gpu.global [i32; n]) |
-            -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-            let view_a = group_mut::<1024>(to_view_mut(input.0));
-            let view_b = group::<1024>(to_view(input.1));
-            sched block in grid {
-                let a_row = view_a[[block]];
-                let b_row = view_b[[block]];
-                sched thread in block {
-                    let a = a_row[[thread]];
-                    let b = b_row[[thread]];
-                    *a = *a + *b
-                }
-            }
+fn vector_add_gpu<gs: nat, bs: nat, a: prv, b: prv>(
+    g_vec_a: &a uniq gpu.global [u32; gs*bs],
+    g_vec_b: &b shrd gpu.global [u32; gs*bs]
+)  -[grid: gpu.grid<X<gs>, X<bs>>]-> () {
+    let view_a = group_mut::<bs>(to_view_mut(g_vec_a));
+    let view_b = group::<bs>(to_view(g_vec_b));
+    sched block in grid {
+        let a_row = view_a[[block]];
+        let b_row = view_b[[block]];
+        sched thread in block {
+            let a = a_row[[thread]];
+            let b = b_row[[thread]];
+            *a = *a + *b
         }
-    );
-    copy_to_host(&shrd a_array, ha_array)
+    }
 }
