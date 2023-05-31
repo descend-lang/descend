@@ -20,9 +20,12 @@ pub trait Visit: Sized {
     fn visit_dty(&mut self, dty: &DataTy) { walk_dty(self, dty) }
     fn visit_fn_ty(&mut self, fn_ty: &FnTy) { walk_fn_ty(self, fn_ty) }
     fn visit_ty(&mut self, ty: &Ty) { walk_ty(self, ty) }
-    fn visit_view(&mut self, view: &View) { walk_view(self, view) }
+    fn visit_view_ty(&mut self, view_ty: &ViewTy) { walk_view_ty(self, view_ty) }
+    fn visit_view_fn_ty(&mut self, view_fn_ty: &ViewFunTy) { walk_view_fn_ty(self, view_fn_ty) }
+    fn visit_view_inst(&mut self, view_inst: &ViewInst) { walk_view_inst(self, view_inst) }
+    fn visit_view_arg(&mut self, view_arg: &ViewTerm) { walk_view_arg(self, view_arg) }
     fn visit_pl_expr(&mut self, pl_expr: &PlaceExpr) { walk_pl_expr(self, pl_expr) }
-    fn visit_arg_kinded(&mut self, arg_kinded: &ArgKinded) { walk_arg_kinded(self, arg_kinded) }
+    fn visit_arg_kinded(&mut self, arg_kinded: &GenArg) { walk_arg_kinded(self, arg_kinded) }
     fn visit_kind(&mut self, _kind: &Kind) {}
     fn visit_binary_op(&mut self, _op: &BinOp) {}
     fn visit_unary_op(&mut self, _op: &UnOp) {}
@@ -43,6 +46,7 @@ pub trait Visit: Sized {
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
     fn visit_refine(&mut self, refine: &Refinement) { walk_refine(self, refine) }
     fn visit_pred(&mut self, pred: &Predicate) { walk_pred(self, pred) }
+    fn visit_ident_typed(&mut self, ident_typed: &IdentTyped) { walk_ident_typed(self, ident_typed) }
 }
 
 macro_rules! walk_list {
@@ -103,20 +107,20 @@ pub fn walk_prv<V: Visit>(visitor: &mut V, prv: &Provenance) {
 
 pub fn walk_dim3d<V: Visit>(visitor: &mut V, dim3d: &Dim3d) {
     let Dim3d(n1, n2, n3) = dim3d;
-    visitor.visit_ident(n1);
-    visitor.visit_ident(n2);
-    visitor.visit_ident(n3);
+    visitor.visit_pred(n1);
+    visitor.visit_pred(n2);
+    visitor.visit_pred(n3);
 }
 
 pub fn walk_dim2d<V: Visit>(visitor: &mut V, dim2d: &Dim2d) {
     let Dim2d(n1, n2) = dim2d;
-    visitor.visit_ident(n1);
-    visitor.visit_ident(n2);
+    visitor.visit_pred(n1);
+    visitor.visit_pred(n2);
 }
 
 pub fn walk_dim1d<V: Visit>(visitor: &mut V, dim1d: &Dim1d) {
     let Dim1d(n) = dim1d;
-    visitor.visit_ident(n);
+    visitor.visit_pred(n);
 }
 
 pub fn walk_dim<V: Visit>(visitor: &mut V, dim: &Dim) {
@@ -142,7 +146,11 @@ pub fn walk_ref<V: Visit>(visitor: &mut V, reff: &RefDty) {
 pub fn walk_pred<V: Visit>(visitor: &mut V, pred: &Predicate) {
     match pred {
         Predicate::Ident(ident) => visitor.visit_ident(ident),
-        Predicate::Add(pl, pr) | Predicate::And(pl, pr) | Predicate::Or(pl, pr) => {
+        Predicate::Le(pl, pr)
+        | Predicate::Eq(pl, pr)
+        | Predicate::Add(pl, pr)
+        | Predicate::And(pl, pr)
+        | Predicate::Or(pl, pr) => {
             visitor.visit_pred(pl);
             visitor.visit_pred(pr);
         }
@@ -175,11 +183,11 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
-            visitor.visit_ident(n)
+            visitor.visit_pred(n)
         }
         DataTyKind::ArrayShape(dty, n) => {
             visitor.visit_dty(dty);
-            visitor.visit_ident(n);
+            visitor.visit_pred(n);
         }
         DataTyKind::At(dty, mem) => {
             visitor.visit_dty(dty);
@@ -198,14 +206,19 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
 pub fn walk_fn_ty<V: Visit>(visitor: &mut V, fn_ty: &FnTy) {
     let FnTy {
         generics,
-        param_tys,
+        idents_typed,
         exec_ty,
-        ret_ty,
+        ret_dty: ret_ty,
     } = fn_ty;
     walk_list!(visitor, visit_ident_kinded, generics);
-    walk_list!(visitor, visit_ty, param_tys);
+    walk_list!(visitor, visit_ident_typed, idents_typed);
     visitor.visit_exec_ty(exec_ty);
-    visitor.visit_ty(ret_ty);
+    visitor.visit_dty(ret_ty);
+}
+
+pub fn walk_ident_typed<V: Visit>(visitor: &mut V, ident_typed: &IdentTyped) {
+    visitor.visit_ident(&ident_typed.ident);
+    visitor.visit_dty(&ident_typed.dty);
 }
 
 pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
@@ -217,11 +230,46 @@ pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
     }
 }
 
-pub fn walk_view<V: Visit>(visitor: &mut V, view: &View) {
-    visitor.visit_ident(&view.name);
-    walk_list!(visitor, visit_arg_kinded, &view.gen_args);
-    for v in &view.args {
-        visitor.visit_view(v)
+pub fn walk_view_fn_ty<V: Visit>(visitor: &mut V, view_fn_ty: &ViewFunTy) {
+    let ViewFunTy {
+        gen_params,
+        params,
+        in_view_elem_dty,
+        in_view_size,
+        ret_dty,
+    } = view_fn_ty;
+    walk_list!(visitor, visit_ident_kinded, gen_params);
+    for (p_ident, p_ty) in params {
+        visitor.visit_ident(p_ident);
+        visitor.visit_view_ty(p_ty);
+    }
+    visitor.visit_dty(in_view_elem_dty);
+    visitor.visit_pred(in_view_size);
+    visitor.visit_dty(ret_dty);
+}
+
+pub fn walk_view_ty<V: Visit>(visitor: &mut V, view_ty: &ViewTy) {
+    match view_ty {
+        ViewTy::View(view_fn_ty) => visitor.visit_view_fn_ty(view_fn_ty),
+        ViewTy::Refine(_base_ty, refine) => visitor.visit_refine(refine),
+    }
+}
+
+pub fn walk_view_inst<V: Visit>(visitor: &mut V, view_inst: &ViewInst) {
+    let ViewInst {
+        ident,
+        gen_args,
+        args,
+    } = view_inst;
+    visitor.visit_ident(ident);
+    walk_list!(visitor, visit_arg_kinded, gen_args);
+    walk_list!(visitor, visit_view_arg, args);
+}
+
+pub fn walk_view_arg<V: Visit>(visitor: &mut V, view_arg: &ViewTerm) {
+    match view_arg {
+        ViewTerm::ViewInst(view_inst) => visitor.visit_view_inst(view_inst),
+        ViewTerm::RefineValue(ident) => visitor.visit_ident(ident),
     }
 }
 
@@ -236,24 +284,24 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
         }
-        PlaceExprKind::View(pl_expr, view) => {
+        PlaceExprKind::View(pl_expr, view_inst) => {
             visitor.visit_pl_expr(pl_expr);
-            visitor.visit_view(view);
+            visitor.visit_view_inst(view_inst);
         }
         PlaceExprKind::Idx(pl_expr, n) => {
             visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
+            visitor.visit_ident(n)
         }
     }
 }
 
-pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
+pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &GenArg) {
     match arg_kinded {
-        ArgKinded::Ident(ident) => visitor.visit_ident(ident),
-        ArgKinded::Nat(n) => visitor.visit_nat(n),
-        ArgKinded::Memory(mem) => visitor.visit_mem(mem),
-        ArgKinded::DataTy(dty) => visitor.visit_dty(dty),
-        ArgKinded::Provenance(prv) => visitor.visit_prv(prv),
+        GenArg::Ident(ident) => visitor.visit_ident(ident),
+        GenArg::Nat(n) => visitor.visit_nat(n),
+        GenArg::Memory(mem) => visitor.visit_mem(mem),
+        GenArg::DataTy(dty) => visitor.visit_dty(dty),
+        GenArg::Provenance(prv) => visitor.visit_prv(prv),
     }
 }
 
@@ -279,7 +327,7 @@ pub fn walk_indep<V: Visit>(visitor: &mut V, indep: &Indep) {
         branch_bodies,
     } = indep;
     visitor.visit_dim_compo(dim_compo);
-    visitor.visit_nat(pos);
+    visitor.visit_ident(pos);
     visitor.visit_exec_expr(split_exec);
     walk_list!(visitor, visit_ident, branch_idents);
     walk_list!(visitor, visit_expr, branch_bodies);
@@ -328,7 +376,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
         }
         ExprKind::IdxAssign(pl_expr, idx, expr) => {
             visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(idx);
+            visitor.visit_ident(idx);
             visitor.visit_expr(expr);
         }
         ExprKind::Seq(es) => {
@@ -413,7 +461,7 @@ pub fn walk_app_kernel<V: Visit>(visitor: &mut V, app_kernel: &AppKernel) {
         block_dim,
         shared_mem_dtys,
         shared_mem_prvs: _,
-        fun,
+        fun_ident,
         gen_args,
         args,
     } = app_kernel;
@@ -422,7 +470,7 @@ pub fn walk_app_kernel<V: Visit>(visitor: &mut V, app_kernel: &AppKernel) {
     for dty in shared_mem_dtys {
         visitor.visit_dty(dty);
     }
-    visitor.visit_expr(fun);
+    visitor.visit_ident(fun_ident);
     for garg in gen_args {
         visitor.visit_arg_kinded(garg);
     }
@@ -443,7 +491,7 @@ pub fn walk_split_proj<V: Visit>(visitor: &mut V, split_proj: &SplitProj) {
         proj: _,
     } = split_proj;
     visitor.visit_dim_compo(split_dim);
-    visitor.visit_nat(pos);
+    visitor.visit_ident(pos);
 }
 
 pub fn walk_exec_expr<V: Visit>(visitor: &mut V, exec_expr: &ExecExpr) {

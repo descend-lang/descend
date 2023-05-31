@@ -4,7 +4,7 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::{Ty, TyKind};
+use crate::ast::TyKind;
 use crate::ty_check;
 use cu_ast as cu;
 use std::collections::HashMap;
@@ -341,13 +341,14 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             ..
                         } = ddty.as_ref()
                         {
-                            cu::Ty::CArray(
-                                Box::new(gen_ty(
-                                    &desc::TyKind::Data(Box::new(d.as_ref().clone())),
-                                    desc::Mutability::Mut,
-                                )),
-                                Some(desc::Nat::Ident(n.clone())),
-                            )
+                            todo!()
+                            // cu::Ty::CArray(
+                            //     Box::new(gen_ty(
+                            //         &desc::TyKind::Data(Box::new(d.as_ref().clone())),
+                            //         desc::Mutability::Mut,
+                            //     )),
+                            //     Some(desc::Nat::Ident(n.clone())),
+                            // )
                         } else {
                             gen_ty(&TyKind::Data(dty.clone()), desc::Mutability::Mut)
                         },
@@ -532,7 +533,7 @@ fn gen_let(pattern: &desc::Pattern, e: &desc::Expr, codegen_ctx: &mut CodegenCtx
                 .map(|(i, tp)| {
                     gen_let(
                         tp,
-                        &desc::Expr::with_type(
+                        &desc::Expr::with_dty(
                             desc::ExprKind::PlaceExpr(Box::new(desc::PlaceExpr::new(
                                 desc::PlaceExprKind::Proj(
                                     Box::new(desc::PlaceExpr::new(desc::PlaceExprKind::Ident(
@@ -541,8 +542,8 @@ fn gen_let(pattern: &desc::Pattern, e: &desc::Expr, codegen_ctx: &mut CodegenCtx
                                     i,
                                 ),
                             ))),
-                            match ty_check::proj_elem_dty(e.ty.as_ref().unwrap().dty(), i) {
-                                Ok(dty) => desc::Ty::new(desc::TyKind::Data(Box::new(dty))),
+                            match ty_check::proj_elem_dty(e.dty.as_ref().unwrap(), i) {
+                                Ok(dty) => dty,
                                 Err(err) => {
                                     panic!("Cannot project tuple element type at {}", i)
                                 }
@@ -750,7 +751,7 @@ fn gen_for_range(
 }
 
 fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
-    let exec_kernel = match &app_kernel.fun.expr {
+    let exec_kernel = match &app_kernel.fun_ident.expr {
         desc::ExprKind::PlaceExpr(pl_expr) => {
             if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
                 let fn_def = codegen_ctx
@@ -928,7 +929,7 @@ fn count_bytes(dtys: &[desc::DataTy]) -> desc::Nat {
 
 fn gen_indep(
     dim_compo: desc::DimCompo,
-    pos: &desc::Nat,
+    pos: &desc::Ident,
     branch_bodies: &[desc::Expr],
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
@@ -1218,7 +1219,7 @@ fn gen_lambda_call(
 
 fn gen_global_fn_call(
     fun: &desc::FunDef,
-    gen_args: &[desc::ArgKinded],
+    gen_args: &[desc::GenArg],
     args: &[desc::Expr],
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::FnCall {
@@ -1284,7 +1285,7 @@ fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
 fn view_exprs_in_args(args: &[desc::Expr]) -> Vec<&desc::Expr> {
     let (views, _): (Vec<_>, Vec<_>) = args
         .iter()
-        .partition(|a| is_view_dty(a.ty.as_ref().unwrap().dty()));
+        .partition(|a| is_view_dty(a.dty.as_ref().unwrap().dty()));
     views
 }
 
@@ -1504,7 +1505,7 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
 }
 
 enum IdxOrProj {
-    Idx(desc::Nat),
+    Idx(desc::Ident),
     Proj(usize),
 }
 
@@ -1523,7 +1524,7 @@ fn gen_pl_expr(
                 },
                 IdxOrProj::Idx(i) => cu::Expr::ArraySubscript {
                     array: Box::new(res_expr),
-                    index: i.clone(),
+                    index: Box::new(cu::Expr::Ident(i.name.to_string())),
                 },
             };
         }
@@ -1618,10 +1619,10 @@ fn insert_into_pl_expr(mut pl_expr: desc::PlaceExpr, insert: &desc::PlaceExpr) -
     pl_expr
 }
 
-fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_view(view: &desc::ViewTerm, path: &mut Vec<IdxOrProj>) -> bool {
     if view.name.name.as_ref() == ty_check::pre_decl::TO_VIEW {
     } else if view.name.name.as_ref() == ty_check::pre_decl::GROUP {
-        if let desc::ArgKinded::Nat(s) = &view.gen_args[0] {
+        if let desc::GenArg::Nat(s) = &view.gen_args[0] {
             if !transform_path_with_group(s, path) {
                 return false;
             }
@@ -1629,7 +1630,7 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> boo
             panic!("Unexpected argument.")
         }
     } else if view.name.name.as_ref() == ty_check::pre_decl::JOIN {
-        if let desc::ArgKinded::Nat(n) = &view.gen_args[1] {
+        if let desc::GenArg::Nat(n) = &view.gen_args[1] {
             if !transform_path_with_join(n, path) {
                 return false;
             }
@@ -1639,7 +1640,7 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> boo
     } else if view.name.name.as_ref() == ty_check::pre_decl::TRANSPOSE {
         transform_path_with_transpose(path);
     } else if view.name.name.as_ref() == ty_check::pre_decl::REVERSE {
-        if let desc::ArgKinded::Nat(n) = &view.gen_args[0] {
+        if let desc::GenArg::Nat(n) = &view.gen_args[0] {
             if !transform_path_with_rev(n, path) {
                 return false;
             }
@@ -1647,7 +1648,7 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> boo
             panic!("Cannot create `reverse` from the provided arguments.");
         }
     } else if view.name.name.as_ref() == ty_check::pre_decl::SPLIT_AT {
-        if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
+        if let desc::GenArg::Nat(k) = &view.gen_args[0] {
             if !transform_path_with_split_at(k, path) {
                 return false;
             }
@@ -1771,7 +1772,7 @@ fn transform_path_with_split_at(split_pos: &desc::Nat, path: &mut Vec<IdxOrProj>
     }
 }
 
-fn transform_path_with_map(f: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_map(f: &desc::ViewTerm, path: &mut Vec<IdxOrProj>) -> bool {
     let i = path.pop();
     match i {
         Some(i @ IdxOrProj::Idx(_)) => {
@@ -1785,7 +1786,7 @@ fn transform_path_with_map(f: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
 
 fn gen_indep_branch_cond(
     dim_compo: desc::DimCompo,
-    pos: &desc::Nat,
+    pos: &desc::Ident,
     exec: &desc::Exec,
 ) -> cu::Expr {
     cu::Expr::BinOp {
@@ -1796,7 +1797,7 @@ fn gen_indep_branch_cond(
             // Use Distrib to indicate this.
             &desc::ExecExpr::new(exec.clone().distrib(dim_compo)),
         ))),
-        rhs: Box::new(cu::Expr::Nat(pos.clone())),
+        rhs: Box::new(cu::Expr::Ident(pos.clone())),
     }
 }
 
@@ -1846,20 +1847,18 @@ fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
     }
 }
 
-fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
+fn gen_args_kinded(templ_args: &[desc::GenArg]) -> Vec<cu::TemplateArg> {
     templ_args.iter().filter_map(gen_arg_kinded).collect()
 }
 
-fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
+fn gen_arg_kinded(templ_arg: &desc::GenArg) -> Option<cu::TemplateArg> {
     match templ_arg {
-        desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
-        desc::ArgKinded::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
+        desc::GenArg::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
+        desc::GenArg::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
             &desc::TyKind::Data(Box::new(dty.clone())),
             desc::Mutability::Mut,
         ))),
-        desc::ArgKinded::Memory(_) | desc::ArgKinded::Provenance(_) | desc::ArgKinded::Ident(_) => {
-            None
-        }
+        desc::GenArg::Memory(_) | desc::GenArg::Provenance(_) | desc::GenArg::Ident(_) => None,
     }
 }
 
@@ -2131,7 +2130,7 @@ fn shift_idx_by(idx: desc::Nat, shift: desc::Nat) -> desc::Nat {
     desc::Nat::BinOp(desc::BinOpNat::Sub, Box::new(idx), Box::new(shift))
 }
 
-fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr) -> desc::Nat {
+fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr) -> desc::Ident {
     match dim {
         desc::DimCompo::X => to_parall_indices(exec).0,
         desc::DimCompo::Y => to_parall_indices(exec).1,

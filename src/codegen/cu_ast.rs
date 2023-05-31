@@ -133,7 +133,7 @@ pub(super) enum Expr {
     },
     ArraySubscript {
         array: Box<Expr>,
-        index: Nat,
+        index: Box<Expr>,
     },
     Proj {
         tuple: Box<Expr>,

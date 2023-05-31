@@ -2,8 +2,8 @@ use crate::ast::visit::walk_list;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    visit, visit_mut, ArgKinded, DataTy, DataTyKind, Dim, ExecTy, Expr, ExprKind, FnTy, FunDef,
-    Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    visit, visit_mut, DataTy, DataTyKind, Dim, ExecTy, Expr, ExprKind, FnTy, FunDef, GenArg, Ident,
+    IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind, ViewFunTy, ViewTy,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -58,13 +58,15 @@ macro_rules! visitable_mut {
     };
 }
 visitable_mut!(Ty, visit_ty);
+visitable_mut!(DataTy, visit_dty);
 visitable_mut!(Expr, visit_expr);
 visitable_mut!(ExecTy, visit_exec_ty);
+visitable_mut!(ViewTy, visit_view_ty);
 
 pub fn subst_idents_kinded<'a, I, J, T: VisitableMut>(gen_params: I, k_args: J, t: &mut T)
 where
     I: IntoIterator<Item = &'a IdentKinded>,
-    J: IntoIterator<Item = &'a ArgKinded>,
+    J: IntoIterator<Item = &'a GenArg>,
 {
     let subst_map = HashMap::from_iter(
         gen_params
@@ -77,12 +79,12 @@ where
 }
 
 struct SubstIdentsKinded<'a> {
-    pub subst_map: &'a HashMap<&'a str, &'a ArgKinded>,
+    pub subst_map: &'a HashMap<&'a str, &'a GenArg>,
     pub bound_idents: HashSet<IdentKinded>,
 }
 
 impl<'a> SubstIdentsKinded<'a> {
-    fn new(subst_map: &'a HashMap<&'a str, &'a ArgKinded>) -> Self {
+    fn new(subst_map: &'a HashMap<&'a str, &'a GenArg>) -> Self {
         SubstIdentsKinded {
             subst_map,
             bound_idents: HashSet::new(),
@@ -90,7 +92,7 @@ impl<'a> SubstIdentsKinded<'a> {
     }
 
     fn with_bound_idents(
-        subst_map: &'a HashMap<&'a str, &'a ArgKinded>,
+        subst_map: &'a HashMap<&'a str, &'a GenArg>,
         bound_idents: HashSet<IdentKinded>,
     ) -> Self {
         SubstIdentsKinded {
@@ -106,7 +108,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
             Nat::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Nat);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    if let Some(ArgKinded::Nat(nat_arg)) =
+                    if let Some(GenArg::Nat(nat_arg)) =
                         self.subst_map.get::<str>(ident.name.as_ref())
                     {
                         *nat = nat_arg.clone()
@@ -122,7 +124,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
             Memory::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Memory);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    if let Some(ArgKinded::Memory(mem_arg)) =
+                    if let Some(GenArg::Memory(mem_arg)) =
                         self.subst_map.get::<str>(ident.name.as_ref())
                     {
                         *mem = mem_arg.clone()
@@ -138,7 +140,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
             Provenance::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Provenance);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    if let Some(ArgKinded::Provenance(prv_arg)) =
+                    if let Some(GenArg::Provenance(prv_arg)) =
                         self.subst_map.get::<str>(ident.name.as_ref())
                     {
                         *prv = prv_arg.clone()
@@ -154,7 +156,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
             DataTyKind::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::DataTy);
                 if !self.bound_idents.contains(&ident_kinded) {
-                    if let Some(ArgKinded::DataTy(dty_arg)) =
+                    if let Some(GenArg::DataTy(dty_arg)) =
                         self.subst_map.get::<str>(ident.name.as_ref())
                     {
                         *dty = dty_arg.clone()
@@ -221,6 +223,8 @@ visitable!(Provenance, visit_prv);
 visitable!(ExecTy, visit_exec_ty);
 visitable!(Dim, visit_dim);
 visitable!(Expr, visit_expr);
+visitable!(ViewTy, visit_view_ty);
+visitable!(ViewFunTy, visit_view_fn_ty);
 visitable!(Nat, visit_nat);
 
 pub fn free_kinded_idents<T: Visitable>(t: &T) -> HashSet<IdentKinded> {
@@ -229,9 +233,9 @@ pub fn free_kinded_idents<T: Visitable>(t: &T) -> HashSet<IdentKinded> {
     free_kinded_idents.set
 }
 
-pub struct FreeKindedIdents {
-    pub set: HashSet<IdentKinded>,
-    pub bound_idents: HashSet<IdentKinded>,
+struct FreeKindedIdents {
+    set: HashSet<IdentKinded>,
+    bound_idents: HashSet<IdentKinded>,
 }
 
 impl FreeKindedIdents {
@@ -309,8 +313,8 @@ impl Visit for FreeKindedIdents {
                     )
                 }
 
-                walk_list!(self, visit_ty, &fn_ty.param_tys);
-                self.visit_ty(fn_ty.ret_ty.as_ref())
+                walk_list!(self, visit_ident_typed, &fn_ty.idents_typed);
+                self.visit_dty(fn_ty.ret_dty.as_ref())
             }
             _ => visit::walk_ty(self, ty),
         }

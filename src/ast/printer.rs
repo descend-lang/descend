@@ -1,6 +1,7 @@
 use crate::ast::{
     BaseTy, BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecTy, ExecTyKind, Ident, IdentKinded,
-    Kind, Memory, Nat, Ownership, Predicate, Provenance, Refinement, ScalarTy, Ty, TyKind,
+    IdentTyped, Kind, Memory, Nat, Ownership, Predicate, Provenance, Refinement, ScalarTy, Ty,
+    TyKind,
 };
 
 pub struct PrintState {
@@ -46,7 +47,7 @@ impl PrintState {
                 self.string.push('<');
                 print_list!(self, Self::print_ident_kinded, &fn_ty.generics);
                 self.string.push_str(">(");
-                print_list!(self, Self::print_ty, &fn_ty.param_tys);
+                print_list!(self, Self::print_ident_typed, &fn_ty.idents_typed);
                 self.string.push_str(") -[");
                 self.print_exec_ty(&fn_ty.exec_ty);
             }
@@ -54,8 +55,15 @@ impl PrintState {
         }
     }
 
+    fn print_ident_typed(&mut self, ident_typed: &IdentTyped) {
+        self.print_ident(&ident_typed.ident);
+        self.string.push_str(" : ");
+        self.print_dty(&ident_typed.dty);
+    }
+
     fn print_ident_kinded(&mut self, ident_kinded: &IdentKinded) {
         self.print_ident(&ident_kinded.ident);
+        self.string.push_str(" : ");
         self.print_kind(ident_kinded.kind);
     }
 
@@ -106,31 +114,31 @@ impl PrintState {
         match dim {
             Dim::XYZ(dim3d) => {
                 self.string.push_str("XYZ<");
-                print_static_list!(self, Self::print_ident, &dim3d.0, &dim3d.1, &dim3d.2);
+                print_static_list!(self, Self::print_pred, &dim3d.0, &dim3d.1, &dim3d.2);
             }
             Dim::XY(dim2d) => {
                 self.string.push_str("XY<");
-                print_static_list!(self, Self::print_ident, &dim2d.0, &dim2d.1);
+                print_static_list!(self, Self::print_pred, &dim2d.0, &dim2d.1);
             }
             Dim::XZ(dim2d) => {
                 self.string.push_str("XZ<");
-                print_static_list!(self, Self::print_ident, &dim2d.0, &dim2d.1);
+                print_static_list!(self, Self::print_pred, &dim2d.0, &dim2d.1);
             }
             Dim::YZ(dim2d) => {
                 self.string.push_str("YZ<");
-                print_static_list!(self, Self::print_ident, &dim2d.0, &dim2d.1);
+                print_static_list!(self, Self::print_pred, &dim2d.0, &dim2d.1);
             }
             Dim::X(dim1d) => {
                 self.string.push_str("X<");
-                self.print_ident(&dim1d.0)
+                self.print_pred(&dim1d.0)
             }
             Dim::Y(dim1d) => {
                 self.string.push_str("Y<");
-                self.print_ident(&dim1d.0)
+                self.print_pred(&dim1d.0)
             }
             Dim::Z(dim1d) => {
                 self.string.push_str("Z<");
-                self.print_ident(&dim1d.0)
+                self.print_pred(&dim1d.0)
             }
         }
         self.string.push('>');
@@ -157,14 +165,14 @@ impl PrintState {
                 self.string.push('[');
                 self.print_dty(dty);
                 self.string.push(';');
-                self.print_ident(n);
+                self.print_pred(n);
                 self.string.push(']');
             }
             DataTyKind::ArrayShape(dty, n) => {
                 self.string.push_str("[[");
                 self.print_dty(dty);
                 self.string.push(';');
-                self.print_ident(n);
+                self.print_pred(n);
                 self.string.push_str("]]");
             }
             DataTyKind::Tuple(dtys) => {
@@ -254,6 +262,16 @@ impl PrintState {
             Predicate::True => self.string.push_str("true"),
             Predicate::Num(n) => {
                 self.string.push_str(&n.to_string());
+            }
+            Predicate::Le(pl, pr) => {
+                self.print_pred(pl);
+                self.string.push_str(" < ");
+                self.print_pred(pr);
+            }
+            Predicate::Eq(pl, pr) => {
+                self.print_pred(pl);
+                self.string.push_str(" = ");
+                self.print_pred(pr);
             }
         }
     }

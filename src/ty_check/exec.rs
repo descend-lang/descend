@@ -1,14 +1,16 @@
 use super::{
-    BaseExec, BinOpNat, Dim, Dim1d, Dim2d, DimCompo, ExecExpr, ExecPathElem, ExecTy, ExecTyKind,
-    IdentExec, KindCtx, Nat, TyCtx, TyError, TyResult,
+    BaseExec, Dim, Dim1d, Dim2d, DimCompo, ExecExpr, ExecPathElem, ExecTy, ExecTyKind, IdentExec,
+    KindCtx, TyCtx, TyError, TyResult,
 };
+use crate::ast::{Constraint, Ident, Predicate};
 
+// TODO well-formedness of ExecTy!!!!
 pub(super) fn ty_check(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
     ident_exec: &IdentExec,
     exec_expr: &mut ExecExpr,
-) -> TyResult<()> {
+) -> TyResult<Constraint> {
     let mut exec_ty = match &exec_expr.exec.base {
         BaseExec::Ident(ident) => {
             if ident == &ident_exec.ident {
@@ -22,18 +24,21 @@ pub(super) fn ty_check(
         BaseExec::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid(gdim.clone(), bdim.clone()),
     };
 
+    let mut constraint = Constraint::Pred(Predicate::True);
     for e in &exec_expr.exec.path {
         match &e {
             ExecPathElem::Distrib(d) => {
                 exec_ty = ty_check_exec_distrib(*d, &exec_ty)?;
             }
             ExecPathElem::SplitProj(exec_split) => {
-                exec_ty = ty_check_exec_split_proj(
+                let (ety, constr) = ty_check_exec_split_proj(
                     exec_split.split_dim,
                     &exec_split.pos,
                     exec_split.proj,
                     &exec_ty,
                 )?;
+                exec_ty = ety;
+                constraint = Constraint::and(constraint, constr);
             }
             ExecPathElem::ToThreads(d) => {
                 exec_ty = ty_check_exec_to_threads(*d, &exec_ty)?;
@@ -41,7 +46,7 @@ pub(super) fn ty_check(
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
-    Ok(())
+    Ok(constraint)
 }
 
 fn ty_check_exec_to_threads(dim: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
@@ -136,31 +141,34 @@ pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
 
 fn ty_check_exec_split_proj(
     d: DimCompo,
-    n: &Nat,
+    pos: &Ident,
     proj: u8,
     exec_ty: &ExecTyKind,
-) -> TyResult<ExecTyKind> {
+) -> TyResult<(ExecTyKind, Constraint)> {
     // TODO check well-formedness of Nats
-    let (lexec_ty, rexec_ty) = match exec_ty {
+    let (lexec_ty, rexec_ty, constr) = match exec_ty {
         ExecTyKind::GpuGrid(gdim, bdim) | ExecTyKind::GpuBlockGrp(gdim, bdim) => {
-            let (ldim, rdim) = split_dim(d, n.clone(), gdim.clone())?;
+            let ((ldim, rdim), constr) = split_dim(d, pos, gdim.clone())?;
             (
                 ExecTyKind::GpuBlockGrp(ldim, bdim.clone()),
                 ExecTyKind::GpuBlockGrp(rdim, bdim.clone()),
+                constr,
             )
         }
         ExecTyKind::GpuBlock(dim) | ExecTyKind::GpuThreadGrp(dim) => {
-            let (ldim, rdim) = split_dim(d, n.clone(), dim.clone())?;
+            let ((ldim, rdim), constr) = split_dim(d, pos, dim.clone())?;
             (
                 ExecTyKind::GpuThreadGrp(ldim),
                 ExecTyKind::GpuThreadGrp(rdim),
+                constr,
             )
         }
         ExecTyKind::GpuGlobalThreads(dim) => {
-            let (ldim, rdim) = split_dim(d, n.clone(), dim.clone())?;
+            let ((ldim, rdim), constr) = split_dim(d, pos, dim.clone())?;
             (
                 ExecTyKind::GpuGlobalThreads(ldim),
                 ExecTyKind::GpuGlobalThreads(rdim),
+                constr,
             )
         }
         ex => {
@@ -170,102 +178,125 @@ fn ty_check_exec_split_proj(
             )))
         }
     };
-    Ok(if proj == 0 { lexec_ty } else { rexec_ty })
+    Ok(if proj == 0 {
+        (lexec_ty, constr)
+    } else {
+        (rexec_ty, constr)
+    })
 }
 
-fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
-    Ok(match dim {
+fn split_dim(split_dim: DimCompo, pos: &Ident, dim: Dim) -> TyResult<((Dim, Dim), Constraint)> {
+    let (new_dims, diff) = match dim {
         Dim::XYZ(d) => match split_dim {
-            DimCompo::X => (
-                Dim::new_3d(pos.clone(), d.1.clone(), d.2.clone()),
-                Dim::new_3d(
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.0), Box::new(pos)),
-                    d.1,
-                    d.2,
-                ),
-            ),
-            DimCompo::Y => (
-                Dim::new_3d(d.0.clone(), pos.clone(), d.2.clone()),
-                Dim::new_3d(
-                    d.0,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.1), Box::new(pos)),
-                    d.2,
-                ),
-            ),
-            DimCompo::Z => (
-                Dim::new_3d(d.0.clone(), d.1.clone(), pos.clone()),
-                Dim::new_3d(
-                    d.0,
-                    d.1,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.2), Box::new(pos)),
-                ),
-            ),
+            DimCompo::X => {
+                let diff = d.0.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_3d(Predicate::Ident(pos.clone()), d.1.clone(), d.2.clone()),
+                        Dim::new_3d(diff.clone(), d.1, d.2),
+                    ),
+                    diff,
+                )
+            }
+            DimCompo::Y => {
+                let diff = d.1.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_3d(d.0.clone(), Predicate::Ident(pos.clone()), d.2.clone()),
+                        Dim::new_3d(d.0, diff.clone(), d.2),
+                    ),
+                    diff,
+                )
+            }
+            DimCompo::Z => {
+                let diff = d.2.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_3d(d.0.clone(), d.1.clone(), Predicate::Ident(pos.clone())),
+                        Dim::new_3d(d.0, d.1, diff.clone()),
+                    ),
+                    diff,
+                )
+            }
         },
         Dim::XY(d) => match split_dim {
-            DimCompo::X => (
-                Dim::new_2d(Dim::XY, pos.clone(), d.1.clone()),
-                Dim::new_2d(
-                    Dim::XY,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.0), Box::new(pos)),
-                    d.1,
-                ),
-            ),
-            DimCompo::Y => (
-                Dim::new_2d(Dim::XY, d.0.clone(), pos.clone()),
-                Dim::new_2d(
-                    Dim::XY,
-                    d.0,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.1), Box::new(pos)),
-                ),
-            ),
+            DimCompo::X => {
+                let diff = d.0.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_2d(Dim::XY, Predicate::Ident(pos.clone()), d.1.clone()),
+                        Dim::new_2d(Dim::XY, diff.clone(), d.1),
+                    ),
+                    diff,
+                )
+            }
+            DimCompo::Y => {
+                let diff = d.1.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_2d(Dim::XY, d.0.clone(), Predicate::Ident(pos.clone())),
+                        Dim::new_2d(Dim::XY, d.0, diff.clone()),
+                    ),
+                    diff,
+                )
+            }
             DimCompo::Z => return Err(TyError::IllegalDimension),
         },
         Dim::XZ(d) => match split_dim {
-            DimCompo::X => (
-                Dim::new_2d(Dim::XZ, pos.clone(), d.1.clone()),
-                Dim::new_2d(
-                    Dim::XZ,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.0), Box::new(pos)),
-                    d.1,
-                ),
-            ),
+            DimCompo::X => {
+                let diff = d.0.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_2d(Dim::XZ, Predicate::Ident(pos.clone()), d.1.clone()),
+                        Dim::new_2d(Dim::XZ, diff.clone(), d.1),
+                    ),
+                    diff,
+                )
+            }
             DimCompo::Y => return Err(TyError::IllegalDimension),
-            DimCompo::Z => (
-                Dim::new_2d(Dim::XZ, d.0.clone(), pos.clone()),
-                Dim::new_2d(
-                    Dim::XZ,
-                    d.0,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.1), Box::new(pos)),
-                ),
-            ),
+            DimCompo::Z => {
+                let diff = d.1.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_2d(Dim::XZ, d.0.clone(), Predicate::Ident(pos.clone())),
+                        Dim::new_2d(Dim::XZ, d.0, diff.clone()),
+                    ),
+                    diff,
+                )
+            }
         },
         Dim::YZ(d) => match split_dim {
             DimCompo::X => return Err(TyError::IllegalDimension),
-            DimCompo::Y => (
-                Dim::new_2d(Dim::YZ, pos.clone(), d.1.clone()),
-                Dim::new_2d(
-                    Dim::YZ,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.0), Box::new(pos)),
-                    d.1,
-                ),
-            ),
-            DimCompo::Z => (
-                Dim::new_2d(Dim::YZ, d.0.clone(), pos.clone()),
-                Dim::new_2d(
-                    Dim::YZ,
-                    d.0,
-                    Nat::BinOp(BinOpNat::Sub, Box::new(d.1), Box::new(pos)),
-                ),
-            ),
+            DimCompo::Y => {
+                let diff = d.0.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_2d(Dim::YZ, Predicate::Ident(pos.clone()), d.1.clone()),
+                        Dim::new_2d(Dim::YZ, diff.clone(), d.1),
+                    ),
+                    diff,
+                )
+            }
+            DimCompo::Z => {
+                let diff = d.1.subtract(Predicate::Ident(pos.clone()));
+                (
+                    (
+                        Dim::new_2d(Dim::YZ, d.0.clone(), Predicate::Ident(pos.clone())),
+                        Dim::new_2d(Dim::YZ, d.0, diff.clone()),
+                    ),
+                    diff,
+                )
+            }
         },
         Dim::X(d) => {
             if let DimCompo::X = split_dim {
+                let diff = d.0.subtract(Predicate::Ident(pos.clone()));
                 (
-                    Dim::new_1d(Dim::X, pos.clone()),
-                    Dim::new_1d(
-                        Dim::X,
-                        Nat::BinOp(BinOpNat::Sub, Box::new(d.0), Box::new(pos)),
+                    (
+                        Dim::new_1d(Dim::X, Predicate::Ident(pos.clone())),
+                        Dim::new_1d(Dim::X, diff.clone()),
                     ),
+                    diff,
                 )
             } else {
                 return Err(TyError::IllegalDimension);
@@ -273,12 +304,13 @@ fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
         }
         Dim::Y(d) => {
             if let DimCompo::Y = split_dim {
+                let diff = d.0.subtract(Predicate::Ident(pos.clone()));
                 (
-                    Dim::new_1d(Dim::Y, pos.clone()),
-                    Dim::new_1d(
-                        Dim::Y,
-                        Nat::BinOp(BinOpNat::Sub, Box::new(d.0), Box::new(pos)),
+                    (
+                        Dim::new_1d(Dim::Y, Predicate::Ident(pos.clone())),
+                        Dim::new_1d(Dim::Y, diff.clone()),
                     ),
+                    diff,
                 )
             } else {
                 return Err(TyError::IllegalDimension);
@@ -286,16 +318,20 @@ fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
         }
         Dim::Z(d) => {
             if let DimCompo::Z = split_dim {
+                let diff = d.0.subtract(Predicate::Ident(pos.clone()));
                 (
-                    Dim::new_1d(Dim::Z, pos.clone()),
-                    Dim::new_1d(
-                        Dim::Z,
-                        Nat::BinOp(BinOpNat::Sub, Box::new(d.0), Box::new(pos)),
+                    (
+                        Dim::new_1d(Dim::Z, Predicate::Ident(pos.clone())),
+                        Dim::new_1d(Dim::Z, diff.clone()),
                     ),
+                    diff,
                 )
             } else {
                 return Err(TyError::IllegalDimension);
             }
         }
-    })
+    };
+    let constraint = Constraint::Pred(Predicate::leq(Predicate::Num(0), diff));
+
+    Ok((new_dims, constraint))
 }

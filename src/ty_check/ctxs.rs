@@ -1,4 +1,4 @@
-use crate::ast::internal::{ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
+use crate::ast::internal::{ExecMapping, Frame, FrameEntry, Loan, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
 use crate::ty_check::pre_decl;
@@ -570,6 +570,7 @@ impl KindCtx {
 #[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
     items: HashMap<Box<str>, FnTy>,
+    views: HashMap<Box<str>, ViewFunTy>,
 }
 
 impl GlobalCtx {
@@ -579,6 +580,7 @@ impl GlobalCtx {
     {
         let mut gl_ctx = GlobalCtx {
             items: HashMap::new(),
+            views: HashMap::new(),
         };
         Self::append_fun_decls(&mut gl_ctx, &pre_decl::fun_decls());
         gl_ctx
@@ -601,6 +603,13 @@ impl GlobalCtx {
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
+
+    pub fn view_ty_by_ident(&self, ident: &Ident) -> CtxResult<&ViewFunTy> {
+        match self.views.get(&ident.name) {
+            Some(view_ty) => Ok(view_ty),
+            None => Err(CtxError::IdentNotFound(ident.clone())),
+        }
+    }
 }
 
 #[test]
@@ -608,16 +617,14 @@ fn test_kill_place_ident() {
     let mut ty_ctx = TyCtx::new();
     let x = IdentTyped::new(
         Ident::new("x"),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::I32,
-        ))))),
+        DataTy::new(DataTyKind::Scalar(ScalarTy::I32)),
         Mutability::Const,
         ExecExpr::new(Exec::new(BaseExec::Ident(Ident::new("exec")))),
     );
     let place = internal::Place::new(x.ident.clone(), vec![]);
     ty_ctx.append_ident_typed(x).kill_place(&place);
     assert!(matches!(
-        ty_ctx.idents_typed().next().unwrap().ty.dty(),
+        &ty_ctx.idents_typed().next().unwrap().dty,
         DataTy {
             dty: DataTyKind::Dead(_),
             ..

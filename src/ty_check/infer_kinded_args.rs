@@ -1,5 +1,5 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, ExecTy, FnTy, Ident, IdentKinded, Memory, Nat, Provenance, Ty,
+    DataTy, DataTyKind, ExecTy, FnTy, GenArg, Ident, IdentKinded, Memory, Nat, Provenance, Ty,
     TyKind,
 };
 use std::collections::HashMap;
@@ -8,22 +8,22 @@ use std::collections::HashMap;
 //  and since polytype is top-level function type, all (type-level) identifiers must have been
 //  introduced by the polymorphic function, therefore finding an identifier on the lhs means that
 //  it was introduced by the polymorphic function
-pub fn infer_kinded_args_from_mono_ty(
+pub fn infer_kinded_args_from_mono_dty(
     remain_gen_args: Vec<IdentKinded>,
-    subst_param_tys: Vec<Ty>,
+    subst_param_dtys: Vec<DataTy>,
     subst_exec_level: &ExecTy,
-    subst_ret_ty: &Ty,
+    subst_ret_dty: &DataTy,
     mono_fn_ty: &FnTy,
-) -> Vec<ArgKinded> {
-    if mono_fn_ty.param_tys.len() != subst_param_tys.len() {
+) -> Vec<GenArg> {
+    if mono_fn_ty.idents_typed.len() != subst_param_dtys.len() {
         panic!("Unexpected difference in amount of paramters.")
     }
     let mut res_map = HashMap::new();
-    for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
-        infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
+    for (subst_dty, ident_typed) in subst_param_dtys.iter().zip(&mono_fn_ty.idents_typed) {
+        infer_kargs_dtys(&mut res_map, subst_dty, &ident_typed.dty);
     }
     // infer_kargs_exec_level(&mut res_map, subst_exec_level, &mono_fn_ty.exec_ty);
-    infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
+    infer_kargs_dtys(&mut res_map, subst_ret_dty, &mono_fn_ty.ret_dty);
     let mut res_vec = Vec::new();
     for gen_arg in remain_gen_args {
         let res_karg = res_map.get(&gen_arg.ident).unwrap();
@@ -35,9 +35,9 @@ pub fn infer_kinded_args_from_mono_ty(
     res_vec
 }
 
-macro_rules! infer_from_lists {
+macro_rules! infer_from_iter {
     ($method: ident, $map: expr, $list1: expr, $list2: expr) => {
-        for (elem1, elem2) in $list1.iter().zip($list2) {
+        for (elem1, elem2) in $list1.zip($list2) {
             $method($map, elem1, elem2)
         }
     };
@@ -69,16 +69,27 @@ macro_rules! panic_if_neq {
     };
 }
 
-fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &Ty) {
+fn infer_kargs_tys(map: &mut HashMap<Ident, GenArg>, poly_ty: &Ty, mono_ty: &Ty) {
     match (&poly_ty.ty, &mono_ty.ty) {
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
             if !fn_ty1.generics.is_empty() || !fn_ty2.generics.is_empty() {
                 panic!("Unexpected top-level function type.")
             }
-            infer_from_lists!(infer_kargs_tys, map, &fn_ty1.param_tys, &fn_ty2.param_tys);
+            infer_from_iter!(
+                infer_kargs_dtys,
+                map,
+                fn_ty1
+                    .idents_typed
+                    .iter()
+                    .map(|ident_typed| { &ident_typed.dty }),
+                fn_ty2
+                    .idents_typed
+                    .iter()
+                    .map(|ident_typed| { &ident_typed.dty })
+            );
             // infer_kargs_exec_level(map, &fn_ty1.exec_ty, &fn_ty2.exec_ty);
-            infer_kargs_tys(map, &fn_ty1.ret_ty, &fn_ty2.ret_ty)
+            infer_kargs_dtys(map, &fn_ty1.ret_dty, &fn_ty2.ret_dty)
         }
         _ => panic_no_inst!(),
     }
@@ -128,9 +139,9 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
 //     }
 // }
 
-fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono_dty: &DataTy) {
+fn infer_kargs_dtys(map: &mut HashMap<Ident, GenArg>, poly_dty: &DataTy, mono_dty: &DataTy) {
     match (&poly_dty.dty, &mono_dty.dty) {
-        (DataTyKind::Ident(id), _) => insert_checked!(map, ArgKinded::DataTy, id, mono_dty),
+        (DataTyKind::Ident(id), _) => insert_checked!(map, GenArg::DataTy, id, mono_dty),
         (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
             panic_if_neq!(sty1, sty2);
         }
@@ -138,7 +149,7 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
             panic_if_neq!(sty1, sty2);
         }
         (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
-            infer_from_lists!(infer_kargs_dtys, map, elem_dtys1, elem_dtys2)
+            infer_from_iter!(infer_kargs_dtys, map, elem_dtys1.iter(), elem_dtys2.iter())
         }
         (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
             infer_kargs_dtys(map, dty1, dty2);
@@ -165,12 +176,10 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
     }
 }
 
-fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_nat: &Nat) {
+fn infer_kargs_nats(map: &mut HashMap<Ident, GenArg>, poly_nat: &Nat, mono_nat: &Nat) {
     match (poly_nat, mono_nat) {
         (Nat::Ident(id), _) => {
-            if let Some(ArgKinded::Nat(old)) =
-                map.insert(id.clone(), ArgKinded::Nat(mono_nat.clone()))
-            {
+            if let Some(GenArg::Nat(old)) = map.insert(id.clone(), GenArg::Nat(mono_nat.clone())) {
                 if &old != mono_nat {
                     println!(
                         "WARNING: Not able to check equality of Nats `{}` and `{}`",
@@ -188,26 +197,26 @@ fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_na
         (Nat::Lit(l1), Nat::Lit(l2)) => panic_if_neq!(l1, l2),
         (Nat::App(func1, args1), Nat::App(func2, args2)) => {
             panic_if_neq!(func1, func2);
-            infer_from_lists!(infer_kargs_nats, map, args1, args2.iter());
+            infer_from_iter!(infer_kargs_nats, map, args1.iter(), args2.iter());
         }
         _ => panic_no_inst!(),
     }
 }
 
-fn infer_kargs_mems(map: &mut HashMap<Ident, ArgKinded>, poly_mem: &Memory, mono_mem: &Memory) {
+fn infer_kargs_mems(map: &mut HashMap<Ident, GenArg>, poly_mem: &Memory, mono_mem: &Memory) {
     match (poly_mem, mono_mem) {
-        (Memory::Ident(id), _) => insert_checked!(map, ArgKinded::Memory, id, mono_mem),
+        (Memory::Ident(id), _) => insert_checked!(map, GenArg::Memory, id, mono_mem),
         _ => panic_if_neq!(poly_mem, mono_mem),
     }
 }
 
 fn infer_kargs_prvs(
-    map: &mut HashMap<Ident, ArgKinded>,
+    map: &mut HashMap<Ident, GenArg>,
     poly_prv: &Provenance,
     mono_prv: &Provenance,
 ) {
     match (poly_prv, mono_prv) {
-        (Provenance::Ident(id), _) => insert_checked!(map, ArgKinded::Provenance, id, mono_prv),
+        (Provenance::Ident(id), _) => insert_checked!(map, GenArg::Provenance, id, mono_prv),
         _ => panic_if_neq!(poly_prv, mono_prv),
     }
 }

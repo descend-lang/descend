@@ -42,19 +42,18 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
         ident_names_to_kinds: HashMap<Box<str>, Kind>,
     }
     impl ReplaceArgKindedIdents {
-        fn subst_in_gen_args(&self, gen_args: &mut [ArgKinded]) {
+        fn subst_in_gen_args(&self, gen_args: &mut [GenArg]) {
             for gen_arg in gen_args {
-                if let ArgKinded::Ident(ident) = gen_arg {
+                if let GenArg::Ident(ident) = gen_arg {
                     let to_be_kinded = ident.clone();
                     match self.ident_names_to_kinds.get(&ident.name).unwrap() {
                         Kind::Provenance => {
-                            *gen_arg = ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
+                            *gen_arg = GenArg::Provenance(Provenance::Ident(to_be_kinded))
                         }
-                        Kind::Memory => *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded)),
-                        Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
+                        Kind::Memory => *gen_arg = GenArg::Memory(Memory::Ident(to_be_kinded)),
+                        Kind::Nat => *gen_arg = GenArg::Nat(Nat::Ident(to_be_kinded)),
                         Kind::DataTy => {
-                            *gen_arg =
-                                ArgKinded::DataTy(DataTy::new(DataTyKind::Ident(to_be_kinded)))
+                            *gen_arg = GenArg::DataTy(DataTy::new(DataTyKind::Ident(to_be_kinded)))
                         }
                     }
                 }
@@ -80,12 +79,12 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
                 }
                 ExprKind::AppKernel(app_kernel) => {
                     let AppKernel {
-                        fun,
+                        fun_ident,
                         gen_args,
                         args,
                         ..
                     } = app_kernel.as_mut();
-                    self.visit_expr(fun);
+                    self.visit_ident(fun_ident);
                     self.subst_in_gen_args(gen_args);
                     visit_mut::walk_list!(self, visit_expr, args)
                 }
@@ -103,10 +102,10 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
             }
         }
 
-        fn visit_view(&mut self, view: &mut View) {
-            self.subst_in_gen_args(&mut view.gen_args);
-            for v in &mut view.args {
-                self.visit_view(v)
+        fn visit_view_inst(&mut self, view_inst: &mut ViewInst) {
+            self.subst_in_gen_args(&mut view_inst.gen_args);
+            for v in &mut view_inst.args {
+                self.visit_view_arg(v)
             }
         }
 
@@ -426,7 +425,7 @@ peg::parser! {
                         kind_args
                 ))
             }
-            func:ident() _ "::<<<" _ grid_dim:dim() _ "," _ block_dim:dim()
+            fun_ident:ident() _ "::<<<" _ grid_dim:dim() _ "," _ block_dim:dim()
                 mshrd:(_ ";" _ shrd_mem_dtys: dty() ** (_ "," _)
                     mprvs:(_ ";" _ prvs:prov_value() ** (_ "," _) { prvs })? {
                         (shrd_mem_dtys, mprvs)
@@ -441,18 +440,15 @@ peg::parser! {
                     else { vec![] };
                     Expr::new(ExprKind::AppKernel(Box::new(AppKernel {
                         grid_dim, block_dim, shared_mem_dtys, shared_mem_prvs,
-                        fun: Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(
-                                PlaceExpr::new(PlaceExprKind::Ident(func))))
-                            )),
+                        fun_ident,
                         gen_args,
                         args,
                     })))
             }
             l:literal() {
-                Expr::with_type(
+                Expr::with_dty(
                     ExprKind::Lit(l),
-                    Ty::new(TyKind::Data(Box::new(utils::type_from_lit(&l))))
-                )
+                    utils::type_from_lit(&l))
             }
             "sync" maybe_exec:(_ "(" _ exec:exec_expr() _ ")" { exec })?  {
                 Expr::new(ExprKind::Sync(maybe_exec))
@@ -481,7 +477,7 @@ peg::parser! {
             "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block_expr() {
                 Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
             }
-            "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:exec_expr() _ "{" _
+            "indep" _ "(" _ dim:dim_component() _ ")" __ n:ident() __ exec:exec_expr() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
@@ -547,20 +543,20 @@ peg::parser! {
                 )
             }
         rule args() -> Vec<Expr> = "(" _ args:expression() ** (_ "," _) _ ")" { args }
-        rule kind_args() -> Vec<ArgKinded> = "::<" _ k:kind_argument() ** (_ "," _) _ ">" { k }
+        rule kind_args() -> Vec<GenArg> = "::<" _ k:kind_argument() ** (_ "," _) _ ">" { k }
         // TODO make nat expressions aside from literals parsable.
         //  the current problem is, that a nat expression cannot be recognized as such, if it starts
         //  with an identifier, because identifiers are parsed generically. Just assuming the ident
         //  is nat would be wrong too (i.e., simply checking for nat first and then for generic ident).
         /// Parse a kind argument
-        pub(crate) rule kind_argument() -> ArgKinded
+        pub(crate) rule kind_argument() -> GenArg
             = !identifier() result:(
-                n:nat() { ArgKinded::Nat(n) }
-                / mem:memory_kind() { ArgKinded::Memory(mem) }
-                / dty:dty() { ArgKinded::DataTy(dty) }
-                / prov:provenance() { ArgKinded::Provenance(prov) }
+                n:nat() { GenArg::Nat(n) }
+                / mem:memory_kind() { GenArg::Memory(mem) }
+                / dty:dty() { GenArg::DataTy(dty) }
+                / prov:provenance() { GenArg::Provenance(prov) }
             ) { result }
-            / ident:ident() { ArgKinded::Ident(ident)}
+            / ident:ident() { GenArg::Ident(ident)}
 
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
@@ -569,13 +565,15 @@ peg::parser! {
                     PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref)))
                 }
                 --
-                pl_expr:@ _ "[" _ ".." _ split_pos:nat() _ ".." _ "]" {
+                pl_expr:@ _ "[" _ ".." _ split_pos:ident() _ ".." _ "]" {
                     PlaceExpr::new(
                         PlaceExprKind::View(Box::new(pl_expr),
-                            Box::new(View { name: Ident::new("split_at"),
-                                gen_args: vec![ArgKinded::Nat(split_pos)], args: vec![] })))
+                            Box::new(ViewInst {
+                                ident: Ident::new("split_at"),
+                                gen_args: vec![],
+                                args: vec![ViewTerm::RefineValue(split_pos)] })))
                 }
-                pl_expr:@ _ "[" _ idx:nat() _ "]" {
+                pl_expr:@ _ "[" _ idx:ident() _ "]" {
                     PlaceExpr::new(PlaceExprKind::Idx(Box::new(pl_expr), Box::new(idx)))
                 }
                 pl_expr:@ exec:(_ "[" _ "[" _ exec:exec_expr() _ "]" _ "]"{ exec }) {
@@ -583,7 +581,7 @@ peg::parser! {
                 }
                 --
                 proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
-                pl_expr:@ _ "." _ v:view_app() { PlaceExpr::new(PlaceExprKind::View(Box::new(pl_expr), Box::new(v))) }
+                pl_expr:@ _ "." _ v:view_inst() { PlaceExpr::new(PlaceExprKind::View(Box::new(pl_expr), Box::new(v))) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -628,14 +626,19 @@ peg::parser! {
             //     ple
             // }
 
-        pub(crate) rule view_app() -> View =
+        pub(crate) rule view_inst() -> ViewInst =
             view_ident:view_ident() mkargs:(_ kargs:kind_args() { kargs })?
-                margs:(_ "(" _ args: view_app() **<1,> (_ "," _) _ ")" { args })? {
-                    View { name: view_ident,
+                margs:(_ "(" _ args: view_term() **<0,> (_ "," _) _ ")" { args })? {
+                    ViewInst {
+                        ident: view_ident,
                         gen_args: mkargs.unwrap_or_default(),
                         args: margs.unwrap_or_default()
                     }
             }
+
+        rule view_term() -> ViewTerm =
+            view_inst:view_inst() { ViewTerm::ViewInst(view_inst) }
+            / refine_val:ident() { ViewTerm::RefineValue(refine_val) }
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat = precedence! {
@@ -656,17 +659,6 @@ peg::parser! {
             "(" _ n:nat() _ ")" { n }
         }
             // TODO: binary operations are currently disabled
-
-        rule nat_literal() -> usize
-            = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
-                // TODO: Getting the cause of the parse error is unstable for now. Fix this once
-                //  int_error_matching becomes stable
-                match s.parse::<usize>() {
-                    Ok(val) => Ok(val),
-                    Err(_) => { Err("Cannot parse natural number") }
-                }
-            }
-
 
         pub(crate) rule ty() -> Ty
             = begin:position!() dty:dty() end:position!() {
@@ -692,9 +684,9 @@ peg::parser! {
             / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
             / name:ident() { DataTyKind::Ident(name) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
-            / "[" _ t:dty() _ ";" _ n:ident() _ "]" { DataTyKind::Array(Box::new(t), n) }
-            / "[" _ "[" _ dty:dty() _ ";" _ n:ident() _ "]" _ "]" {
-                DataTyKind::ArrayShape(Box::new(dty), n)
+            / "[" _ t:dty() _ ";" _ n:predicate() _ "]" { DataTyKind::Array(Box::new(t), Box::new(n)) }
+            / "[" _ "[" _ dty:dty() _ ";" _ n:predicate() _ "]" _ "]" {
+                DataTyKind::ArrayShape(Box::new(dty), Box::new(n))
             }
             / "&" _ prov:(prv:provenance() __ { prv })? own:ownership() __ mem:memory_kind() __ dty:dty() {
                 DataTyKind::Ref(Box::new(RefDty::new(match prov {
@@ -703,6 +695,52 @@ peg::parser! {
                 }, own, mem, dty)))
             }
             / "_" { DataTyKind::Ident(Ident::new_impli(&crate::ast::utils::fresh_name("d"))) }
+
+        rule predicate() -> Predicate = precedence!{
+            // TODO move into extra rule to enable this case?
+            // "if" __ b:(@) __ "then" __ x:(@) __ "else" __ y:(@) {
+            //     Predicate::IfElse(Box::new(b), Box::new(x), Box::new(y))
+            // }
+            // --
+            x:(@) _ "|" _ y:@ { Predicate::Or(Box::new(x), Box::new(y)) }
+            x:(@) _ "&" _ y:@ { Predicate::And(Box::new(x), Box::new(y)) }
+            --
+            x:(@) _ "<" _ y:@ { Predicate::Le(Box::new(x), Box::new(y)) }
+            x:(@) _ "=" _ y:@ { Predicate::Eq(Box::new(x), Box::new(y)) }
+            x:(@) _ "<=" _ y:@ { Predicate::Or(
+                Box::new(Predicate::Eq(Box::new(x), Box::new(y))),
+                Box::new(Predicate::Le(Box::new(x), Box::new(y))))
+            }
+            --
+            x:(@) _ "+" _ y:@ { Predicate::Add(Box::new(x), Box::new(y)) }
+            x:(@) _ "-" _ y:@ {
+                Predicate::Add(Box::new(x), Box::new(Predicate::ConstMul(-1, Box::new(y))))
+            }
+            --
+            n:nat_literal() _ "*" _ x:@ { Predicate::ConstMul(n as i64, Box::new(x)) }
+            x:(@) _ "*" _ y:@ { Predicate::Uninterp(Ident::new("*"), vec![x, y]) }
+            x:(@) _ "/" _ y:@ { Predicate::Uninterp(Ident::new("/"), vec![x, y]) }
+            x:(@) _ "%" _ y:@ { Predicate::Uninterp(Ident::new("%"), vec![x, y]) }
+            --
+            "true" { Predicate::True }
+            "false" { Predicate::False }
+            l:nat_literal() { Predicate::Num(l) }
+            x:ident() { Predicate::Ident(x) }
+            --
+            "!" _ x:@ { Predicate::Not(Box::new(x)) }
+            --
+            "(" _ p:predicate() _ ")" { p }
+        }
+
+        rule nat_literal() -> usize
+            = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
+                // TODO: Getting the cause of the parse error is unstable for now. Fix this once
+                //  int_error_matching becomes stable
+                match s.parse::<usize>() {
+                    Ok(val) => Ok(val),
+                    Err(_) => { Err("Cannot parse natural number") }
+                }
+            }
 
         rule exec_expr() -> ExecExpr =
             begin:position!() exec:exec() end:position!() {
@@ -724,7 +762,7 @@ peg::parser! {
 
         rule exec_path_elem() -> ExecPathElem =
             "distrib" _ "<" _ dim_compo:dim_component() _ ">" { ExecPathElem::Distrib(dim_compo) }
-            / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { 0 }/ "1" { 1 }) _ ">" {
+            / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:ident() _ "," _ proj:("0" { 0 }/ "1" { 1 }) _ ">" {
                 ExecPathElem::SplitProj(Box::new(SplitProj::new(dim_compo, pos, proj)))
             }
 
@@ -788,9 +826,9 @@ peg::parser! {
             / "Y" _ "<" _ dim1d:dim1d() _ ">" { Dim::Y(Box::new(dim1d)) }
             / "Z" _ "<" _ dim1d:dim1d() _ ">" { Dim::Z(Box::new(dim1d)) }
 
-        rule dim3d() -> Dim3d = n1:ident() _ "," _ n2:ident() _ "," _ n3:ident() { Dim3d(n1, n2, n3) }
-        rule dim2d() -> Dim2d = n1:ident() _ "," _ n2:ident() { Dim2d(n1, n2) }
-        rule dim1d() -> Dim1d = n:ident() { Dim1d(n) }
+        rule dim3d() -> Dim3d = n1:predicate() _ "," _ n2:predicate() _ "," _ n3:predicate() { Dim3d(n1, n2, n3) }
+        rule dim2d() -> Dim2d = n1:predicate() _ "," _ n2:predicate() { Dim2d(n1, n2) }
+        rule dim1d() -> Dim1d = n:predicate() { Dim1d(n) }
 
         rule ident() -> Ident
             = begin:position!() ident:$(identifier()) end:position!() {
@@ -1093,7 +1131,7 @@ mod tests {
             Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
                 DataTyKind::Array(
                     Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))),
-                    Nat::Lit(42)
+                    Box::new(Predicate::Num(42))
                 )
             ))))),
             "does not recognize [f32;42] type"
@@ -1103,7 +1141,7 @@ mod tests {
             Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
                 DataTyKind::Array(
                     Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U32))),
-                    Nat::Lit(43)
+                    Box::new(Predicate::Num(43)),
                 )
             ))))),
             "does not recognize [u32;43] type"
@@ -1118,7 +1156,7 @@ mod tests {
             Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
                 DataTyKind::ArrayShape(
                     Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                    Nat::Lit(24)
+                    Box::new(Predicate::Num(24))
                 )
             ))))),
             "does not recognize [[f32;24]] type"
@@ -1150,14 +1188,14 @@ mod tests {
             ))))),
             "does not recognize type of unique i32 reference in cpu heap with provenance 'a"
         );
-        assert_eq!(descend::ty("&b shrd gpu.global [f32;N]"), Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+        assert_eq!(descend::ty("&b shrd gpu.global [f32; N]"), Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
             Box::new(RefDty::new(
                         Provenance::Ident(Ident::new("b")),
                         Ownership::Shrd,
                         Memory::GpuGlobal,
                         DataTy::new(DataTyKind::Array(
                             Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))),
-                            Nat::Ident(Ident::new("N"))
+                            Box::new(Predicate::Ident(Ident::new("N")))
                         ))
                     )))))),
         )), "does not recognize type of shared [f32] reference in gpu global memory with provenance b");
@@ -1181,7 +1219,7 @@ mod tests {
                 DataTyKind::At(
                     Box::new(DataTy::new(DataTyKind::Array(
                         Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))),
-                        Nat::Lit(42)
+                        Box::new(Predicate::Num(42))
                     ))),
                     Memory::GpuGlobal
                 )
@@ -1480,11 +1518,9 @@ mod tests {
     fn expression_literal() {
         assert_eq!(
             descend::expression("7"),
-            Ok(Expr::with_type(
+            Ok(Expr::with_dty(
                 ExprKind::Lit(Lit::I32(7)),
-                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                    ScalarTy::I32
-                )))))
+                DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
             ))
         );
         dbg!(descend::expression("7").unwrap());
@@ -1496,17 +1532,13 @@ mod tests {
             descend::expression("7+8"),
             Ok(Expr::new(ExprKind::BinOp(
                 BinOp::Add,
-                Box::new(Expr::with_type(
+                Box::new(Expr::with_dty(
                     ExprKind::Lit(Lit::I32(7)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::I32
-                    )))))
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                 )),
-                Box::new(Expr::with_type(
+                Box::new(Expr::with_dty(
                     ExprKind::Lit(Lit::I32(8)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::I32
-                    )))))
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                 ))
             ),))
         );
@@ -1520,24 +1552,18 @@ mod tests {
                 BinOp::Mul,
                 Box::new(Expr::new(ExprKind::BinOp(
                     BinOp::Add,
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(5)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     )),
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(6)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ))
                 ),)),
-                Box::new(Expr::with_type(
+                Box::new(Expr::with_dty(
                     ExprKind::Lit(Lit::I32(7)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::I32
-                    )))))
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                 ))
             ),))
         );
@@ -1607,11 +1633,9 @@ mod tests {
                 Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new(
                     "var_token"
                 )))),
-                Box::new(Expr::with_type(
+                Box::new(Expr::with_dty(
                     ExprKind::Lit(Lit::F32(730.0)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::F32
-                    )))))
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::F32))
                 ))
             )))
         );
@@ -1623,17 +1647,13 @@ mod tests {
                 )))),
                 Box::new(Expr::new(ExprKind::BinOp(
                     BinOp::Add,
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(3)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     )),
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(4)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ))
                 )))
             )))
@@ -1677,11 +1697,9 @@ mod tests {
         assert_eq!(
             descend::expression_seq("[12, x[3], true]"),
             Ok(Expr::new(ExprKind::Array(vec![
-                Expr::with_type(
+                Expr::with_dty(
                     ExprKind::Lit(Lit::I32(12)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::I32
-                    )))))
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                 ),
                 Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
                     PlaceExprKind::Idx(
@@ -1689,11 +1707,9 @@ mod tests {
                         Box::new(Nat::Lit(3))
                     )
                 )))),
-                Expr::with_type(
+                Expr::with_dty(
                     ExprKind::Lit(Lit::Bool(true)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::Bool
-                    )))))
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::Bool))
                 )
             ])))
         );
@@ -1781,23 +1797,17 @@ mod tests {
             Ok(Expr::new(ExprKind::For(
                 x.clone(),
                 Box::new(Expr::new(ExprKind::Array(vec![
-                    Expr::with_type(
+                    Expr::with_dty(
                         ExprKind::Lit(Lit::I32(1)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ),
-                    Expr::with_type(
+                    Expr::with_dty(
                         ExprKind::Lit(Lit::I32(2)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ),
-                    Expr::with_type(
+                    Expr::with_dty(
                         ExprKind::Lit(Lit::I32(3)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     )
                 ]))),
                 Box::new(Expr::new(ExprKind::Block(Block::new(Expr::new(
@@ -1808,11 +1818,9 @@ mod tests {
                             Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
                                 PlaceExprKind::Ident(x.clone())
                             ))))),
-                            Box::new(Expr::with_type(
+                            Box::new(Expr::with_dty(
                                 ExprKind::Lit(Lit::I32(1)),
-                                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                    ScalarTy::I32
-                                )))))
+                                DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                             ))
                         ),))
                     ),
@@ -1833,14 +1841,10 @@ mod tests {
             descend::expression_seq("let mut x : f32 = 17.123f32"),
             Ok(Expr::new(ExprKind::Let(
                 Pattern::Ident(Mutability::Mut, Ident::new("x")),
-                Some(Box::new(Ty::new(TyKind::Data(Box::new(DataTy::new(
-                    DataTyKind::Scalar(ScalarTy::F32)
-                )))))),
-                Box::new(Expr::with_type(
+                Some(Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32)))),
+                Box::new(Expr::with_dty(
                     ExprKind::Lit(Lit::F32(17.123)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::F32
-                    )))))
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::F32))
                 ))
             ),))
         );
@@ -1894,58 +1898,44 @@ mod tests {
                         BinOp::Add,
                         Box::new(Expr::new(ExprKind::UnOp(
                             UnOp::Neg,
-                            Box::new(Expr::with_type(
+                            Box::new(Expr::with_dty(
                                 ExprKind::Lit(Lit::I32(1)),
-                                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                    ScalarTy::I32
-                                )))))
+                                DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                             ))
                         ))),
                         Box::new(Expr::new(ExprKind::BinOp(
                             BinOp::Mul,
-                            Box::new(Expr::with_type(
+                            Box::new(Expr::with_dty(
                                 ExprKind::Lit(Lit::I32(2)),
-                                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                    ScalarTy::I32
-                                )))))
+                                DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                             )),
-                            Box::new(Expr::with_type(
+                            Box::new(Expr::with_dty(
                                 ExprKind::Lit(Lit::I32(3)),
-                                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                    ScalarTy::I32
-                                )))))
+                                DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                             ))
                         )))
                     ))),
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(4)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ))
                 ))),
                 Box::new(Expr::new(ExprKind::BinOp(
                     BinOp::Mul,
                     Box::new(Expr::new(ExprKind::BinOp(
                         BinOp::Mul,
-                        Box::new(Expr::with_type(
+                        Box::new(Expr::with_dty(
                             ExprKind::Lit(Lit::I32(5)),
-                            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                ScalarTy::I32
-                            )))))
+                            DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                         )),
-                        Box::new(Expr::with_type(
+                        Box::new(Expr::with_dty(
                             ExprKind::Lit(Lit::I32(6)),
-                            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                ScalarTy::I32
-                            )))))
+                            DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                         ))
                     ))),
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ))
                 )))
             ),))
@@ -1960,17 +1950,13 @@ mod tests {
                     UnOp::Neg,
                     Box::new(Expr::new(ExprKind::BinOp(
                         BinOp::Add,
-                        Box::new(Expr::with_type(
+                        Box::new(Expr::with_dty(
                             ExprKind::Lit(Lit::I32(1)),
-                            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                ScalarTy::I32
-                            )))))
+                            DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                         )),
-                        Box::new(Expr::with_type(
+                        Box::new(Expr::with_dty(
                             ExprKind::Lit(Lit::I32(2)),
-                            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                ScalarTy::I32
-                            )))))
+                            DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                         ))
                     ),))
                 ),)),
@@ -1978,42 +1964,32 @@ mod tests {
                     BinOp::Mul,
                     Box::new(Expr::new(ExprKind::BinOp(
                         BinOp::Add,
-                        Box::new(Expr::with_type(
+                        Box::new(Expr::with_dty(
                             ExprKind::Lit(Lit::I32(3)),
-                            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                ScalarTy::I32
-                            )))))
+                            DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                         )),
                         Box::new(Expr::new(ExprKind::BinOp(
                             BinOp::Mul,
                             Box::new(Expr::new(ExprKind::BinOp(
                                 BinOp::Add,
-                                Box::new(Expr::with_type(
+                                Box::new(Expr::with_dty(
                                     ExprKind::Lit(Lit::I32(4)),
-                                    Ty::new(TyKind::Data(Box::new(DataTy::new(
-                                        DataTyKind::Scalar(ScalarTy::I32)
-                                    ))))
+                                    DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                                 )),
-                                Box::new(Expr::with_type(
+                                Box::new(Expr::with_dty(
                                     ExprKind::Lit(Lit::I32(5)),
-                                    Ty::new(TyKind::Data(Box::new(DataTy::new(
-                                        DataTyKind::Scalar(ScalarTy::I32)
-                                    ))))
+                                    DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                                 ))
                             ))),
-                            Box::new(Expr::with_type(
+                            Box::new(Expr::with_dty(
                                 ExprKind::Lit(Lit::I32(6)),
-                                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                    ScalarTy::I32
-                                )))))
+                                DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                             ))
                         )))
                     ))),
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(7)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ))
                 )))
             ),))
@@ -2040,16 +2016,14 @@ mod tests {
         ];
         let params = vec![ParamDecl {
             ident: Ident::new("ha_array"),
-            dty: Some(Ty::new(TyKind::Data(Box::new(DataTy::new(
-                DataTyKind::Ref(Box::new(RefDty::new(
-                    Provenance::Ident(Ident::new("a")),
-                    Ownership::Uniq,
-                    Memory::CpuMem,
-                    DataTy::new(DataTyKind::Array(
-                        Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                        Nat::Ident(Ident::new("n")),
-                    )),
-                ))),
+            dty: Some(DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
+                Provenance::Ident(Ident::new("a")),
+                Ownership::Uniq,
+                Memory::CpuMem,
+                DataTy::new(DataTyKind::Array(
+                    Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
+                    Nat::Ident(Ident::new("n")),
+                )),
             ))))),
             mutbl: Mutability::Const,
         }];
@@ -2188,28 +2162,22 @@ mod tests {
             Ok(Expr::new(ExprKind::While(
                 Box::new(Expr::new(ExprKind::BinOp(
                     BinOp::Le,
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(1)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     )),
-                    Box::new(Expr::with_type(
+                    Box::new(Expr::with_dty(
                         ExprKind::Lit(Lit::I32(2)),
-                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                            ScalarTy::I32
-                        )))))
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                     ))
                 ))),
                 Box::new(Expr::new(ExprKind::Block(Block::new(Expr::new(
                     ExprKind::Let(
                         Pattern::Ident(Mutability::Const, Ident::new("x")),
                         None,
-                        Box::new(Expr::with_type(
+                        Box::new(Expr::with_dty(
                             ExprKind::Lit(Lit::I32(5)),
-                            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                                ScalarTy::I32
-                            )))))
+                            DataTy::new(DataTyKind::Scalar(ScalarTy::I32))
                         ))
                     )
                 )))))

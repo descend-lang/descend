@@ -24,7 +24,7 @@ pub fn make_binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
     // ))
     Expr {
         expr: ExprKind::BinOp(op, Box::new(lhs), Box::new(rhs)),
-        ty: None,
+        dty: None,
         span: None,
     }
 }
@@ -44,7 +44,7 @@ pub fn make_unary(op: UnOp, rhs: Expr) -> Expr {
     // ))
     Expr {
         expr: ExprKind::UnOp(op, Box::new(rhs)),
-        ty: None,
+        dty: None,
         span: None,
     }
 }
