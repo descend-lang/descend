@@ -35,22 +35,13 @@ fn gpu_vlc_encode<gs:nat>(
     s_block_out: &uniq gpu.shared [AtomicU32; 256],
     s_last_index_to_copy: &uniq gpu.shared [u32; 1]
 ) -[grid: gpu.grid<X<gs>, X<256>>]-> () {
-
-    let g_source_data_block_groups = group::<256>(to_view(g_source_data));
-    let g_codewords_view = to_view(g_codewords);
-    let g_codewordlens_view = to_view(g_codewordlens);
-
-    let g_out_block_groups = group_mut::<256>(to_view_mut(g_out));
-    let g_out_idx_block_groups = group_mut::<1>(to_view_mut(g_out_idx));
-
     sched block in grid {
         // distribute groups to blocks
-        let g_source_data_block_group = g_source_data_block_groups[[block]];
-        let g_out_block_group = g_out_block_groups[[block]];
-        let g_out_idx_block_group = g_out_idx_block_groups[[block]];
+        let g_out_block_group = &uniq (*g_out).to_view.grp::<256>[[block]];
+        let g_out_idx_block_group = &uniq (*g_out_idx).to_view.grp::<1>[[block]];
 
         // create shared memory views
-        let s_block_out_view = to_view(&shrd *s_block_out);
+        let s_block_out_view = &shrd (*s_block_out).to_view;
 
         // Declare register variables for information that is relevant throughout the entire
         // algorithm, but can be most efficiently calculated some steps before the
@@ -73,14 +64,11 @@ fn gpu_vlc_encode<gs:nat>(
 
         // cache the codewords and their lengths (in bits) in shared memory
         {
-            let s_codewords_view = to_view_mut(&uniq *s_codewords);
-            let s_codewordlens_view = to_view_mut(&uniq *s_codewordlens);
-
             sched thread in block {
-                let g_codeword_item = g_codewords_view[[thread]];
-                let g_codewordlen_item = g_codewordlens_view[[thread]];
-                let s_codeword_item = s_codewords_view[[thread]];
-                let s_codewordlen_item = s_codewordlens_view[[thread]];
+                let g_codeword_item = &shrd (*g_codewords).to_view[[thread]];
+                let g_codewordlen_item = &shrd (*g_codewordlens).to_view[[thread]];
+                let s_codeword_item = &uniq (*s_codewords).to_view[[thread]];
+                let s_codewordlen_item = &uniq (*s_codewordlens).to_view[[thread]];
 
                 *s_codeword_item = *g_codeword_item;
                 *s_codewordlen_item = *g_codewordlen_item
@@ -92,10 +80,9 @@ fn gpu_vlc_encode<gs:nat>(
         // encode four input symbols per thread and save the total bit-length of the encoded
         // symbols per thread in shared memory
         {
-            let tmp_s_result_locations_view = to_view_mut(&uniq *s_result_locations);
             sched thread in block {
-                let g_source_data_item = g_source_data_block_group[[thread]];
-                let s_result_location_item = tmp_s_result_locations_view[[thread]];
+                let g_source_data_item = &shrd (*g_source_data).to_view.grp::<256>[[block]][[thread]];
+                let s_result_location_item = &uniq (*s_result_locations).to_view[[thread]];
 
                 // four symbols are stored in g_source_data_item
                 let tmp_source_data_item = *g_source_data_item;
@@ -144,7 +131,7 @@ fn gpu_vlc_encode<gs:nat>(
         // step 2: set last value to zero
         {
             let tmp_view2 = to_view_mut(&uniq *s_result_locations);
-            let tmp_last = (split uniq (256 - 1) (*tmp_view2)).1;
+            let tmp_last = &uniq (*tmp_view2)[..(256-1)..].1;
             indep(X) 1 block {
                 active_thread => {
                     sched thread in active_thread {
