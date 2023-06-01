@@ -1,6 +1,7 @@
 use super::Ty;
 use crate::ast::internal::Place;
-use crate::ast::{Ident, Ownership, PlaceExpr, TyKind};
+use crate::ast::printer::PrintState;
+use crate::ast::{BaseExec, DataTy, Expr, Ident, Ownership, PlaceExpr, TyKind};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -14,6 +15,8 @@ pub enum TyError {
     MutabilityNotAllowed(Ty),
     CtxError(CtxError),
     SubTyError(SubTyError),
+    // Standard data type mismatch, expected type followed by actual type
+    MismatchedDataTypes(DataTy, DataTy, Expr),
     // "Trying to violate existing borrow of {:?}.",
     // p1 under own1 is in conflict because of BorrowingError
     ConflictingBorrow(Box<PlaceExpr>, Ownership, BorrowingError),
@@ -38,10 +41,6 @@ pub enum TyError {
     // The borrowed view type is at least paritally dead
     BorrowingDeadView,
     IllegalExec,
-    // A type variable has to be equal to a term that is referring to the same type variable
-    InfiniteType,
-    // Cannot unify the two terms
-    CannotUnify,
     // Trying to type an expression with dead type
     DeadTy,
     // When a parallel collection consits of other parallel elements, a for-with requires an
@@ -54,6 +53,7 @@ pub enum TyError {
     UnexpectedType,
     // The thread hierarchy dimension referred to does not exist
     IllegalDimension,
+    UnifyError(UnifyError),
     // TODO remove as soon as possible
     String(String),
 }
@@ -72,6 +72,30 @@ impl TyError {
                     err.emit(source);
                 }
             }
+            TyError::MismatchedDataTypes(expec, actual, actual_expr) => {
+                let label = "mismatched types";
+                let mut expec_printer = PrintState::new();
+                expec_printer.print_dty(expec);
+                let mut actual_printer = PrintState::new();
+                actual_printer.print_dty(actual);
+                let annotation = format!(
+                    "expected `{}` but found `{}`",
+                    expec_printer.get(),
+                    actual_printer.get()
+                );
+                let expr_span = actual_expr.span.unwrap();
+                let (begin_line, begin_column) = source.get_line_col(expr_span.begin);
+                let (_, end_column) = source.get_line_col(expr_span.end);
+                let snippet = error::single_line_snippet(
+                    source,
+                    label,
+                    &annotation,
+                    begin_line,
+                    begin_column,
+                    end_column,
+                );
+                eprintln!("{}", DisplayList::from(snippet));
+            }
             TyError::MutabilityNotAllowed(ty) => {
                 if let Some(span) = ty.span {
                     let label = "mutability not allowed";
@@ -80,11 +104,12 @@ impl TyError {
                     let snippet = error::single_line_snippet(
                         source,
                         label,
+                        label,
                         begin_line,
                         begin_column,
                         end_column,
                     );
-                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                    eprintln!("{}", DisplayList::from(snippet));
                 } else {
                     eprintln!("{:?}", &self);
                 };
@@ -106,7 +131,7 @@ impl TyError {
                     }],
                     opt: default_format(),
                 };
-                eprintln!("{}", DisplayList::from(snippet).to_string());
+                eprintln!("{}", DisplayList::from(snippet));
             }
             TyError::CtxError(CtxError::IdentNotFound(ident)) => {
                 if let Some(span) = ident.span {
@@ -119,11 +144,12 @@ impl TyError {
                     let snippet = error::single_line_snippet(
                         source,
                         label,
+                        label,
                         begin_line,
                         begin_column,
                         end_column,
                     );
-                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                    eprintln!("{}", DisplayList::from(snippet));
                 } else {
                     eprintln!("{:?}", &self);
                 };
@@ -139,18 +165,24 @@ impl TyError {
                             let snippet = error::single_line_snippet(
                                 source,
                                 label,
+                                label,
                                 begin_line,
                                 begin_column,
                                 end_column,
                             );
-                            eprintln!("{}", DisplayList::from(snippet).to_string());
+                            eprintln!("{}", DisplayList::from(snippet));
                             eprintln!("conflicting with {:?}", place);
                         }
                         BorrowingError::TemporaryConflictingBorrow(_prv) => {
                             eprintln!("{:?}", conflict)
                         }
                         BorrowingError::ConflictingOwnership => eprintln!("{:?}", conflict),
+                        BorrowingError::ConflictingAccess => eprintln!("{:?}", conflict),
                         BorrowingError::CtxError(ctx_err) => eprintln!("{:?}", ctx_err),
+                        BorrowingError::WrongDevice(under, from) => {
+                            eprintln!("error: wrong device\nunder:{:?}\nfrom:{:?}", under, from)
+                        }
+                        BorrowingError::MultipleDistribs => eprintln!("{:?}", conflict),
                         BorrowingError::TyError(ty_err) => {
                             ty_err.emit(source);
                         }
@@ -170,11 +202,12 @@ impl TyError {
                     let snippet = error::single_line_snippet(
                         source,
                         &label,
+                        &label,
                         begin_line,
                         begin_column,
                         end_column,
                     );
-                    eprintln!("{}", DisplayList::from(snippet).to_string());
+                    eprintln!("{}", DisplayList::from(snippet));
                 } else {
                     eprintln!("{:?}", &self);
                 };
@@ -197,6 +230,11 @@ impl From<SubTyError> for TyError {
         TyError::SubTyError(err)
     }
 }
+impl From<UnifyError> for TyError {
+    fn from(err: UnifyError) -> Self {
+        TyError::UnifyError(err)
+    }
+}
 
 #[must_use]
 #[derive(Debug)]
@@ -208,8 +246,26 @@ pub enum SubTyError {
     PrvNotUsedInBorrow(String),
     // Subtyping checks fail if the memory kinds are not equal
     MemoryKindsNoMatch,
+    // Subtyping checks fail if the ownership of supposedly subtyped references do not match
+    OwnershipNoMatch,
     // TODO remove asap
     Dummy,
+}
+
+#[must_use]
+#[derive(Debug)]
+pub enum UnifyError {
+    // Cannot unify the two terms
+    CannotUnify,
+    // A type variable has to be equal to a term that is referring to the same type variable
+    InfiniteType,
+    SubTyError(SubTyError),
+}
+
+impl From<SubTyError> for UnifyError {
+    fn from(err: SubTyError) -> Self {
+        UnifyError::SubTyError(err)
+    }
 }
 
 #[must_use]
@@ -243,9 +299,12 @@ pub enum BorrowingError {
     //     loan with {} capability.",
     // checked_own, ref_own
     ConflictingOwnership,
+    ConflictingAccess,
     // The borrowing place is not in the reborrow list
     BorrowNotInReborrowList(Place),
     TemporaryConflictingBorrow(String),
+    WrongDevice(BaseExec, BaseExec),
+    MultipleDistribs,
     TyError(Box<TyError>),
 }
 

@@ -1,5 +1,6 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Ident, IdentKinded, Memory, Nat, Provenance, Ty, TyKind,
+    ArgKinded, DataTy, DataTyKind, Dim, ExecTy, ExecTyKind, FnTy, Ident, IdentKinded, Memory, Nat,
+    Provenance, Ty, TyKind,
 };
 use std::collections::HashMap;
 
@@ -10,30 +11,28 @@ use std::collections::HashMap;
 pub fn infer_kinded_args_from_mono_ty(
     remain_gen_args: Vec<IdentKinded>,
     subst_param_tys: Vec<Ty>,
+    subst_exec_level: &ExecTy,
     subst_ret_ty: &Ty,
-    mono_ty: &Ty,
+    mono_fn_ty: &FnTy,
 ) -> Vec<ArgKinded> {
-    if let TyKind::FnTy(mono_fn_ty) = &mono_ty.ty {
-        if mono_fn_ty.param_tys.len() != subst_param_tys.len() {
-            panic!("Unexpected difference in amount of paramters.")
-        }
-        let mut res_map = HashMap::new();
-        for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
-            infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
-        }
-        infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
-        let mut res_vec = Vec::new();
-        for gen_arg in remain_gen_args {
-            let res_karg = res_map.get(&gen_arg.ident).unwrap();
-            if gen_arg.kind != res_karg.kind() {
-                panic!("Unexpected: Kinds of identifier and argument do not match.")
-            }
-            res_vec.push(res_karg.clone());
-        }
-        res_vec
-    } else {
-        panic!("Expected function type.")
+    if mono_fn_ty.param_tys.len() != subst_param_tys.len() {
+        panic!("Unexpected difference in amount of paramters.")
     }
+    let mut res_map = HashMap::new();
+    for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
+        infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
+    }
+    infer_kargs_exec_level(&mut res_map, subst_exec_level, &mono_fn_ty.exec_ty);
+    infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
+    let mut res_vec = Vec::new();
+    for gen_arg in remain_gen_args {
+        let res_karg = res_map.get(&gen_arg.ident).unwrap();
+        if gen_arg.kind != res_karg.kind() {
+            panic!("Unexpected: Kinds of identifier and argument do not match.")
+        }
+        res_vec.push(res_karg.clone());
+    }
+    res_vec
 }
 
 macro_rules! infer_from_lists {
@@ -78,8 +77,52 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
                 panic!("Unexpected top-level function type.")
             }
             infer_from_lists!(infer_kargs_tys, map, &fn_ty1.param_tys, &fn_ty2.param_tys);
-            panic_if_neq!(fn_ty1.exec_ty, fn_ty2.exec_ty);
+            infer_kargs_exec_level(map, &fn_ty1.exec_ty, &fn_ty2.exec_ty);
             infer_kargs_tys(map, &fn_ty1.ret_ty, &fn_ty2.ret_ty)
+        }
+        _ => panic_no_inst!(),
+    }
+}
+
+fn infer_kargs_exec_level(
+    map: &mut HashMap<Ident, ArgKinded>,
+    poly_exec_level: &ExecTy,
+    mono_exec_level: &ExecTy,
+) {
+    match (&poly_exec_level.ty, &mono_exec_level.ty) {
+        (ExecTyKind::GpuGrid(gdim1, bdim1), ExecTyKind::GpuGrid(gdim2, bdim2))
+        | (ExecTyKind::GpuBlockGrp(gdim1, bdim1), ExecTyKind::GpuBlockGrp(gdim2, bdim2)) => {
+            infer_kargs_dims(map, gdim1, gdim2);
+            infer_kargs_dims(map, bdim1, bdim2);
+        }
+        (ExecTyKind::GpuBlock(dim1), ExecTyKind::GpuBlock(dim2))
+        | (ExecTyKind::GpuThreadGrp(dim1), ExecTyKind::GpuThreadGrp(dim2)) => {
+            infer_kargs_dims(map, dim1, dim2);
+        }
+        (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
+        | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
+        | (ExecTyKind::View, ExecTyKind::View) => {}
+        _ => panic_no_inst!(),
+    }
+}
+
+fn infer_kargs_dims(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
+    match (poly_dim, mono_dim) {
+        (Dim::XYZ(d3d1), Dim::XYZ(d3d2)) => {
+            infer_kargs_nats(map, &d3d1.0, &d3d2.0);
+            infer_kargs_nats(map, &d3d1.1, &d3d2.1);
+            infer_kargs_nats(map, &d3d1.2, &d3d2.2);
+        }
+        (Dim::XY(d2d1), Dim::XY(d2d2))
+        | (Dim::XZ(d2d1), Dim::XZ(d2d2))
+        | (Dim::YZ(d2d1), Dim::YZ(d2d2)) => {
+            infer_kargs_nats(map, &d2d1.0, &d2d2.0);
+            infer_kargs_nats(map, &d2d1.1, &d2d2.1);
+        }
+        (Dim::X(d1d1), Dim::X(d1d2))
+        | (Dim::Y(d1d1), Dim::Y(d1d2))
+        | (Dim::Z(d1d1), Dim::Z(d1d2)) => {
+            infer_kargs_nats(map, &d1d1.0, &d1d2.0);
         }
         _ => panic_no_inst!(),
     }
@@ -121,27 +164,6 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         _ => panic_no_inst!(),
     }
 }
-
-// TODO remove? or is this required somewhere?
-// fn infer_dim(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
-//     match (poly_dim, mono_dim) {
-//         (Dim::XYZ(diml), Dim::XYZ(dimr)) => {
-//             infer_kargs_nats(map, &diml.0, &dimr.0);
-//             infer_kargs_nats(map, &diml.1, &dimr.1);
-//             infer_kargs_nats(map, &diml.2, &dimr.2);
-//         }
-//         (Dim::XY(diml), Dim::XY(dimr))
-//         | (Dim::XZ(diml), Dim::XZ(dimr))
-//         | (Dim::YZ(diml), Dim::YZ(dimr)) => {
-//             infer_kargs_nats(map, &diml.0, &dimr.0);
-//             infer_kargs_nats(map, &diml.1, &dimr.1);
-//         }
-//         (Dim::X(diml), Dim::X(dimr))
-//         | (Dim::Y(diml), Dim::Y(dimr))
-//         | (Dim::Z(diml), Dim::Z(dimr)) => infer_kargs_nats(map, &diml.0, &dimr.0),
-//         _ => panic!("Unexpected: mono type is not an instantiation of poly type"),
-//     }
-// }
 
 fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_nat: &Nat) {
     match (poly_nat, mono_nat) {

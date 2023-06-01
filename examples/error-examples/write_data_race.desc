@@ -1,3 +1,68 @@
+// two threads (block/grid) dereferences two different but aliased pointers to the same memory location → data race
+//
+// __global__ void block_1024_executed_fn(
+//   int *ref_to_mem1_512_elems,
+//   int *accidentally_aliased_ref_to_mem1_512_elems
+// ) {
+//   bool fst_half_block = threadIdx.x < 512;
+//   if (fst_half_block) {
+//     ref_to_mem1_512_elems[threadIdx.x] = 1;
+//   } else {
+//     // Data race
+//     accidentally_aliased_ref_to_mem1_512_elems[thradIdx.x-blockDimx.x/2] = 2;
+//   }
+// }
+//
+// ...
+// block_1024_executed_fn(ref_to_mem1_512_elems, ref_to_mem1_512_elems);
+fn block_1024_executed_fn(
+  ref_to_mem1_512_elems: &uniq gpu.global [i32; 512],
+  not_aliased_ref_to_mem2_512_elems: &uniq gpu.global [i32; 512]
+) -[block: gpu.block<X<1024>>]-> () {
+  indep(X) 512 block {
+    fst_half_block => {
+      sched thread in fst_half_block {
+        ref_to_mem1_512_elems[[thread]] = 1;
+      }
+    }
+    snd_half_block => {
+      sched thread in snd_half_block {
+        not_aliased_ref_to_mem2_512_elems[[thread]] = 2;
+      }
+    }
+  }
+}
+...
+// ERROR: Attempting to alias unique reference
+block_1024_executed_fn(ref_to_mem1_512_elems, ref_to_mem1_512_elems)
+/////
+/////
+// Attempt 2
+fn block_1024_executed_fn(
+  ref_to_mem1_512_elems: &uniq gpu.global [i32; 512],
+) -[block: gpu.block<X<1024>>]-> () {
+  let aliased_ref = ref_to_mem1_512_elems;
+  indep(X) 512 block {
+    fst_half_block => {
+      sched thread in fst_half_block {
+        let aliased_ref = &uniq *ref_to_mem1_512_elems;
+        aliased_ref[[thread]] = 1;
+      }
+    }
+    snd_half_block => {
+      sched thread in snd_half_block {
+        // ERROR: ref_to_mem1_512_elems is currently being borrowed uniquely
+        ref_to_mem1_512_elems[[thread]] = 2;
+      }
+    }
+  }
+}
+...
+block_1024_executed_fn(ref_to_mem1_512_elems)
+
+
+// Two threads from different blocks access the same global memory location → data race
+//
 // __global__ void write_to_fixed_pos(
 //   int *out_vec, int *in_vec) {
 //   int globalIdx =
@@ -9,24 +74,102 @@ fn write_to_fixed_pos(
   out_vec: &uniq gpu.global [i32; 6], in_vec: &shrd gpu.global [i32; 6]
 ) -[grid: gpu.grid<X<1>, X<6>> () {
   sched thread in grid.to_threads {
-    out_vec[0] = in_vec[[thread]]; // cannot be written atm, requires a view
+    // ERROR: trying to uniquely use the entirety of out_vec in multiple threads
+    out_vec[0] = in_vec[[thread]];
   }
 }
 
-// __global__ void write_to_computed_pos(
-//   double *out_vec, int vec_size) {
-//   int globalIdx =
-//     blockIdx.x * blockDim.x + threadIdx.x;
-//   out_vec[globalIdx * 2 % (vec_size - 1)] = ...;
+// Thread on the GPU dereferences a pointer that was created to point to host memory → undefined behavior
+//
+// void host_fun() {
+//   double *ref = alloc_and_init(sizeof(double) * 6, 0.0);
+//   init_kernel<<<M, N>>>(ref);
 // }
-fn write_to_computed_pos(
-  out_vec: &uniq gpu.global [i32; 6]
-) -[grid: gpu.grid<X<1>, X<6>> () {
+//
+// __global__ void init_kernel(double *ref) {
+//   // Attempting to dereference host pointer from device.
+//   ref[globalIdx.x] = 1.0;
+// }
+fn host_fun1() -[t: cpu.thread]-> () {
+  let ref = new_cpu_heap::<[f64; 6]>(0.0);
+  // ERROR: wrong type: expected &uniq gpu.global [f64; 6], but found &uniq cpu.mem [f64;6]
+  init_kernel1<<<X<M>, X<N>>>>(ref);
+  init_kernel2<<<X<M>, X<N>>>>(ref);
+}
+fn init_kernel1(ref: &uniq gpu.global [f64; 6]) -[grid: gpu.grid<X<M>, X<N>>]-> () {
   sched thread in grid.to_threads {
-    // vec_size = 6
-    out_vec[thread * 2 % (6-1)] = ...;
+    let elem_ref = ref[[thread]];
+    *elem_ref = 1.0
   }
 }
+// Another attempt: allow the function to take a cpu.mem reference
+fn init_kernel2(ref: &uniq cpu.mem [f64; 6]) -[grid: gpu.grid<X<M>, X<N>>]-> () {
+  sched thread in grid.to_threads {
+    let elem_ref = ref[[thread]];
+    *elem_ref = 1.0 // trying to access CPU memory from GPU
+  }
+}
+
+
+// Function (Kernel) assumes a fixed number of blocks/threads but more blocks/threads are started → undefined behavior (index-out-of-bounds) / data race
+//
+// THE FOLLOWING CANNOT BE CHECKED RIGHT NOW
+// __global__ scale_vec(double *vec) {
+//   vec[globalIdx.x] = vec[globalIdx.x] * 3.0;
+// }
+//
+// void host(double * h_ptr) {
+//   double *d_ptr;
+//   size_t num_bytes = SIZE_SMALLER_THAN_NUM_THREADS * sizeof(double);
+//   cudaMalloc(&d_ptr, num_bytes);
+//   cudaMemcpy(h_ptr, d_ptr, num_bytes, cudaMemcpyHostToDevice);
+//   // Start kernel in one block with NUM_THREADS many threads.
+//   // If size < NUM_THREADS: Out-of-bounds accesses in kernel.
+//   scale_vec_kernel<<<1, NUM_THREADS>>>(d_ptr);
+//   cudaMemcpy(d_ptr, h_ptr, num_bytes, cudaMemcpyDeviceToHost);
+// }
+fn scale_vec(
+  vec: &uniq gpu.global [f64; SIZE_SMALLER_THAN_NUM_THREADS]
+) -[grid: gpu.grid<X<1>, X<NUM_THREADS>>]-> {
+  sched thread in grid.to_threads {
+    // ERROR: `size_smaller_than_num_threads` is not equal to the amount of threads `num_threads` == 1*num_threads
+    let elem_ref = vec[[thread]];
+    *elem_ref = *elem_ref * 3.0;
+  }
+}
+fn host(h_ptr: &uniq cpu.mem [f64; SIZE_SMALLER_THAN_NUM_THREADS]) -[t: cpu.thread]-> () {
+  let d_ptr = gpu_alloc_copy(h_ptr);
+  scale_vec::<<<X<1>, X<NUM_THREADS>>>>(d_ptr);
+  copy_to_host(&shrd d_ptr, h_ptr)
+}
+
+
+///
+///
+///
+///
+///
+///
+///
+///
+///
+
+//
+//
+// void host_fun() {
+//   double *device_ptr;
+//   double* h_ptr = allocate_and_init_host_mem();
+//   cudaMalloc(&device_ptr, num_bytes);
+//   // Misuse of memory API: device and host pointer must be swapped.
+//   cudaMemcpy(
+//     d_ptr, h_ptr, num_bytes, cudaMemcpyHostToDevice);
+// }
+fn host_fun2() -[t: cpu.thread]-> () {
+let h_ptr = allocate_and_init_host_mem();
+let g_ptr = gpu_alloc_copy(&shrd h_vec) // Impossible to misuse
+}
+
+
 
 // __device__ void mem_assign(double *vec_part) {
 //   vec_part[threadIdx.x] = ...;
@@ -105,76 +248,21 @@ fn kernel3() -[grid: gpu.grid<<X<3>, X<2>>]-> () {
   }
 }
 
-// void host_fun() {
-//   double *ptr = alloc_and_init(sizeof(double) * 6, 0.0);
-//   init_kernel<<<M, N>>>(ptr);
-// }
-//
-// __global__ void init_kernel(double *ptr) {
-//   // Attempting to dereference host pointer from device.
-//   ptr[globalIdx.x] = 1.0;
-// }
-fn host_fun1() -[t: cpu.thread]-> () {
-  let ptr = new_cpu_heap::<[f64; 6]>(0.0);
-  // ERROR: wrong type: expected &uniq gpu.global [f64; 6], but found &uniq cpu.mem [f64;6]
-  init_kernel1<<<X<M>, X<N>>>>(ptr);
-  init_kernel2<<<X<M>, X<N>>>>(ptr);
-}
-fn init_kernel1(ptr: &uniq gpu.global [f64; 6]) -[grid: gpu.grid<X<M>, X<N>>]-> () {
-  sched thread in grid.to_threads {
-    let elem_ref = ptr[[thread]];
-    *elem_ref = 1.0
-  }
-}
-// Another attempt: allow the function to take a cpu.mem reference
-fn init_kernel2(ptr: &uniq cpu.mem [f64; 6]) -[grid: gpu.grid<X<M>, X<N>>]-> () {
-  sched thread in grid.to_threads {
-    let elem_ref = ptr[[thread]];
-    *elem_ref = 1.0 // trying to access CPU memory from GPU
-  }
-}
 
 
-// void host_fun() {
-//   double *device_ptr;
-//   double* h_ptr = allocate_and_init_host_mem();
-//   cudaMalloc(&device_ptr, num_bytes);
-//   // Misuse of memory API: device and host pointer must be swapped.
-//   cudaMemcpy(
-//     d_ptr, h_ptr, num_bytes, cudaMemcpyHostToDevice);
-// }
-fn host_fun2() -[t: cpu.thread]-> () {
-  let h_ptr = allocate_and_init_host_mem();
-  let g_ptr = gpu_alloc_copy(&shrd h_vec) // Impossible to misuse
-}
 
-// THE FOLLOWING CANNOT BE CHECKED RIGHT NOW
-// QUICK SOLUTION: store CONSTRAINTS IN FUNCTION TYPE AND CHECK STATICALLY OR FAIL
-// __global__ scale_vec(double *vec) {
-//   vec[globalIdx.x] = vec[globalIdx.x] * 3.0;
+
+// __global__ void write_to_computed_pos(
+//   double *out_vec, int vec_size) {
+//   int globalIdx =
+//     blockIdx.x * blockDim.x + threadIdx.x;
+//   out_vec[globalIdx * 2 % (vec_size - 1)] = ...;
 // }
-//
-// void host(double * h_ptr, size_t size) {
-//   double *d_ptr;
-//   size_t num_bytes = size * sizeof(double);
-//   cudaMalloc(&d_ptr, num_bytes);
-//   cudaMemcpy(h_ptr, d_ptr, num_bytes, cudaMemcpyHostToDevice);
-//   // Start kernel in one block with NUM_THREADS many threads.
-//   // If size < NUM_THREADS: Out-of-bounds accesses in kernel.
-//   // If size > NUM_THREADS: Incomplete computation.
-//   scale_vec_kernel<<<1, NUM_THREADS>>>(d_ptr);
-//   cudaMemcpy(d_ptr, h_ptr, num_bytes, cudaMemcpyDeviceToHost);
-// }
-fn scale_vec<num_threads: nat>(
-  vec: &uniq gpu.global [f64; n]
-) -[grid: gpu.grid<X<1>, X<num_threads>>]-> {
-  sched thread in grid.to_threads {
-    let elem_ref = vec[[thread]]; // requires n == 1*num_threads
-    *elem_ref = *elem_ref * 3.0;
-  }
+fn write_to_computed_pos(
+  out_vec: &uniq gpu.global [i32; 6]
+) -[grid: gpu.grid<X<1>, X<6>> () {
+sched thread in grid.to_threads {
+// vec_size = 6
+out_vec[thread * 2 % (6-1)] = ...;
 }
-fn host<n: nat, num_threads: nat>(h_ptr: &uniq cpu.mem [f64; n]) -[t: cpu.thread]-> () {
-  let d_ptr = gpu_alloc_copy(h_ptr);
-  scale_vec::<<<X<1>, X<num_threads>>>>(d_ptr);
-  copy_to_host(&shrd d_ptr, h_ptr)
 }

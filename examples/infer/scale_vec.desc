@@ -1,5 +1,5 @@
-fn scale_vec<n: nat>(
-    h_vec: &uniq cpu.mem [f64; n]
+fn scale_vec<n: nat, r: prv>(
+    h_vec: &r uniq cpu.mem [f64; n]
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
@@ -10,23 +10,10 @@ fn scale_vec<n: nat>(
 fn par_scale_vec<n: nat, r: prv>(
     vec: &r uniq gpu.global [f64; n]
 ) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-    let groups = map_mut(
-        |v: &r uniq gpu.global [[f64; 1024]]| -[v: view]-> &r uniq gpu.global [[f64; 1024]] {
-            rev_mut(v)
-        },
-        create_2d_uniq::<1024>(vec)
-    );
     sched block in grid {
         sched thread in block {
-            let block_groups = groups[[block]];
-            let v = block_groups[[thread]];
+            let v = &uniq (*vec).to_view.grp::<1024>.map(rev::<1024>)[[block]][[thread]];
             *v = *v * 3.0
         }
     }
-}
-
-fn create_2d_uniq<k: nat, n: nat, r: prv>(
-    array: &r uniq gpu.global [f64; n]
-) -[v: view]-> &r uniq gpu.global [[ [[f64; k]]; n/k]] {
-    group_mut::<k>(to_view_mut(array))
 }

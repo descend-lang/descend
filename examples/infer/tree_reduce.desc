@@ -1,32 +1,35 @@
-fn reduce<n: nat, a: prv, b: prv>(
-  ha_array: &a uniq cpu.mem [i32; n]
+fn reduce<gs: nat, bs: nat, a: prv, b: prv>(
+  ha_array: &a uniq cpu.mem [i32; gs*bs]
 ) -[t: cpu.thread]-> () {
     let mut gpu: Gpu = gpu_device(0);
 
     let mut a_array = gpu_alloc_copy(&uniq gpu, &shrd *ha_array);
-    gpu_reduce::<<<X<64>, X<1024>>>>(&uniq a_array);
+    gpu_reduce::<<<X<gs>, X<bs>>>>(&uniq a_array);
     copy_to_host(&shrd a_array, ha_array)
 }
 
-fn gpu_reduce<n:nat>(input: &uniq gpu.global [i32; n]) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-    let block_group = group_mut::<1024>(to_view_mut(input));
+fn gpu_reduce<r: prv, gs: nat, bs: nat>(
+    input: &r uniq gpu.global [i32; gs*bs]
+) -[grid: gpu.grid<X<gs>, X<bs>>]-> () {
     sched block in grid {
-        let ib = block_group[[block]];
-        for_nat k in halved_range(512) {
-            let split_ib = (split uniq 2*k (*ib)).0;
-            let (active_half0, active_half1) = split uniq k (*split_ib);
+        let ib = &uniq (*input).to_view.grp::<bs>[[block]];
+        for_nat k in halved_range(bs/2) {
+            let split_ib = &uniq (*ib)[..2*k..].0;
+            let active_halves = &uniq (*split_ib)[..k..];
+            let active_half0 = &uniq (*active_halves).0;
+            let active_half1 = &uniq (*active_halves).1;
 
             indep(X) k block {
-                inactive_threads => { () },
                 active_threads => {
                     sched thread in active_threads {
-                        let fst_half = active_half0[[thread]];
-                        let snd_half = active_half1[[thread]];
+                        let fst_half = &uniq (*active_half0)[[thread]];
+                        let snd_half = &shrd (*active_half1)[[thread]];
                         *fst_half = *fst_half + *snd_half
                     }
-                }
+                },
+                inactive_threads => { () }
             };
-            sync //not enforced yet
+            sync
         }
     }
 }

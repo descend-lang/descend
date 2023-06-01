@@ -21,6 +21,7 @@ pub trait VisitMut: Sized {
     fn visit_dty(&mut self, dty: &mut DataTy) { walk_dty(self, dty) }
     fn visit_fn_ty(&mut self, fn_ty: &mut FnTy) { walk_fn_ty(self, fn_ty) }
     fn visit_ty(&mut self, ty: &mut Ty) { walk_ty(self, ty) }
+    fn visit_view(&mut self, view: &mut View) { walk_view(self, view) }
     fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) { walk_pl_expr(self, pl_expr) }
     fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded) { walk_arg_kinded(self, arg_kinded) }
     fn visit_kind(&mut self, _kind: &mut Kind) {}
@@ -32,8 +33,7 @@ pub trait VisitMut: Sized {
     fn visit_ident(&mut self, _ident: &mut Ident) {}
     fn visit_pattern(&mut self, pattern: &mut Pattern) { walk_pattern(self, pattern) }
     fn visit_indep(&mut self, indep: &mut Indep) { walk_indep(self, indep) }
-    fn visit_par_for(&mut self, par_for: &mut Sched) { walk_sched(self, par_for) }
-    fn visit_expr_split(&mut self, expr_split: &mut ExprSplit) { walk_expr_split(self, expr_split) }
+    fn visit_sched(&mut self, sched: &mut Sched) { walk_sched(self, sched) }
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
     fn visit_app_kernel(&mut self, app_kernel: &mut AppKernel) { walk_app_kernel(self, app_kernel) }
     fn visit_block(&mut self, block: &mut Block) { walk_block(self, block) }
@@ -195,12 +195,32 @@ pub fn walk_ty<V: VisitMut>(visitor: &mut V, ty: &mut Ty) {
     }
 }
 
+pub fn walk_view<V: VisitMut>(visitor: &mut V, view: &mut View) {
+    visitor.visit_ident(&mut view.name);
+    walk_list!(visitor, visit_arg_kinded, &mut view.gen_args);
+    for v in &mut view.args {
+        visitor.visit_view(v)
+    }
+}
+
 pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
     match &mut pl_expr.pl_expr {
         PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
+        PlaceExprKind::Select(p, distrib_exec) => {
+            visitor.visit_pl_expr(p);
+            visitor.visit_exec_expr(distrib_exec);
+        }
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
+        }
+        PlaceExprKind::View(pl_expr, view) => {
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_view(view);
+        }
+        PlaceExprKind::Idx(pl_expr, n) => {
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_nat(n)
         }
     }
 }
@@ -243,13 +263,13 @@ pub fn walk_indep<V: VisitMut>(visitor: &mut V, indep: &mut Indep) {
     walk_list!(visitor, visit_expr, branch_bodies);
 }
 
-pub fn walk_sched<V: VisitMut>(visitor: &mut V, par_for: &mut Sched) {
+pub fn walk_sched<V: VisitMut>(visitor: &mut V, sched: &mut Sched) {
     let Sched {
         dim,
         inner_exec_ident,
         sched_exec,
         body,
-    } = par_for;
+    } = sched;
     visitor.visit_dim_compo(dim);
     for ident in inner_exec_ident {
         visitor.visit_ident(ident)
@@ -258,28 +278,12 @@ pub fn walk_sched<V: VisitMut>(visitor: &mut V, par_for: &mut Sched) {
     visitor.visit_block(body);
 }
 
-pub fn walk_expr_split<V: VisitMut>(visitor: &mut V, expr_split: &mut ExprSplit) {
-    let ExprSplit {
-        lrgn: _lrgn,
-        rrgn: _rgn,
-        own,
-        pos,
-        view,
-    } = expr_split;
-    visitor.visit_own(own);
-    visitor.visit_nat(pos);
-    visitor.visit_pl_expr(view);
-}
-
 pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
     // For now, only visit ExprKind
     match &mut expr.expr {
         ExprKind::Lit(l) => visitor.visit_lit(l),
         ExprKind::PlaceExpr(pl_expr) => visitor.visit_pl_expr(pl_expr),
-        ExprKind::Index(pl_expr, n) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
-        }
+
         ExprKind::Ref(_, own, pl_expr) => {
             visitor.visit_own(own);
             visitor.visit_pl_expr(pl_expr);
@@ -295,11 +299,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
                 visitor.visit_ty(ty);
             }
             visitor.visit_expr(e);
-        }
-        ExprKind::BorrowIndex(_, own, pl_expr, n) => {
-            visitor.visit_own(own);
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
         }
         ExprKind::Assign(pl_expr, expr) => {
             visitor.visit_pl_expr(pl_expr);
@@ -346,7 +345,6 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Tuple(elems) => {
             walk_list!(visitor, visit_expr, elems);
         }
-        ExprKind::Proj(e, _) => visitor.visit_expr(e),
         ExprKind::For(ident, coll, body) => {
             visitor.visit_ident(ident);
             visitor.visit_expr(coll);
@@ -355,12 +353,8 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         ExprKind::Indep(par_branch) => {
             visitor.visit_indep(par_branch);
         }
-        ExprKind::Sched(par_for) => {
-            visitor.visit_par_for(par_for);
-        }
-        ExprKind::Select(_, p, distrib_exec) => {
-            visitor.visit_pl_expr(p);
-            visitor.visit_ident(distrib_exec);
+        ExprKind::Sched(sched) => {
+            visitor.visit_sched(sched);
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(ident);
@@ -380,19 +374,16 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_unary_op(op);
             visitor.visit_expr(expr)
         }
-        ExprKind::Cast(expr, ty) => {
+        ExprKind::Sync(exec) => {
+            for e in exec {
+                visitor.visit_exec_expr(e)
+            }
+        }
+        ExprKind::Cast(expr, dty) => {
             visitor.visit_expr(expr);
-            visitor.visit_ty(ty)
+            visitor.visit_dty(dty)
         }
-        ExprKind::Split(expr_split) => {
-            visitor.visit_expr_split(expr_split);
-        }
-        ExprKind::Idx(e, i) => {
-            visitor.visit_expr(e);
-            visitor.visit_nat(i);
-        }
-        ExprKind::Deref(expr) => visitor.visit_expr(expr),
-        ExprKind::Range(_, _) | ExprKind::Sync => (),
+        ExprKind::Range(_, _) => (),
     }
 }
 

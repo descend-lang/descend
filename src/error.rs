@@ -55,6 +55,7 @@ pub fn default_format() -> FormatOptions {
 pub fn single_line_snippet<'a>(
     source: &'a SourceCode<'a>,
     label: &'a str,
+    annotation: &'a str,
     line_num: u32,
     begin_column: u32,
     end_column: u32,
@@ -73,7 +74,7 @@ pub fn single_line_snippet<'a>(
             origin: source.file_path,
             annotations: vec![SourceAnnotation {
                 range: (begin_column as usize, end_column as usize),
-                label,
+                label: annotation,
                 annotation_type: AnnotationType::Error,
             }],
             fold: false,

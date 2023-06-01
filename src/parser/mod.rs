@@ -14,15 +14,12 @@ use crate::ast::visit_mut::VisitMut;
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
-    Ok(CompilUnit::new(
-        parser
-            .parse()
-            .map_err(|err| err.emit())?
-            .into_iter()
-            .map(replace_arg_kinded_idents)
-            .collect::<Vec<FunDef>>(),
-        source,
-    ))
+    let mut fun_defs = parser.parse().map_err(|err| err.emit())?;
+    for fun_def in &mut fun_defs {
+        replace_arg_kinded_idents(fun_def);
+        replace_exec_idents_with_specific_execs(fun_def);
+    }
+    Ok(CompilUnit::new(fun_defs, source))
 }
 
 #[derive(Debug)]
@@ -40,7 +37,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
+fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
     struct ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap<Box<str>, Kind>,
     }
@@ -81,6 +78,17 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                     self.visit_expr(f);
                     self.subst_in_gen_args(gen_args);
                 }
+                ExprKind::AppKernel(app_kernel) => {
+                    let AppKernel {
+                        fun,
+                        gen_args,
+                        args,
+                        ..
+                    } = app_kernel.as_mut();
+                    self.visit_expr(fun);
+                    self.subst_in_gen_args(gen_args);
+                    visit_mut::walk_list!(self, visit_expr, args)
+                }
                 ExprKind::App(f, gen_args, args) => {
                     self.visit_expr(f);
                     self.subst_in_gen_args(gen_args);
@@ -92,6 +100,13 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
                     self.visit_expr(body)
                 }
                 _ => visit_mut::walk_expr(self, expr),
+            }
+        }
+
+        fn visit_view(&mut self, view: &mut View) {
+            self.subst_in_gen_args(&mut view.gen_args);
+            for v in &mut view.args {
+                self.visit_view(v)
             }
         }
 
@@ -107,8 +122,95 @@ fn replace_arg_kinded_idents(mut fun_def: FunDef) -> FunDef {
     let mut replace = ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap::new(),
     };
-    replace.visit_fun_def(&mut fun_def);
-    fun_def
+    replace.visit_fun_def(fun_def);
+}
+
+fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
+    struct ReplaceExecIdents {
+        ident_names_to_exec_expr: Vec<(Box<str>, ExecExpr)>,
+    }
+    impl VisitMut for ReplaceExecIdents {
+        fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
+            match &mut pl_expr.pl_expr {
+                PlaceExprKind::Select(ple, exec) => {
+                    self.visit_pl_expr(ple);
+                    expand_exec_expr(&self.ident_names_to_exec_expr, exec);
+                }
+                _ => visit_mut::walk_pl_expr(self, pl_expr),
+            }
+        }
+
+        fn visit_indep(&mut self, indep: &mut Indep) {
+            expand_exec_expr(&self.ident_names_to_exec_expr, &mut indep.split_exec);
+            for (i, (ident, branch)) in indep
+                .branch_idents
+                .iter()
+                .zip(&mut indep.branch_bodies)
+                .enumerate()
+            {
+                let branch_exec_expr = ExecExpr::new(indep.split_exec.exec.clone().split_proj(
+                    indep.dim_compo,
+                    indep.pos.clone(),
+                    i as u8,
+                ));
+                self.ident_names_to_exec_expr
+                    .push((ident.name.clone(), branch_exec_expr));
+                self.visit_expr(branch);
+                self.ident_names_to_exec_expr.pop();
+            }
+        }
+
+        fn visit_sched(&mut self, sched: &mut Sched) {
+            expand_exec_expr(&self.ident_names_to_exec_expr, &mut sched.sched_exec);
+            let body_exec = ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
+            if let Some(ident) = &sched.inner_exec_ident {
+                self.ident_names_to_exec_expr
+                    .push((ident.name.clone(), body_exec));
+            }
+            self.visit_block(&mut sched.body);
+            self.ident_names_to_exec_expr.pop();
+        }
+
+        fn visit_expr(&mut self, expr: &mut Expr) {
+            match &mut expr.expr {
+                ExprKind::Sync(exec) => {
+                    for exec in exec {
+                        expand_exec_expr(&self.ident_names_to_exec_expr, exec);
+                    }
+                }
+                _ => visit_mut::walk_expr(self, expr),
+            }
+        }
+    }
+
+    fn expand_exec_expr(exec_mapping: &[(Box<str>, ExecExpr)], exec_expr: &mut ExecExpr) {
+        match &exec_expr.exec.base {
+            BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => {}
+            BaseExec::Ident(ident) => {
+                if let Some(exec) = get_exec_expr(exec_mapping, ident) {
+                    let new_base = exec.exec.base.clone();
+                    let mut new_exec_path = exec.exec.path.clone();
+                    new_exec_path.append(&mut exec_expr.exec.path.clone());
+                    exec_expr.exec.base = new_base;
+                    exec_expr.exec.path = new_exec_path;
+                };
+            }
+        }
+    }
+
+    fn get_exec_expr(exec_mapping: &[(Box<str>, ExecExpr)], ident: &Ident) -> Option<ExecExpr> {
+        for (i, exec) in exec_mapping.iter().rev() {
+            if i == &ident.name {
+                return Some(exec.clone());
+            }
+        }
+        None
+    }
+
+    let mut replace_exec_idents = ReplaceExecIdents {
+        ident_names_to_exec_expr: vec![],
+    };
+    replace_exec_idents.visit_fun_def(fun_def);
 }
 
 pub mod error {
@@ -144,7 +246,7 @@ pub mod error {
                 column_num,
                 column_num + 1,
             );
-            println!("{}", DisplayList::from(snippet).to_string());
+            println!("{}", DisplayList::from(snippet));
             ErrorReported
         }
     }
@@ -160,16 +262,12 @@ pub mod error {
         crate::error::single_line_snippet(
             source,
             label,
+            label,
             line_num - 1,
             begin_column - 1,
             end_column - 1,
         )
     }
-}
-
-enum IdxOrSelect {
-    Idx(Nat),
-    Select(Option<String>, Ident),
 }
 
 peg::parser! {
@@ -293,8 +391,8 @@ peg::parser! {
             x:(@) _ "/" _ y:@ { utils::make_binary(BinOp::Div, x, y) }
             x:(@) _ "%" _ y:@ { utils::make_binary(BinOp::Mod, x, y) }
             --
-            x:(@) __ "as" __ cty:ty() {
-                Expr::new(ExprKind::Cast(Box::new(x), cty))
+            x:(@) __ "as" __ dty:dty() {
+                Expr::new(ExprKind::Cast(Box::new(x), Box::new(dty)))
             }
             --
             "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
@@ -310,16 +408,12 @@ peg::parser! {
             // Not allowing white spaces between . and number can increase parser performance
             //  significantly.
             // To achieve this, move the first _ in front of ns.
-            e:(@) ns:("." _ n:nat_literal() {n})+ {
-                ns.into_iter().fold(e,
-                    |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
-                )
-            }
-            begin:position!() "split" __ r1:(prv:prov_value() __ { prv })?
-                    r2:(prv:prov_value()  __ { prv })? o:ownership() __
-                    s:nat() __ view:place_expression() end:position!() {
-                Expr::new(ExprKind::Split(Box::new(ExprSplit::new(r1, r2, o, s, view))))
-            }
+            // e:(@) ns:("." _ n:nat_literal() {n})+ {
+            //     ns.into_iter().fold(e,
+            //         |prev, n| Expr::new(ExprKind::Proj(Box::new(prev), n))
+            //     )
+            // }
+
             begin:position!() func:ident() place_end:position!() _
                 kind_args:kind_args()?
                 args:args() end:position!()
@@ -367,23 +461,18 @@ peg::parser! {
                         args,
                     })))
             }
-
             l:literal() {
                 Expr::with_type(
                     ExprKind::Lit(l),
                     Ty::new(TyKind::Data(Box::new(utils::type_from_lit(&l))))
                 )
             }
-            "sync" {
-                Expr::new(ExprKind::Sync)
+            "sync" maybe_exec:(_ "(" _ exec:exec_expr() _ ")" { exec })?  {
+                Expr::new(ExprKind::Sync(maybe_exec))
             }
-            e:maybe_square_bracket_indexing_assignment() { e }
-            "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression()
-                idx:(_ "[" _ n:nat() _ "]" {n})? {
-                match idx {
-                    None => Expr::new(ExprKind::Ref(prov, own, Box::new(p))),
-                    Some(idx) => Expr::new(ExprKind::BorrowIndex(prov, own, Box::new(p),idx))
-                }
+            e:pl_expr_maybe_assignment() { e }
+            "&" _ prov:(v:prov_value() __ { v })? own:ownership() __ p:place_expression() {
+                Expr::new(ExprKind::Ref(prov, own, Box::new(p)))
             }
             "[" _ expressions:expression() ** (_ "," _) _ "]" {
                 Expr::new(ExprKind::Array(expressions))
@@ -415,11 +504,11 @@ peg::parser! {
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
             }
             "sched" sched:(_ "(" _ dim:dim_component() _ ")" { dim })? __
-                inner_exec_ident:maybe_ident() __ "in" __ exec:exec_expr() _ body:block() {
+                inner_exec_ident:maybe_ident() __ "in" __ sched_exec:exec_expr() _ body:block() {
                 Expr::new(ExprKind::Sched(Box::new(Sched::new(match sched {
                     Some(d) => d,
                     None => DimCompo::X,
-                }, inner_exec_ident, exec, body))))
+                }, inner_exec_ident, sched_exec, body))))
             }
             "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
               "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
@@ -430,26 +519,12 @@ peg::parser! {
             expression: expr_helper() { expression }
         }
 
-        rule maybe_square_bracket_indexing_assignment() -> Expr =
+        rule pl_expr_maybe_assignment() -> Expr =
             p:place_expression()
-            idx:(_ "[" _ n:nat() _ "]" { n })?
-            select_info:(_ "[" _ "[" prv:(p:prov_value() __ { p })? ident:ident() _ "]" _ "]" {
-                (prv, ident)
-            })?
-            expr:(_ "=" _ e:expression() {e})? { ?
+            expr:(_ "=" _ e:expression() {e})? {
                 match expr {
-                    None => match (idx, select_info) {
-                        (None, None) => Ok(Expr::new(ExprKind::PlaceExpr(Box::new(p)))),
-                        (Some(idx), None) => Ok(Expr::new(ExprKind::Index(Box::new(p), idx))),
-                        (None, Some((prv, ident))) =>
-                            Ok(Expr::new(ExprKind::Select(prv, Box::new(p), Box::new(ident)))),
-                        (Some(_), Some(_)) => Err("cannot select on an indexing expression")
-                    },
-                    Some(expr) => match (idx, select_info) {
-                        (None, None) => Ok(Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr)))),
-                        (Some(idx), None) => Ok(Expr::new(ExprKind::IdxAssign(Box::new(p), idx, Box::new(expr)))),
-                        (_, Some(_)) => Err("expected a place expression or indexing, but found a selection instead"),
-                    }
+                    None => Expr::new(ExprKind::PlaceExpr(Box::new(p))),
+                    Some(expr) => Expr::new(ExprKind::Assign(Box::new(p), Box::new(expr))),
                 }
             }
 
@@ -503,9 +578,25 @@ peg::parser! {
         /// Place expression
         pub(crate) rule place_expression() -> PlaceExpr
             = precedence!{
-                "*" _ deref:@ { PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref))) }
+                "*" _ deref:@ {
+                    PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref)))
+                }
                 --
-                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n))}
+                pl_expr:@ _ "[" _ ".." _ split_pos:nat() _ ".." _ "]" {
+                    PlaceExpr::new(
+                        PlaceExprKind::View(Box::new(pl_expr),
+                            Box::new(View { name: Ident::new("split_at"),
+                                gen_args: vec![ArgKinded::Nat(split_pos)], args: vec![] })))
+                }
+                pl_expr:@ _ "[" _ idx:nat() _ "]" {
+                    PlaceExpr::new(PlaceExprKind::Idx(Box::new(pl_expr), Box::new(idx)))
+                }
+                pl_expr:@ exec:(_ "[" _ "[" _ exec:exec_expr() _ "]" _ "]"{ exec }) {
+                    PlaceExpr::new(PlaceExprKind::Select(Box::new(pl_expr), Box::new(exec)))
+                }
+                --
+                proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
+                pl_expr:@ _ "." _ v:view_app() { PlaceExpr::new(PlaceExprKind::View(Box::new(pl_expr), Box::new(v))) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -549,6 +640,15 @@ peg::parser! {
             //     ple.span = Some(Span::new(begin, end));
             //     ple
             // }
+
+        pub(crate) rule view_app() -> View =
+            view_ident:view_ident() mkargs:(_ kargs:kind_args() { kargs })?
+                margs:(_ "(" _ args: view_app() **<1,> (_ "," _) _ ")" { args })? {
+                    View { name: view_ident,
+                        gen_args: mkargs.unwrap_or_default(),
+                        args: margs.unwrap_or_default()
+                    }
+            }
 
         /// Parse nat token
         pub(crate) rule nat() -> Nat = precedence! {
@@ -624,10 +724,12 @@ peg::parser! {
             }
 
         rule exec() -> Exec =
-            base:base_exec() _ "." _  exec_path_elem:exec_path_elem() {
-                Exec::with_path(base, vec![exec_path_elem])
+            base:base_exec()
+            maybe_exec_path_elems:(_ "." _  exec_path_elems: exec_path_elem() **<1,> _ "." _ { exec_path_elems })? {
+                if let Some(path) = maybe_exec_path_elems {
+                    Exec::with_path(base, path)
+                } else { Exec::new(base) }
             }
-            / base:base_exec() { Exec::new(base) }
 
         rule base_exec() -> BaseExec =
             ident:ident() { BaseExec::Ident(ident) }
@@ -662,8 +764,8 @@ peg::parser! {
             / "gpu.block_grp" _ "<" _ g_dim:dim() _ "," _ b_dim:dim() _ ">" {
                 ExecTyKind::GpuBlockGrp(g_dim, b_dim)
             }
-            / "gpu.warp_grp" _ "<" _ wg_dim:nat() _ ">" {
-                ExecTyKind::GpuWarpGrp(wg_dim)
+            / "gpu.warp_grp" _ "<" _ wg_size:nat() _ ">" {
+                ExecTyKind::GpuWarpGrp(wg_size)
             }
             / "gpu.warp" {
                 ExecTyKind::GpuWarp
@@ -713,7 +815,7 @@ peg::parser! {
 
         rule ident() -> Ident
             = begin:position!() ident:$(identifier()) end:position!() {
-                Ident::with_span(ident.into(), Span::new(begin, end))
+                Ident::with_span(ident, Span::new(begin, end))
             }
 
         rule provenance() -> Provenance
@@ -745,11 +847,27 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to_warps" / "to" / "with"
                 / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "AtomicU32" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec"
+                / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
-                / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view")
+                / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view"
+                / view_name())
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )
+
+        rule view_name() -> ()
+            = ("to_view" / "grp" / "map" / "transp" / "join" / "rev")
+
+        rule view_identifier() -> String =
+            s:$(&view_name() (['a'..='z'|'A'..='Z'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*
+            / ['_']+ ['a'..='z'|'A'..='Z'|'0'..='9'] ['a'..='z'|'A'..='Z'|'0'..='9'|'_']*))
+        {
+            s.into()
+        }
+
+        rule view_ident() -> Ident =
+            begin:position!() ident:$(view_identifier()) end:position!() {
+                Ident::with_span(ident, Span::new(begin, end))
+            }
 
         // Literal may be one of Unit, bool, i32, u8, u32, u64, f32, f64
         pub(crate) rule literal() -> Lit
@@ -1032,7 +1150,7 @@ mod tests {
             Ok(DataTy::new(DataTyKind::Tuple(vec![
                 ty_unit.clone(),
                 ty_unit.clone(),
-                ty_unit.clone()
+                ty_unit
             ]))),
             "does not recognize (unit,unit,unit) tuple type"
         );
@@ -1246,9 +1364,8 @@ mod tests {
             Ok(Lit::Bool(true)),
             "does not parse boolean correctly"
         );
-        assert_eq!(
+        assert!(
             descend::literal("False").is_err(),
-            true,
             "wrongfully parses misspelled boolean"
         );
         assert_eq!(
@@ -1321,19 +1438,16 @@ mod tests {
             Ok(Lit::F32(3.1415927)),
             "not parsing f32 float as expected"
         );
-        assert_eq!(
+        assert!(
             descend::literal("12345ad").is_err(),
-            true,
             "incorrectly parsing invalid literal"
         );
-        assert_eq!(
+        assert!(
             descend::literal("e54").is_err(),
-            true,
             "incorrectly parsing e-notation only to literal"
         );
-        assert_eq!(
+        assert!(
             descend::literal("-i32").is_err(),
-            true,
             "incorrectly parsing 'negative data type' to literal"
         );
     }
@@ -1418,38 +1532,38 @@ mod tests {
         );
 
         // No place expressions
-        assert_eq!(
-            descend::expression("f::<x>().0"),
-            Ok(Expr::new(ExprKind::Proj(
-                Box::new(Expr::new(ExprKind::App(
-                    Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("f"))
-                    ))))),
-                    vec![ArgKinded::Ident(Ident::new("x"))],
-                    vec![]
-                ))),
-                zero_literal
-            ))),
-            "does not recognize projection on function application"
-        );
-        assert_eq!(
-            descend::expression("(x, y, z).1"),
-            Ok(Expr::new(ExprKind::Proj(
-                Box::new(Expr::new(ExprKind::Tuple(vec![
-                    Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("x"))
-                    )))),
-                    Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("y"))
-                    )))),
-                    Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
-                        PlaceExprKind::Ident(Ident::new("z"))
-                    ))))
-                ]))),
-                one_literal
-            ))),
-            "does not recognize projection on tuple view expression"
-        );
+        // assert_eq!(
+        //     descend::expression("f::<x>().0"),
+        //     Ok(Expr::new(ExprKind::Proj(
+        //         Box::new(Expr::new(ExprKind::App(
+        //             Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("f"))
+        //             ))))),
+        //             vec![ArgKinded::Ident(Ident::new("x"))],
+        //             vec![]
+        //         ))),
+        //         zero_literal
+        //     ))),
+        //     "does not recognize projection on function application"
+        // );
+        // assert_eq!(
+        //     descend::expression("(x, y, z).1"),
+        //     Ok(Expr::new(ExprKind::Proj(
+        //         Box::new(Expr::new(ExprKind::Tuple(vec![
+        //             Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("x"))
+        //             )))),
+        //             Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("y"))
+        //             )))),
+        //             Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+        //                 PlaceExprKind::Ident(Ident::new("z"))
+        //             ))))
+        //         ]))),
+        //         one_literal
+        //     ))),
+        //     "does not recognize projection on tuple view expression"
+        // );
     }
 
     #[test]
@@ -1564,12 +1678,14 @@ mod tests {
     fn expression_indexing() {
         assert_eq!(
             descend::expression_seq("place_expression[12]"),
-            Ok(Expr::new(ExprKind::Index(
-                Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new(
-                    "place_expression"
-                )))),
-                Nat::Lit(12)
-            )))
+            Ok(Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+                PlaceExprKind::Idx(
+                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new(
+                        "place_expression"
+                    )))),
+                    Box::new(Nat::Lit(12))
+                )
+            )),)))
         );
     }
 
@@ -1624,26 +1740,26 @@ mod tests {
                 Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("variable"))))
             )))
         );
-        assert_eq!(
-            descend::expression_seq("&'prov uniq var[7]"),
-            Ok(Expr::new(ExprKind::BorrowIndex(
-                Some(String::from("'prov")),
-                Ownership::Uniq,
-                Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
-                Nat::Lit(7)
-            ),))
-        );
-        assert_eq!(
-            descend::expression_seq("&'prov uniq var[token]"),
-            Ok(Expr::new(ExprKind::BorrowIndex(
-                Some(String::from("'prov")),
-                Ownership::Uniq,
-                Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
-                Nat::Ident(Ident::new("token"))
-            ),))
-        );
+        // assert_eq!(
+        //     descend::expression_seq("&'prov uniq var[7]"),
+        //     Ok(Expr::new(ExprKind::BorrowIndex(
+        //         Some(String::from("'prov")),
+        //         Ownership::Uniq,
+        //         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
+        //         Nat::Lit(7)
+        //     ),))
+        // );
+        // assert_eq!(
+        //     descend::expression_seq("&'prov uniq var[token]"),
+        //     Ok(Expr::new(ExprKind::BorrowIndex(
+        //         Some(String::from("'prov")),
+        //         Ownership::Uniq,
+        //         Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("var")))),
+        //         Nat::Ident(Ident::new("token"))
+        //     ),))
+        // );
         let result = descend::expression_seq("&'a uniq var[7][3]");
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1657,10 +1773,12 @@ mod tests {
                         ScalarTy::I32
                     )))))
                 ),
-                Expr::new(ExprKind::Index(
-                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    Nat::Lit(3)
-                )),
+                Expr::new(ExprKind::PlaceExpr(Box::new(PlaceExpr::new(
+                    PlaceExprKind::Idx(
+                        Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+                        Box::new(Nat::Lit(3))
+                    )
+                )))),
                 Expr::with_type(
                     ExprKind::Lit(Lit::Bool(true)),
                     Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
@@ -1683,30 +1801,30 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn expression_tupel() {
-        assert_eq!(
-            descend::expression_seq("(12, x[3], true)"),
-            Ok(Expr::new(ExprKind::Tuple(vec![
-                Expr::with_type(
-                    ExprKind::Lit(Lit::I32(12)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::I32
-                    )))))
-                ),
-                Expr::new(ExprKind::Index(
-                    Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
-                    Nat::Lit(3)
-                )),
-                Expr::with_type(
-                    ExprKind::Lit(Lit::Bool(true)),
-                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                        ScalarTy::Bool
-                    )))))
-                )
-            ])))
-        );
-    }
+    // #[test]
+    // fn expression_tupel() {
+    //     assert_eq!(
+    //         descend::expression_seq("(12, x[3], true)"),
+    //         Ok(Expr::new(ExprKind::Tuple(vec![
+    //             Expr::with_type(
+    //                 ExprKind::Lit(Lit::I32(12)),
+    //                 Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+    //                     ScalarTy::I32
+    //                 )))))
+    //             ),
+    //             Expr::new(ExprKind::Index(
+    //                 Box::new(PlaceExpr::new(PlaceExprKind::Ident(Ident::new("x")))),
+    //                 Nat::Lit(3)
+    //             )),
+    //             Expr::with_type(
+    //                 ExprKind::Lit(Lit::Bool(true)),
+    //                 Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+    //                     ScalarTy::Bool
+    //                 )))))
+    //             )
+    //         ])))
+    //     );
+    // }
 
     #[test]
     fn expression_if_else() {

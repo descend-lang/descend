@@ -1,3 +1,5 @@
+extern crate core;
+
 use crate::error::ErrorReported;
 
 mod ast;

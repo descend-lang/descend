@@ -5,6 +5,30 @@ extern crate descend;
 type Res = Result<(), descend::error::ErrorReported>;
 
 #[test]
+fn transpose() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/transpose.desc")?
+    ))
+}
+
+#[test]
+fn transpose_shrd_mem() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/transpose_shrd_mem.desc")?
+    ))
+}
+
+#[test]
+fn matmul() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/matmul.desc")?
+    ))
+}
+
+#[test]
 fn scale_vec() -> Res {
     Ok(println!(
         "{}",
@@ -29,7 +53,7 @@ fn bitonic_sort() -> Res {
     ))
 }
 
-#[ignore]
+#[test]
 fn scan() -> Res {
     eprintln!(
         "Breaks because there are name clashes between nats and type variables.\n \
