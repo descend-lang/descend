@@ -3,11 +3,11 @@ use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
     utils, BinOpNat, DataTy, DataTyKind, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident, IdentExec,
-    Memory, Nat, Ownership, PlaceExpr, PlaceExprKind, Provenance, RefDty, Ty, TyKind, View,
+    Memory, Nat, Ownership, PlaceExpr, PlaceExprKind, Provenance, Ty, TyKind, View,
 };
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 
-use crate::ty_check::{accessible_memory, exec, unify, ExprTyCtx};
+use crate::ty_check::{exec, unify, ExprTyCtx};
 
 pub(super) struct PlExprTyCtx<'ctxt> {
     gl_ctx: &'ctxt GlobalCtx,
@@ -251,6 +251,8 @@ fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
         ExecTyKind::GpuBlockGrp(_, _) => Some(Memory::GpuLocal),
         ExecTyKind::GpuThreadGrp(_) => Some(Memory::GpuLocal),
         ExecTyKind::GpuBlock(_) => Some(Memory::GpuLocal),
+        ExecTyKind::GpuWarpGrp(_) => Some(Memory::GpuLocal),
+        ExecTyKind::GpuWarp => Some(Memory::GpuLocal),
         ExecTyKind::View => None,
     }
 }

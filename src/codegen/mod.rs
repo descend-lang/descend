@@ -4,13 +4,13 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::ExprKind;
 use crate::ty_check;
-use crate::ty_check::matches_dty;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicI32, Ordering};
+
+pub(crate) static WARP_IDENT: &str = "$warp";
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
@@ -33,6 +33,9 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         };
         codegen_ctx.push_scope();
         codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(exec));
+        codegen_ctx
+            .exec_mapping
+            .insert(&fun_def.exec_decl.ident.name, codegen_ctx.exec.clone());
         generated_initial_fns.push(gen_fun_def(fun_def, &mut codegen_ctx));
         codegen_ctx.drop_scope();
         debug_assert_eq!(codegen_ctx.view_ctx.map.len(), 0);
@@ -433,9 +436,9 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
                             let iter = cu::Expr::Assign {
                                 lhs: Box::new(i.clone()),
                                 rhs: Box::new(cu::Expr::BinOp {
-                                    op: cu::BinOp::Div,
+                                    op: cu::BinOp::Shr,
                                     lhs: Box::new(i),
-                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(2))),
+                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(1))),
                                 }),
                             };
                             (init_decl, cond, iter)
@@ -497,7 +500,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             cu::Stmt::Skip
         }
         AppKernel(app_kernel) => gen_app_kernel(app_kernel, codegen_ctx),
-        Indep(pb) => gen_indep(pb.dim_compo, &pb.pos, &pb.branch_bodies, codegen_ctx),
+        Indep(pb) => gen_indep(pb, codegen_ctx),
         Sched(pf) => gen_sched(pf, codegen_ctx),
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => {
@@ -857,7 +860,10 @@ fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) ->
                 index: prev_amount.clone(),
             }));
             let cu_ty = cu::Ty::Ptr(Box::new(gen_ty(&elem_ty.ty, desc::Mutability::Mut)));
-            let cast_current_ptr = cu::Expr::Cast(cu_ty.clone(), Box::new(current_ptr));
+            let cast_current_ptr = cu::Expr::Cast {
+                expr: Box::new(current_ptr),
+                ty: cu_ty.clone(),
+            };
             let ptr_decl = cu::Stmt::VarDecl {
                 name: param_name.clone(),
                 ty: cu::Ty::Const(Box::new(cu_ty)),
@@ -878,7 +884,8 @@ fn size_of_dty(dty: &desc::DataTy) -> usize {
         desc::DataTyKind::Scalar(desc::ScalarTy::Bool) => 1,
         desc::DataTyKind::Scalar(desc::ScalarTy::U32)
         | desc::DataTyKind::Scalar(desc::ScalarTy::I32)
-        | desc::DataTyKind::Scalar(desc::ScalarTy::F32) => 4,
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F32)
+        | desc::DataTyKind::Atomic(desc::AtomicTy::AtomicU32) => 4,
         desc::DataTyKind::Scalar(desc::ScalarTy::U64)
         | desc::DataTyKind::Scalar(desc::ScalarTy::I64)
         | desc::DataTyKind::Scalar(desc::ScalarTy::F64) => 8,
@@ -890,12 +897,14 @@ fn get_elem_ty_and_amount(dty: &desc::DataTy) -> (desc::Ty, desc::Nat) {
     let nat_1 = desc::Nat::Lit(1);
     match &dty.dty {
         desc::DataTyKind::Scalar(desc::ScalarTy::Bool)
+        | desc::DataTyKind::Scalar(desc::ScalarTy::U8)
         | desc::DataTyKind::Scalar(desc::ScalarTy::U32)
         | desc::DataTyKind::Scalar(desc::ScalarTy::I32)
         | desc::DataTyKind::Scalar(desc::ScalarTy::F32)
         | desc::DataTyKind::Scalar(desc::ScalarTy::U64)
         | desc::DataTyKind::Scalar(desc::ScalarTy::I64)
-        | desc::DataTyKind::Scalar(desc::ScalarTy::F64) => (
+        | desc::DataTyKind::Scalar(desc::ScalarTy::F64)
+        | desc::DataTyKind::Atomic(desc::AtomicTy::AtomicU32) => (
             desc::Ty::new(desc::TyKind::Data(Box::new(dty.clone()))),
             nat_1,
         ),
@@ -925,40 +934,55 @@ fn count_bytes(dtys: &[desc::DataTy]) -> desc::Nat {
     bytes
 }
 
-fn gen_indep(
-    dim_compo: desc::DimCompo,
-    pos: &desc::Nat,
-    branch_bodies: &[desc::Expr],
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Stmt {
+fn gen_indep(indep: &desc::Indep, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     let outer_exec = codegen_ctx.exec.clone();
+    let expanded_outer_exec = expand_exec_expr(codegen_ctx, &outer_exec);
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(outer_exec.exec.clone().split_proj(
-        dim_compo,
-        pos.clone(),
+    let inner_exec = desc::ExecExpr::new(expanded_outer_exec.exec.clone().split_proj(
+        indep.dim_compo,
+        indep.pos.clone(),
         0,
     ));
-    let fst_branch = gen_stmt(&branch_bodies[0], false, codegen_ctx);
+    codegen_ctx.exec = inner_exec.clone();
+    codegen_ctx
+        .exec_mapping
+        .insert(&indep.branch_idents[0].name, inner_exec);
+    let fst_branch = gen_stmt(&indep.branch_bodies[0], false, codegen_ctx);
     codegen_ctx.drop_scope();
     codegen_ctx.push_scope();
-    codegen_ctx.exec = desc::ExecExpr::new(outer_exec.exec.clone().split_proj(
-        dim_compo,
-        pos.clone(),
+    let inner_exec = desc::ExecExpr::new(expanded_outer_exec.exec.clone().split_proj(
+        indep.dim_compo,
+        indep.pos.clone(),
         1,
     ));
-    let snd_branch = gen_stmt(&branch_bodies[1], false, codegen_ctx);
+    codegen_ctx.exec = inner_exec.clone();
+    codegen_ctx
+        .exec_mapping
+        .insert(&indep.branch_idents[1].name, inner_exec);
+    let snd_branch = gen_stmt(&indep.branch_bodies[1], false, codegen_ctx);
     codegen_ctx.drop_scope();
     codegen_ctx.exec = outer_exec;
 
-    let split_cond = gen_indep_branch_cond(dim_compo, pos, &codegen_ctx.exec.exec);
-    cu::Stmt::Seq(vec![
-        cu::Stmt::IfElse {
-            cond: split_cond,
-            true_body: Box::new(fst_branch),
-            false_body: Box::new(snd_branch),
-        },
-        //  gen_sync_stmt(&split_par_collec),
-    ])
+    let split_cond = gen_indep_branch_cond(indep.dim_compo, &indep.pos, &codegen_ctx.exec.exec);
+    let branches = cu::Stmt::IfElse {
+        cond: split_cond,
+        true_body: Box::new(fst_branch),
+        false_body: Box::new(snd_branch),
+    };
+    if let Some(desc::ExecPathElem::ToWarps) = indep.split_exec.exec.path.last() {
+        cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
+            cu::Stmt::VarDecl {
+                name: WARP_IDENT.to_string(),
+                ty: cu::Ty::Scalar(cu::ScalarTy::Warp),
+                addr_space: None,
+                expr: Some(cu::Expr::Ident("descend::to_warps()".to_string())),
+                is_extern: false,
+            },
+            branches,
+        ])))
+    } else {
+        branches
+    }
 }
 
 fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
@@ -988,7 +1012,8 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
 
 fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     codegen_ctx.push_scope();
-    let inner_exec = desc::ExecExpr::new(codegen_ctx.exec.exec.clone().distrib(sched.dim));
+    let expanded_sched_exec_expr = expand_exec_expr(codegen_ctx, sched.sched_exec.as_ref());
+    let inner_exec = desc::ExecExpr::new(expanded_sched_exec_expr.exec.clone().distrib(sched.dim));
     let outer_exec = codegen_ctx.exec.clone();
     if let Some(id) = &sched.inner_exec_ident {
         codegen_ctx
@@ -999,7 +1024,20 @@ fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     let stmt = gen_stmt(&sched.body.body, false, codegen_ctx);
     codegen_ctx.exec = outer_exec;
     codegen_ctx.drop_scope();
-    cu::Stmt::Seq(vec![cu::Stmt::Block(Box::new(stmt))])
+    if let Some(desc::ExecPathElem::ToWarps) = sched.sched_exec.exec.path.last() {
+        cu::Stmt::Block(Box::new(cu::Stmt::Seq(vec![
+            cu::Stmt::VarDecl {
+                name: WARP_IDENT.to_string(),
+                ty: cu::Ty::Scalar(cu::ScalarTy::Warp),
+                addr_space: None,
+                expr: Some(cu::Expr::Ident("descend::to_warps()".to_string())),
+                is_extern: false,
+            },
+            stmt,
+        ])))
+    } else {
+        cu::Stmt::Block(Box::new(stmt))
+    }
 }
 
 // fn gen_check_idx_stmt(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
@@ -1068,16 +1106,33 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
             },
             arg: Box::new(gen_expr(arg, codegen_ctx)),
         },
-        Ref(_, _, pl_expr) => match &pl_expr.ty.as_ref().unwrap().dty() {
-            desc::DataTy {
-                dty: desc::DataTyKind::At(_, desc::Memory::GpuShared),
-                ..
-            } => gen_pl_expr(pl_expr, &mut vec![], codegen_ctx),
-            _ => cu::Expr::Ref(Box::new(gen_pl_expr(pl_expr, &mut vec![], codegen_ctx))),
+        Cast(expr, dty) => cu::Expr::Cast {
+            expr: Box::new(gen_expr(expr, codegen_ctx)),
+            ty: gen_ty(&desc::TyKind::Data(dty.clone()), desc::Mutability::Mut),
         },
+        Ref(_, own, pl_expr) => {
+            let ref_pl_expr = gen_pl_expr(pl_expr, &mut vec![], codegen_ctx);
+            match &pl_expr.ty.as_ref().unwrap().dty() {
+                desc::DataTy {
+                    dty: desc::DataTyKind::At(_, desc::Memory::GpuShared),
+                    ..
+                } => ref_pl_expr,
+                desc::DataTy {
+                    dty: desc::DataTyKind::Atomic(_),
+                    ..
+                } => match *own {
+                    desc::Ownership::Shrd => cu::Expr::AtomicRef {
+                        expr: Box::new(ref_pl_expr),
+                        base_ty: gen_ty(&pl_expr.ty.as_ref().unwrap().ty, desc::Mutability::Mut),
+                    },
+                    _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
+                },
+                _ => cu::Expr::Ref(Box::new(ref_pl_expr)),
+            }
+        }
         // IdxAssign(pl_expr, idx, expr) => {
         //     let cu_expr = gen_expr(expr, codegen_ctx);
-        //     let cu_idx = if contains_shape_expr(pl_expr, &codegen_ctx.view_ctx) {
+        //     let cu_idx = if contains_shape_expr(pl_expr, &codegen_ctx.shape_ctx) {
         //         gen_idx_into_shape(pl_expr, idx, codegen_ctx)
         //     } else {
         //         cu::Expr::ArraySubscript {
@@ -1125,12 +1180,22 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
                         .iter()
                         .any(|(name, _)| &ident.name.as_ref() == name) =>
                 {
-                    let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
-                    cu::Expr::FnCall(create_fn_call(
-                        cu::Expr::Ident(pre_decl_ident.name.to_string()),
-                        gen_args_kinded(kinded_args),
-                        gen_fn_call_args(args, codegen_ctx),
-                    ))
+                    if ident.name.as_ref() == "nat_as_u64" {
+                        gen_nat_as_u64(kinded_args)
+                    } else if ident.name.as_ref() == "to_atomic_array" {
+                        gen_to_atomic_array(args, codegen_ctx)
+                    } else if ident.name.as_ref() == "shfl_up" {
+                        gen_shfl_up(args, kinded_args, codegen_ctx)
+                    } else if ident.name.as_ref() == "thread_id_x" {
+                        cu::Expr::Nat(desc::Nat::ThreadIdx(desc::DimCompo::X))
+                    } else {
+                        let pre_decl_ident = desc::Ident::new(&format!("descend::{}", ident.name));
+                        cu::Expr::FnCall(create_fn_call(
+                            cu::Expr::Ident(pre_decl_ident.name.to_string()),
+                            gen_args_kinded(kinded_args),
+                            gen_fn_call_args(args, codegen_ctx),
+                        ))
+                    }
                 }
                 desc::PlaceExprKind::Ident(ident)
                     if codegen_ctx.comp_unit.iter().any(|f| &f.ident == ident) =>
@@ -1340,6 +1405,9 @@ fn stringify_exec(exec: &desc::ExecExpr) -> String {
                 );
                 str.push_str(&s);
             }
+            desc::ExecPathElem::ToWarps => {
+                str.push_str("to_warps");
+            }
             desc::ExecPathElem::ToThreads(dim) => {
                 str.push('T');
                 str.push_str(&format!("{}", dim));
@@ -1447,6 +1515,10 @@ fn gen_bin_op_expr(
         desc::BinOp::Gt => cu::BinOp::Gt,
         desc::BinOp::Ge => cu::BinOp::Ge,
         desc::BinOp::Neq => cu::BinOp::Neq,
+        desc::BinOp::Shl => cu::BinOp::Shl,
+        desc::BinOp::Shr => cu::BinOp::Shr,
+        desc::BinOp::BitOr => cu::BinOp::BitOr,
+        desc::BinOp::BitAnd => cu::BinOp::BitAnd,
     };
     cu::Expr::BinOp {
         op,
@@ -1495,7 +1567,9 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
     match l {
         desc::Lit::Bool(b) => cu::Expr::Lit(cu::Lit::Bool(b)),
         desc::Lit::I32(i) => cu::Expr::Lit(cu::Lit::I32(i)),
+        desc::Lit::U8(uc) => cu::Expr::Lit(cu::Lit::U8(uc)),
         desc::Lit::U32(u) => cu::Expr::Lit(cu::Lit::U32(u)),
+        desc::Lit::U64(ul) => cu::Expr::Lit(cu::Lit::U64(ul)),
         desc::Lit::F32(f) => cu::Expr::Lit(cu::Lit::F32(f)),
         desc::Lit::F64(d) => cu::Expr::Lit(cu::Lit::F64(d)),
         desc::Lit::Unit => cu::Expr::Empty,
@@ -1849,6 +1923,35 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
     templ_args.iter().filter_map(gen_arg_kinded).collect()
 }
 
+fn gen_nat_as_u64(templ_args: &[desc::ArgKinded]) -> cu::Expr {
+    let generated_arg_expr = gen_arg_kinded(&templ_args[0]);
+    if let Some(e) = generated_arg_expr {
+        if let cu::TemplateArg::Expr(expr) = e {
+            expr
+        } else {
+            panic!("This should never happen!")
+        }
+    } else {
+        panic!("This should never happen!")
+    }
+}
+
+fn gen_to_atomic_array(args: &Vec<desc::Expr>, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
+    gen_fn_call_args(args, codegen_ctx)[0].clone()
+}
+
+fn gen_shfl_up(
+    args: &Vec<desc::Expr>,
+    kinded_args: &Vec<desc::ArgKinded>,
+    codegen_ctx: &mut CodegenCtx,
+) -> cu::Expr {
+    cu::Expr::FnCall(create_fn_call(
+        cu::Expr::Ident(format!("{}.shfl_up", WARP_IDENT)),
+        gen_args_kinded(kinded_args),
+        gen_fn_call_args(args, codegen_ctx),
+    ))
+}
+
 fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
@@ -1875,21 +1978,14 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
         Data(dty) => {
             match &dty.dty {
                 d::Atomic(a) => match a {
-                    desc::ScalarTy::Unit => cu::Ty::Atomic(cu::ScalarTy::Void),
-                    desc::ScalarTy::U32 => cu::Ty::Atomic(cu::ScalarTy::U32),
-                    desc::ScalarTy::I32 => cu::Ty::Atomic(cu::ScalarTy::I32),
-                    desc::ScalarTy::U64 => cu::Ty::Atomic(cu::ScalarTy::U64),
-                    desc::ScalarTy::I64 => cu::Ty::Atomic(cu::ScalarTy::I64),
-                    desc::ScalarTy::F32 => cu::Ty::Atomic(cu::ScalarTy::F32),
-                    desc::ScalarTy::F64 => cu::Ty::Atomic(cu::ScalarTy::F64),
-                    desc::ScalarTy::Bool => cu::Ty::Atomic(cu::ScalarTy::Bool),
-                    desc::ScalarTy::Gpu => cu::Ty::Atomic(cu::ScalarTy::Gpu),
+                    desc::AtomicTy::AtomicU32 => cu::Ty::Scalar(cu::ScalarTy::U32),
                 },
                 d::Scalar(s) => match s {
                     desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
+                    desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
+                    desc::ScalarTy::U8 => cu::Ty::Scalar(cu::ScalarTy::U8),
                     desc::ScalarTy::U32 => cu::Ty::Scalar(cu::ScalarTy::U32),
                     desc::ScalarTy::U64 => cu::Ty::Scalar(cu::ScalarTy::U64),
-                    desc::ScalarTy::I32 => cu::Ty::Scalar(cu::ScalarTy::I32),
                     desc::ScalarTy::I64 => cu::Ty::Scalar(cu::ScalarTy::I64),
                     desc::ScalarTy::F32 => cu::Ty::Scalar(cu::ScalarTy::F32),
                     desc::ScalarTy::F64 => cu::Ty::Scalar(cu::ScalarTy::F64),
@@ -1996,23 +2092,25 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
         | desc::ExecTyKind::GpuGlobalThreads(_)
         | desc::ExecTyKind::GpuBlockGrp(_, _)
         | desc::ExecTyKind::GpuThreadGrp(_)
-        | desc::ExecTyKind::GpuThread => true,
+        | desc::ExecTyKind::GpuThread
+        | desc::ExecTyKind::GpuWarpGrp(_)
+        | desc::ExecTyKind::GpuWarp => true,
         desc::ExecTyKind::CpuThread | desc::ExecTyKind::View => false,
     }
 }
 
-fn extract_size(ty: &desc::Ty) -> Option<desc::Nat> {
-    match &ty.ty {
-        desc::TyKind::Data(dty) => match &dty.dty {
-            desc::DataTyKind::Array(_, n) => Some(n.clone()),
-            desc::DataTyKind::Ref(reff) => match &reff.dty.dty {
-                desc::DataTyKind::Array(_, n) => Some(n.clone()),
-                desc::DataTyKind::ArrayShape(_, n) => Some(n.clone()),
-                _ => None,
-            },
-            _ => None,
-        },
-        _ => None,
+fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &desc::ExecExpr) -> desc::ExecExpr {
+    match &exec_expr.exec.base {
+        desc::BaseExec::CpuThread | desc::BaseExec::GpuGrid(_, _) => exec_expr.clone(),
+        desc::BaseExec::Ident(ident) => {
+            let inner_exec_expr = codegen_ctx.exec_mapping.get(ident.name.as_ref());
+            let new_base = inner_exec_expr.exec.base.clone();
+            let mut new_exec_path = inner_exec_expr.exec.path.clone();
+            new_exec_path.append(&mut exec_expr.exec.path.clone());
+            let mut expanded_exec_expr: desc::ExecExpr =
+                desc::ExecExpr::new(desc::Exec::with_path(new_base, new_exec_path));
+            expanded_exec_expr
+        }
     }
 }
 
@@ -2047,6 +2145,12 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                     Some(desc::Nat::BlockIdx(d)) if d == desc::DimCompo::X => {
                         set_distrib_idx(&mut indices.0, desc::Nat::ThreadIdx(d), &mut split_shift);
                     }
+                    Some(desc::Nat::WarpGrpIdx) => {
+                        set_distrib_idx(&mut indices.0, desc::Nat::WarpIdx, &mut split_shift);
+                    }
+                    Some(desc::Nat::WarpIdx) => {
+                        set_distrib_idx(&mut indices.0, desc::Nat::LaneIdx, &mut split_shift);
+                    }
                     _ => unreachable!(),
                 },
                 desc::DimCompo::Y => match contained_par_idx(&indices.1) {
@@ -2071,6 +2175,12 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                     }
                     _ => unreachable!(),
                 },
+            },
+            desc::ExecPathElem::ToWarps => match contained_par_idx(&indices.0) {
+                Some(desc::Nat::BlockIdx(desc::DimCompo::X)) => {
+                    indices.0 = desc::Nat::WarpGrpIdx;
+                }
+                _ => unreachable!(),
             },
             // desc::ExecPathElem::ToThreadGrp(grid) => {
             //     assert!(matches!(&grid.exec, desc::ExecPathElem::GpuGrid(_, _)));
@@ -2107,6 +2217,8 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
             match n {
                 desc::Nat::GridIdx => self.par_idx = Some(n.clone()),
                 desc::Nat::BlockIdx(_) => self.par_idx = Some(n.clone()),
+                desc::Nat::WarpGrpIdx => self.par_idx = Some(n.clone()),
+                desc::Nat::WarpIdx => self.par_idx = Some(n.clone()),
                 _ => desc::visit::walk_nat(self, n),
             }
         }

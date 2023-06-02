@@ -1,11 +1,9 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt;
 
 use descend_derive::span_derive;
 pub use span::*;
 
-use crate::ast::visit_mut::VisitMut;
 use crate::parser::SourceCode;
 
 pub mod internal;
@@ -56,6 +54,7 @@ impl FunDef {
         }
     }
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdentExec {
     pub ident: Ident,
@@ -198,7 +197,7 @@ impl Expr {
 pub struct Sched {
     pub dim: DimCompo,
     pub inner_exec_ident: Option<Ident>,
-    pub sched_exec: ExecExpr,
+    pub sched_exec: Box<ExecExpr>,
     pub body: Box<Block>,
 }
 
@@ -212,8 +211,35 @@ impl Sched {
         Sched {
             dim,
             inner_exec_ident,
-            sched_exec,
+            sched_exec: Box::new(sched_exec),
             body: Box::new(body),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct ExprSplit {
+    pub lrgn: Option<String>,
+    pub rrgn: Option<String>,
+    pub own: Ownership,
+    pub pos: Nat,
+    pub view: Box<PlaceExpr>,
+}
+
+impl ExprSplit {
+    pub fn new(
+        lrgn: Option<String>,
+        rrgn: Option<String>,
+        own: Ownership,
+        pos: Nat,
+        view: PlaceExpr,
+    ) -> Self {
+        ExprSplit {
+            lrgn,
+            rrgn,
+            own,
+            pos,
+            view: Box::new(view),
         }
     }
 }
@@ -222,7 +248,7 @@ impl Sched {
 pub struct Indep {
     pub dim_compo: DimCompo,
     pub pos: Nat,
-    pub split_exec: ExecExpr,
+    pub split_exec: Box<ExecExpr>,
     pub branch_idents: Vec<Ident>,
     pub branch_bodies: Vec<Expr>,
 }
@@ -238,7 +264,7 @@ impl Indep {
         Indep {
             dim_compo,
             pos,
-            split_exec,
+            split_exec: Box::new(split_exec),
             branch_idents,
             branch_bodies,
         }
@@ -327,6 +353,7 @@ pub enum ExprKind {
     While(Box<Expr>, Box<Expr>),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     UnOp(UnOp, Box<Expr>),
+    Cast(Box<Expr>, Box<DataTy>),
     // TODO branches must be blocks or treated like blocks
     Indep(Box<Indep>),
     Sched(Box<Sched>),
@@ -383,7 +410,9 @@ pub enum Lit {
     Unit,
     Bool(bool),
     I32(i32),
+    U8(u8),
     U32(u32),
+    U64(u64),
     F32(f32),
     F64(f64),
 }
@@ -407,7 +436,9 @@ impl fmt::Display for Lit {
             Self::Unit => write!(f, "()"),
             Self::Bool(b) => write!(f, "{}", b),
             Self::I32(i) => write!(f, "{}", i),
+            Self::U8(uc) => write!(f, "{}", uc),
             Self::U32(u) => write!(f, "{}", u),
+            Self::U64(ul) => write!(f, "{}", ul),
             Self::F32(fl) => write!(f, "{}f", fl),
             Self::F64(d) => write!(f, "{}", d),
         }
@@ -467,6 +498,10 @@ pub enum BinOp {
     Gt,
     Ge,
     Neq,
+    Shl,
+    Shr,
+    BitOr,
+    BitAnd,
 }
 
 impl fmt::Display for BinOp {
@@ -485,6 +520,10 @@ impl fmt::Display for BinOp {
             Self::Gt => ">",
             Self::Ge => ">=",
             Self::Neq => "!=",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
+            Self::BitOr => "|",
+            Self::BitAnd => "&",
         };
         write!(f, "{}", str)
     }
@@ -821,6 +860,7 @@ pub enum BaseExec {
 pub enum ExecPathElem {
     SplitProj(Box<SplitProj>),
     Distrib(DimCompo),
+    ToWarps,
     ToThreads(DimCompo),
 }
 
@@ -962,6 +1002,7 @@ pub struct DataTy {
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
+
 impl DataTy {
     pub fn new(dty: DataTyKind) -> Self {
         DataTy {
@@ -1038,7 +1079,7 @@ impl DataTy {
         match &dty.dty {
             DataTyKind::Scalar(_) | DataTyKind::Ident(_) | DataTyKind::Range => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
-            DataTyKind::Atomic(sty) => &self.dty == &DataTyKind::Scalar(sty.clone()),
+            DataTyKind::Atomic(aty) => &self.dty == &DataTyKind::Atomic(aty.clone()),
             DataTyKind::Ref(reff) => self.occurs_in(&reff.dty),
             DataTyKind::RawPtr(elem_dty) => self.occurs_in(elem_dty),
             DataTyKind::Tuple(elem_dtys) => {
@@ -1100,7 +1141,7 @@ impl RefDty {
 pub enum DataTyKind {
     Ident(Ident),
     Scalar(ScalarTy),
-    Atomic(ScalarTy),
+    Atomic(AtomicTy),
     Array(Box<DataTy>, Nat),
     // [[ dty; n ]]
     ArrayShape(Box<DataTy>, Nat),
@@ -1117,6 +1158,7 @@ pub enum DataTyKind {
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ScalarTy {
     Unit,
+    U8,
     U32,
     U64,
     I32,
@@ -1125,6 +1167,11 @@ pub enum ScalarTy {
     F64,
     Bool,
     Gpu,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+pub enum AtomicTy {
+    AtomicU32,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1166,6 +1213,8 @@ pub enum ExecTyKind {
     GpuBlock(Dim),
     GpuGlobalThreads(Dim),
     GpuBlockGrp(Dim, Dim),
+    GpuWarpGrp(Nat),
+    GpuWarp,
     GpuThreadGrp(Dim),
     GpuThread,
     View,
@@ -1199,6 +1248,9 @@ pub enum Nat {
     ThreadIdx(DimCompo),
     BlockIdx(DimCompo),
     BlockDim(DimCompo),
+    WarpGrpIdx,
+    WarpIdx,
+    LaneIdx,
     // Dummy that is always 0, i.e. equivalent to Lit(0)
     GridIdx,
     BinOp(BinOpNat, Box<Nat>, Box<Nat>),
@@ -1240,7 +1292,10 @@ impl Nat {
             | Nat::GridIdx
             | Nat::BlockIdx(_)
             | Nat::BlockDim(_)
-            | Nat::ThreadIdx(_) => Err("Cannot evaluate.".to_string()),
+            | Nat::ThreadIdx(_)
+            | Nat::WarpGrpIdx
+            | Nat::WarpIdx
+            | Nat::LaneIdx => Err("Cannot evaluate.".to_string()),
             Nat::Lit(n) => Ok(*n),
             Nat::BinOp(op, l, r) => match op {
                 BinOpNat::Add => Ok(l.eval()? + r.eval()?),
@@ -1341,8 +1396,8 @@ mod size_asserts {
     static_assert_size!(ExecExpr, 32);
     static_assert_size!(Exec, 64);
     static_assert_size!(ExecPathElem, 16);
-    static_assert_size!(ExecTy, 56);
-    static_assert_size!(ExecTyKind, 40);
+    static_assert_size!(ExecTy, 80);
+    static_assert_size!(ExecTyKind, 64);
     static_assert_size!(Expr, 128);
     static_assert_size!(ExprKind, 104);
     static_assert_size!(FunDef, 264);

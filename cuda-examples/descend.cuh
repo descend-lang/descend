@@ -7,7 +7,8 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include <atomic>
+#include <cuda/atomic>
+#include <cooperative_groups.h>
 
 #define CHECK_CUDA_ERR(err) { check_cuda_err((err), __FILE__, __LINE__); }
 inline void check_cuda_err(const cudaError_t err, const char * const file, const int line) {
@@ -206,11 +207,14 @@ public:
 
 using i32 = std::int32_t;
 extern const i32 NO_ERROR = -1;
+using u8 = std::uint8_t;
 using u32 = std::uint32_t;
-using byte = std::uint8_t;
-// FIXME there is no way to guarantee that float holds 32 bits
+using u64 = std::uint64_t;
 using f32 = float;
+static_assert(sizeof(f32) == 4);
 using f64 = double;
+static_assert(sizeof(f64) == 8);
+using byte = std::uint8_t;
 
 template<typename T, std::size_t n>
 using array = std::array<T, n>;
@@ -219,7 +223,9 @@ template<typename ... Types>
 using tuple = thrust::tuple<Types...>;
 
 template<typename T>
-using atomic = std::atomic<T>;
+using atomic_ref = cuda::atomic_ref<T, cuda::thread_scope_device>;
+
+using Warp = cooperative_groups::thread_block_tile<32>;
 
 template<typename T>
 constexpr auto size_in_bytes() -> std::size_t {
@@ -420,37 +426,82 @@ auto exec(dim3 num_blocks, dim3 num_threads, std::size_t shared_mem_bytes, F &&f
     CHECK_CUDA_ERR( cudaDeviceSynchronize() );
 }
 
-template <typename T>
-__device__ void atomic_set(bool *address, bool val)
-{
-    unsigned long long addr = (unsigned long long)address;
-    unsigned pos = addr & 3;  // byte position within the int
-    int *int_addr = (int *)(addr - pos);  // int-aligned address
-    int old = *int_addr, assumed, ival;
-    bool current_value;
-
-    do
-    {
-        current_value = (bool)(old & ((0xFFU) << (8 * pos)));
-
-        if(current_value == val)
-            break;
-
-        assumed = old;
-        if(val)
-            ival = old | (1 << (8 * pos));
-        else
-            ival = old & (~((0xFFU) << (8 * pos)));
-        old = atomicCAS(int_addr, assumed, ival);
-    } while(assumed != old);
+// required to launch kernels that utilize grid synchronization
+template<std::size_t num_blocks, std::size_t num_threads, typename F, typename... Args>
+auto cooperative_exec(const descend::Gpu * const gpu, F &&f, Args... args) -> void {
+    CHECK_CUDA_ERR( cudaSetDevice(*gpu) );
+    // check if the GPU supports cooperative launches
+    int supports_coop_launch = 0;
+    CHECK_CUDA_ERR( cudaDeviceGetAttribute(&supports_coop_launch, cudaDevAttrCooperativeLaunch, *gpu) );
+    if (supports_coop_launch != 1){
+        std::cerr << "Error: GPU does not support cooperative launches!";
+        exit(EXIT_FAILURE);
+    }
+    // check whether the given grid/block dimensions guarantee co-residency of all blocks on the GPU
+    // (needed for grid synchronization)
+    int max_blocks_per_sm = 0;
+    cudaDeviceProp device_prop;
+    CHECK_CUDA_ERR( cudaGetDeviceProperties(&device_prop, *gpu) );
+    CHECK_CUDA_ERR( cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &max_blocks_per_sm,
+            (void *) launch<F, Args...>,
+            num_threads,
+            0
+    ));
+    if (num_blocks > max_blocks_per_sm * device_prop.multiProcessorCount) {
+        std::cerr << "Error: Given grid/block dimensions do not guarantee co-residency of all blocks on the GPU when launching the given kernel!";
+        exit(EXIT_FAILURE);
+    }
+    dim3 dim_block(num_threads, 1, 1);
+    dim3 dim_grid(num_blocks, 1, 1);
+    void* launch_args[] = {(void *) &f, (void *) &args...};
+#ifdef BENCH
+    Timing timing{};
+    timing.record_begin();
+#endif
+    cudaLaunchCooperativeKernel((void *) launch<F, Args...>, dim_grid, dim_block, launch_args);
+#ifdef BENCH
+    timing.record_end();
+    benchmark.current_run().insert_timing(timing);
+#endif
+    CHECK_CUDA_ERR( cudaPeekAtLastError() );
+    CHECK_CUDA_ERR( cudaDeviceSynchronize() );
 }
 
 template <typename T>
-__device__ void atomic_set(T *address, T val) {
-    atomicExch(address, val);
+inline __device__ T atomic_load(
+        atomic_ref<T> target,
+        cuda::std::memory_order order = cuda::memory_order_relaxed) {
+    return target.load(order);
 }
 
+template <typename T>
+inline __device__ void atomic_store(
+        atomic_ref<T> target,
+        T val,
+        cuda::std::memory_order order = cuda::memory_order_relaxed) {
+    target.store(val, order);
+}
 
+template <typename T>
+inline __device__ T atomic_fetch_or(
+        atomic_ref<T> target,
+        T val,
+        cuda::std::memory_order order = cuda::memory_order_relaxed) {
+    return target.fetch_or(val, order);
+}
+
+template <typename T>
+inline __device__ T atomic_fetch_add(
+        atomic_ref<T> target,
+        T val,
+        cuda::std::memory_order order = cuda::memory_order_relaxed) {
+    return target.fetch_add(val, order);
+}
+
+inline __device__ Warp to_warps() {
+    return cooperative_groups::tiled_partition<32>(cooperative_groups::this_thread_block());
+}
 
 namespace detail
 {

@@ -75,6 +75,38 @@ fn reduce_shared_mem() -> Res {
 }
 
 #[test]
+fn vlc_encode() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/vlc_encode.desc")?
+    ))
+}
+
+#[test]
+fn vlc_encode_cg() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/vlc_encode_cg.desc")?
+    ))
+}
+
+#[test]
+fn vlc_encode_reuse() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/vlc_encode_reuse.desc")?
+    ))
+}
+
+#[test]
+fn histogram() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/huffman/histogram.desc")?
+    ))
+}
+
+#[test]
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",

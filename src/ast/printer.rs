@@ -1,6 +1,7 @@
 use crate::ast::{
-    BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecTy, ExecTyKind, Ident, IdentKinded, Kind,
-    Memory, Nat, Ownership, Provenance, ScalarTy, Ty, TyKind,
+    AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecExpr, ExecPathElem,
+    ExecTy, ExecTyKind, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, ScalarTy,
+    SplitProj, Ty, TyKind,
 };
 use std::fmt::Write;
 
@@ -70,7 +71,7 @@ impl PrintState {
         self.string.push_str(kind_str);
     }
 
-    fn print_exec_ty(&mut self, exec_ty: &ExecTy) {
+    pub fn print_exec_ty(&mut self, exec_ty: &ExecTy) {
         match &exec_ty.ty {
             ExecTyKind::CpuThread => self.string.push_str("cpu.thread"),
             ExecTyKind::GpuGrid(gdim, bdim) => {
@@ -100,7 +101,52 @@ impl PrintState {
                 self.string.push('>');
             }
             ExecTyKind::View => self.string.push_str("view"),
+            ExecTyKind::GpuWarpGrp(n) => {
+                self.string.push_str("gpu.warp_grp<");
+                self.print_nat(n);
+                self.string.push('>');
+            }
+            ExecTyKind::GpuWarp => {}
         }
+    }
+
+    pub fn print_exec_expr(&mut self, exec_expr: &ExecExpr) {
+        match &exec_expr.exec.base {
+            BaseExec::Ident(ident) => self.print_ident(ident),
+            BaseExec::CpuThread => self.string.push_str("cpu.thread"),
+            BaseExec::GpuGrid(gdim, bdim) => {
+                self.string.push_str("gpu.grid<");
+                self.print_dim(gdim);
+                self.string.push_str(", ");
+                self.print_dim(bdim);
+                self.string.push('>');
+            }
+        }
+        for pe in &exec_expr.exec.path {
+            self.string.push('.');
+            match pe {
+                ExecPathElem::SplitProj(split_proj) => self.print_split_proj(split_proj),
+                ExecPathElem::Distrib(dim_compo) => {
+                    self.string.push_str("sched(");
+                    self.print_dim_compo(dim_compo);
+                    self.string.push(')');
+                }
+                ExecPathElem::ToThreads(dim_compo) => {
+                    self.string.push_str("to_threads(");
+                    self.print_dim_compo(dim_compo);
+                    self.string.push(')');
+                }
+                ExecPathElem::ToWarps => self.string.push_str("to_warps"),
+            }
+        }
+    }
+
+    fn print_split_proj(&mut self, split_proj: &SplitProj) {
+        self.string.push_str("split(");
+        self.print_dim_compo(&split_proj.split_dim);
+        self.string.push_str(", ");
+        self.print_nat(&split_proj.pos);
+        write!(&mut self.string, ").{}", split_proj.proj).unwrap();
     }
 
     fn print_dim(&mut self, dim: &Dim) {
@@ -145,15 +191,17 @@ impl PrintState {
         }
     }
 
+    pub fn print_aty(&mut self, aty: &AtomicTy) {
+        match &aty {
+            AtomicTy::AtomicU32 => self.string.push_str("AtomicU32"),
+        }
+    }
+
     pub fn print_dty(&mut self, dty: &DataTy) {
         match &dty.dty {
             DataTyKind::Ident(ident) => self.print_ident(ident),
             DataTyKind::Scalar(sty) => self.print_sty(sty),
-            DataTyKind::Atomic(sty) => {
-                self.string.push_str("Atomic<");
-                self.print_sty(sty);
-                self.string.push('>');
-            }
+            DataTyKind::Atomic(aty) => self.print_aty(aty),
             DataTyKind::Array(dty, n) => {
                 self.string.push('[');
                 self.print_dty(dty);
@@ -207,6 +255,7 @@ impl PrintState {
             ScalarTy::F64 => self.string.push_str("f64"),
             ScalarTy::Bool => self.string.push_str("bool"),
             ScalarTy::Gpu => self.string.push_str("Gpu"),
+            ScalarTy::U8 => self.string.push_str("u8"),
         }
     }
 
@@ -269,6 +318,9 @@ impl PrintState {
                     self.string.push(')');
                 }
             }
+            Nat::WarpGrpIdx => self.string.push_str("warpGrpIdx"),
+            Nat::WarpIdx => self.string.push_str("warpIdx"),
+            Nat::LaneIdx => self.string.push_str("laneIdx"),
         }
     }
 

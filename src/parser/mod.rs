@@ -162,7 +162,7 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
 
         fn visit_sched(&mut self, sched: &mut Sched) {
             expand_exec_expr(&self.ident_names_to_exec_expr, &mut sched.sched_exec);
-            let mut body_exec = ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
+            let body_exec = ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
             if let Some(ident) = &sched.inner_exec_ident {
                 self.ident_names_to_exec_expr
                     .push((ident.name.clone(), body_exec));
@@ -362,8 +362,13 @@ peg::parser! {
 
         /// Parse an expression
         pub(crate) rule expression() -> Expr = precedence!{
-            x:(@) _ "&&" _ y:@ { utils::make_binary(BinOp::And, x, y) }
+            x: (@) _ ".." _ y: @ {
+                Expr::new(ExprKind::Range(Box::new(x), Box::new(y)))
+            }
+            --
             x:(@) _ "||" _ y:@ { utils::make_binary(BinOp::Or, x, y) }
+            --
+            x:(@) _ "&&" _ y:@ { utils::make_binary(BinOp::And, x, y) }
             --
             x:(@) _ "==" _ y:@ { utils::make_binary(BinOp::Eq, x, y) }
             x:(@) _ "!=" _ y:@ { utils::make_binary(BinOp::Neq, x, y) }
@@ -372,6 +377,13 @@ peg::parser! {
             x:(@) _ ">" _ y:@ { utils::make_binary(BinOp::Gt, x, y) }
             x:(@) _ ">=" _ y:@ { utils::make_binary(BinOp::Ge, x, y) }
             --
+            x:(@) _ "|" _ y:@ { utils::make_binary(BinOp::BitOr, x, y) }
+            --
+            x:(@) _ "&" _ y:@ { utils::make_binary(BinOp::BitAnd, x, y) }
+            --
+            x:(@) _ "<<" _ y:@ { utils::make_binary(BinOp::Shl, x, y) }
+            x:(@) _ ">>" _ y:@ { utils::make_binary(BinOp::Shr, x, y) }
+            --
             x:(@) _ "+" _ y:@ { utils::make_binary(BinOp::Add, x, y) }
             x:(@) _ "-" _ y:@ { utils::make_binary(BinOp::Sub, x, y) }
             --
@@ -379,9 +391,10 @@ peg::parser! {
             x:(@) _ "/" _ y:@ { utils::make_binary(BinOp::Div, x, y) }
             x:(@) _ "%" _ y:@ { utils::make_binary(BinOp::Mod, x, y) }
             --
-            x: (@) _ ".." _ y: @ {
-                Expr::new(ExprKind::Range(Box::new(x), Box::new(y)))
+            x:(@) __ "as" __ dty:dty() {
+                Expr::new(ExprKind::Cast(Box::new(x), Box::new(dty)))
             }
+            --
             "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
             "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
             --
@@ -684,12 +697,13 @@ peg::parser! {
             = "f32" { DataTyKind::Scalar(ScalarTy::F32) }
             / "f64" { DataTyKind::Scalar(ScalarTy::F64) }
             / "i32" { DataTyKind::Scalar(ScalarTy::I32) }
+            / "u8" { DataTyKind::Scalar(ScalarTy::U8) }
             / "u32" { DataTyKind::Scalar(ScalarTy::U32) }
+            / "u64" { DataTyKind::Scalar(ScalarTy::U64) }
             / "bool" { DataTyKind::Scalar(ScalarTy::Bool) }
             / "()" { DataTyKind::Scalar(ScalarTy::Unit) }
             / "Gpu" { DataTyKind::Scalar(ScalarTy::Gpu) }
-            / "Atomic<i32>" { DataTyKind::Atomic(ScalarTy::I32) }
-            / "Atomic<bool>" {DataTyKind::Atomic(ScalarTy::Bool)}
+            / "AtomicU32" { DataTyKind::Atomic(AtomicTy::AtomicU32) }
             / name:ident() { DataTyKind::Ident(name) }
             / "(" _ types:dty() ** ( _ "," _ ) _ ")" { DataTyKind::Tuple(types) }
             / "[" _ t:dty() _ ";" _ n:nat() _ "]" { DataTyKind::Array(Box::new(t), n) }
@@ -727,6 +741,7 @@ peg::parser! {
             / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { 0 }/ "1" { 1 }) _ ">" {
                 ExecPathElem::SplitProj(Box::new(SplitProj::new(dim_compo, pos, proj)))
             }
+            / "to_warps" { ExecPathElem::ToWarps }
 
         rule exec_ty() -> ExecTy =
             begin:position!() exec:exec_ty_kind() end:position!() {
@@ -748,6 +763,12 @@ peg::parser! {
             }
             / "gpu.block_grp" _ "<" _ g_dim:dim() _ "," _ b_dim:dim() _ ">" {
                 ExecTyKind::GpuBlockGrp(g_dim, b_dim)
+            }
+            / "gpu.warp_grp" _ "<" _ wg_size:nat() _ ">" {
+                ExecTyKind::GpuWarpGrp(wg_size)
+            }
+            / "gpu.warp" {
+                ExecTyKind::GpuWarp
             }
             / "gpu.thread_grp" _ "<" _ t_dim:dim() _ ">" {
                 ExecTyKind::GpuThreadGrp(t_dim)
@@ -824,8 +845,8 @@ peg::parser! {
         // are no follow-up symbols. But there is still "dep" left to be parsed.
         // Therefore, the rule fails, even though it should have succeeded.
         rule keyword() -> ()
-            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to" / "with"
-                / "f32" / "f64" / "i32" / "u32" / "bool" / "Atomic<i32>" / "Atomic<bool>" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
+            = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to_warps" / "to" / "with"
+                / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "AtomicU32" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
                 / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view"
@@ -848,7 +869,7 @@ peg::parser! {
                 Ident::with_span(ident, Span::new(begin, end))
             }
 
-        // Literal may be one of Unit, bool, i32, u32, f32
+        // Literal may be one of Unit, bool, i32, u8, u32, u64, f32, f64
         pub(crate) rule literal() -> Lit
             = "()" {
                 Lit::Unit
@@ -872,17 +893,30 @@ peg::parser! {
                     }
                 }
             }
-            / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") ("i32" / "u32" / "f32")?  ) { ?
-                let literal = if (l.ends_with("i32") || l.ends_with("u32") || l.ends_with("f32")) {&l[0..l.len()-3]} else {l};
+            / l:$((("-"? ['1'..='9']['0'..='9']*) / "0") ("i32" / "u8" / "u32" / "u64" / "f32")?  ) { ?
+                let literal =
+                    if (l.ends_with("i32") || l.ends_with("u32") || l.ends_with("u64") || l.ends_with("f32")) {&l[0..l.len()-3]}
+                    else if (l.ends_with("u8")) {&l[0..l.len()-2]}
+                    else {l};
                 if (l.ends_with("f32")) {
                     match literal.parse::<f32>() {
                         Ok(val) => Ok(Lit::F32(val)),
                         Err(_) => Err("Error while parsing f32 literal")
                     }
+                } else if (l.ends_with("u8")) {
+                    match literal.parse::<u8>() {
+                        Ok(val) => Ok(Lit::U8(val)),
+                        Err(_) => Err("Error while paring u8 literal")
+                    }
                 } else if (l.ends_with("u32")) {
                     match literal.parse::<u32>() {
                         Ok(val) => Ok(Lit::U32(val)),
                         Err(_) => Err("Error while paring u32 literal")
+                    }
+                } else if (l.ends_with("u64")) {
+                    match literal.parse::<u64>() {
+                        Ok(val) => Ok(Lit::U64(val)),
+                        Err(_) => Err("Error while paring u64 literal")
                     }
                 } else {
                     match literal.parse::<i32>() {
@@ -900,7 +934,6 @@ peg::parser! {
         rule whitespace_char() = [' '|'\n'|'\t'|'\r'] // 0 or more whitespaces
         rule line_comment() = "//" (!['\n'][_])* (['\n'] / ![_]) // Comment to EOL
         rule inline_comment() = "/*" (!"*/"[_])* "*/"  // Block comment
-
     }
 }
 
@@ -1021,11 +1054,25 @@ mod tests {
             "does not recognize i32 type"
         );
         assert_eq!(
+            descend::ty("u8"),
+            Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+                DataTyKind::Scalar(ScalarTy::U8)
+            ))))),
+            "does not recognize u8 type"
+        );
+        assert_eq!(
             descend::ty("u32"),
             Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
                 DataTyKind::Scalar(ScalarTy::U32)
             ))))),
             "does not recognize u32 type"
+        );
+        assert_eq!(
+            descend::ty("u64"),
+            Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+                DataTyKind::Scalar(ScalarTy::U64)
+            ))))),
+            "does not recognize u64 type"
         );
         assert_eq!(
             descend::ty("()"),
@@ -1044,6 +1091,17 @@ mod tests {
     }
 
     #[test]
+    fn ty_atomic() {
+        assert_eq!(
+            descend::ty("AtomicU32"),
+            Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+                DataTyKind::Atomic(AtomicTy::AtomicU32)
+            ))))),
+            "does not recognize AtomicU32 type"
+        );
+    }
+
+    #[test]
     fn ty_gpu() {
         assert_eq!(
             descend::ty("Gpu"),
@@ -1058,7 +1116,9 @@ mod tests {
     fn dty_tuple() {
         let ty_f32 = DataTy::new(DataTyKind::Scalar(ScalarTy::F32));
         let ty_i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
+        let ty_u8 = DataTy::new(DataTyKind::Scalar(ScalarTy::U8));
         let ty_u32 = DataTy::new(DataTyKind::Scalar(ScalarTy::U32));
+        let ty_u64 = DataTy::new(DataTyKind::Scalar(ScalarTy::U64));
         let ty_unit = DataTy::new(DataTyKind::Scalar(ScalarTy::Unit));
         assert_eq!(
             descend::dty("(f32)"),
@@ -1071,9 +1131,19 @@ mod tests {
             "does not recognize (i32) tuple type"
         );
         assert_eq!(
+            descend::dty("(u8,u8)"),
+            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u8.clone(), ty_u8]))),
+            "does not recognize (u8, u8) tuple type"
+        );
+        assert_eq!(
             descend::dty("(u32,u32)"),
             Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u32.clone(), ty_u32]))),
             "does not recognize (u32, u32) tuple type"
+        );
+        assert_eq!(
+            descend::dty("(u64,u64)"),
+            Ok(DataTy::new(DataTyKind::Tuple(vec![ty_u64.clone(), ty_u64]))),
+            "does not recognize (u64, u64) tuple type"
         );
         assert_eq!(
             descend::dty("((),(),())"),
@@ -1107,6 +1177,26 @@ mod tests {
                 )
             ))))),
             "does not recognize [u32;43] type"
+        );
+        assert_eq!(
+            descend::ty("[u8;44]"),
+            Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+                DataTyKind::Array(
+                    Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U8))),
+                    Nat::Lit(44)
+                )
+            ))),)),
+            "does not recognize [u8;44] type"
+        );
+        assert_eq!(
+            descend::ty("[u64;45]"),
+            Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+                DataTyKind::Array(
+                    Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U64))),
+                    Nat::Lit(45)
+                )
+            ))),)),
+            "does not recognize [u64;45] type"
         );
         // TODO: Implement identifer parsing in nat
         // assert_eq!(descend::ty("[();N]"), Ok(Ty::Array(Box::new(
@@ -2122,7 +2212,7 @@ mod tests {
 
     #[test]
     fn global_fun_def_no_function_parameters_required() {
-        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[t: cpu.thread]-> () <>{            
+        let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[t: cpu.thread]-> () <>{
             let answer_to_everything :i32 = 42;
             answer_to_everything
         }"#;

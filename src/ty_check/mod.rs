@@ -28,6 +28,7 @@ macro_rules! matches_dty {
         }
     };
 }
+use crate::ast::printer::PrintState;
 use crate::ty_check::borrow_check::BorrowCheckCtx;
 pub(crate) use matches_dty;
 
@@ -190,8 +191,8 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         ExprKind::BinOp(bin_op, lhs, rhs) => ty_check_binary_op(ctx, bin_op, lhs, rhs)?,
         ExprKind::UnOp(un_op, e) => ty_check_unary_op(ctx, un_op, e)?,
         ExprKind::Sync(exec) => ty_check_sync(ctx, exec)?,
+        ExprKind::Cast(expr, dty) => ty_check_cast(ctx, expr, dty)?,
         ExprKind::Range(l, u) => ty_check_range(ctx, l, u)?,
-        // ExprKind::BorrowIndex(_, _, _, _) => unimplemented!(),
     };
 
     // TODO reintroduce!!!!
@@ -248,6 +249,8 @@ fn syncable_exec_ty(exec_ty: &ExecTy) -> bool {
         | ExecTyKind::GpuGlobalThreads(_)
         | ExecTyKind::GpuBlockGrp(_, _)
         | ExecTyKind::GpuThreadGrp(_)
+        | ExecTyKind::GpuWarpGrp(_)
+        | ExecTyKind::GpuWarp
         | ExecTyKind::GpuThread
         | ExecTyKind::View => false,
     }
@@ -557,12 +560,14 @@ fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> Ty
 }
 
 fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
-    exec::ty_check(
-        ctx.kind_ctx,
-        ctx.ty_ctx,
-        ctx.ident_exec,
-        &mut indep.split_exec,
-    )?;
+    // exec::ty_check(
+    //     ctx.kind_ctx,
+    //     ctx.ty_ctx,
+    //     ctx.ident_exec,
+    //     &mut indep.split_exec,
+    // )?;
+    legal_exec_under_current(ctx, &indep.split_exec)?;
+    let expanded_exec_expr = expand_exec_expr(ctx, &indep.split_exec)?;
     if indep.branch_idents.len() != indep.branch_bodies.len() {
         panic!(
             "Amount of branch identifiers and amount of branches do not match:\
@@ -579,7 +584,7 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
     }
 
     for i in 0..indep.branch_bodies.len() {
-        let mut branch_exec = ExecExpr::new(ctx.exec.exec.clone().split_proj(
+        let mut branch_exec = ExecExpr::new(expanded_exec_expr.exec.clone().split_proj(
             indep.dim_compo,
             indep.pos.clone(),
             i as u8,
@@ -618,13 +623,9 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
 }
 
 fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
-    exec::ty_check(
-        ctx.kind_ctx,
-        ctx.ty_ctx,
-        ctx.ident_exec,
-        &mut sched.sched_exec,
-    )?;
-    let mut body_exec = ExecExpr::new(ctx.exec.exec.clone().distrib(sched.dim));
+    legal_exec_under_current(ctx, &sched.sched_exec)?;
+    let expanded_exec_expr = expand_exec_expr(ctx, &sched.sched_exec)?;
+    let mut body_exec = ExecExpr::new(expanded_exec_expr.exec.clone().distrib(sched.dim));
     exec::ty_check(&ctx.kind_ctx, &ctx.ty_ctx, &ctx.ident_exec, &mut body_exec)?;
     let mut schedule_body_ctx = ExprTyCtx {
         gl_ctx: ctx.gl_ctx,
@@ -635,6 +636,11 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
         access_ctx: &mut *ctx.access_ctx,
     };
     schedule_body_ctx.ty_ctx.push_empty_frame();
+    if let Some(ident) = &sched.inner_exec_ident {
+        schedule_body_ctx
+            .ty_ctx
+            .append_exec_mapping(ident.clone(), body_exec.clone());
+    };
     for prv in &sched.body.prvs {
         schedule_body_ctx
             .ty_ctx
@@ -865,14 +871,6 @@ fn ty_check_idx_assign(
     idx: &Nat,
     e: &mut Expr,
 ) -> TyResult<Ty> {
-    if &ctx.ident_exec.ty.ty != &ExecTyKind::CpuThread
-        && &ctx.ident_exec.ty.ty != &ExecTyKind::GpuThread
-    {
-        return Err(TyError::String(format!(
-            "Trying to assign to memory from {:?}.",
-            &ctx.ident_exec.ty.ty
-        )));
-    }
     ty_check_expr(ctx, e)?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), pl_expr)?;
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
@@ -958,47 +956,96 @@ fn ty_check_binary_op(
     ty_check_expr(ctx, rhs)?;
     let lhs_ty = lhs.ty.as_ref().unwrap();
     let rhs_ty = rhs.ty.as_ref().unwrap();
-    let ret = match bin_op {
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::And | BinOp::Or => {
-            lhs_ty.as_ref().clone()
-        }
-        BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Neq => Ty::new(
-            TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::Bool)))),
-        ),
+    let ret_dty = match bin_op {
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Mod
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::BitAnd
+        | BinOp::BitOr => lhs_ty.as_ref().clone(),
+        BinOp::Eq
+        | BinOp::Lt
+        | BinOp::Le
+        | BinOp::Gt
+        | BinOp::Ge
+        | BinOp::And
+        | BinOp::Or
+        | BinOp::Neq => Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::Bool,
+        ))))),
     };
-    // let fresh_id = constrain::fresh_ident("p_bin_op", DataTyKind::Ident);
-    // let operand_ty = Ty::new(TyKind::Data(DataTy::new(fresh_id)));
-    // self.term_constr
-    //     .constrain(&mut rhs_ty_ctx, lhs_ty, &operand_ty)?;
-    // self.term_constr
-    //     .constrain(&mut rhs_ty_ctx, rhs_ty, &operand_ty)?;
-    match (&lhs_ty.ty, &rhs_ty.ty) {
+    match bin_op {
+        // Shift operators only allow integer values (lhs_ty and rhs_ty can differ!)
+        BinOp::Shl
+        | BinOp::Shr => match (&lhs_ty.ty, &rhs_ty.ty) {
+            (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
+                (
+                    DataTyKind::Scalar(ScalarTy::U8)
+                    | DataTyKind::Scalar(ScalarTy::U32)
+                    | DataTyKind::Scalar(ScalarTy::U64)
+                    | DataTyKind::Scalar(ScalarTy::I32)
+                    ,
+                    DataTyKind::Scalar(ScalarTy::U8)
+                    | DataTyKind::Scalar(ScalarTy::U32)
+                    | DataTyKind::Scalar(ScalarTy::U64)
+                    | DataTyKind::Scalar(ScalarTy::I32),
+                ) => Ok(ret_dty),
+                _ => Err(TyError::String(format!(
+                    "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                    bin_op, lhs, rhs
+                )))
+            }
+            _ => Err(TyError::String(format!(
+                "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                bin_op, lhs, rhs
+            ))),
+        }
+        _ => match (&lhs_ty.ty, &rhs_ty.ty) {
             (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
                 (
                     DataTyKind::Scalar(ScalarTy::F32),
                     DataTyKind::Scalar(ScalarTy::F32),
                 ) |
-                ( DataTyKind::Scalar(ScalarTy::F64), DataTyKind::Scalar(ScalarTy::F64)) |
-                (   DataTyKind::Scalar(ScalarTy::I32),
+                (
+                    DataTyKind::Scalar(ScalarTy::U8),
+                    DataTyKind::Scalar(ScalarTy::U8),
+                ) |
+                (
+                    DataTyKind::Scalar(ScalarTy::U32),
+                    DataTyKind::Scalar(ScalarTy::U32),
+                ) |
+                (
+                    DataTyKind::Scalar(ScalarTy::U64),
+                    DataTyKind::Scalar(ScalarTy::U64),
+                ) |
+                (
+                    DataTyKind::Scalar(ScalarTy::F64),
+                    DataTyKind::Scalar(ScalarTy::F64)
+                ) |
+                (
+                    DataTyKind::Scalar(ScalarTy::I32),
                     DataTyKind::Scalar(ScalarTy::I32),
                 ) |
-                (    DataTyKind::Scalar(ScalarTy::Bool),
+                (
                     DataTyKind::Scalar(ScalarTy::Bool),
-                ) => Ok(ret),
-                _ =>  Err(TyError::String(format!(
+                    DataTyKind::Scalar(ScalarTy::Bool),
+                ) => Ok(ret_dty),
+                _ => Err(TyError::String(format!(
                     "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
                     bin_op, lhs, rhs
                 )))
             }
             _ => Err(TyError::String(format!(
-            "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-            bin_op, lhs, rhs
-        ))),
+                "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
+                bin_op, lhs, rhs
+            ))),
         }
-    // Ok((rhs_ty_ctx, operand_ty))
+    }
 }
 
-// FIXME currently assumes that binary operators exist only for f32 and i32
 fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
     let e_ty = e.ty.as_ref().unwrap();
@@ -1007,17 +1054,55 @@ fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResul
     } else {
         return Err(TyError::String("expected data type, but found".to_string()));
     };
-    match &e_dty {
-        DataTy {
-            dty: DataTyKind::Scalar(ScalarTy::F32),
-            ..
-        }
-        | DataTy {
-            dty: DataTyKind::Scalar(ScalarTy::I32),
-            ..
-        } => Ok(e_ty.as_ref().clone()),
+    match &e_dty.dty {
+        DataTyKind::Scalar(ScalarTy::F32)
+        | DataTyKind::Scalar(ScalarTy::F64)
+        | DataTyKind::Scalar(ScalarTy::I32)
+        | DataTyKind::Scalar(ScalarTy::U8)
+        | DataTyKind::Scalar(ScalarTy::U32)
+        | DataTyKind::Scalar(ScalarTy::U64) => Ok(e_ty.as_ref().clone()),
         _ => Err(TyError::String(format!(
             "Exected a number type (i.e., f32 or i32), but found {:?}",
+            e_ty
+        ))),
+    }
+}
+
+fn ty_check_cast(ctx: &mut ExprTyCtx, e: &mut Expr, dty: &DataTy) -> TyResult<Ty> {
+    ty_check_expr(ctx, e)?;
+    let e_ty = e.ty.as_ref().unwrap();
+    match &e_ty.dty().dty {
+        DataTyKind::Scalar(ScalarTy::F32)
+        | DataTyKind::Scalar(ScalarTy::F64)
+        | DataTyKind::Scalar(ScalarTy::I32)
+        | DataTyKind::Scalar(ScalarTy::U8)
+        | DataTyKind::Scalar(ScalarTy::U32)
+        | DataTyKind::Scalar(ScalarTy::U64)
+        => match dty.dty {
+            DataTyKind::Scalar(ScalarTy::I32)
+            | DataTyKind::Scalar(ScalarTy::U8)
+            | DataTyKind::Scalar(ScalarTy::U32)
+            | DataTyKind::Scalar(ScalarTy::U64)
+            | DataTyKind::Scalar(ScalarTy::F32)
+            | DataTyKind::Scalar(ScalarTy::F64) => Ok(Ty::new(TyKind::Data(Box::new(dty.clone())))),
+            _ => Err(TyError::String(format!(
+                "Exected a number type (i.e. i32 or f32) to cast to from {:?}, but found {:?}",
+                e_ty, dty
+            ))),
+        },
+        DataTyKind::Scalar(ScalarTy::Bool)
+        => match dty.dty {
+            DataTyKind::Scalar(ScalarTy::I32)
+            | DataTyKind::Scalar(ScalarTy::U8)
+            | DataTyKind::Scalar(ScalarTy::U32)
+            | DataTyKind::Scalar(ScalarTy::U64) => Ok(Ty::new(TyKind::Data(Box::new(dty.clone())))),
+            _ => Err(TyError::String(format!(
+                "Exected an integer type (i.e. i32 or u32) to cast to from a bool, but found {:?}",
+                dty
+            ))),
+        },
+        _ => Err(TyError::String(format!(
+            "Exected a number type (i.e. f32 or i32) or bool as a type to cast from, but found {:?}",
             e_ty
         ))),
     }
@@ -1327,7 +1412,9 @@ fn ty_check_literal(l: &mut Lit) -> Ty {
         Lit::Unit => ScalarTy::Unit,
         Lit::Bool(_) => ScalarTy::Bool,
         Lit::I32(_) => ScalarTy::I32,
+        Lit::U8(_) => ScalarTy::U8,
         Lit::U32(_) => ScalarTy::U32,
+        Lit::U64(_) => ScalarTy::U64,
         Lit::F32(_) => ScalarTy::F32,
         Lit::F64(_) => ScalarTy::F64,
     };
@@ -1578,6 +1665,8 @@ fn allowed_mem_for_exec(exec_ty: &ExecTyKind) -> Vec<Memory> {
         | ExecTyKind::GpuGrid(_, _)
         | ExecTyKind::GpuBlock(_)
         | ExecTyKind::GpuBlockGrp(_, _)
+        | ExecTyKind::GpuWarpGrp(_)
+        | ExecTyKind::GpuWarp
         | ExecTyKind::GpuThreadGrp(_) => {
             vec![Memory::GpuGlobal, Memory::GpuShared, Memory::GpuLocal]
         }
@@ -1741,6 +1830,48 @@ pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
         let res = unify::unify(&mut callee_exec_ty.clone(), &mut caller_exec_ty.clone());
         res.is_ok()
     }
+}
+
+fn expand_exec_expr(ctx: &ExprTyCtx, exec_expr: &ExecExpr) -> TyResult<ExecExpr> {
+    match &exec_expr.exec.base {
+        BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => Ok(exec_expr.clone()),
+        BaseExec::Ident(ident) => {
+            let inner_exec_expr = ctx.ty_ctx.get_exec_expr(ident)?;
+            let new_base = inner_exec_expr.exec.base.clone();
+            let mut new_exec_path = inner_exec_expr.exec.path.clone();
+            new_exec_path.append(&mut exec_expr.exec.path.clone());
+            let mut expanded_exec_expr: ExecExpr =
+                ExecExpr::new(Exec::with_path(new_base, new_exec_path));
+            exec::ty_check(
+                &ctx.kind_ctx,
+                &ctx.ty_ctx,
+                &ctx.ident_exec,
+                &mut expanded_exec_expr,
+            )?;
+            Ok(expanded_exec_expr)
+        }
+    }
+}
+
+fn legal_exec_under_current(ctx: &ExprTyCtx, exec: &ExecExpr) -> TyResult<()> {
+    let expanded_exec_expr = expand_exec_expr(ctx, exec)?;
+    if ctx.exec != expanded_exec_expr {
+        let current_exec_ty = &ctx.exec.ty.as_ref().unwrap().ty;
+        let expanded_exec_ty = expanded_exec_expr.ty.unwrap().ty;
+        match (current_exec_ty, expanded_exec_ty) {
+            // FIXME Piet: this does not guarantee that the GpuWarpGrp was created from the GpuBlock
+            (ExecTyKind::GpuBlock(..), ExecTyKind::GpuWarpGrp(..)) => (),
+            _ => {
+                let mut print_state = PrintState::new();
+                print_state.print_exec_expr(exec);
+                return Err(TyError::String(format!(
+                    "illegal execution resource: {}",
+                    print_state.get()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 // TODO move into utility module (also used in codegen)

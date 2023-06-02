@@ -89,7 +89,7 @@ pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<H
             },
             DataTyKind::RawPtr(_) => ownership_safe_deref_raw(ctx, &pl_ctx_no_deref, &most_spec_pl),
             // TODO improve error message
-            t => panic!("Is the type dead? `{:?}`", t),
+            t => ownership_safe_place(ctx, p), //panic!("Is the type dead? `{:?}`\n {:?}", t, p),
         }
     }
 }

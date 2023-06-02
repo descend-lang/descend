@@ -1,0 +1,38 @@
+fn hist<i: prv, o: prv, gs:nat, ts:nat>(
+    h_in: &s shrd cpu.mem [u8; gs*256*ts],
+    h_out: &o uniq cpu.mem [u32; 256]
+) -[t: cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let d_in = gpu_alloc_copy(&uniq gpu, &shrd *h_in);
+    let mut d_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
+    gpu_hist::<<<X<gs>, X<256>; [AtomicU32; 256]>>>(&shrd d_in, &uniq d_out);
+    copy_to_host(&shrd d_out, h_out)
+}
+
+fn gpu_hist<gs:nat, ts:nat, r1: prv, r2: prv, r3: prv>(
+    d_in: &r1 shrd gpu.global [u8; gs*256*ts],
+    d_out: &r2 uniq gpu.global [u32; 256],
+    s_block_out: &r3 uniq gpu.shared [AtomicU32; 256]
+) -[grid: gpu.grid<X<gs>, X<256>>]-> () {
+    let d_in_groups = &shrd (*d_in).to_view.grp::<(gs*256)>.transp.grp::<256>;
+    let d_out_atomic = to_atomic_array(d_out);
+    sched block in grid {
+        sched thread in block {
+            let s_block_out_item = &shrd (*s_block_out).to_view[[thread]];
+
+            // TODO Should this be non-atomic if we sync afterwards anyway? The original code uses normal writes.
+            atomic_store(s_block_out_item, 0u32);
+            sync(block);
+            for_nat i in range(0, ts) {
+                let tmp = (*d_in_groups)[[block]][[thread]][i];
+                atomic_fetch_add(&shrd (*s_block_out)[tmp], 1u32)
+            };
+            sync(block);
+            atomic_fetch_add(
+                &shrd (*d_out_atomic).to_view[[thread]],
+                atomic_load(s_block_out_item)
+            )
+        }
+    }
+}

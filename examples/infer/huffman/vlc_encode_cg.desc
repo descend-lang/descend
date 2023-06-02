@@ -1,0 +1,318 @@
+fn vlc_encode<s: prv, c: prv, cl: prv, o: prv, oi: prv, gs: nat>(
+    h_source_data: &s shrd cpu.mem [u32; gs*256],
+    h_codewords: &c shrd cpu.mem [u32; 256],
+    h_codewordlens: &cl shrd cpu.mem [u32; 256],
+    h_out: &o uniq cpu.mem [u32; gs*256],
+    h_out_idx: &oi uniq cpu.mem [u32; 64]
+) -[t: cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let g_source_data = gpu_alloc_copy(&uniq gpu, &shrd *h_source_data);
+    let g_codewords = gpu_alloc_copy(&uniq gpu, &shrd *h_codewords);
+    let g_codewordlens = gpu_alloc_copy(&uniq gpu, &shrd *h_codewordlens);
+    let mut g_out = gpu_alloc_copy(&uniq gpu, &shrd *h_out);
+    let mut g_out_idx = gpu_alloc_copy(&uniq gpu, &shrd *h_out_idx);
+    gpu_vlc_encode::<<<X<gs>, X<256>; [u32; 256], [u32; 256], [u32; 7], [AtomicU32; 256], [u32; 1]>>>(
+        &shrd g_source_data,
+        &shrd g_codewords,
+        &shrd g_codewordlens,
+        &uniq g_out,
+        &uniq g_out_idx
+    );
+    copy_to_host(&shrd g_out, h_out);
+    copy_to_host(&shrd g_out_idx, h_out_idx)
+}
+
+fn gpu_vlc_encode<gs: nat>(
+    g_source_data: &shrd gpu.global [u32; gs*256],
+    g_codewords: &shrd gpu.global [u32; 256],
+    g_codewordlens: &shrd gpu.global [u32; 256],
+    g_out: &uniq gpu.global [u32; gs*256],
+    g_out_idx: &uniq gpu.global [u32; 64],
+    s_codewords: &uniq gpu.shared [u32; 256],
+    s_codewordlens: &uniq gpu.shared [u32; 256],
+    s_scan_arr: &uniq gpu.shared [u32; 7],
+    s_block_out: &uniq gpu.shared [AtomicU32; 256],
+    s_last_index_to_copy: &uniq gpu.shared [u32; 1]
+) -[grid: gpu.grid<X<64>, X<256>>]-> () {
+
+    let g_source_data_block_groups = group::<256>(to_view(g_source_data));
+    let g_codewords_view = to_view(g_codewords);
+    let g_codewordlens_view = to_view(g_codewordlens);
+
+    let g_out_block_groups = group_mut::<256>(to_view_mut(g_out));
+    let g_out_idx_block_groups = group_mut::<1>(to_view_mut(g_out_idx));
+
+    sched block in grid {
+        // distribute groups to blocks
+        let g_source_data_block_group = g_source_data_block_groups[[block]];
+        let g_out_block_group = g_out_block_groups[[block]];
+        let g_out_idx_block_group = g_out_idx_block_groups[[block]];
+
+        // create shared memory views
+        let s_block_out_view = to_view(&shrd *s_block_out);
+        let s_scan_arr_view = to_view_mut(&uniq *s_scan_arr);
+
+        // Declare register variables for information that is relevant throughout the entire
+        // algorithm, but can be most efficiently calculated some steps before the
+        // information is required.
+        // These variables would go out of scope if declared inside "sched thread in block"!
+
+        // output that is encoded by a single thread
+        let mut l_thread_out: u64 = 0u64;
+
+        // length of the output that is encoded by a single thread (in bits)
+        let mut l_thread_out_len: u32 = 0u32;
+
+        // index of the value in the output array (32 bits per value) where the output of
+        // the current thread starts
+        let mut l_thread_start_value: u32 = 0u32; // does not need to be initialized here
+
+        // bit-index inside of the value in the output array where the codeword of the
+        // current thread starts
+        let mut l_thread_start_bit: u32 = 0u32; // does not need to be initialized here
+
+        // cache the codewords and their lengths (in bits) in shared memory
+        {
+            let s_codewords_view = to_view_mut(&uniq *s_codewords);
+            let s_codewordlens_view = to_view_mut(&uniq *s_codewordlens);
+
+            sched thread in block {
+                let g_codeword_item = g_codewords_view[[thread]];
+                let g_codewordlen_item = g_codewordlens_view[[thread]];
+                let s_codeword_item = s_codewords_view[[thread]];
+                let s_codewordlen_item = s_codewordlens_view[[thread]];
+
+                *s_codeword_item = *g_codeword_item;
+                *s_codewordlen_item = *g_codewordlen_item
+            }
+        };
+
+        sync;
+
+        // encode four input symbols per thread and save the total bit-length of the encoded
+        // symbols per thread in shared memory
+        sched thread in block {
+            let g_source_data_item = g_source_data_block_group[[thread]];
+
+            // four symbols are stored in g_source_data_item
+            let tmp_source_data_item = *g_source_data_item;
+            // declare temporary variables
+
+            let mut tmp_source_data_item_i: u8 = 0u8;
+            let mut tmp_cw: u32 = 0u32;
+            let mut tmp_cwl: u32 = 0u32;
+
+            for_nat i in range(0,4) {
+                tmp_source_data_item_i =
+                        (tmp_source_data_item >> 8 * (3 - (nat_as_u64::<i>() as i32))) as u8;
+                tmp_cw = s_codewords[tmp_source_data_item_i];
+                tmp_cwl = s_codewordlens[tmp_source_data_item_i];
+                l_thread_out = (l_thread_out << tmp_cwl) | tmp_cw as u64;
+                l_thread_out_len = l_thread_out_len + tmp_cwl
+            }
+        };
+
+        // ---------------------------------------------------------------------------------
+        // exclusive scan with cooperative groups
+        let mut l_thread_out_len_scan: u32 = l_thread_out_len;
+
+        // these variables do not need to be initialized here!
+        let mut tmp_shfl_res: u32 = 0u32;
+        let mut tmp_scan_block: u32 = 0u32;
+
+        // calculate inclusive scan for each warp
+        sched warp in block.to_warps {
+            for_nat k in doubled_range(1, 16) {
+                tmp_shfl_res = shfl_up(l_thread_out_len_scan, nat_as_u64::<k>() as i32);
+                indep(X) k warp {
+                    inactive_lanes => { () },
+                    active_lanes => {
+                        sched lane in active_lanes {
+                            l_thread_out_len_scan = l_thread_out_len_scan + tmp_shfl_res
+                        }
+                    }
+                }
+            }
+        };
+
+        // write sum of all input values to shared memory for the first 7 out of 8 warps
+        // these sums are required for calculating the scan for the entire block
+        indep(X) 7 block.to_warps {
+            active_warps => {
+                sched warp in active_warps {
+                    let s_scan_arr_warp_item_1 = s_scan_arr_view[[warp]];
+                    indep(X) 31 warp {
+                        inactive_lanes => { () },
+                        active_lane => {
+                            sched lane in active_lane {
+                                *s_scan_arr_warp_item_1 = l_thread_out_len_scan
+                            }
+                        }
+                    }
+                }
+            },
+            inactive_warp => { () }
+        };
+
+        sync;
+
+        // aggregate the warp sums with an inclusive scan calculated by the first warp and
+        // write the results to shared memory
+        indep(X) 1 block.to_warps {
+            active_warp => {
+                sched warp in active_warp {
+                    indep(X) 7 warp {
+                        input_lanes => {
+                            sched lane in input_lanes {
+                                let s_scan_arr_lane_item = s_scan_arr_view[[lane]];
+                                tmp_scan_block = *s_scan_arr_lane_item
+                            }
+                        },
+                        zero_lanes => {
+                            sched lane in zero_lanes {
+                                tmp_scan_block = 0u32
+                            }
+                        }
+                    };
+                    for_nat k in doubled_range(1, 4) {
+                        tmp_shfl_res = shfl_up(tmp_scan_block, nat_as_u64::<k>() as i32);
+                        indep(X) k warp {
+                            inactive_lanes => { () },
+                            active_lanes => {
+                                sched lane in active_lanes {
+                                    tmp_scan_block = tmp_scan_block + tmp_shfl_res
+                                }
+                            }
+                        }
+                    };
+                    indep(X) 7 warp {
+                        active_lanes => {
+                            sched lane in active_lanes {
+                                let s_scan_arr_lane_item = s_scan_arr_view[[lane]];
+                                *s_scan_arr_lane_item = tmp_scan_block
+                            }
+                        },
+                        inactive_lanes => { () }
+                    }
+                }
+            },
+            inactive_warps => { () }
+        };
+
+        sync;
+
+        // add sums of previous warps to each result of a warps inclusive scan
+        indep(X) 1 block.to_warps {
+            inactive_warp => { () },
+            active_warps => {
+                sched warp in active_warps {
+                    let s_scan_arr_item = s_scan_arr_view[[warp]];
+                    sched lane in warp {
+                        l_thread_out_len_scan = l_thread_out_len_scan + *s_scan_arr_item
+                    }
+                }
+            }
+        };
+
+        // inclusive scan -> exclusive scan
+        sched thread in block {
+            l_thread_out_len_scan = l_thread_out_len_scan - l_thread_out_len
+        };
+        // ---------------------------------------------------------------------------------
+
+
+        // output the bit-index after the last codeword of the block for every block
+        // (g_out_idx_block_item)
+        // store the last index of the output that is needed to store the output of the
+        // block to reduce the amount of copy operations from gpu.shared to gpu.global
+        // (s_last_index_to_copy_item)
+        {
+            let s_last_index_to_copy_view = to_view_mut(&uniq *s_last_index_to_copy);
+            indep(X) 255 block {
+                inactive_threads => { () },
+                active_thread => {
+                    sched thread in active_thread {
+                        let g_out_idx_block_item = g_out_idx_block_group[[thread]];
+                        let s_last_index_to_copy_item = s_last_index_to_copy_view[[thread]];
+
+                        *g_out_idx_block_item = l_thread_out_len_scan + l_thread_out_len;
+                        *s_last_index_to_copy_item =
+                            (l_thread_out_len_scan + l_thread_out_len) / 32u32
+                    }
+                }
+            }
+        };
+
+        // l_thread_start_value =
+        //     index of the value in the output array (32 bits per value) where the codeword
+        //     of the current thread starts
+        // l_thread_start_bit =
+        //     bit-index inside of the value in the output array where the codeword of the
+        //     current thread starts
+        // initialize all values in s_block_out with 0 to use it for storing the output for
+        // each block
+        sched thread in block {
+            let s_block_out_item = s_block_out_view[[thread]];
+
+            l_thread_start_value = l_thread_out_len_scan / 32u32;
+            l_thread_start_bit = l_thread_out_len_scan % 32u32;
+            atomic_store(&shrd *s_block_out_item, 0u32)
+        };
+
+        sync;
+
+        // combine the output of every thread in a block inside gpu.shared
+        // output of a thread can span across 3 32-bit values in gpu.shared!
+        sched thread in block {
+            let g_out_item = g_out_block_group[[thread]];
+            let s_block_out_item = s_block_out_view[[thread]];
+
+            let mut wrbits: u32;
+            // Part 1 (first value in gpu.shared)
+            if l_thread_out_len > (32u32 - l_thread_start_bit) {
+                wrbits = (32u32 - l_thread_start_bit)
+            } else {
+                wrbits = l_thread_out_len
+            };
+            let mut tmpcw: u32 = ( l_thread_out >> ( l_thread_out_len - wrbits ) ) as u32;
+            atomic_fetch_or(
+                &shrd (*s_block_out)[l_thread_start_value],
+                tmpcw << (32u32 - l_thread_start_bit - wrbits)
+            );
+            l_thread_out_len = l_thread_out_len - wrbits;
+
+            // Part 2 (second value in gpu.shared)
+            if l_thread_out_len > 0u32 {
+                if l_thread_out_len > 32u32 {
+                    wrbits = 32u32
+                } else {
+                    wrbits = l_thread_out_len
+                };
+                tmpcw = ( l_thread_out >> (l_thread_out_len - wrbits) ) as u32
+                        & ( ( 1u32 << wrbits ) - 1u32 );
+                atomic_fetch_or(
+                    &shrd (*s_block_out)[l_thread_start_value+1],
+                    tmpcw << ( 32u32 - wrbits )
+                );
+                l_thread_out_len = l_thread_out_len - wrbits
+            };
+
+            // Part 3 (third value in gpu.shared)
+            if l_thread_out_len > 0u32 {
+                tmpcw = (l_thread_out & ( ( 1u64 << l_thread_out_len) - 1u64) ) as u32;
+                atomic_fetch_or(
+                    &shrd (*s_block_out)[l_thread_start_value+2],
+                    tmpcw << ( 32u32 - l_thread_out_len )
+                ); ()
+            };
+
+            sync;
+
+            // copy block outputs from gpu.shared to gpu.global
+            if thread_id_x() <= s_last_index_to_copy[0] {
+                *g_out_item = atomic_load(&shrd *s_block_out_item)
+            }
+        }
+    }
+}

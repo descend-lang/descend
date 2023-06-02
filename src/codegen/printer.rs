@@ -207,6 +207,7 @@ impl std::fmt::Display for Expr {
         match self {
             Empty => Ok(()),
             Ident(name) => write!(f, "{}", name),
+            //todo print type suffix
             Lit(l) => write!(f, "{}", l),
             Assign {
                 lhs: l_val,
@@ -238,8 +239,9 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, &fn_call.args, ", ")?;
                 write!(f, ")")
             }
-            UnOp { op, arg } => write!(f, "{}{}", op, arg),
-            BinOp { op, lhs, rhs } => write!(f, "{} {} {}", lhs, op, rhs),
+            UnOp { op, arg } => write!(f, "({}{})", op, arg),
+            BinOp { op, lhs, rhs } => write!(f, "({} {} {})", lhs, op, rhs),
+            Cast { expr, ty } => write!(f, "({})({})", ty, expr),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
             Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
             InitializerList { elems } => {
@@ -247,6 +249,7 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, elems, ", ")?;
                 write!(f, "}}")
             }
+            AtomicRef { expr, base_ty } => write!(f, "descend::atomic_ref<{}>({})", base_ty, expr),
             Ref(expr) => write!(f, "(&{})", expr),
             Deref(expr) => write!(f, "(*{})", expr),
             Tuple(elems) => {
@@ -254,7 +257,6 @@ impl std::fmt::Display for Expr {
                 fmt_vec(f, elems, ", ")?;
                 write!(f, "}}")
             }
-            Cast(ty, expr) => write!(f, "({}){}", ty, expr),
             Nat(n) => write!(f, "{}", n),
         }
     }
@@ -265,7 +267,9 @@ impl std::fmt::Display for Lit {
         match self {
             Lit::Bool(b) => write!(f, "{}", b),
             Lit::I32(i) => write!(f, "{}", i),
-            Lit::U32(u) => write!(f, "{}", u),
+            Lit::U8(uc) => write!(f, "((descend::u8){})", uc),
+            Lit::U32(u) => write!(f, "{}u", u),
+            Lit::U64(ul) => write!(f, "{}ull", ul),
             Lit::F32(fl) => {
                 // This is supposed to be a strict comparison. It is equal if fl is an integer.
                 if &fl.ceil() == fl {
@@ -334,6 +338,10 @@ impl std::fmt::Display for BinOp {
             Self::Gt => ">",
             Self::Ge => ">=",
             Self::Neq => "!=",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
+            Self::BitOr => "|",
+            Self::BitAnd => "&",
         };
         write!(f, "{}", str)
     }
@@ -375,7 +383,6 @@ impl std::fmt::Display for Ty {
                 BufferKind::Ident(name) => write!(f, "{}", name),
             },
             Scalar(sty) => write!(f, "{}", sty),
-            Atomic(at) => write!(f, "descend::Atomic<{}>", at),
             Ident(name) => write!(f, "{}", name),
         }
     }
@@ -387,9 +394,10 @@ impl std::fmt::Display for ScalarTy {
         match self {
             Auto => write!(f, "auto"),
             Void => write!(f, "void"),
-            Byte => write!(f, "descend::byte"),
+            U8 => write!(f, "descend::u8"),
             U32 => write!(f, "descend::u32"),
             U64 => write!(f, "descend::u64"),
+            Byte => write!(f, "descend::byte"),
             I32 => write!(f, "descend::i32"),
             I64 => write!(f, "descend::i64"),
             F32 => write!(f, "descend::f32"),
@@ -398,6 +406,7 @@ impl std::fmt::Display for ScalarTy {
             Bool => write!(f, "bool"),
             Memory => write!(f, "descend::Memory"),
             Gpu => write!(f, "descend::Gpu"),
+            Warp => write!(f, "descend::Warp"),
         }
     }
 }
@@ -429,6 +438,15 @@ impl std::fmt::Display for Nat {
                     write!(f, "{})", last)?;
                 }
                 Ok(())
+            }
+            Self::WarpGrpIdx => {
+                write!(f, "warpGrpIdx")
+            }
+            Self::WarpIdx => {
+                write!(f, "warpIdx")
+            }
+            Self::LaneIdx => {
+                write!(f, "laneIdx")
             }
         }
     }

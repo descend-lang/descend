@@ -131,6 +131,10 @@ pub(super) enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Cast {
+        expr: Box<Expr>,
+        ty: Ty,
+    },
     ArraySubscript {
         array: Box<Expr>,
         index: Nat,
@@ -142,10 +146,13 @@ pub(super) enum Expr {
     InitializerList {
         elems: Vec<Expr>,
     },
+    AtomicRef {
+        expr: Box<Expr>,
+        base_ty: Ty,
+    },
     Ref(Box<Expr>),
     Deref(Box<Expr>),
     Tuple(Vec<Expr>),
-    Cast(Ty, Box<Expr>),
     // The current plan for Nats is to simply print them with C syntax.
     // Instead generate a C/Cuda expression?
     Nat(Nat),
@@ -172,7 +179,9 @@ impl FnCall {
 pub(super) enum Lit {
     Bool(bool),
     I32(i32),
+    U8(u8),
     U32(u32),
+    U64(u64),
     F32(f32),
     F64(f64),
 }
@@ -198,6 +207,10 @@ pub(super) enum BinOp {
     Gt,
     Ge,
     Neq,
+    Shl,
+    Shr,
+    BitOr,
+    BitAnd,
 }
 
 #[derive(Clone)]
@@ -222,7 +235,6 @@ pub(super) enum GpuAddrSpace {
 #[derive(Clone, Debug)]
 pub(super) enum Ty {
     Scalar(ScalarTy),
-    Atomic(ScalarTy),
     Tuple(Vec<Ty>),
     Array(Box<Ty>, Nat),
     CArray(Box<Ty>, Option<Nat>),
@@ -251,9 +263,10 @@ pub(super) enum BufferKind {
 pub(super) enum ScalarTy {
     Auto,
     Void,
-    Byte,
+    U8,
     U32,
     U64,
+    Byte,
     I32,
     I64,
     F32,
@@ -262,4 +275,5 @@ pub(super) enum ScalarTy {
     SizeT,
     Memory,
     Gpu,
+    Warp,
 }

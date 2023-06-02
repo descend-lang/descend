@@ -11,7 +11,8 @@ pub trait VisitMut: Sized {
     fn visit_mem(&mut self, mem: &mut Memory) { walk_mem(self, mem) }
     fn visit_prv(&mut self, prv: &mut Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
-    fn visit_dim_compo(&mut self, _dim_compo: &mut DimCompo) { }
+    fn visit_atomic_ty(&mut self, _aty: &mut AtomicTy) {}
+    fn visit_dim_compo(&mut self, _dim_compo: &mut DimCompo) {}
     fn visit_dim(&mut self, dim: &mut Dim) { walk_dim(self, dim) }
     fn visit_dim3d(&mut self, dim3d: &mut Dim3d) { walk_dim3d(self, dim3d) }
     fn visit_dim2d(&mut self, dim2d: &mut Dim2d) { walk_dim2d(self, dim2d) }
@@ -61,7 +62,14 @@ pub fn walk_nat<V: VisitMut>(visitor: &mut V, n: &mut Nat) {
             visitor.visit_nat(l);
             visitor.visit_nat(r)
         }
-        Nat::GridIdx | Nat::BlockIdx(_) | Nat::BlockDim(_) | Nat::ThreadIdx(_) | Nat::Lit(_) => {}
+        Nat::GridIdx
+        | Nat::BlockIdx(_)
+        | Nat::BlockDim(_)
+        | Nat::ThreadIdx(_)
+        | Nat::WarpGrpIdx
+        | Nat::WarpIdx
+        | Nat::LaneIdx
+        | Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
             walk_list!(visitor, visit_nat, args.as_mut())
@@ -142,7 +150,7 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
     match &mut dty.dty {
         DataTyKind::Ident(ident) => visitor.visit_ident(ident),
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
-        DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
+        DataTyKind::Atomic(aty) => visitor.visit_atomic_ty(aty),
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
@@ -371,6 +379,10 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
                 visitor.visit_exec_expr(e)
             }
         }
+        ExprKind::Cast(expr, dty) => {
+            visitor.visit_expr(expr);
+            visitor.visit_dty(dty)
+        }
         ExprKind::Range(_, _) => (),
     }
 }
@@ -435,6 +447,7 @@ pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut Exec) {
         match e {
             ExecPathElem::SplitProj(split_proj) => visitor.visit_split_proj(split_proj),
             ExecPathElem::Distrib(dim_compo) => visitor.visit_dim_compo(dim_compo),
+            ExecPathElem::ToWarps => {}
             ExecPathElem::ToThreads(dim_compo) => visitor.visit_dim_compo(dim_compo),
         }
     }

@@ -23,7 +23,7 @@ pub(super) fn ty_check(
     };
 
     for e in &exec_expr.exec.path {
-        match &e {
+        match e {
             ExecPathElem::Distrib(d) => {
                 exec_ty = ty_check_exec_distrib(*d, &exec_ty)?;
             }
@@ -38,6 +38,7 @@ pub(super) fn ty_check(
             ExecPathElem::ToThreads(d) => {
                 exec_ty = ty_check_exec_to_threads(*d, &exec_ty)?;
             }
+            ExecPathElem::ToWarps => exec_ty = ty_check_exec_to_warps(&exec_ty)?,
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
@@ -51,6 +52,37 @@ fn ty_check_exec_to_threads(dim: DimCompo, exec_ty: &ExecTyKind) -> TyResult<Exe
         ()
     };
     todo!()
+}
+
+fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    match exec_ty {
+        ExecTyKind::GpuBlock(dim) => match dim.clone() {
+            Dim::X(d) => {
+                if Nat::BinOp(BinOpNat::Mod, Box::new(d.0.clone()), Box::new(Nat::Lit(32)))
+                    != Nat::Lit(0)
+                {
+                    Err(TyError::String(format!(
+                        "Size of GpuBlock needs to be evenly divisible by 32 to create warps, instead got: {:?}",
+                        exec_ty
+                    )))
+                } else {
+                    Ok(ExecTyKind::GpuWarpGrp(Nat::BinOp(
+                        BinOpNat::Div,
+                        Box::new(d.0),
+                        Box::new(Nat::Lit(32)),
+                    )))
+                }
+            }
+            _ => Err(TyError::String(format!(
+                "GpuBlock needs to be one-dimensional to create warps, instead got: {:?}",
+                exec_ty
+            ))),
+        },
+        _ => Err(TyError::String(format!(
+            "Trying to create warps from {:?}",
+            exec_ty
+        ))),
+    }
 }
 
 fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
@@ -83,6 +115,8 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
                 None => ExecTyKind::GpuThread,
             }
         }
+        ExecTyKind::GpuWarpGrp(_) => ExecTyKind::GpuWarp,
+        ExecTyKind::GpuWarp => ExecTyKind::GpuThread,
         ExecTyKind::GpuGlobalThreads(gdim) => {
             let inner_dim = remove_dim(gdim, d)?;
             match inner_dim {

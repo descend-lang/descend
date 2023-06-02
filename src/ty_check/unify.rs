@@ -284,12 +284,14 @@ impl Constrainable for DataTy {
                 }
             }
             (DataTyKind::Range, DataTyKind::Range) => Ok(()),
-            (_, DataTyKind::Dead(dty)) => self.constrain(dty, constr_map, prv_rels),
             (DataTyKind::RawPtr(_), DataTyKind::RawPtr(_)) => {
                 unimplemented!()
             }
             (DataTyKind::Dead(_), _) => {
                 panic!()
+            }
+            (dty1, DataTyKind::Dead(dty2)) if !matches!(dty1, DataTyKind::Dead(_)) => {
+                self.constrain(dty2, constr_map, prv_rels)
             }
             _ => Err(UnifyError::CannotUnify),
         }
@@ -311,7 +313,11 @@ impl Constrainable for ExecTy {
         match (&mut self.ty, &mut other.ty) {
             (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
             | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
+            | (ExecTyKind::GpuWarp, ExecTyKind::GpuWarp)
             | (ExecTyKind::View, ExecTyKind::View) => Ok(()),
+            (ExecTyKind::GpuWarpGrp(nl), ExecTyKind::GpuWarpGrp(nr)) => {
+                nl.constrain(nr, constr_map, prv_rels)
+            }
             (ExecTyKind::GpuGrid(lgdim, lbdim), ExecTyKind::GpuGrid(rgdim, rbdim))
             | (ExecTyKind::GpuBlockGrp(lgdim, lbdim), ExecTyKind::GpuBlockGrp(rgdim, rbdim)) => {
                 lgdim.constrain(rgdim, constr_map, prv_rels)?;
@@ -542,7 +548,7 @@ impl Constrainable for Provenance {
             (Provenance::Ident(i), r) | (r, Provenance::Ident(i)) if i.is_implicit => {
                 r.bind_to(i, constr_map)
             }
-            (Provenance::Ident(i), _) | (_, Provenance::Ident(i)) => {
+            (Provenance::Ident(_), _) | (_, Provenance::Ident(_)) => {
                 prv_rels.push(PrvConstr(self.clone(), other.clone()));
                 Ok(())
             }

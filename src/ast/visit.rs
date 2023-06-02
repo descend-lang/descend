@@ -11,6 +11,7 @@ pub trait Visit: Sized {
     fn visit_mem(&mut self, mem: &Memory) { walk_mem(self, mem) }
     fn visit_prv(&mut self, prv: &Provenance) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &ScalarTy) {}
+    fn visit_atomic_ty(&mut self, _aty: &AtomicTy) {}
     fn visit_dim_compo(&mut self, _dim_compo: &DimCompo) { }
     fn visit_dim(&mut self, dim: &Dim) { walk_dim(self, dim) }
     fn visit_dim3d(&mut self, dim3d: &Dim3d) { walk_dim3d(self, dim3d) }
@@ -60,7 +61,14 @@ pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
             visitor.visit_nat(l);
             visitor.visit_nat(r)
         }
-        Nat::GridIdx | Nat::BlockIdx(_) | Nat::BlockDim(_) | Nat::ThreadIdx(_) | Nat::Lit(_) => {}
+        Nat::GridIdx
+        | Nat::BlockIdx(_)
+        | Nat::BlockDim(_)
+        | Nat::ThreadIdx(_)
+        | Nat::WarpGrpIdx
+        | Nat::WarpIdx
+        | Nat::LaneIdx
+        | Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
             walk_list!(visitor, visit_nat, args.as_ref())
@@ -141,7 +149,7 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
     match &dty.dty {
         DataTyKind::Ident(ident) => visitor.visit_ident(ident),
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
-        DataTyKind::Atomic(aty) => visitor.visit_scalar_ty(aty),
+        DataTyKind::Atomic(aty) => visitor.visit_atomic_ty(aty),
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
@@ -372,6 +380,10 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
                 visitor.visit_exec_expr(e)
             }
         }
+        ExprKind::Cast(expr, dty) => {
+            visitor.visit_expr(expr);
+            visitor.visit_dty(dty)
+        }
         ExprKind::Range(_, _) => (),
     }
 }
@@ -437,6 +449,7 @@ pub fn walk_exec<V: Visit>(visitor: &mut V, exec: &Exec) {
             ExecPathElem::SplitProj(split_proj) => visitor.visit_split_proj(split_proj),
             ExecPathElem::Distrib(dim_compo) => visitor.visit_dim_compo(dim_compo),
             ExecPathElem::ToThreads(dim_compo) => visitor.visit_dim_compo(dim_compo),
+            ExecPathElem::ToWarps => {}
         }
     }
 }
