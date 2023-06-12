@@ -36,12 +36,12 @@ fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat, r: prv, p: prv>(
 
     //Berechnung des Diagonal tiles
     let row_of_tiles: &uniq gpu.global [[ [[ [[f32; tile_size]]; tile_size]]; (matrix_dim / tile_size) ]]= &uniq (*matrix_view)[it];
-    let position_of_tile: &uniq gpu.global [[ [[ [[f32; tile_size]]; tile_size]]; 1]] = &uniq (*row_of_tiles)[..it..].1[..1..].0;
+    let tile: &uniq gpu.global [[ [[f32; tile_size]]; tile_size]] = &uniq (*row_of_tiles)[..it..].1[0];
 
     let local_tile_view: &uniq gpu.shared [[ [[f32; tile_size]]; tile_size]] = &uniq (*local_tile).to_view.grp::<tile_size>; //wenn lokaler speicher wieder mehrdimensional: .map::<[[ [f32; tile_size]; tile_size]]>(map::<[f32; tile_size]>(to_view))
 
     sched block in grid {// m: &uniq [[ [[f32; tile_size]]; tile_size]]
-        let tile: &uniq gpu.global [[ [[f32; tile_size]]; tile_size]] = &uniq (*position_of_tile)[[block]];
+        //let tile: &uniq gpu.global [[ [[f32; tile_size]]; tile_size]] = &uniq (*position_of_tile)[[block]];
 
         sched thread in block { //TODO kann so aliasing benutzt werden zur Optimierung?
             let global_thread_tile: &uniq gpu.global [[f32;tile_size]] = &uniq (*tile).transp[[thread]];
@@ -71,22 +71,20 @@ fn lud_diagonal<it:nat, tile_size: nat, matrix_dim: nat, r: prv, p: prv>(
                 //für indiviuelle Zugriffe: -> die nicht veränderbar sein sollen
                 let indiv_access: &shrd gpu.shared [[ [[f32; i]]; tile_size - (i+ 1)]] = &shrd (*split_column).0.transp;
 
+                let column_i: &shrd gpu.shared [[f32; i+1]] = &shrd (*mat_view_partition).0.transp[i];
+
                 indep(X) (i+1) block { //elem: &uniq f32, shrd_row: &shrd [[f32, i]]
                     active_threads => {
                         ()
                     },
                     inactive_threads => {
                         sched thread in inactive_threads {
-
                             let elem: &uniq gpu.shared f32 = &uniq (*thread_elements)[[thread]];
                             let shrd_row: &shrd gpu.shared [[f32; i]] = &shrd (*indiv_access)[[thread]];
-
-                            let row_i: &shrd gpu.shared [[f32; tile_size]] = &shrd (*mat_view_partition).0.transp[i];
-                            let column_il: &shrd gpu.shared [[f32; i + 1]] = &shrd (*row_i)[..(i+1)..].0;
                             for_nat j in 0..i {
-                                *elem = (*elem) - ((*shrd_row)[j] * (*column_il)[j])
+                                *elem = (*elem) - ((*shrd_row)[j] * (*column_i)[j])
                             };
-                            *elem = (*elem) / (*column_il)[i]
+                            *elem = (*elem) / (*column_i)[i]
                         }
                     }
                 };

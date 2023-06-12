@@ -54,7 +54,7 @@ __global__ auto lud_diagonal(descend::f32 *const m) -> void {
       static_for<0, tile_size>([&](auto i) -> void {
         local_tile[((i * tile_size) + (threadIdx.x - 0))] =
             m[((((it * tile_size) + i) * matrix_dim) +
-               ((((blockIdx.x - 0) + it) * tile_size) + (threadIdx.x - 0)))];
+               (((0 + it) * tile_size) + (threadIdx.x - 0)))];
       });
     }
 
@@ -106,7 +106,7 @@ __global__ auto lud_diagonal(descend::f32 *const m) -> void {
 
       static_for<1, tile_size>([&](auto i) -> void {
         m[((((it * tile_size) + i) * matrix_dim) +
-           ((((blockIdx.x - 0) + it) * tile_size) + (threadIdx.x - 0)))] =
+           (((0 + it) * tile_size) + (threadIdx.x - 0)))] =
             local_tile[((i * tile_size) + (threadIdx.x - 0))];
       });
     }
