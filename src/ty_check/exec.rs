@@ -46,13 +46,43 @@ pub(super) fn ty_check(
     Ok(())
 }
 
-fn ty_check_exec_to_threads(dim: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
-    let result_ty = if let ExecTyKind::GpuGrid(gdim, bdim) = exec_ty {
-        // match (gdim, bdim) {
-        // }
-        ()
-    };
-    todo!()
+fn ty_check_exec_to_threads(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    if let ExecTyKind::GpuGrid(gdim, bdim) = exec_ty {
+        let (rest_gdim, rem_gdim) = remove_dim(gdim, d)?;
+        let (rest_bdim, rem_bdim) = remove_dim(bdim, d)?;
+        let global_dim = match (rem_gdim, rem_bdim) {
+            (Dim::X(g), Dim::X(b)) => Dim::X(Box::new(Dim1d(Nat::BinOp(
+                BinOpNat::Mul,
+                Box::new(g.0),
+                Box::new(b.0),
+            )))),
+            (Dim::Y(g), Dim::Y(b)) => Dim::Y(Box::new(Dim1d(Nat::BinOp(
+                BinOpNat::Mul,
+                Box::new(g.0),
+                Box::new(b.0),
+            )))),
+            (Dim::Z(g), Dim::Z(b)) => Dim::Z(Box::new(Dim1d(Nat::BinOp(
+                BinOpNat::Mul,
+                Box::new(g.0),
+                Box::new(b.0),
+            )))),
+            _ => {
+                return Err(TyError::String(format!(
+                    "Provided dimension {} does not exist",
+                    d
+                )))
+            }
+        };
+        match (rest_gdim, rest_bdim) {
+            (Some(rest_gdim), Some(rest_bdim)) => Ok(ExecTyKind::GpuToThreads(
+                global_dim,
+                Box::new(ExecTy::new(ExecTyKind::GpuBlockGrp(rest_gdim, rest_bdim))),
+            )),
+            _ => unimplemented!(),
+        }
+    } else {
+        Err(TyError::UnexpectedType)
+    }
 }
 
 fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
@@ -89,28 +119,28 @@ fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
 fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
     let res_ty = match exec_ty {
         ExecTyKind::GpuGrid(gdim, bdim) => {
-            let inner_dim = remove_dim(gdim, d)?;
+            let inner_dim = remove_dim(gdim, d)?.0;
             match inner_dim {
                 Some(dim) => ExecTyKind::GpuGrid(dim, bdim.clone()),
                 None => ExecTyKind::GpuBlock(bdim.clone()),
             }
         }
         ExecTyKind::GpuBlockGrp(gdim, bdim) => {
-            let inner_dim = remove_dim(gdim, d)?;
+            let inner_dim = remove_dim(gdim, d)?.0;
             match inner_dim {
                 Some(dim) => ExecTyKind::GpuBlockGrp(dim, bdim.clone()),
                 None => ExecTyKind::GpuBlock(bdim.clone()),
             }
         }
         ExecTyKind::GpuBlock(bdim) => {
-            let inner_dim = remove_dim(bdim, d)?;
+            let inner_dim = remove_dim(bdim, d)?.0;
             match inner_dim {
                 Some(dim) => ExecTyKind::GpuBlock(dim),
                 None => ExecTyKind::GpuThread,
             }
         }
         ExecTyKind::GpuThreadGrp(tdim) => {
-            let inner_dim = remove_dim(tdim, d)?;
+            let inner_dim = remove_dim(tdim, d)?.0;
             match inner_dim {
                 Some(dim) => ExecTyKind::GpuThreadGrp(dim),
                 None => ExecTyKind::GpuThread,
@@ -133,39 +163,56 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
     Ok(res_ty)
 }
 
-pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
+pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<(Option<Dim>, Dim)> {
     match (dim, dim_compo) {
-        (Dim::XYZ(dim3d), DimCompo::X) => Ok(Some(Dim::YZ(Box::new(Dim2d(
-            dim3d.as_ref().1.clone(),
-            dim3d.2.clone(),
-        ))))),
-        (Dim::XYZ(dim3d), DimCompo::Y) => Ok(Some(Dim::XZ(Box::new(Dim2d(
-            dim3d.as_ref().0.clone(),
-            dim3d.2.clone(),
-        ))))),
-        (Dim::XYZ(dim3d), DimCompo::Z) => Ok(Some(Dim::XY(Box::new(Dim2d(
-            dim3d.as_ref().0.clone(),
-            dim3d.as_ref().1.clone(),
-        ))))),
-        (Dim::XY(dim2d), DimCompo::X) => {
-            Ok(Some(Dim::Y(Box::new(Dim1d(dim2d.as_ref().1.clone())))))
+        (Dim::XYZ(dim3d), DimCompo::X) => Ok((
+            Some(Dim::YZ(Box::new(Dim2d(
+                dim3d.as_ref().1.clone(),
+                dim3d.2.clone(),
+            )))),
+            Dim::X(Box::new(Dim1d(dim3d.0.clone()))),
+        )),
+        (Dim::XYZ(dim3d), DimCompo::Y) => Ok((
+            Some(Dim::XZ(Box::new(Dim2d(
+                dim3d.as_ref().0.clone(),
+                dim3d.2.clone(),
+            )))),
+            Dim::Y(Box::new(Dim1d(dim3d.1.clone()))),
+        )),
+        (Dim::XYZ(dim3d), DimCompo::Z) => Ok((
+            Some(Dim::XY(Box::new(Dim2d(
+                dim3d.as_ref().0.clone(),
+                dim3d.as_ref().1.clone(),
+            )))),
+            Dim::Z(Box::new(Dim1d(dim3d.2.clone()))),
+        )),
+        (Dim::XY(dim2d), DimCompo::X) => Ok((
+            Some(Dim::Y(Box::new(Dim1d(dim2d.as_ref().1.clone())))),
+            Dim::X(Box::new(Dim1d(dim2d.0.clone()))),
+        )),
+        (Dim::XY(dim2d), DimCompo::Y) => Ok((
+            Some(Dim::X(Box::new(Dim1d(dim2d.as_ref().0.clone())))),
+            Dim::Y(Box::new(Dim1d(dim2d.1.clone()))),
+        )),
+        (Dim::XZ(dim2d), DimCompo::X) => Ok((
+            Some(Dim::Z(Box::new(Dim1d(dim2d.as_ref().1.clone())))),
+            Dim::X(Box::new(Dim1d(dim2d.0.clone()))),
+        )),
+        (Dim::XZ(dim2d), DimCompo::Z) => Ok((
+            Some(Dim::X(Box::new(Dim1d(dim2d.as_ref().0.clone())))),
+            Dim::Z(Box::new(Dim1d(dim2d.1.clone()))),
+        )),
+        (Dim::YZ(dim2d), DimCompo::Y) => Ok((
+            Some(Dim::Z(Box::new(Dim1d(dim2d.as_ref().1.clone())))),
+            Dim::Y(Box::new(Dim1d(dim2d.0.clone()))),
+        )),
+        (Dim::YZ(dim2d), DimCompo::Z) => Ok((
+            Some(Dim::Y(Box::new(Dim1d(dim2d.as_ref().0.clone())))),
+            Dim::Z(Box::new(Dim1d(dim2d.1.clone()))),
+        )),
+        (Dim::X(_), DimCompo::X) | (Dim::Y(_), DimCompo::Y) | (Dim::Z(_), DimCompo::Z) => {
+            Ok((None, dim.clone()))
         }
-        (Dim::XY(dim2d), DimCompo::Y) => {
-            Ok(Some(Dim::X(Box::new(Dim1d(dim2d.as_ref().0.clone())))))
-        }
-        (Dim::XZ(dim2d), DimCompo::X) => {
-            Ok(Some(Dim::Z(Box::new(Dim1d(dim2d.as_ref().1.clone())))))
-        }
-        (Dim::XZ(dim2d), DimCompo::Z) => {
-            Ok(Some(Dim::X(Box::new(Dim1d(dim2d.as_ref().0.clone())))))
-        }
-        (Dim::YZ(dim2d), DimCompo::Y) => {
-            Ok(Some(Dim::Z(Box::new(Dim1d(dim2d.as_ref().1.clone())))))
-        }
-        (Dim::YZ(dim2d), DimCompo::Z) => {
-            Ok(Some(Dim::Y(Box::new(Dim1d(dim2d.as_ref().0.clone())))))
-        }
-        (Dim::X(_), DimCompo::X) | (Dim::Y(_), DimCompo::Y) | (Dim::Z(_), DimCompo::Z) => Ok(None),
         _ => Err(TyError::IllegalDimension),
     }
 }
