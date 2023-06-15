@@ -244,7 +244,7 @@ fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
 
 fn no_distrib_in_diff(under: &ExecExpr, from: &ExecExpr) -> OwnResult<()> {
     for e in &under.exec.path[from.exec.path.len()..] {
-        if let ExecPathElem::Distrib(_) = e {
+        if let ExecPathElem::ForAll(_) = e {
             return Err(BorrowingError::MultipleDistribs);
         }
     }

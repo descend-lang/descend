@@ -2,6 +2,7 @@ use super::{
     BaseExec, BinOpNat, Dim, Dim1d, Dim2d, DimCompo, ExecExpr, ExecPathElem, ExecTy, ExecTyKind,
     IdentExec, KindCtx, Nat, TyCtx, TyError, TyResult,
 };
+use crate::ast::LeftOrRight;
 
 pub(super) fn ty_check(
     kind_ctx: &KindCtx,
@@ -24,14 +25,14 @@ pub(super) fn ty_check(
 
     for e in &exec_expr.exec.path {
         match e {
-            ExecPathElem::Distrib(d) => {
+            ExecPathElem::ForAll(d) => {
                 exec_ty = ty_check_exec_distrib(*d, &exec_ty)?;
             }
-            ExecPathElem::SplitProj(exec_split) => {
+            ExecPathElem::TakeRange(exec_split) => {
                 exec_ty = ty_check_exec_split_proj(
                     exec_split.split_dim,
                     &exec_split.pos,
-                    exec_split.proj,
+                    exec_split.left_or_right,
                     &exec_ty,
                 )?;
             }
@@ -117,11 +118,12 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
         }
         ExecTyKind::GpuWarpGrp(_) => ExecTyKind::GpuWarp,
         ExecTyKind::GpuWarp => ExecTyKind::GpuThread,
-        ExecTyKind::GpuGlobalThreads(gdim) => {
-            let inner_dim = remove_dim(gdim, d)?;
-            match inner_dim {
-                Some(dim) => ExecTyKind::GpuGlobalThreads(dim),
-                None => ExecTyKind::GpuThread,
+        ExecTyKind::GpuToThreads(dim, inner_exec) => {
+            if dim_compo_matches_dim(d, dim) {
+                inner_exec.ty.clone()
+            } else {
+                let forall_inner = ty_check_exec_distrib(d, &inner_exec.ty)?;
+                ExecTyKind::GpuToThreads(dim.clone(), Box::new(ExecTy::new(forall_inner)))
             }
         }
         ex @ ExecTyKind::CpuThread | ex @ ExecTyKind::GpuThread | ex @ ExecTyKind::View => {
@@ -171,7 +173,7 @@ pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<Option<Dim>> {
 fn ty_check_exec_split_proj(
     d: DimCompo,
     n: &Nat,
-    proj: u8,
+    proj: LeftOrRight,
     exec_ty: &ExecTyKind,
 ) -> TyResult<ExecTyKind> {
     // TODO check well-formedness of Nats
@@ -190,12 +192,28 @@ fn ty_check_exec_split_proj(
                 ExecTyKind::GpuThreadGrp(rdim),
             )
         }
-        ExecTyKind::GpuGlobalThreads(dim) => {
-            let (ldim, rdim) = split_dim(d, n.clone(), dim.clone())?;
-            (
-                ExecTyKind::GpuGlobalThreads(ldim),
-                ExecTyKind::GpuGlobalThreads(rdim),
-            )
+        ExecTyKind::GpuToThreads(dim, inner) => {
+            if dim_compo_matches_dim(d, dim) {
+                let (ldim, rdim) = split_dim(d, n.clone(), dim.clone())?;
+                (
+                    ExecTyKind::GpuToThreads(ldim, inner.clone()),
+                    ExecTyKind::GpuToThreads(rdim, inner.clone()),
+                )
+            } else if let ExecTyKind::GpuBlockGrp(gdim, bdim) = &inner.ty {
+                let (ldim, rdim) = split_dim(d, n.clone(), gdim.clone())?;
+                (
+                    ExecTyKind::GpuToThreads(
+                        dim.clone(),
+                        Box::new(ExecTy::new(ExecTyKind::GpuBlockGrp(ldim, bdim.clone()))),
+                    ),
+                    ExecTyKind::GpuToThreads(
+                        dim.clone(),
+                        Box::new(ExecTy::new(ExecTyKind::GpuBlockGrp(rdim, bdim.clone()))),
+                    ),
+                )
+            } else {
+                panic!("GpuToThreads is not well-formed.")
+            }
         }
         ex => {
             return Err(TyError::String(format!(
@@ -204,7 +222,17 @@ fn ty_check_exec_split_proj(
             )))
         }
     };
-    Ok(if proj == 0 { lexec_ty } else { rexec_ty })
+    Ok(if proj == LeftOrRight::Left {
+        lexec_ty
+    } else {
+        rexec_ty
+    })
+}
+
+fn dim_compo_matches_dim(d: DimCompo, dim: &Dim) -> bool {
+    (matches!(dim, Dim::X(_)) && d == DimCompo::X)
+        | (matches!(dim, Dim::Y(_)) && d == DimCompo::Y)
+        | (matches!(dim, Dim::Z(_)) && d == DimCompo::Z)
 }
 
 fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {

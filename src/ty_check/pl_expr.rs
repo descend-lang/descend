@@ -247,7 +247,7 @@ fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
         ExecTyKind::CpuThread => Some(Memory::CpuMem),
         ExecTyKind::GpuThread => Some(Memory::GpuLocal),
         ExecTyKind::GpuGrid(_, _) => Some(Memory::GpuLocal),
-        ExecTyKind::GpuGlobalThreads(_) => Some(Memory::GpuLocal),
+        ExecTyKind::GpuToThreads(_, _) => Some(Memory::GpuLocal),
         ExecTyKind::GpuBlockGrp(_, _) => Some(Memory::GpuLocal),
         ExecTyKind::GpuThreadGrp(_) => Some(Memory::GpuLocal),
         ExecTyKind::GpuBlock(_) => Some(Memory::GpuLocal),

@@ -88,7 +88,9 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> TyResult<()> 
             ident: ident.clone(),
             ty: ty.as_ref().unwrap().clone(),
             mutbl: *mutbl,
-            exec: ExecExpr::new(Exec::new(BaseExec::Ident(gf.exec_decl.ident.clone()))),
+            exec: ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
+                gf.exec_decl.ident.clone(),
+            ))),
         })
         .collect();
     for pi in param_idents_ty {
@@ -98,7 +100,9 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> TyResult<()> 
         ty_ctx.append_prv_mapping(PrvMapping::new(prv));
     }
 
-    let mut exec = ExecExpr::new(Exec::new(BaseExec::Ident(gf.exec_decl.ident.clone())));
+    let mut exec = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
+        gf.exec_decl.ident.clone(),
+    )));
     exec::ty_check(&kind_ctx, &ty_ctx, &gf.exec_decl, &mut exec)?;
     ty_ctx.append_exec_mapping(gf.exec_decl.ident.clone(), exec.clone());
 
@@ -227,7 +231,7 @@ fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
     }
     if under.is_sub_exec_of(synced) || under == synced {
         for ep in &under.exec.path[synced.exec.path.len()..] {
-            if matches!(ep, ExecPathElem::SplitProj(_)) {
+            if matches!(ep, ExecPathElem::TakeRange(_)) {
                 return Err(TyError::String(
                     "tyring to synchronize on split execution resource".to_string(),
                 ));
@@ -246,7 +250,7 @@ fn syncable_exec_ty(exec_ty: &ExecTy) -> bool {
         ExecTyKind::GpuBlock(_) => true,
         ExecTyKind::CpuThread
         | ExecTyKind::GpuGrid(_, _)
-        | ExecTyKind::GpuGlobalThreads(_)
+        | ExecTyKind::GpuToThreads(_, _)
         | ExecTyKind::GpuBlockGrp(_, _)
         | ExecTyKind::GpuThreadGrp(_)
         | ExecTyKind::GpuWarpGrp(_)
@@ -381,7 +385,9 @@ fn ty_check_for(
         ident.clone(),
         Ty::new(TyKind::Data(Box::new(DataTy::new(ident_dty)))),
         Mutability::Const,
-        ExecExpr::new(Exec::new(BaseExec::Ident(ctx.ident_exec.ident.clone()))),
+        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
+            ctx.ident_exec.ident.clone(),
+        ))),
     )]);
     ctx.ty_ctx.push_frame(frame);
     ty_check_expr(ctx, body)?;
@@ -587,7 +593,13 @@ fn ty_check_indep(ctx: &mut ExprTyCtx, indep: &mut Indep) -> TyResult<Ty> {
         let mut branch_exec = ExecExpr::new(expanded_exec_expr.exec.clone().split_proj(
             indep.dim_compo,
             indep.pos.clone(),
-            i as u8,
+            if i == 0 {
+                LeftOrRight::Left
+            } else if i == 1 {
+                LeftOrRight::Right
+            } else {
+                panic!("Unexepected projection.")
+            },
         ));
         exec::ty_check(
             &ctx.kind_ctx,
@@ -675,7 +687,9 @@ fn ty_check_lambda(
                     ))))),
                 },
                 mutbl: *mutbl,
-                exec: ExecExpr::new(Exec::new(BaseExec::Ident(lambda_ident_exec.ident.clone()))),
+                exec: ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
+                    lambda_ident_exec.ident.clone(),
+                ))),
             })
             .collect(),
     );
@@ -683,7 +697,9 @@ fn ty_check_lambda(
     // FIXME check that no variables are captured.
     // let compare_ctx = ctx.ty_ctx.clone();
     ctx.ty_ctx.push_frame(fun_frame);
-    let mut body_exec = ExecExpr::new(Exec::new(BaseExec::Ident(lambda_ident_exec.ident.clone())));
+    let mut body_exec = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
+        lambda_ident_exec.ident.clone(),
+    )));
     exec::ty_check(
         &ctx.kind_ctx,
         &ctx.ty_ctx,
@@ -1238,7 +1254,7 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         gl_ctx: ctx.gl_ctx,
         ident_exec: ctx.ident_exec,
         kind_ctx: ctx.kind_ctx,
-        exec: ExecExpr::new(Exec::new(BaseExec::GpuGrid(
+        exec: ExecExpr::new(ExecExprKind::new(BaseExec::GpuGrid(
             app_kernel.grid_dim.clone(),
             app_kernel.block_dim.clone(),
         ))),
@@ -1670,7 +1686,7 @@ fn allowed_mem_for_exec(exec_ty: &ExecTyKind) -> Vec<Memory> {
         | ExecTyKind::GpuThreadGrp(_) => {
             vec![Memory::GpuGlobal, Memory::GpuShared, Memory::GpuLocal]
         }
-        ExecTyKind::GpuGlobalThreads(_) => vec![Memory::GpuGlobal, Memory::GpuLocal],
+        ExecTyKind::GpuToThreads(_, _) => vec![Memory::GpuGlobal, Memory::GpuLocal],
         ExecTyKind::View => vec![],
     }
 }
@@ -1841,7 +1857,7 @@ fn expand_exec_expr(ctx: &ExprTyCtx, exec_expr: &ExecExpr) -> TyResult<ExecExpr>
             let mut new_exec_path = inner_exec_expr.exec.path.clone();
             new_exec_path.append(&mut exec_expr.exec.path.clone());
             let mut expanded_exec_expr: ExecExpr =
-                ExecExpr::new(Exec::with_path(new_base, new_exec_path));
+                ExecExpr::new(ExecExprKind::with_path(new_base, new_exec_path));
             exec::ty_check(
                 &ctx.kind_ctx,
                 &ctx.ty_ctx,

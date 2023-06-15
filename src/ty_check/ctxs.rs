@@ -624,7 +624,7 @@ fn test_kill_place_ident() {
             ScalarTy::I32,
         ))))),
         Mutability::Const,
-        ExecExpr::new(Exec::new(BaseExec::Ident(Ident::new("exec")))),
+        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(Ident::new("exec")))),
     );
     let place = internal::Place::new(x.ident.clone(), vec![]);
     ty_ctx.append_ident_typed(x).kill_place(&place);

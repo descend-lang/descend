@@ -1,7 +1,7 @@
 use crate::ast::{
     AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecExpr, ExecPathElem,
-    ExecTy, ExecTyKind, Ident, IdentKinded, Kind, Memory, Nat, Ownership, Provenance, ScalarTy,
-    SplitProj, Ty, TyKind,
+    ExecTy, ExecTyKind, Ident, IdentKinded, Kind, LeftOrRight, Memory, Nat, Ownership, Provenance,
+    ScalarTy, TakeRange, Ty, TyKind,
 };
 use std::fmt::Write;
 
@@ -79,9 +79,11 @@ impl PrintState {
                 print_static_list!(self, Self::print_dim, gdim, bdim);
                 self.string.push('>');
             }
-            ExecTyKind::GpuGlobalThreads(dim) => {
+            ExecTyKind::GpuToThreads(dim, exec_ty) => {
                 self.string.push_str("gpu.global_threads<");
                 self.print_dim(dim);
+                self.string.push_str(", ");
+                self.print_exec_ty(exec_ty);
                 self.string.push('>');
             }
             ExecTyKind::GpuBlock(bdim) => {
@@ -125,8 +127,8 @@ impl PrintState {
         for pe in &exec_expr.exec.path {
             self.string.push('.');
             match pe {
-                ExecPathElem::SplitProj(split_proj) => self.print_split_proj(split_proj),
-                ExecPathElem::Distrib(dim_compo) => {
+                ExecPathElem::TakeRange(split_proj) => self.print_take_range(split_proj),
+                ExecPathElem::ForAll(dim_compo) => {
                     self.string.push_str("sched(");
                     self.print_dim_compo(dim_compo);
                     self.string.push(')');
@@ -141,12 +143,21 @@ impl PrintState {
         }
     }
 
-    fn print_split_proj(&mut self, split_proj: &SplitProj) {
-        self.string.push_str("split(");
-        self.print_dim_compo(&split_proj.split_dim);
-        self.string.push_str(", ");
-        self.print_nat(&split_proj.pos);
-        write!(&mut self.string, ").{}", split_proj.proj).unwrap();
+    fn print_take_range(&mut self, take_range: &TakeRange) {
+        self.string.push('[');
+        self.print_dim_compo(&take_range.split_dim);
+        self.string.push_str("; ");
+        match &take_range.left_or_right {
+            LeftOrRight::Left => {
+                self.string.push_str("..");
+                self.print_nat(&take_range.pos);
+            }
+            LeftOrRight::Right => {
+                self.print_nat(&take_range.pos);
+                self.string.push_str("..");
+            }
+        }
+        self.string.push(']');
     }
 
     fn print_dim(&mut self, dim: &Dim) {

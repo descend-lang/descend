@@ -37,9 +37,9 @@ pub trait VisitMut: Sized {
     fn visit_expr(&mut self, expr: &mut Expr) { walk_expr(self, expr) }
     fn visit_app_kernel(&mut self, app_kernel: &mut AppKernel) { walk_app_kernel(self, app_kernel) }
     fn visit_block(&mut self, block: &mut Block) { walk_block(self, block) }
-    fn visit_split_proj(&mut self, exec_split: &mut SplitProj) { walk_split_proj(self, exec_split) }
+    fn visit_split_proj(&mut self, exec_split: &mut TakeRange) { walk_split_proj(self, exec_split) }
     fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) { walk_exec_expr(self, exec_expr) }
-    fn visit_exec(&mut self, exec: &mut Exec) { walk_exec(self, exec) }
+    fn visit_exec(&mut self, exec: &mut ExecExprKind) { walk_exec(self, exec) }
     fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
 }
@@ -416,11 +416,11 @@ pub fn walk_block<V: VisitMut>(visitor: &mut V, block: &mut Block) {
     visitor.visit_expr(body);
 }
 
-pub fn walk_split_proj<V: VisitMut>(visitor: &mut V, split_proj: &mut SplitProj) {
-    let SplitProj {
+pub fn walk_split_proj<V: VisitMut>(visitor: &mut V, split_proj: &mut TakeRange) {
+    let TakeRange {
         split_dim,
         pos,
-        proj: _,
+        left_or_right: _,
     } = split_proj;
     visitor.visit_dim_compo(split_dim);
     visitor.visit_nat(pos);
@@ -433,8 +433,8 @@ pub fn walk_exec_expr<V: VisitMut>(visitor: &mut V, exec_expr: &mut ExecExpr) {
     }
 }
 
-pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut Exec) {
-    let Exec { base, path } = exec;
+pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut ExecExprKind) {
+    let ExecExprKind { base, path } = exec;
     match base {
         BaseExec::CpuThread => (),
         BaseExec::Ident(ident) => visitor.visit_ident(ident),
@@ -445,8 +445,8 @@ pub fn walk_exec<V: VisitMut>(visitor: &mut V, exec: &mut Exec) {
     };
     for e in path {
         match e {
-            ExecPathElem::SplitProj(split_proj) => visitor.visit_split_proj(split_proj),
-            ExecPathElem::Distrib(dim_compo) => visitor.visit_dim_compo(dim_compo),
+            ExecPathElem::TakeRange(split_proj) => visitor.visit_split_proj(split_proj),
+            ExecPathElem::ForAll(dim_compo) => visitor.visit_dim_compo(dim_compo),
             ExecPathElem::ToWarps => {}
             ExecPathElem::ToThreads(dim_compo) => visitor.visit_dim_compo(dim_compo),
         }

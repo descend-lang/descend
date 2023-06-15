@@ -4,6 +4,7 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
+use crate::ast::LeftOrRight;
 use crate::ty_check;
 use cu_ast as cu;
 use std::collections::HashMap;
@@ -18,7 +19,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let mut initial_fns_to_generate = collect_initial_fns_to_generate(comp_unit);
     let mut codegen_ctx = CodegenCtx::new(
         // CpuThread is only a dummy and will be set according to the generated function.
-        desc::ExecExpr::new(desc::Exec::new(desc::BaseExec::CpuThread)),
+        desc::ExecExpr::new(desc::ExecExprKind::new(desc::BaseExec::CpuThread)),
         &comp_unit.fun_defs,
     );
     let mut generated_initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 4);
@@ -32,7 +33,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
             _ => unreachable!("Every exec must be constructed based on a gpu grid."),
         };
         codegen_ctx.push_scope();
-        codegen_ctx.exec = desc::ExecExpr::new(desc::Exec::new(exec));
+        codegen_ctx.exec = desc::ExecExpr::new(desc::ExecExprKind::new(exec));
         codegen_ctx
             .exec_mapping
             .insert(&fun_def.exec_decl.ident.name, codegen_ctx.exec.clone());
@@ -90,7 +91,7 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
                 && matches!(
                     &f.exec_decl.ty.ty,
                     desc::ExecTyKind::GpuGrid(_, _)
-                        | desc::ExecTyKind::GpuGlobalThreads(_)
+                        | desc::ExecTyKind::GpuToThreads(_, _)
                         | desc::ExecTyKind::CpuThread
                 )
         })
@@ -941,7 +942,7 @@ fn gen_indep(indep: &desc::Indep, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     let inner_exec = desc::ExecExpr::new(expanded_outer_exec.exec.clone().split_proj(
         indep.dim_compo,
         indep.pos.clone(),
-        0,
+        desc::LeftOrRight::Left,
     ));
     codegen_ctx.exec = inner_exec.clone();
     codegen_ctx
@@ -953,7 +954,7 @@ fn gen_indep(indep: &desc::Indep, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     let inner_exec = desc::ExecExpr::new(expanded_outer_exec.exec.clone().split_proj(
         indep.dim_compo,
         indep.pos.clone(),
-        1,
+        desc::LeftOrRight::Right,
     ));
     codegen_ctx.exec = inner_exec.clone();
     codegen_ctx
@@ -1393,15 +1394,15 @@ fn stringify_exec(exec: &desc::ExecExpr) -> String {
     let mut str = String::with_capacity(10);
     for e in &exec.exec.path {
         match e {
-            desc::ExecPathElem::Distrib(dim) => {
+            desc::ExecPathElem::ForAll(dim) => {
                 str.push('D');
                 str.push_str(&format!("{}", dim));
                 str.push('_');
             }
-            desc::ExecPathElem::SplitProj(split_proj) => {
+            desc::ExecPathElem::TakeRange(split_proj) => {
                 let s = format!(
                     "P{}S{}{}_",
-                    split_proj.proj, split_proj.split_dim, &split_proj.pos,
+                    split_proj.left_or_right, split_proj.split_dim, &split_proj.pos,
                 );
                 str.push_str(&s);
             }
@@ -1859,7 +1860,7 @@ fn transform_path_with_map(f: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
 fn gen_indep_branch_cond(
     dim_compo: desc::DimCompo,
     pos: &desc::Nat,
-    exec: &desc::Exec,
+    exec: &desc::ExecExprKind,
 ) -> cu::Expr {
     cu::Expr::BinOp {
         op: cu::BinOp::Lt,
@@ -2089,7 +2090,7 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
     match &exec_ty.ty {
         desc::ExecTyKind::GpuGrid(_, _)
         | desc::ExecTyKind::GpuBlock(_)
-        | desc::ExecTyKind::GpuGlobalThreads(_)
+        | desc::ExecTyKind::GpuToThreads(_, _)
         | desc::ExecTyKind::GpuBlockGrp(_, _)
         | desc::ExecTyKind::GpuThreadGrp(_)
         | desc::ExecTyKind::GpuThread
@@ -2108,7 +2109,7 @@ fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &desc::ExecExpr) -> des
             let mut new_exec_path = inner_exec_expr.exec.path.clone();
             new_exec_path.append(&mut exec_expr.exec.path.clone());
             let mut expanded_exec_expr: desc::ExecExpr =
-                desc::ExecExpr::new(desc::Exec::with_path(new_base, new_exec_path));
+                desc::ExecExpr::new(desc::ExecExprKind::with_path(new_base, new_exec_path));
             expanded_exec_expr
         }
     }
@@ -2124,8 +2125,8 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
     let mut split_shift = desc::Nat::Lit(0);
     for e in &exec.exec.path {
         match e {
-            desc::ExecPathElem::SplitProj(split_proj) => {
-                if split_proj.proj == 1 {
+            desc::ExecPathElem::TakeRange(split_proj) => {
+                if split_proj.left_or_right == LeftOrRight::Right {
                     split_shift = desc::Nat::BinOp(
                         desc::BinOpNat::Add,
                         Box::new(split_shift),
@@ -2133,7 +2134,7 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
                     )
                 }
             }
-            desc::ExecPathElem::Distrib(d) => match d {
+            desc::ExecPathElem::ForAll(d) => match d {
                 desc::DimCompo::X => match contained_par_idx(&indices.0) {
                     Some(desc::Nat::GridIdx) => {
                         set_distrib_idx(

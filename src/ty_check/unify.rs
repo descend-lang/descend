@@ -323,8 +323,16 @@ impl Constrainable for ExecTy {
                 lgdim.constrain(rgdim, constr_map, prv_rels)?;
                 lbdim.constrain(rbdim, constr_map, prv_rels)
             }
-            (ExecTyKind::GpuGlobalThreads(ldim), ExecTyKind::GpuGlobalThreads(rdim))
-            | (ExecTyKind::GpuBlock(ldim), ExecTyKind::GpuBlock(rdim))
+            (
+                ExecTyKind::GpuToThreads(ldim_compo, l_inner),
+                ExecTyKind::GpuToThreads(rdim_compo, r_inner),
+            ) => {
+                if ldim_compo != rdim_compo {
+                    return Err(UnifyError::CannotUnify);
+                }
+                l_inner.constrain(r_inner, constr_map, prv_rels)
+            }
+            (ExecTyKind::GpuBlock(ldim), ExecTyKind::GpuBlock(rdim))
             | (ExecTyKind::GpuThreadGrp(ldim), ExecTyKind::GpuThreadGrp(rdim)) => {
                 ldim.constrain(rdim, constr_map, prv_rels)
             }

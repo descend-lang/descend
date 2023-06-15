@@ -151,7 +151,13 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
                 let branch_exec_expr = ExecExpr::new(indep.split_exec.exec.clone().split_proj(
                     indep.dim_compo,
                     indep.pos.clone(),
-                    i as u8,
+                    if i == 0 {
+                        LeftOrRight::Left
+                    } else if i == 1 {
+                        LeftOrRight::Right
+                    } else {
+                        panic!("Unexpected projection.")
+                    },
                 ));
                 self.ident_names_to_exec_expr
                     .push((ident.name.clone(), branch_exec_expr));
@@ -723,12 +729,12 @@ peg::parser! {
                 ExecExpr { exec: Box::new(exec), ty: None, span: Some(Span::new(begin,end)) }
             }
 
-        rule exec() -> Exec =
+        rule exec() -> ExecExprKind =
             base:base_exec()
             maybe_exec_path_elems:(_ "." _  exec_path_elems: exec_path_elem() **<1,> _ "." _ { exec_path_elems })? {
                 if let Some(path) = maybe_exec_path_elems {
-                    Exec::with_path(base, path)
-                } else { Exec::new(base) }
+                    ExecExprKind::with_path(base, path)
+                } else { ExecExprKind::new(base) }
             }
 
         rule base_exec() -> BaseExec =
@@ -737,9 +743,9 @@ peg::parser! {
             / "gpu.grid" _ "<" _ gdim:dim() _ "," _ bdim:dim() _ ">" { BaseExec::GpuGrid(gdim, bdim) }
 
         rule exec_path_elem() -> ExecPathElem =
-            "distrib" _ "<" _ dim_compo:dim_component() _ ">" { ExecPathElem::Distrib(dim_compo) }
-            / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { 0 }/ "1" { 1 }) _ ">" {
-                ExecPathElem::SplitProj(Box::new(SplitProj::new(dim_compo, pos, proj)))
+            "distrib" _ "<" _ dim_compo:dim_component() _ ">" { ExecPathElem::ForAll(dim_compo) }
+            / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { LeftOrRight::Left }/ "1" { LeftOrRight::Right }) _ ">" {
+                ExecPathElem::TakeRange(Box::new(TakeRange::new(dim_compo, pos, proj)))
             }
             / "to_warps" { ExecPathElem::ToWarps }
 
@@ -758,8 +764,8 @@ peg::parser! {
             / "gpu.block" _ "<" _ b_dim:dim() _ ">" {
                 ExecTyKind::GpuBlock(b_dim)
             }
-            / "gpu.global_threads" _ "<" _ t_dim:dim() _ ">" {
-                ExecTyKind::GpuGlobalThreads(t_dim)
+            / "gpu.global_threads" _ "<" _ dim:dim() _ "," _ exec_ty:exec_ty() _ ">" {
+                ExecTyKind::GpuToThreads(dim, Box::new(exec_ty))
             }
             / "gpu.block_grp" _ "<" _ g_dim:dim() _ "," _ b_dim:dim() _ ">" {
                 ExecTyKind::GpuBlockGrp(g_dim, b_dim)

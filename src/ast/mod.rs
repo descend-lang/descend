@@ -11,9 +11,7 @@ pub mod internal;
 pub mod printer;
 mod span;
 pub mod utils;
-#[allow(dead_code)]
 pub mod visit;
-#[allow(dead_code)]
 pub mod visit_mut;
 
 #[derive(Clone, Debug)]
@@ -739,14 +737,14 @@ impl PlaceExpr {
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct ExecExpr {
-    pub exec: Box<Exec>,
+    pub exec: Box<ExecExprKind>,
     pub ty: Option<Box<ExecTy>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
 
 impl ExecExpr {
-    pub fn new(exec: Exec) -> Self {
+    pub fn new(exec: ExecExprKind) -> Self {
         ExecExpr {
             exec: Box::new(exec),
             ty: None,
@@ -766,13 +764,13 @@ impl ExecExpr {
             .exec
             .path
             .iter()
-            .rposition(|e| matches!(e, ExecPathElem::Distrib(_)));
+            .rposition(|e| matches!(e, ExecPathElem::ForAll(_)));
         let removed_distrib_path = if let Some(ldp) = last_distrib_pos {
             self.exec.path[..ldp].to_vec()
         } else {
             vec![]
         };
-        ExecExpr::new(Exec::with_path(
+        ExecExpr::new(ExecExprKind::with_path(
             self.exec.base.clone(),
             removed_distrib_path,
         ))
@@ -781,67 +779,82 @@ impl ExecExpr {
 
 #[test]
 fn equal_exec_exprs() {
-    let exec1 = ExecExpr::new(Exec::with_path(
+    let exec1 = ExecExpr::new(ExecExprKind::with_path(
         BaseExec::Ident(Ident::new("grid")),
-        vec![ExecPathElem::Distrib(DimCompo::X)],
+        vec![ExecPathElem::ForAll(DimCompo::X)],
     ));
-    let exec2 = ExecExpr::new(Exec::with_path(
+    let exec2 = ExecExpr::new(ExecExprKind::with_path(
         BaseExec::Ident(Ident::new("grid")),
-        vec![ExecPathElem::Distrib(DimCompo::X)],
+        vec![ExecPathElem::ForAll(DimCompo::X)],
     ));
     if exec1 != exec2 {
         panic!("Unequal execs, that should be equal")
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct SplitProj {
-    pub split_dim: DimCompo,
-    pub pos: Nat,
-    pub proj: u8,
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub enum LeftOrRight {
+    Left,
+    Right,
 }
 
-impl SplitProj {
-    pub fn new(split_dim: DimCompo, pos: Nat, proj: u8) -> Self {
-        SplitProj {
-            split_dim,
-            pos,
-            proj,
+impl fmt::Display for LeftOrRight {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LeftOrRight::Left => write!(f, "left"),
+            LeftOrRight::Right => write!(f, "right"),
         }
     }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Exec {
+pub struct TakeRange {
+    pub split_dim: DimCompo,
+    pub pos: Nat,
+    pub left_or_right: LeftOrRight,
+}
+
+impl TakeRange {
+    pub fn new(split_dim: DimCompo, pos: Nat, proj: LeftOrRight) -> Self {
+        TakeRange {
+            split_dim,
+            pos,
+            left_or_right: proj,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct ExecExprKind {
     pub base: BaseExec,
     pub path: Vec<ExecPathElem>,
 }
 
-impl Exec {
+impl ExecExprKind {
     pub fn new(base: BaseExec) -> Self {
-        Exec { base, path: vec![] }
+        ExecExprKind { base, path: vec![] }
     }
 
     pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
-        Exec { base, path }
+        ExecExprKind { base, path }
     }
 
-    pub fn split_proj(mut self, dim_compo: DimCompo, pos: Nat, proj: u8) -> Self {
+    pub fn split_proj(mut self, dim_compo: DimCompo, pos: Nat, proj: LeftOrRight) -> Self {
         self.path
-            .push(ExecPathElem::SplitProj(Box::new(SplitProj::new(
+            .push(ExecPathElem::TakeRange(Box::new(TakeRange::new(
                 dim_compo, pos, proj,
             ))));
         self
     }
 
     pub fn distrib(mut self, dim_compo: DimCompo) -> Self {
-        self.path.push(ExecPathElem::Distrib(dim_compo));
+        self.path.push(ExecPathElem::ForAll(dim_compo));
         self
     }
 
     pub fn active_distrib_dim(&self) -> Option<DimCompo> {
         for e in self.path.iter().rev() {
-            if let ExecPathElem::Distrib(dim) = e {
+            if let ExecPathElem::ForAll(dim) = e {
                 return Some(*dim);
             }
         }
@@ -858,10 +871,45 @@ pub enum BaseExec {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ExecPathElem {
-    SplitProj(Box<SplitProj>),
-    Distrib(DimCompo),
+    TakeRange(Box<TakeRange>),
+    ForAll(DimCompo),
     ToWarps,
     ToThreads(DimCompo),
+}
+
+// ExecTy
+// fn size(DimCompo) -> usize
+// fn take_range(DimCompo, Nat) -> ExecTy
+// fn elem_type(DimCompo) -> ExecTy
+#[span_derive(PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
+pub struct ExecTy {
+    pub ty: ExecTyKind,
+    #[span_derive_ignore]
+    pub span: Option<Span>,
+}
+
+impl ExecTy {
+    pub fn new(exec: ExecTyKind) -> Self {
+        ExecTy {
+            ty: exec,
+            span: None,
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum ExecTyKind {
+    CpuThread,
+    GpuThread,
+    GpuWarp,
+    GpuBlock(Dim),
+    GpuGrid(Dim, Dim),
+    GpuToThreads(Dim, Box<ExecTy>),
+    GpuThreadGrp(Dim),
+    GpuWarpGrp(Nat),
+    GpuBlockGrp(Dim, Dim),
+    View,
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -1189,37 +1237,6 @@ pub enum Memory {
     Ident(Ident),
 }
 
-#[span_derive(PartialEq, Eq, Hash)]
-#[derive(Debug, Clone)]
-pub struct ExecTy {
-    pub ty: ExecTyKind,
-    #[span_derive_ignore]
-    pub span: Option<Span>,
-}
-
-impl ExecTy {
-    pub fn new(exec: ExecTyKind) -> Self {
-        ExecTy {
-            ty: exec,
-            span: None,
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum ExecTyKind {
-    CpuThread,
-    GpuGrid(Dim, Dim),
-    GpuBlock(Dim),
-    GpuGlobalThreads(Dim),
-    GpuBlockGrp(Dim, Dim),
-    GpuWarpGrp(Nat),
-    GpuWarp,
-    GpuThreadGrp(Dim),
-    GpuThread,
-    View,
-}
-
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct PrvRel {
     pub longer: Ident,
@@ -1394,7 +1411,7 @@ mod size_asserts {
     static_assert_size!(DataTy, 112);
     static_assert_size!(DataTyKind, 72);
     static_assert_size!(ExecExpr, 32);
-    static_assert_size!(Exec, 64);
+    static_assert_size!(ExecExprKind, 64);
     static_assert_size!(ExecPathElem, 16);
     static_assert_size!(ExecTy, 80);
     static_assert_size!(ExecTyKind, 64);
