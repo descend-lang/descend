@@ -2,8 +2,9 @@ use crate::ast::visit::walk_list;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    visit, visit_mut, ArgKinded, DataTy, DataTyKind, Dim, ExecTy, Expr, ExprKind, FnTy, FunDef,
-    Ident, IdentKinded, Kind, Memory, Nat, Provenance, Ty, TyKind,
+    visit, visit_mut, ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecTy, Expr,
+    ExprKind, FnTy, FunDef, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, ParamSig, Provenance,
+    Ty, TyKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -59,23 +60,44 @@ macro_rules! visitable_mut {
 }
 visitable_mut!(Ty, visit_ty);
 visitable_mut!(Expr, visit_expr);
-visitable_mut!(ExecTy, visit_exec_ty);
+visitable_mut!(ExecExpr, visit_exec_expr);
+visitable_mut!(IdentExec, visit_ident_exec);
+visitable_mut!(ParamSig, visit_param_sig);
+visitable_mut!(FnTy, visit_fn_ty);
 
-pub fn subst_idents_kinded<'a, I, J, T: VisitableMut>(gen_params: I, k_args: J, t: &mut T)
+/*
+ * gen_idents: a list of generic identifiers to be substituted (this list can be longer than args.
+ *  In that case, only the first gen_args.len() many identifiers are substituted.
+ * gen_args: the kinded expressions that are substituting the generic identifiers
+ * t: the term to substitute in
+ */
+pub fn subst_idents_kinded<'a, I, J, T: VisitableMut>(gen_idents: I, gen_args: J, t: &mut T)
 where
     I: IntoIterator<Item = &'a IdentKinded>,
     J: IntoIterator<Item = &'a ArgKinded>,
 {
     let subst_map = HashMap::from_iter(
-        gen_params
+        gen_idents
             .into_iter()
             .map(|p| p.ident.name.as_ref())
-            .zip(k_args),
+            .zip(gen_args),
     );
     let mut subst_idents_kinded = SubstIdentsKinded::new(&subst_map);
     t.visit_mut(&mut subst_idents_kinded);
 }
 
+pub fn subst_ident_exec<'a, T: VisitableMut>(ident: &Ident, exec: &ExecExpr, t: &mut T) {
+    let mut subst_ident_exec = SubstIdentExec::new(ident, exec);
+    t.visit_mut(&mut subst_ident_exec);
+}
+
+/*
+ * substitute kinded arguments for free identifiers
+ *
+ * When substituting within a function definition or function type, the generic parameters are
+ * bound. In order to substitute generic identifiers with their arguments, the relevant generic
+ * identifiers must be removed from the list, first.
+ */
 struct SubstIdentsKinded<'a> {
     pub subst_map: &'a HashMap<&'a str, &'a ArgKinded>,
     pub bound_idents: HashSet<IdentKinded>,
@@ -165,6 +187,26 @@ impl VisitMut for SubstIdentsKinded<'_> {
         }
     }
 
+    // add generic paramters to list of bound identifiers
+    fn visit_fn_ty(&mut self, fn_ty: &mut FnTy) {
+        let fun_bound_idents = fn_ty.generics.clone();
+        let mut all_bound_idents = self.bound_idents.clone();
+        all_bound_idents.extend(fun_bound_idents);
+        let mut visitor_subst_generic_ident =
+            SubstIdentsKinded::with_bound_idents(self.subst_map, all_bound_idents);
+        walk_list!(
+            &mut visitor_subst_generic_ident,
+            visit_param_sig,
+            &mut fn_ty.param_sigs
+        );
+        for ident_exec in &mut fn_ty.generic_exec {
+            visitor_subst_generic_ident.visit_exec_ty(&mut ident_exec.ty);
+        }
+        visitor_subst_generic_ident.visit_exec_expr(&mut fn_ty.exec);
+        visitor_subst_generic_ident.visit_ty(&mut fn_ty.ret_ty);
+    }
+
+    // only required to introduce a new scope of bound identifiers
     fn visit_expr(&mut self, expr: &mut Expr) {
         match &mut expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
@@ -179,6 +221,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
         }
     }
 
+    // add generic paramters to list of bound identifiers
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
         let fun_bound_idents = fun_def.generic_params.clone();
         let mut all_bound_idents = self.bound_idents.clone();
@@ -191,13 +234,46 @@ impl VisitMut for SubstIdentsKinded<'_> {
             &mut fun_def.param_decls
         );
         subst_fun_free_kind_idents.visit_dty(&mut fun_def.ret_dty);
-        subst_fun_free_kind_idents.visit_ident_exec(&mut fun_def.exec_decl);
+        for ident_exec in &mut fun_def.generic_exec {
+            subst_fun_free_kind_idents.visit_ident_exec(ident_exec);
+        }
+        subst_fun_free_kind_idents.visit_exec_expr(&mut fun_def.exec);
         walk_list!(
             subst_fun_free_kind_idents,
             visit_prv_rel,
             &mut fun_def.prv_rels
         );
         subst_fun_free_kind_idents.visit_block(&mut fun_def.body)
+    }
+}
+
+/*
+ * Substitue a generic exec identifier with specific exec.
+ * This substitution ignores whehter an execution identifier is bound by a function type.
+ */
+struct SubstIdentExec<'a> {
+    pub ident: &'a Ident,
+    pub exec: &'a ExecExpr,
+}
+
+impl<'a> SubstIdentExec<'a> {
+    fn new(ident: &'a Ident, exec: &'a ExecExpr) -> Self {
+        SubstIdentExec { ident, exec }
+    }
+}
+impl VisitMut for SubstIdentExec<'_> {
+    fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) {
+        insert_for_ident(self.exec, &self.ident, exec_expr)
+    }
+}
+
+fn insert_for_ident(exec: &ExecExpr, ident: &Ident, in_exec: &mut ExecExpr) {
+    if let BaseExec::Ident(i) = &mut in_exec.exec.base {
+        if i == ident {
+            let mut subst_exec = exec.clone();
+            subst_exec.exec.path.extend(in_exec.exec.path.clone());
+            *in_exec = subst_exec;
+        }
     }
 }
 
@@ -215,9 +291,11 @@ macro_rules! visitable {
 }
 visitable!(Ty, visit_ty);
 visitable!(FnTy, visit_fn_ty);
+visitable!(ParamSig, visit_param_sig);
 visitable!(DataTy, visit_dty);
 visitable!(Memory, visit_mem);
 visitable!(Provenance, visit_prv);
+visitable!(ExecExpr, visit_exec_expr);
 visitable!(ExecTy, visit_exec_ty);
 visitable!(Dim, visit_dim);
 visitable!(Expr, visit_expr);
@@ -309,7 +387,7 @@ impl Visit for FreeKindedIdents {
                     )
                 }
 
-                walk_list!(self, visit_ty, &fn_ty.param_tys);
+                walk_list!(self, visit_param_sig, &fn_ty.param_sigs);
                 self.visit_ty(fn_ty.ret_ty.as_ref())
             }
             _ => visit::walk_ty(self, ty),

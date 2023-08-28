@@ -2,8 +2,9 @@ use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
-    utils, BinOpNat, DataTy, DataTyKind, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident, IdentExec,
-    Memory, Nat, Ownership, PlaceExpr, PlaceExprKind, Provenance, Ty, TyKind, View,
+    utils, ArgKinded, BaseExec, BinOpNat, DataTy, DataTyKind, ExecExpr, ExecExprKind, ExecTy,
+    ExecTyKind, FnTy, Ident, IdentExec, Memory, Nat, Ownership, ParamSig, PlaceExpr, PlaceExprKind,
+    Provenance, Ty, TyKind, View,
 };
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 
@@ -92,35 +93,22 @@ fn ty_check_view_pl_expr(
     let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
     let view_fn_ty = ty_check_view(ctx, view)?;
     let in_dty = pl_expr.ty.as_ref().unwrap().dty().clone();
-    let res_dty = ty_check_app_view_fn_ty(ctx, &in_dty, view_fn_ty)?;
+    let res_dty = ty_check_app_view_fn_ty(&in_dty, view_fn_ty)?;
     Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
 }
 
-// fn ty_check_composed_views(ctx: &PlExprTyCtx, views: &mut [View]) -> TyResult<FnTy> {
-//     let fst_view_fn_ty = ty_check_view(ctx, &mut views[0])?;
-//     let mut ret_dty = fst_view_fn_ty.ret_ty.dty().clone();
-//     for v in &mut views[1..] {
-//         let view_fn_ty = ty_check_view(ctx, v)?;
-//         ret_dty = ty_check_app_view_fn_ty(ctx, &ret_dty, view_fn_ty)?;
-//     }
-//     let res_fn_ty = FnTy::new(
-//         vec![],
-//         vec![fst_view_fn_ty.param_tys.last().unwrap().clone()],
-//         ExecTy::new(ExecTyKind::View),
-//         Ty::new(TyKind::Data(Box::new(ret_dty))),
-//     );
-//     Ok(res_fn_ty)
-// }
-
-fn ty_check_app_view_fn_ty(
-    ctx: &PlExprTyCtx,
-    in_dty: &DataTy,
-    mut view_fn_ty: FnTy,
-) -> TyResult<DataTy> {
+fn ty_check_app_view_fn_ty(in_dty: &DataTy, mut view_fn_ty: FnTy) -> TyResult<DataTy> {
+    let ident_exec = Ident::new(&utils::fresh_name("view_fn"));
     let mut arg_dty_fn_ty = FnTy::new(
         vec![],
-        vec![Ty::new(TyKind::Data(Box::new(in_dty.clone())))],
-        ExecTy::new(ExecTyKind::View),
+        None,
+        vec![ParamSig::new(
+            ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.clone()))),
+            Ty::new(TyKind::Data(Box::new(in_dty.clone()))),
+        )],
+        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(Ident::new_impli(
+            "view_ex",
+        )))),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
             Ident::new_impli("ret_dty"),
         ))))),
@@ -130,73 +118,54 @@ fn ty_check_app_view_fn_ty(
     Ok(res_dty)
 }
 
-fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
+fn ty_check_view(ctx: &PlExprTyCtx, view: &View) -> TyResult<FnTy> {
     let arg_tys = view
         .args
-        .iter_mut()
-        .map(|v| -> TyResult<Ty> { Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))) })
+        .iter()
+        .map(|v| Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))))
         .collect::<TyResult<Vec<_>>>()?;
-    let fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?.clone();
-    if fn_ty.generics.len() < view.gen_args.len() {
-        return Err(TyError::String(format!(
-            "Wrong amount of generic arguments. Expected {}, found {}",
-            fn_ty.generics.len(),
-            view.gen_args.len()
-        )));
-    }
-    for (gp, kv) in fn_ty.generics.iter().zip(&*view.gen_args) {
-        super::check_arg_has_correct_kind(&ctx.kind_ctx, &gp.kind, kv)?;
-    }
-    let mut subst_param_tys = fn_ty.param_tys.clone();
-    for ty in &mut subst_param_tys {
-        utils::subst_idents_kinded(fn_ty.generics.iter(), view.gen_args.iter(), ty);
-    }
-    let mut subst_exec_level = fn_ty.exec_ty.clone();
-    utils::subst_idents_kinded(
-        fn_ty.generics.iter(),
-        view.gen_args.iter(),
-        &mut subst_exec_level,
-    );
-    let mut subst_out_ty = fn_ty.ret_ty.as_ref().clone();
-    utils::subst_idents_kinded(
-        fn_ty.generics.iter(),
-        view.gen_args.iter(),
-        &mut subst_out_ty,
-    );
-    let mut mono_fn_ty = unify::inst_fn_ty_scheme(
-        &fn_ty.generics[view.gen_args.len()..],
-        &subst_param_tys,
-        &fn_ty.exec_ty,
-        &subst_out_ty,
+    let view_fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?;
+    let partially_applied_view_fn_ty = super::apply_gen_args_to_fn_ty_checked(
+        ctx.kind_ctx,
+        &ctx.exec,
+        view_fn_ty,
+        &view.gen_args,
     )?;
-    let mut actual_view_fn_ty = view_ty_with_input_view_and_free_ret(arg_tys);
+    let mut actual_view_fn_ty = create_view_ty_with_input_view_and_free_ret(arg_tys);
+    let mut mono_fn_ty = unify::inst_fn_ty_scheme(&partially_applied_view_fn_ty);
     unify::unify(&mut actual_view_fn_ty, &mut mono_fn_ty)?;
-    let mut inferred_k_args = super::infer_kinded_args::infer_kinded_args_from_mono_ty(
-        fn_ty.generics[view.gen_args.len()..].to_vec(),
-        subst_param_tys,
-        &subst_exec_level,
-        &subst_out_ty,
-        &mono_fn_ty,
-    );
+    let mut inferred_k_args =
+        super::infer_kinded_args::infer_kinded_args(&partially_applied_view_fn_ty, &mono_fn_ty);
     // TODO reintroduce. Problem: may contain implicit identifiers that are not substituted later
     // view.gen_args.append(&mut inferred_k_args);
-    let res_view_ty = FnTy::new(
-        vec![],
-        vec![actual_view_fn_ty.param_tys.pop().unwrap()],
-        ExecTy::new(ExecTyKind::View),
-        actual_view_fn_ty.ret_ty.as_ref().clone(),
-    );
-    Ok(res_view_ty)
+    // let res_view_ty = FnTy::new(
+    //     vec![],
+    //     view_fn_ty.generic_exec.clone(),
+    //     vec![actual_view_fn_ty.param_sigs.pop().unwrap()],
+    //     view_fn_ty.exec.clone(),
+    //     actual_view_fn_ty.ret_ty.as_ref().clone(),
+    // );
+    Ok(actual_view_fn_ty.clone())
 }
 
-fn view_ty_with_input_view_and_free_ret(mut arg_tys: Vec<Ty>) -> FnTy {
+fn create_view_ty_with_input_view_and_free_ret(mut arg_tys: Vec<Ty>) -> FnTy {
+    let ident_exec = Ident::new(&utils::fresh_name("view_exec"));
     arg_tys.push(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Ident(Ident::new_impli("in_view_dty")),
     )))));
     FnTy::new(
         vec![],
-        arg_tys,
-        ExecTy::new(ExecTyKind::View),
+        None,
+        arg_tys
+            .into_iter()
+            .map(|ty| {
+                ParamSig::new(
+                    ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.clone()))),
+                    ty,
+                )
+            })
+            .collect(),
+        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec))),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
             Ident::new_impli("view_out_dty"),
         ))))),
@@ -253,7 +222,7 @@ fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
         ExecTyKind::GpuBlock(_) => Some(Memory::GpuLocal),
         ExecTyKind::GpuWarpGrp(_) => Some(Memory::GpuLocal),
         ExecTyKind::GpuWarp => Some(Memory::GpuLocal),
-        ExecTyKind::View => None,
+        ExecTyKind::Any => None,
     }
 }
 

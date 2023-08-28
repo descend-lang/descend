@@ -1,7 +1,7 @@
 use crate::ast::{
     AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, Dim, DimCompo, ExecExpr, ExecPathElem,
-    ExecTy, ExecTyKind, Ident, IdentKinded, Kind, LeftOrRight, Memory, Nat, Ownership, Provenance,
-    ScalarTy, TakeRange, Ty, TyKind,
+    ExecTy, ExecTyKind, FnTy, Ident, IdentExec, IdentKinded, Kind, LeftOrRight, Memory, Nat,
+    Ownership, ParamSig, Provenance, ScalarTy, TakeRange, Ty, TyKind,
 };
 use std::fmt::Write;
 
@@ -45,15 +45,35 @@ impl PrintState {
     fn print_ty(&mut self, ty: &Ty) {
         match &ty.ty {
             TyKind::FnTy(fn_ty) => {
-                self.string.push('<');
-                print_list!(self, Self::print_ident_kinded, &fn_ty.generics);
-                self.string.push_str(">(");
-                print_list!(self, Self::print_ty, &fn_ty.param_tys);
-                self.string.push_str(") -[");
-                self.print_exec_ty(&fn_ty.exec_ty);
+                self.print_fn_ty(fn_ty);
             }
             TyKind::Data(dty) => self.print_dty(dty),
         }
+    }
+
+    fn print_fn_ty(&mut self, fn_ty: &FnTy) {
+        self.string.push('<');
+        print_list!(self, Self::print_ident_kinded, &fn_ty.generics);
+        self.string.push_str(">(");
+        print_list!(self, Self::print_param_sig, &fn_ty.param_sigs);
+        self.string.push_str(") -[");
+        if let Some(ident_exec) = &fn_ty.generic_exec {
+            self.print_ident_exec(ident_exec);
+        } else {
+            self.print_exec_expr(&fn_ty.exec);
+        }
+        self.string.push_str("]-> ");
+        self.print_ty(&fn_ty.ret_ty);
+    }
+
+    fn print_param_sig(&mut self, param_sig: &ParamSig) {
+        self.print_exec_expr(&param_sig.exec_expr);
+        self.print_ty(&param_sig.ty);
+    }
+
+    fn print_ident_exec(&mut self, ident_exec: &IdentExec) {
+        self.print_ident(&ident_exec.ident);
+        self.print_exec_ty(&ident_exec.ty);
     }
 
     fn print_ident_kinded(&mut self, ident_kinded: &IdentKinded) {
@@ -102,7 +122,7 @@ impl PrintState {
                 self.print_dim(dim);
                 self.string.push('>');
             }
-            ExecTyKind::View => self.string.push_str("view"),
+            ExecTyKind::Any => self.string.push_str("view"),
             ExecTyKind::GpuWarpGrp(n) => {
                 self.string.push_str("gpu.warp_grp<");
                 self.print_nat(n);
@@ -114,6 +134,7 @@ impl PrintState {
 
     pub fn print_exec_expr(&mut self, exec_expr: &ExecExpr) {
         match &exec_expr.exec.base {
+            BaseExec::Any => self.string.push_str("Any"),
             BaseExec::Ident(ident) => self.print_ident(ident),
             BaseExec::CpuThread => self.string.push_str("cpu.thread"),
             BaseExec::GpuGrid(gdim, bdim) => {

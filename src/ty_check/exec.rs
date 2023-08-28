@@ -19,6 +19,7 @@ pub(super) fn ty_check(
                 inline_exec.ty.as_ref().unwrap().ty.clone()
             }
         }
+        BaseExec::Any => ExecTyKind::Any,
         BaseExec::CpuThread => ExecTyKind::CpuThread,
         BaseExec::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid(gdim.clone(), bdim.clone()),
     };
@@ -156,7 +157,7 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
                 ExecTyKind::GpuToThreads(dim.clone(), Box::new(ExecTy::new(forall_inner)))
             }
         }
-        ex @ ExecTyKind::CpuThread | ex @ ExecTyKind::GpuThread | ex @ ExecTyKind::View => {
+        ex @ ExecTyKind::CpuThread | ex @ ExecTyKind::GpuThread | ex @ ExecTyKind::Any => {
             return Err(TyError::String(format!("Cannot schedule over {:?}", ex)))
         }
     };
@@ -407,4 +408,42 @@ fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
             }
         }
     })
+}
+
+fn update_encountered_dims(forall_dims_encountered: &mut Vec<DimCompo>, e: &ExecPathElem) {
+    if let ExecPathElem::ForAll(d) = e {
+        if forall_dims_encountered.contains(d) {
+            forall_dims_encountered.clear();
+            forall_dims_encountered.push(*d);
+        }
+    }
+}
+
+fn swappable_exec_path_elems(
+    dims_encountered: &[DimCompo],
+    lhs: &ExecPathElem,
+    rhs: &ExecPathElem,
+) -> bool {
+    match (lhs, rhs) {
+        (ExecPathElem::ForAll(dl), ExecPathElem::ForAll(dr)) => dl > dr,
+        (ExecPathElem::ForAll(_), ExecPathElem::TakeRange(r)) => {
+            !dims_encountered.contains(&r.split_dim)
+        }
+        _ => false,
+    }
+}
+
+fn normalize(mut exec_path: Vec<ExecPathElem>) -> Vec<ExecPathElem> {
+    let mut forall_dims_encountered = Vec::with_capacity(3);
+    for i in 0..exec_path.len() - 1 {
+        for j in 0..exec_path.len() - i - 1 {
+            update_encountered_dims(&mut forall_dims_encountered, &exec_path[j]);
+            update_encountered_dims(&mut forall_dims_encountered, &exec_path[j + 1]);
+            if swappable_exec_path_elems(&forall_dims_encountered, &exec_path[j], &exec_path[j + 1])
+            {
+                exec_path.swap(j, j + 1)
+            }
+        }
+    }
+    exec_path
 }

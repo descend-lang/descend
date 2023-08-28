@@ -30,25 +30,32 @@ impl<'a> CompilUnit<'a> {
 pub struct FunDef {
     pub ident: Ident,
     pub generic_params: Vec<IdentKinded>,
+    pub generic_exec: Option<IdentExec>,
     pub param_decls: Vec<ParamDecl>,
-    pub ret_dty: DataTy,
-    pub exec_decl: IdentExec,
+    pub ret_dty: Box<DataTy>,
+    pub exec: ExecExpr,
     pub prv_rels: Vec<PrvRel>,
     pub body: Box<Block>,
 }
 
 impl FunDef {
     pub fn fn_ty(&self) -> FnTy {
-        let param_tys: Vec<_> = self
+        let param_sigs: Vec<_> = self
             .param_decls
             .iter()
-            .map(|p_decl| p_decl.ty.as_ref().unwrap().clone())
+            .map(|p_decl| {
+                ParamSig::new(
+                    p_decl.exec_expr.as_ref().unwrap_or(&self.exec).clone(),
+                    p_decl.ty.as_ref().unwrap().clone(),
+                )
+            })
             .collect();
         FnTy {
             generics: self.generic_params.clone(),
-            param_tys,
-            exec_ty: self.exec_decl.ty.as_ref().clone(),
-            ret_ty: Box::new(Ty::new(TyKind::Data(Box::new(self.ret_dty.clone())))),
+            generic_exec: self.generic_exec.clone(),
+            param_sigs,
+            exec: self.exec.clone(),
+            ret_ty: Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
         }
     }
 }
@@ -73,6 +80,7 @@ pub struct ParamDecl {
     pub ident: Ident,
     pub ty: Option<Ty>,
     pub mutbl: Mutability,
+    pub exec_expr: Option<ExecExpr>,
 }
 
 #[span_derive(PartialEq)]
@@ -315,7 +323,7 @@ pub enum ExprKind {
     Block(Block),
     // Variable declaration
     // let mut x: ty;
-    LetUninit(Ident, Box<Ty>),
+    LetUninit(Option<Box<ExecExpr>>, Ident, Box<Ty>),
     // Variable declaration, assignment and sequencing
     // let w x: ty = e1
     Let(Pattern, Option<Box<Ty>>, Box<Expr>),
@@ -864,6 +872,7 @@ impl ExecExprKind {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum BaseExec {
+    Any,
     Ident(Ident),
     CpuThread,
     GpuGrid(Dim, Dim),
@@ -909,7 +918,7 @@ pub enum ExecTyKind {
     GpuThreadGrp(Dim),
     GpuWarpGrp(Nat),
     GpuBlockGrp(Dim, Dim),
-    View,
+    Any,
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -921,24 +930,39 @@ pub struct Ty {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct ParamSig {
+    pub exec_expr: ExecExpr,
+    pub ty: Ty,
+}
+
+impl ParamSig {
+    pub fn new(exec_expr: ExecExpr, ty: Ty) -> Self {
+        ParamSig { exec_expr, ty }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct FnTy {
     pub generics: Vec<IdentKinded>,
-    pub param_tys: Vec<Ty>,
-    pub exec_ty: ExecTy,
+    pub generic_exec: Option<IdentExec>,
+    pub param_sigs: Vec<ParamSig>,
+    pub exec: ExecExpr,
     pub ret_ty: Box<Ty>,
 }
 
 impl FnTy {
     pub fn new(
         generics: Vec<IdentKinded>,
-        param_tys: Vec<Ty>,
-        exec_ty: ExecTy,
+        generic_exec: Option<IdentExec>,
+        param_sigs: Vec<ParamSig>,
+        exec: ExecExpr,
         ret_ty: Ty,
     ) -> Self {
         FnTy {
             generics,
-            param_tys,
-            exec_ty,
+            generic_exec,
+            param_sigs,
+            exec,
             ret_ty: Box::new(ret_ty),
         }
     }
@@ -995,9 +1019,9 @@ impl Ty {
             TyKind::Data(dty) => dty.contains_ref_to_prv(prv_val_name),
             TyKind::FnTy(fn_ty) => {
                 fn_ty
-                    .param_tys
+                    .param_sigs
                     .iter()
-                    .any(|param_ty| param_ty.contains_ref_to_prv(prv_val_name))
+                    .any(|param_sig| param_sig.ty.contains_ref_to_prv(prv_val_name))
                     || fn_ty.ret_ty.contains_ref_to_prv(prv_val_name)
             }
         }
@@ -1034,7 +1058,7 @@ impl Dim {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Hash, Debug, Copy, Clone)]
 pub enum DimCompo {
     X,
     Y,
@@ -1417,13 +1441,13 @@ mod size_asserts {
     static_assert_size!(ExecTyKind, 64);
     static_assert_size!(Expr, 128);
     static_assert_size!(ExprKind, 104);
-    static_assert_size!(FunDef, 264);
+    static_assert_size!(FunDef, 192);
     static_assert_size!(Ident, 32); // maybe too large?
     static_assert_size!(IdentExec, 40);
     static_assert_size!(Lit, 16);
     static_assert_size!(Memory, 32);
     static_assert_size!(Nat, 56);
-    static_assert_size!(ParamDecl, 72);
+    static_assert_size!(ParamDecl, 104);
     static_assert_size!(Pattern, 40);
     static_assert_size!(PlaceExpr, 64);
     static_assert_size!(PlaceExprKind, 40);

@@ -42,6 +42,7 @@ pub trait Visit: Sized {
     fn visit_exec(&mut self, exec: &ExecExprKind) { walk_exec(self, exec) }
     fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
+    fn visit_param_sig(&mut self, param_sig: &ParamSig) { walk_param_sig(self, param_sig) }
 }
 
 macro_rules! walk_list {
@@ -175,13 +176,17 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
 pub fn walk_fn_ty<V: Visit>(visitor: &mut V, fn_ty: &FnTy) {
     let FnTy {
         generics,
-        param_tys,
-        exec_ty,
+        generic_exec,
+        param_sigs,
+        exec,
         ret_ty,
     } = fn_ty;
     walk_list!(visitor, visit_ident_kinded, generics);
-    walk_list!(visitor, visit_ty, param_tys);
-    visitor.visit_exec_ty(exec_ty);
+    for exec_decl in generic_exec {
+        visitor.visit_ident_exec(exec_decl)
+    }
+    walk_list!(visitor, visit_param_sig, param_sigs);
+    visitor.visit_exec_expr(exec);
     visitor.visit_ty(ret_ty);
 }
 
@@ -288,7 +293,10 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_pl_expr(pl_expr);
         }
         ExprKind::Block(block) => visitor.visit_block(block),
-        ExprKind::LetUninit(ident, ty) => {
+        ExprKind::LetUninit(maybe_exec_expr, ident, ty) => {
+            for e in maybe_exec_expr {
+                visitor.visit_exec_expr(e);
+            }
             visitor.visit_ident(ident);
             visitor.visit_ty(ty);
         }
@@ -437,7 +445,7 @@ pub fn walk_exec_expr<V: Visit>(visitor: &mut V, exec_expr: &ExecExpr) {
 pub fn walk_exec<V: Visit>(visitor: &mut V, exec: &ExecExprKind) {
     let ExecExprKind { base, path } = exec;
     match base {
-        BaseExec::CpuThread => (),
+        BaseExec::Any | BaseExec::CpuThread => (),
         BaseExec::Ident(ident) => visitor.visit_ident(ident),
         BaseExec::GpuGrid(gdim, bdim) => {
             visitor.visit_dim(gdim);
@@ -455,28 +463,46 @@ pub fn walk_exec<V: Visit>(visitor: &mut V, exec: &ExecExprKind) {
 }
 
 pub fn walk_param_decl<V: Visit>(visitor: &mut V, param_decl: &ParamDecl) {
-    let ParamDecl { ident, ty, mutbl } = param_decl;
+    let ParamDecl {
+        ident,
+        ty,
+        mutbl,
+        exec_expr,
+    } = param_decl;
     visitor.visit_ident(ident);
     if let Some(tty) = ty {
         visitor.visit_ty(tty);
     }
-    visitor.visit_mutability(mutbl)
+    visitor.visit_mutability(mutbl);
+    for ex in exec_expr {
+        visitor.visit_exec_expr(ex);
+    }
 }
 
 pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
     let FunDef {
         ident: _,
         generic_params,
+        generic_exec,
         param_decls: params,
         ret_dty,
-        exec_decl,
+        exec,
         prv_rels,
         body,
     } = fun_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
+    for exec_decl in generic_exec {
+        visitor.visit_ident_exec(exec_decl);
+    }
     walk_list!(visitor, visit_param_decl, params);
     visitor.visit_dty(ret_dty);
-    visitor.visit_ident_exec(exec_decl);
+    visitor.visit_exec_expr(exec);
     walk_list!(visitor, visit_prv_rel, prv_rels);
     visitor.visit_block(body)
+}
+
+pub fn walk_param_sig<V: Visit>(visitor: &mut V, param_sig: &ParamSig) {
+    let ParamSig { exec_expr, ty } = param_sig;
+    visitor.visit_exec_expr(exec_expr);
+    visitor.visit_ty(ty);
 }

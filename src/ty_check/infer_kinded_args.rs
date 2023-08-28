@@ -1,31 +1,25 @@
 use crate::ast::{
-    ArgKinded, DataTy, DataTyKind, Dim, ExecTy, ExecTyKind, FnTy, Ident, IdentKinded, Memory, Nat,
-    Provenance, Ty, TyKind,
+    ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident,
+    Memory, Nat, ParamSig, Provenance, Ty, TyKind,
 };
 use std::collections::HashMap;
 
-// monot_ty is function type,
+// mono_ty is function type,
 //  and since polytype is top-level function type, all (type-level) identifiers must have been
-//  introduced by the polymorphic function, therefore finding an identifier on the lhs means that
-//  it was introduced by the polymorphic function
-pub fn infer_kinded_args_from_mono_ty(
-    remain_gen_args: Vec<IdentKinded>,
-    subst_param_tys: Vec<Ty>,
-    subst_exec_level: &ExecTy,
-    subst_ret_ty: &Ty,
-    mono_fn_ty: &FnTy,
-) -> Vec<ArgKinded> {
-    if mono_fn_ty.param_tys.len() != subst_param_tys.len() {
+//  introduced by the polymorphic function, therefore finding an identifier on the poly type
+//  means that it was introduced by the polymorphic function (even though the identifier may be an
+//  instantiation of a bound identifier
+pub fn infer_kinded_args(poly_fn_ty: &FnTy, mono_fn_ty: &FnTy) -> Vec<ArgKinded> {
+    if poly_fn_ty.param_sigs.len() != mono_fn_ty.param_sigs.len() {
         panic!("Unexpected difference in amount of paramters.")
     }
     let mut res_map = HashMap::new();
-    for (subst_ty, mono_ty) in subst_param_tys.iter().zip(&mono_fn_ty.param_tys) {
-        infer_kargs_tys(&mut res_map, subst_ty, mono_ty)
+    for (subst_ty, mono_ty) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
+        infer_kargs_param_sig(&mut res_map, subst_ty, mono_ty)
     }
-    infer_kargs_exec_level(&mut res_map, subst_exec_level, &mono_fn_ty.exec_ty);
-    infer_kargs_tys(&mut res_map, subst_ret_ty, &mono_fn_ty.ret_ty);
+    infer_kargs_tys(&mut res_map, &poly_fn_ty.ret_ty, &mono_fn_ty.ret_ty);
     let mut res_vec = Vec::new();
-    for gen_arg in remain_gen_args {
+    for gen_arg in &poly_fn_ty.generics {
         let res_karg = res_map.get(&gen_arg.ident).unwrap();
         if gen_arg.kind != res_karg.kind() {
             panic!("Unexpected: Kinds of identifier and argument do not match.")
@@ -74,12 +68,46 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
             if !fn_ty1.generics.is_empty() || !fn_ty2.generics.is_empty() {
-                panic!("Unexpected top-level function type.")
+                panic!("Unexpected top-level function type")
             }
-            infer_from_lists!(infer_kargs_tys, map, &fn_ty1.param_tys, &fn_ty2.param_tys);
-            infer_kargs_exec_level(map, &fn_ty1.exec_ty, &fn_ty2.exec_ty);
+            infer_from_lists!(
+                infer_kargs_param_sig,
+                map,
+                &fn_ty1.param_sigs,
+                &fn_ty2.param_sigs
+            );
+            if let (Some(gel), Some(ger)) = (&fn_ty1.generic_exec, &fn_ty2.generic_exec) {
+                infer_kargs_exec_level(map, &gel.ty, &ger.ty);
+            } else {
+                panic!("Unexpected specific execution resource in function type")
+            }
             infer_kargs_tys(map, &fn_ty1.ret_ty, &fn_ty2.ret_ty)
         }
+        _ => panic_no_inst!(),
+    }
+}
+
+fn infer_kargs_param_sig(
+    map: &mut HashMap<Ident, ArgKinded>,
+    poly_param_sig: &ParamSig,
+    mono_param_sig: &ParamSig,
+) {
+    infer_kargs_exec_expr(map, &poly_param_sig.exec_expr, &mono_param_sig.exec_expr);
+    infer_kargs_tys(map, &poly_param_sig.ty, &mono_param_sig.ty);
+}
+
+fn infer_kargs_exec_expr(
+    map: &mut HashMap<Ident, ArgKinded>,
+    poly_exec_expr: &ExecExpr,
+    mono_exec_expr: &ExecExpr,
+) {
+    match (&poly_exec_expr.exec.base, &mono_exec_expr.exec.base) {
+        (BaseExec::Ident(i1), BaseExec::Ident(i2)) if i1 == i2 => (),
+        (BaseExec::GpuGrid(gdim1, bdim1), BaseExec::GpuGrid(gdim2, bdim2)) => {
+            infer_kargs_dims(map, gdim1, gdim2);
+            infer_kargs_dims(map, bdim1, bdim2);
+        }
+        (BaseExec::CpuThread, BaseExec::CpuThread) => {}
         _ => panic_no_inst!(),
     }
 }
@@ -101,7 +129,7 @@ fn infer_kargs_exec_level(
         }
         (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
         | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
-        | (ExecTyKind::View, ExecTyKind::View) => {}
+        | (ExecTyKind::Any, ExecTyKind::Any) => {}
         _ => panic_no_inst!(),
     }
 }

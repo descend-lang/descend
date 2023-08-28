@@ -4,7 +4,6 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::LeftOrRight;
 use crate::ty_check;
 use cu_ast as cu;
 use std::collections::HashMap;
@@ -25,7 +24,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let mut generated_initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 4);
     for fun_def in &mut initial_fns_to_generate {
         inline_unit_exec_ty_value(fun_def);
-        let exec = match &fun_def.exec_decl.ty.ty {
+        let exec = match &fun_def.generic_exec.as_ref().unwrap().ty.ty {
             desc::ExecTyKind::CpuThread => desc::BaseExec::CpuThread,
             desc::ExecTyKind::GpuGrid(gdim, bdim) => {
                 desc::BaseExec::GpuGrid(gdim.clone(), bdim.clone())
@@ -34,9 +33,10 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         };
         codegen_ctx.push_scope();
         codegen_ctx.exec = desc::ExecExpr::new(desc::ExecExprKind::new(exec));
-        codegen_ctx
-            .exec_mapping
-            .insert(&fun_def.exec_decl.ident.name, codegen_ctx.exec.clone());
+        codegen_ctx.exec_mapping.insert(
+            &fun_def.generic_exec.as_ref().unwrap().ident.name,
+            codegen_ctx.exec.clone(),
+        );
         generated_initial_fns.push(gen_fun_def(fun_def, &mut codegen_ctx));
         codegen_ctx.drop_scope();
         debug_assert_eq!(codegen_ctx.view_ctx.map.len(), 0);
@@ -89,7 +89,7 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
                 .iter()
                 .all(|p| !is_view_dty(p.ty.as_ref().unwrap()))
                 && matches!(
-                    &f.exec_decl.ty.ty,
+                    &f.generic_exec.as_ref().unwrap().ty.ty,
                     desc::ExecTyKind::GpuGrid(_, _)
                         | desc::ExecTyKind::GpuToThreads(_, _)
                         | desc::ExecTyKind::CpuThread
@@ -115,8 +115,8 @@ fn inline_unit_exec_ty_value(fun_def: &mut desc::FunDef) {
         }
     }
     let mut inline_unit_exec_ty = InlineUnitExecTy {
-        ident: fun_def.exec_decl.ident.clone(),
-        base_exec: exec_from_unit_exec_ty(&fun_def.exec_decl.ty),
+        ident: fun_def.generic_exec.as_ref().unwrap().ident.clone(),
+        base_exec: exec_from_unit_exec_ty(&fun_def.generic_exec.as_ref().unwrap().ty),
     };
     inline_unit_exec_ty.visit_fun_def(fun_def)
 }
@@ -290,10 +290,10 @@ impl CheckedExpr {
 fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef {
     let desc::FunDef {
         ident: name,
+        generic_exec,
         generic_params: ty_idents,
         param_decls: params,
-        ret_dty: ret_ty,
-        exec_decl,
+        ret_dty,
         body,
         ..
     } = gl_fun;
@@ -303,10 +303,10 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
         gen_templ_params(ty_idents),
         gen_param_decls(params),
         gen_ty(
-            &desc::TyKind::Data(Box::new(ret_ty.clone())),
+            &desc::TyKind::Data(Box::new(ret_dty.as_ref().clone())),
             desc::Mutability::Mut,
         ),
-        if is_dev_fun(&exec_decl.ty) {
+        if is_dev_fun(&generic_exec.as_ref().unwrap().ty) {
             cu::ExecKind::Device
         } else {
             cu::ExecKind::Host
@@ -318,7 +318,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
         cu::Stmt::Block(Box::new(gen_stmt(
             &body.body,
             !matches!(
-                ret_ty,
+                ret_dty.as_ref(),
                 desc::DataTy {
                     dty: desc::DataTyKind::Scalar(desc::ScalarTy::Unit),
                     ..
@@ -337,7 +337,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             // Let View
             gen_let(pattern, &e, codegen_ctx)
         }
-        LetUninit(ident, ty) => {
+        LetUninit(_, ident, ty) => {
             let (ty, addr_space) = match &ty.ty {
                 desc::TyKind::Data(dty) => {
                     if let desc::DataTyKind::At(ddty, desc::Memory::GpuShared) = &dty.dty {
@@ -527,6 +527,9 @@ fn gen_let(pattern: &desc::Pattern, e: &desc::Expr, codegen_ctx: &mut CodegenCtx
     match pattern {
         desc::Pattern::Tuple(tuple_elems) => {
             let tuple_ident = desc::Ident::new(&desc::utils::fresh_name("tuple"));
+            let tuple_exec = desc::ExecExpr::new(desc::ExecExprKind::new(desc::BaseExec::Ident(
+                desc::Ident::new(&desc::utils::fresh_name("tuple_exec")),
+            )));
             let tuple_bind = gen_let(
                 &desc::Pattern::Ident(desc::Mutability::Const, tuple_ident.clone()),
                 e,
@@ -1245,7 +1248,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
                 .collect::<Vec<_>>(),
         ),
         Let(_, _, _)
-        | LetUninit(_, _)
+        | LetUninit(_, _, _)
         | Block(_)
         | IfElse(_, _, _)
         | If(_, _)
@@ -1913,7 +1916,12 @@ fn gen_param_decls(param_decls: &[desc::ParamDecl]) -> Vec<cu::ParamDecl> {
 }
 
 fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
-    let desc::ParamDecl { ident, ty, mutbl } = param_decl;
+    let desc::ParamDecl {
+        ident,
+        ty,
+        mutbl,
+        exec_expr: _,
+    } = param_decl;
     cu::ParamDecl {
         name: ident.name.to_string(),
         ty: gen_ty(&ty.as_ref().unwrap().ty, *mutbl),
@@ -2096,13 +2104,15 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
         | desc::ExecTyKind::GpuThread
         | desc::ExecTyKind::GpuWarpGrp(_)
         | desc::ExecTyKind::GpuWarp => true,
-        desc::ExecTyKind::CpuThread | desc::ExecTyKind::View => false,
+        desc::ExecTyKind::CpuThread | desc::ExecTyKind::Any => false,
     }
 }
 
 fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &desc::ExecExpr) -> desc::ExecExpr {
     match &exec_expr.exec.base {
-        desc::BaseExec::CpuThread | desc::BaseExec::GpuGrid(_, _) => exec_expr.clone(),
+        desc::BaseExec::Any | desc::BaseExec::CpuThread | desc::BaseExec::GpuGrid(_, _) => {
+            exec_expr.clone()
+        }
         desc::BaseExec::Ident(ident) => {
             let inner_exec_expr = codegen_ctx.exec_mapping.get(ident.name.as_ref());
             let new_base = inner_exec_expr.exec.base.clone();
@@ -2120,13 +2130,15 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
         desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
         }
-        desc::BaseExec::Ident(_) | desc::BaseExec::CpuThread => unreachable!(),
+        desc::BaseExec::Any | desc::BaseExec::Ident(_) | desc::BaseExec::CpuThread => {
+            unreachable!()
+        }
     };
     let mut split_shift = desc::Nat::Lit(0);
     for e in &exec.exec.path {
         match e {
             desc::ExecPathElem::TakeRange(split_proj) => {
-                if split_proj.left_or_right == LeftOrRight::Right {
+                if split_proj.left_or_right == desc::LeftOrRight::Right {
                     split_shift = desc::Nat::BinOp(
                         desc::BinOpNat::Add,
                         Box::new(split_shift),

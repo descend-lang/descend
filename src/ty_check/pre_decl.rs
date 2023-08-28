@@ -1,6 +1,7 @@
 use crate::ast::{
-    AtomicTy, BinOpNat, DataTy, DataTyKind, Dim, Dim1d, Dim2d, ExecTy, ExecTyKind, FnTy, Ident,
-    IdentKinded, Kind, Memory, Nat, Ownership, Provenance, RefDty, ScalarTy, Ty, TyKind,
+    AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, ExecExpr, ExecExprKind, ExecTy, ExecTyKind,
+    FnTy, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, Ownership, ParamSig, Provenance,
+    RefDty, ScalarTy, Ty, TyKind,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -39,9 +40,6 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (GPU_DEVICE, gpu_device_ty()),
         (GPU_ALLOC, gpu_alloc_copy_ty()),
         (COPY_TO_HOST, copy_to_host_ty()),
-        (EXEC, exec_x_ty()),
-        (EXEC_XY, exec_xy_ty()),
-        (SHARED_ALLOC, shared_alloc_ty()),
         (COPY_TO_GPU, copy_to_gpu_ty()),
         (TO_RAW_PTR, to_raw_ptr_ty()),
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
@@ -79,12 +77,18 @@ fn create_array_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::CpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
     FnTy::new(
         vec![n_nat, d_dty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Ident(d.clone()),
-        ))))],
-        ExecTy::new(ExecTyKind::CpuThread),
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
+                d.clone(),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Array(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Nat::Ident(n),
@@ -94,7 +98,7 @@ fn create_array_ty() -> FnTy {
 
 // to_raw_ptr:
 //  <r: prv, m: mem, t: ty> (
-//      &r uniq m t
+//      &r gpu.thread uniq m t
 // ) -[gpu.thread]-> RawPtr<t>
 fn to_raw_ptr_ty() -> FnTy {
     let r = Ident::new("r");
@@ -113,18 +117,23 @@ fn to_raw_ptr_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
     FnTy::new(
         vec![r_prv, m_mem, d_dty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Ref(Box::new(RefDty::new(
-                Provenance::Ident(r),
-                Ownership::Uniq,
-                Memory::Ident(m),
-                DataTy::new(DataTyKind::Ident(d.clone())),
-            ))),
-        ))))],
-        ExecTy::new(ExecTyKind::GpuThread),
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                Box::new(RefDty::new(
+                    Provenance::Ident(r),
+                    Ownership::Uniq,
+                    Memory::Ident(m),
+                    DataTy::new(DataTyKind::Ident(d.clone())),
+                )),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
         ))))),
@@ -141,18 +150,26 @@ fn offset_raw_ptr_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
     FnTy::new(
         vec![d_dty],
+        Some(ident_exec),
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
-                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::I32,
-            ))))),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
+                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::I32,
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::GpuThread),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
         ))))),
@@ -162,17 +179,27 @@ fn offset_raw_ptr_ty() -> FnTy {
 // shfl_up:
 //  <>(u32, i32) -[gpu.warp]-> u32
 fn shfl_up_ty() -> FnTy {
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuWarp));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![],
+        Some(ident_exec),
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::U32,
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::I32,
-            ))))),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::U32,
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::I32,
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::GpuWarp),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
@@ -187,10 +214,14 @@ fn nat_as_u64_ty() -> FnTy {
         ident: n.clone(),
         kind: Kind::Nat,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![n_nat],
+        Some(ident_exec),
         vec![],
-        ExecTy::new(ExecTyKind::View),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U64,
         ))))),
@@ -200,10 +231,14 @@ fn nat_as_u64_ty() -> FnTy {
 // thread_id_x:
 //  <>() -[gpu.thread]-> u32
 fn thread_id_x_ty() -> FnTy {
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![],
+        Some(ident_exec),
         vec![],
-        ExecTy::new(ExecTyKind::GpuThread),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
@@ -213,12 +248,19 @@ fn thread_id_x_ty() -> FnTy {
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
 fn gpu_device_ty() -> FnTy {
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::CpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Scalar(ScalarTy::I32),
-        ))))],
-        ExecTy::new(ExecTyKind::CpuThread),
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::I32,
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Gpu,
         ))))),
@@ -226,7 +268,7 @@ fn gpu_device_ty() -> FnTy {
 }
 
 // to_atomic_array:
-//  <r: prv, m: mem, n: nat>(&r uniq m [u32; n]) -[view]-> &r uniq m [AtomicU32; n]
+//  <r: prv, m: mem, n: nat>(ex: &r uniq m [u32; n]) -[x: Any]-> &r uniq m [AtomicU32; n]
 fn to_atomic_array_ty() -> FnTy {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -243,20 +285,27 @@ fn to_atomic_array_ty() -> FnTy {
         ident: n.clone(),
         kind: Kind::Nat,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![r_prv, m_mem, n_nat],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Ref(Box::new(RefDty::new(
-                Provenance::Ident(r.clone()),
-                Ownership::Uniq,
-                Memory::Ident(m.clone()),
-                DataTy::new(DataTyKind::Array(
-                    Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U32))),
-                    Nat::Ident(n.clone()),
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                Box::new(RefDty::new(
+                    Provenance::Ident(r.clone()),
+                    Ownership::Uniq,
+                    Memory::Ident(m.clone()),
+                    DataTy::new(DataTyKind::Array(
+                        Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::U32))),
+                        Nat::Ident(n.clone()),
+                    )),
                 )),
-            ))),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+            ))))),
+        )],
+        exec_expr.clone(),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
             Box::new(RefDty::new(
                 Provenance::Ident(r),
@@ -272,7 +321,7 @@ fn to_atomic_array_ty() -> FnTy {
 }
 
 // to_atomic:
-//  <r: prv, m: mem>(&r uniq m u32) -[view]-> &r uniq m AtomicU32
+//  <r: prv, m: mem>(&r uniq x m u32) -[x: Any]-> &r uniq x m AtomicU32
 fn to_atomic_ty() -> FnTy {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -284,17 +333,24 @@ fn to_atomic_ty() -> FnTy {
         ident: m.clone(),
         kind: Kind::Memory,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![r_prv, m_mem],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Ref(Box::new(RefDty::new(
-                Provenance::Ident(r.clone()),
-                Ownership::Uniq,
-                Memory::Ident(m.clone()),
-                DataTy::new(DataTyKind::Scalar(ScalarTy::U32)),
-            ))),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                Box::new(RefDty::new(
+                    Provenance::Ident(r.clone()),
+                    Ownership::Uniq,
+                    Memory::Ident(m.clone()),
+                    DataTy::new(DataTyKind::Scalar(ScalarTy::U32)),
+                )),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
             Box::new(RefDty::new(
                 Provenance::Ident(r),
@@ -307,7 +363,7 @@ fn to_atomic_ty() -> FnTy {
 }
 
 // atomic_store:
-//  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> ()
+//  <r: prv, m: mem>(&r shrd  m AtomicU32, u32) -[gpu.thread]-> ()
 fn atomic_store_ty() -> FnTy {
     let r = Ident::new("r");
     let m = Ident::new("m");
@@ -319,22 +375,32 @@ fn atomic_store_ty() -> FnTy {
         ident: m.clone(),
         kind: Kind::Memory,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![r_prv, m_mem],
+        Some(ident_exec),
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r),
-                    Ownership::Shrd,
-                    Memory::Ident(m),
-                    DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
-                )),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::U32,
-            ))))),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r),
+                        Ownership::Shrd,
+                        Memory::Ident(m),
+                        DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
+                    )),
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::U32,
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::GpuThread),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Unit,
         ))))),
@@ -354,22 +420,32 @@ fn atomic_fetch_or_ty() -> FnTy {
         ident: m.clone(),
         kind: Kind::Memory,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![r_prv, m_mem],
+        Some(ident_exec),
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r),
-                    Ownership::Shrd,
-                    Memory::Ident(m),
-                    DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
-                )),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::U32,
-            ))))),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r),
+                        Ownership::Shrd,
+                        Memory::Ident(m),
+                        DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
+                    )),
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::U32,
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::GpuThread),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
@@ -389,22 +465,32 @@ fn atomic_fetch_add_ty() -> FnTy {
         ident: m.clone(),
         kind: Kind::Memory,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![r_prv, m_mem],
+        Some(ident_exec),
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r),
-                    Ownership::Shrd,
-                    Memory::Ident(m),
-                    DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
-                )),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                ScalarTy::U32,
-            ))))),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r),
+                        Ownership::Shrd,
+                        Memory::Ident(m),
+                        DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
+                    )),
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::U32,
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::GpuThread),
+        exec_expr.clone(),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
@@ -424,17 +510,24 @@ fn atomic_load_ty() -> FnTy {
         ident: m.clone(),
         kind: Kind::Memory,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![r_prv, m_mem],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Ref(Box::new(RefDty::new(
-                Provenance::Ident(r),
-                Ownership::Shrd,
-                Memory::Ident(m),
-                DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
-            ))),
-        ))))],
-        ExecTy::new(ExecTyKind::GpuThread),
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                Box::new(RefDty::new(
+                    Provenance::Ident(r),
+                    Ownership::Shrd,
+                    Memory::Ident(m),
+                    DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
+                )),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
@@ -461,27 +554,36 @@ fn gpu_alloc_copy_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::CpuThread));
+
     FnTy::new(
         vec![r1_prv, r2_prv, d_dty],
+        None,
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r1),
-                    Ownership::Uniq,
-                    Memory::CpuMem,
-                    DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu)),
-                )),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r2),
-                    Ownership::Shrd,
-                    Memory::CpuMem,
-                    DataTy::new(DataTyKind::Ident(d.clone())),
-                )),
-            ))))),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r1),
+                        Ownership::Uniq,
+                        Memory::CpuMem,
+                        DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu)),
+                    )),
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r2),
+                        Ownership::Shrd,
+                        Memory::CpuMem,
+                        DataTy::new(DataTyKind::Ident(d.clone())),
+                    )),
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::CpuThread),
+        exec_expr.clone(),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::At(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Memory::GpuGlobal,
@@ -508,27 +610,36 @@ fn copy_to_host_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::CpuThread));
+
     FnTy::new(
         vec![r1_prv, r2_prv, d_dty],
+        None,
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r1),
-                    Ownership::Shrd,
-                    Memory::GpuGlobal,
-                    DataTy::new(DataTyKind::Ident(d.clone())),
-                )),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r2),
-                    Ownership::Uniq,
-                    Memory::CpuMem,
-                    DataTy::new(DataTyKind::Ident(d)),
-                )),
-            ))))),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r1),
+                        Ownership::Shrd,
+                        Memory::GpuGlobal,
+                        DataTy::new(DataTyKind::Ident(d.clone())),
+                    )),
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r2),
+                        Ownership::Uniq,
+                        Memory::CpuMem,
+                        DataTy::new(DataTyKind::Ident(d)),
+                    )),
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::CpuThread),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Unit,
         ))))),
@@ -554,149 +665,38 @@ fn copy_to_gpu_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::CpuThread));
+
     FnTy::new(
         vec![r1_prv, r2_prv, d_dty],
+        None,
         vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r1),
-                    Ownership::Uniq,
-                    Memory::GpuGlobal,
-                    DataTy::new(DataTyKind::Ident(d.clone())),
-                )),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r2),
-                    Ownership::Shrd,
-                    Memory::CpuMem,
-                    DataTy::new(DataTyKind::Ident(d)),
-                )),
-            ))))),
-        ],
-        ExecTy::new(ExecTyKind::CpuThread),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::Unit,
-        ))))),
-    )
-}
-
-fn exec_xy_ty() -> FnTy {
-    let b_x = Ident::new("b_x");
-    let b_y = Ident::new("b_y");
-    let t_x = Ident::new("t_x");
-    let t_y = Ident::new("t_y");
-    let b_x_nat = IdentKinded {
-        ident: b_x.clone(),
-        kind: Kind::Nat,
-    };
-    let b_y_nat = IdentKinded {
-        ident: b_y.clone(),
-        kind: Kind::Nat,
-    };
-    let t_x_nat = IdentKinded {
-        ident: t_x.clone(),
-        kind: Kind::Nat,
-    };
-    let t_y_nat = IdentKinded {
-        ident: t_y.clone(),
-        kind: Kind::Nat,
-    };
-    exec_ty(
-        vec![b_x_nat, b_y_nat, t_x_nat, t_y_nat],
-        (
-            Dim::XY(Box::new(Dim2d(Nat::Ident(b_x), Nat::Ident(b_y)))),
-            Dim::XY(Box::new(Dim2d(Nat::Ident(t_x), Nat::Ident(t_y)))),
-        ),
-    )
-}
-
-fn exec_x_ty() -> FnTy {
-    let blocks = Ident::new("blocks");
-    let threads = Ident::new("threads");
-    let blocks_nat = IdentKinded {
-        ident: blocks.clone(),
-        kind: Kind::Nat,
-    };
-    let threads_nat = IdentKinded {
-        ident: threads.clone(),
-        kind: Kind::Nat,
-    };
-    exec_ty(
-        vec![blocks_nat, threads_nat],
-        (
-            Dim::X(Box::new(Dim1d(Nat::Ident(blocks)))),
-            Dim::X(Box::new(Dim1d(Nat::Ident(threads)))),
-        ),
-    )
-}
-
-// exec: <blocks: nat, threads: nat, r: prv, d: dty>(
-//        &r uniq cpu.mem Gpu,
-//        input: d,
-//        (BlockGrp<blocks, 1, 1, ThreadGrp<Thread, threads, 1, 1>>, d) -[gpu.grid]-> ())
-// -> ()
-fn exec_ty(mut kinded_idents: Vec<IdentKinded>, (b_dim, t_dim): (Dim, Dim)) -> FnTy {
-    let r = Ident::new("r");
-    let d = Ident::new("d");
-
-    let r_prv = IdentKinded {
-        ident: r.clone(),
-        kind: Kind::Provenance,
-    };
-    let d_dty = IdentKinded {
-        ident: d.clone(),
-        kind: Kind::DataTy,
-    };
-    let mut common_kinded_idents = vec![r_prv, d_dty];
-    kinded_idents.append(&mut common_kinded_idents);
-    FnTy::new(
-        kinded_idents,
-        vec![
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
-                Box::new(RefDty::new(
-                    Provenance::Ident(r),
-                    Ownership::Uniq,
-                    Memory::CpuMem,
-                    DataTy::new(DataTyKind::Scalar(ScalarTy::Gpu)),
-                )),
-            ))))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
-                d.clone(),
-            ))))),
-            Ty::new(TyKind::FnTy(Box::new(FnTy::new(
-                vec![],
-                vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-                    DataTyKind::Ident(d.clone()),
-                ))))],
-                ExecTy::new(ExecTyKind::GpuGrid(b_dim, t_dim)),
-                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-                    ScalarTy::Unit,
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r1),
+                        Ownership::Uniq,
+                        Memory::GpuGlobal,
+                        DataTy::new(DataTyKind::Ident(d.clone())),
+                    )),
                 ))))),
-            )))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r2),
+                        Ownership::Shrd,
+                        Memory::CpuMem,
+                        DataTy::new(DataTyKind::Ident(d)),
+                    )),
+                ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::CpuThread),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Unit,
-        ))))),
-    )
-}
-
-// shared_alloc:
-//  <t: dty>() -[view]-> t @ gpu.shared
-fn shared_alloc_ty() -> FnTy {
-    let t = Ident::new("t");
-    let t_ty = IdentKinded {
-        ident: t.clone(),
-        kind: Kind::DataTy,
-    };
-    FnTy::new(
-        vec![t_ty],
-        vec![],
-        ExecTy::new(ExecTyKind::View),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::At(
-            Box::new(DataTy::new(DataTyKind::Ident(t))),
-            Memory::GpuShared,
         ))))),
     )
 }
@@ -704,9 +704,7 @@ fn shared_alloc_ty() -> FnTy {
 // TODO FIX Error: t: ty is too general this means it could contain functions
 //  (which is not well-kinded).
 // to_view:
-//  <r: prv, m: mem, n: nat, d: dty>(&r shrd m [d; n]) -[view]-> &r shrd m [[d; n]]
-// to_view_mut:
-//  <r: prv, m: mem, n: nat, d: dty>(&r uniq m [d; n]) -[view]-> &r uniq m [[d; n]]
+//  <r: prv, m: mem, n: nat, d: dty>([d; n]) -[view]-> [[d; n]]
 fn to_view_ty() -> FnTy {
     let n = Ident::new("n");
     let d = Ident::new("d");
@@ -718,15 +716,20 @@ fn to_view_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![n_nat, d_dty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Array(
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Array(
                 Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                 Nat::Ident(n.clone()),
-            ),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Nat::Ident(n),
@@ -747,15 +750,20 @@ fn reverse_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![n_nat, d_ty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::ArrayShape(
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                 Nat::Ident(n.clone()),
-            ),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
             Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
             Nat::Ident(n.clone()),
@@ -763,7 +771,7 @@ fn reverse_ty() -> FnTy {
     )
 }
 
-//map_mut:<r1: prv, d: dty, d2: dty, m: mem, n: nat>(lambda: |&r1 uniq d| -[view]-> d2, [[d;n]]) -[view]-> &r1 uniq m [[d2; n]]
+//map_mut:<d: dty, d2: dty, n: nat>(lambda: |d| -[ex]-> d2, [[d;n]]) -[ex: Any]-> [[d2; n]]
 fn map_ty() -> FnTy {
     let d = Ident::new("d");
     let d2 = Ident::new("d2");
@@ -780,26 +788,39 @@ fn map_ty() -> FnTy {
         ident: n.clone(),
         kind: Kind::Nat,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
     FnTy::new(
         vec![d_dty.clone(), d2_dty.clone(), n_nat.clone()],
+        Some(ident_exec.clone()),
         vec![
-            Ty::new(TyKind::FnTy(Box::new(FnTy::new(
-                vec![],
-                vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-                    DataTyKind::Ident(d.clone()),
-                ))))],
-                ExecTy::new(ExecTyKind::View),
-                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
-                    d2.clone(),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::FnTy(Box::new(FnTy::new(
+                    vec![],
+                    Some(ident_exec),
+                    vec![ParamSig::new(
+                        exec_expr.clone(),
+                        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
+                            d.clone(),
+                        ))))),
+                    )],
+                    exec_expr.clone(),
+                    Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
+                        d2.clone(),
+                    ))))),
+                )))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
+                    Box::new(DataTy::new(DataTyKind::Ident(d))),
+                    Nat::Ident(n.clone()),
                 ))))),
-            )))),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
-                Box::new(DataTy::new(DataTyKind::Ident(d))),
-                Nat::Ident(n.clone()),
-            ))))),
+            ),
         ],
-        ExecTy::new(ExecTyKind::View),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
             Box::new(DataTy::new(DataTyKind::Ident(d2))),
             Nat::Ident(n),
@@ -808,7 +829,7 @@ fn map_ty() -> FnTy {
 }
 
 // group/group_mut:
-//  <size: nat, r: prv, m: mem, n: nat, d: dty>(&r W m [[d; n]]) -> &r W m [[ [[d; size]]; n/size ]]
+//  <size: nat, n: nat, d: dty>([[d; n]]) -> [[ [[d; size]]; n/size ]]
 fn group_ty() -> FnTy {
     let s = Ident::new("s");
     let n = Ident::new("n");
@@ -825,15 +846,20 @@ fn group_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![s_nat, n_nat, d_ty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::ArrayShape(
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                 Nat::Ident(n.clone()),
-            ),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
             Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::Ident(d))),
@@ -866,15 +892,20 @@ fn split_at_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![s_nat, n_nat, d_ty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::ArrayShape(
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                 Nat::Ident(n.clone()),
-            ),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
             vec![
                 DataTy::new(DataTyKind::ArrayShape(
@@ -929,18 +960,23 @@ fn join_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![o_nat, n_nat, d_dty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::ArrayShape(
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::ArrayShape(
                     Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                     Nat::Ident(n.clone()),
                 ))),
                 Nat::Ident(o.clone()),
-            ),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Nat::BinOp(
@@ -970,18 +1006,23 @@ fn transpose_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
     FnTy::new(
         vec![n_nat, o_nat, d_ty],
-        vec![Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::ArrayShape(
+        Some(ident_exec),
+        vec![ParamSig::new(
+            exec_expr.clone(),
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::ArrayShape(
                     Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
                     Nat::Ident(n.clone()),
                 ))),
                 Nat::Ident(o.clone()),
-            ),
-        ))))],
-        ExecTy::new(ExecTyKind::View),
+            ))))),
+        )],
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
             Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::Ident(d))),

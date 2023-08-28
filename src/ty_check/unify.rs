@@ -5,6 +5,7 @@ use crate::ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::UnifyError;
 use crate::ty_check::subty;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 
 type UnifyResult<T> = Result<T, UnifyError>;
@@ -43,13 +44,13 @@ fn constrain<S: Constrainable>(
     Ok((constr_map, prv_rels))
 }
 
-pub(super) fn inst_fn_ty_scheme(
-    idents_kinded: &[IdentKinded],
-    param_tys: &[Ty],
-    exec_ty: &ExecTy,
-    ret_ty: &Ty,
-) -> UnifyResult<FnTy> {
-    let mono_idents: Vec<_> = idents_kinded
+pub(super) fn inst_fn_ty_scheme(fn_ty: &FnTy) -> FnTy {
+    assert!(
+        fn_ty.generic_exec.is_none(),
+        "exec must be substituted before instantiation to make sure that it has the correct type"
+    );
+    let mono_idents: Vec<_> = fn_ty
+        .generics
         .iter()
         .map(|i| match i.kind {
             Kind::DataTy => ArgKinded::DataTy(DataTy::new(utils::fresh_ident(
@@ -63,20 +64,10 @@ pub(super) fn inst_fn_ty_scheme(
             }
         })
         .collect();
-
-    let mut mono_param_tys = param_tys.to_vec();
-    for ty in &mut mono_param_tys {
-        utils::subst_idents_kinded(idents_kinded, mono_idents.as_slice(), ty);
-    }
-    let mut mono_ret_ty = ret_ty.clone();
-    utils::subst_idents_kinded(idents_kinded, mono_idents.as_slice(), &mut mono_ret_ty);
-
-    Ok(FnTy::new(
-        vec![],
-        mono_param_tys,
-        exec_ty.clone(),
-        mono_ret_ty,
-    ))
+    let mut inst_fn_ty = fn_ty.clone();
+    let generics = inst_fn_ty.generics.drain(..).collect::<Vec<_>>();
+    utils::subst_idents_kinded(generics.iter(), mono_idents.iter(), &mut inst_fn_ty);
+    inst_fn_ty
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -89,6 +80,7 @@ pub(super) struct ConstrainMap {
     pub nat_unifier: HashMap<Box<str>, Nat>,
     pub mem_unifier: HashMap<Box<str>, Memory>,
     pub prv_unifier: HashMap<Box<str>, Provenance>,
+    pub exec_unifier: Option<(Box<str>, ExecExpr)>,
 }
 
 impl ConstrainMap {
@@ -98,6 +90,7 @@ impl ConstrainMap {
             nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
             prv_unifier: HashMap::new(),
+            exec_unifier: None,
         }
     }
 }
@@ -155,31 +148,32 @@ impl Constrainable for FnTy {
     ) -> UnifyResult<()> {
         assert!(self.generics.is_empty());
         assert!(other.generics.is_empty());
+        assert!(self.generic_exec.is_none());
+        assert!(other.generic_exec.is_none());
 
-        self.exec_ty
-            .constrain(&mut other.exec_ty, constr_map, prv_rels)?;
+        self.exec.constrain(&mut other.exec, constr_map, prv_rels)?;
 
-        if self.param_tys.len() != other.param_tys.len() {
+        if self.param_sigs.len() != other.param_sigs.len() {
             return Err(UnifyError::CannotUnify);
         }
         // substitute result of unification for every following unification
         let mut i = 0;
-        let mut remain_lhs = &mut self.param_tys[i..];
-        let mut remain_rhs = &mut other.param_tys[i..];
+        let mut remain_lhs = &mut self.param_sigs[i..];
+        let mut remain_rhs = &mut other.param_sigs[i..];
         while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
             (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
         {
-            next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
             tail_lhs
                 .iter_mut()
-                .for_each(|ty| substitute(constr_map, ty));
+                .for_each(|param_sig| substitute(constr_map, param_sig));
             tail_rhs
                 .iter_mut()
-                .for_each(|ty| substitute(constr_map, ty));
+                .for_each(|param_sig| substitute(constr_map, param_sig));
+            next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
 
             i += 1;
-            remain_lhs = &mut self.param_tys[i..];
-            remain_rhs = &mut other.param_tys[i..];
+            remain_lhs = &mut self.param_sigs[i..];
+            remain_rhs = &mut other.param_sigs[i..];
         }
 
         substitute(constr_map, &mut *self.ret_ty);
@@ -191,6 +185,130 @@ impl Constrainable for FnTy {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_fn_ty(self);
+    }
+}
+
+impl Constrainable for ParamSig {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> UnifyResult<()> {
+        // TODO
+        // self.exec_expr
+        //     .constrain(&mut other.exec_expr, constr_map, prv_rels)?;
+        self.ty.constrain(&mut other.ty, constr_map, prv_rels)
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_param_sig(self);
+    }
+}
+
+impl ExecExpr {
+    fn bind_to(&self, ident: &Ident, constr_map: &mut ConstrainMap) -> UnifyResult<()> {
+        if let BaseExec::Ident(i) = &self.exec.base {
+            if i == ident {
+                return if self.exec.path.is_empty() {
+                    Ok(())
+                } else {
+                    // occurs check
+                    Err(UnifyError::InfiniteType)
+                };
+            }
+        };
+
+        if let Some((_, old)) = &constr_map.exec_unifier {
+            if old != self {
+                panic!(
+                    "Rebinding bound type variable.\n\
+                    Old: {:?}\n\
+                    New: {:?}",
+                    old, self
+                );
+            }
+        } else {
+            constr_map.exec_unifier = Some((ident.name.clone(), self.clone()))
+        }
+
+        constr_map
+            .dty_unifier
+            .values_mut()
+            .for_each(|dty| SubstIdent::new(ident, self).visit_dty(dty));
+        Ok(())
+    }
+}
+
+impl Constrainable for ExecExpr {
+    fn constrain(
+        &mut self,
+        other: &mut Self,
+        constr_map: &mut ConstrainMap,
+        prv_rels: &mut Vec<PrvConstr>,
+    ) -> UnifyResult<()> {
+        match (&mut self.exec.base, &mut other.exec.base) {
+            (BaseExec::Ident(i1), BaseExec::Ident(i2)) => match (i1.is_implicit, i2.is_implicit) {
+                (true, false) => other.bind_to(i1, constr_map)?,
+                (false, true) | (false, false) => self.bind_to(i2, constr_map)?,
+                _ => return Err(UnifyError::CannotUnify),
+            },
+            (BaseExec::Ident(i), _) => other.bind_to(i, constr_map)?,
+            (_, BaseExec::Ident(i)) => self.bind_to(i, constr_map)?,
+            (BaseExec::CpuThread, BaseExec::CpuThread) => {}
+            (BaseExec::GpuGrid(gdim1, bdim1), BaseExec::GpuGrid(gdim2, bdim2)) => {
+                gdim1.constrain(gdim2, constr_map, prv_rels)?;
+                bdim1.constrain(bdim2, constr_map, prv_rels)?;
+            }
+            _ => return Err(UnifyError::CannotUnify),
+        }
+
+        let mut i = 0;
+        let mut remain_lhs = &mut self.exec.path[i..];
+        let mut remain_rhs = &mut other.exec.path[i..];
+        while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
+            (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
+        {
+            tail_lhs.iter_mut().for_each(|ep| {
+                let mut apply_subst = ApplySubst::new(constr_map);
+                apply_subst.visit_exec_path_elem(ep);
+            });
+            tail_rhs.iter_mut().for_each(|ep| {
+                let mut apply_subst = ApplySubst::new(constr_map);
+                apply_subst.visit_exec_path_elem(ep);
+            });
+
+            match (next_lhs, next_rhs) {
+                (ExecPathElem::ForAll(dl), ExecPathElem::ForAll(dr))
+                | (ExecPathElem::ToThreads(dl), ExecPathElem::ToThreads(dr)) => {
+                    if dl != dr {
+                        return Err(UnifyError::CannotUnify);
+                    }
+                }
+                (ExecPathElem::TakeRange(rl), ExecPathElem::TakeRange(rr)) => {
+                    if rl.split_dim != rr.split_dim {
+                        return Err(UnifyError::CannotUnify);
+                    }
+                    if rl.left_or_right != rr.left_or_right {
+                        return Err(UnifyError::CannotUnify);
+                    }
+                    rl.pos.constrain(&mut rr.pos, constr_map, prv_rels)?
+                }
+                (ExecPathElem::ToWarps, ExecPathElem::ToWarps) => {}
+                _ => return Err(UnifyError::CannotUnify),
+            }
+
+            i += 1;
+            remain_lhs = &mut self.exec.path[i..];
+            remain_rhs = &mut other.exec.path[i..];
+        }
+        Ok(())
+    }
+
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_exec_expr(self);
     }
 }
 
@@ -314,7 +432,7 @@ impl Constrainable for ExecTy {
             (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
             | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
             | (ExecTyKind::GpuWarp, ExecTyKind::GpuWarp)
-            | (ExecTyKind::View, ExecTyKind::View) => Ok(()),
+            | (_, ExecTyKind::Any) => Ok(()),
             (ExecTyKind::GpuWarpGrp(nl), ExecTyKind::GpuWarpGrp(nr)) => {
                 nl.constrain(nr, constr_map, prv_rels)
             }
@@ -672,11 +790,24 @@ impl<'a> VisitMut for SubstIdent<'a, DataTy> {
     }
 }
 
+impl<'a> VisitMut for SubstIdent<'a, ExecExpr> {
+    fn visit_exec_expr(&mut self, exec: &mut ExecExpr) {
+        if let BaseExec::Ident(i) = &exec.exec.base {
+            if i.name == self.ident.name {
+                let mut subst_exec = self.term.clone();
+                subst_exec.exec.path.append(&mut exec.exec.path);
+                *exec = subst_exec;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn shrd_ref_ty() -> DataTy {
+        Dim::X(Box::new(Dim1d(Nat::Lit(32))));
         DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
             Provenance::Value("r".to_string()),
             Ownership::Shrd,

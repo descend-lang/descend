@@ -12,6 +12,7 @@ fn par_scale_vec<n: nat, r: prv>(
 ) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
     sched block in grid {
         sched thread in block {
+            // FIXME rev is generic in its exec! problem!
             let v = &uniq (*vec).to_view.grp::<1024>.map(rev::<1024>)[[block]][[thread]];
             *v = *v * 3.0
         }

@@ -191,7 +191,7 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
 
     fn expand_exec_expr(exec_mapping: &[(Box<str>, ExecExpr)], exec_expr: &mut ExecExpr) {
         match &exec_expr.exec.base {
-            BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => {}
+            BaseExec::Any | BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => {}
             BaseExec::Ident(ident) => {
                 if let Some(exec) = get_exec_expr(exec_mapping, ident) {
                     let new_base = exec.exec.base.clone();
@@ -287,18 +287,21 @@ peg::parser! {
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
-            "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
+            "-" _ "[" _ ident_exec:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
             body:block() {
                 let generic_params = match generic_params {
                     Some(generic_params) => generic_params,
                     None => vec![]
                 };
+                let exec = ExecExpr::new(
+                    ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
                 FunDef {
                   ident,
                   generic_params,
+                  generic_exec: Some(ident_exec),
                   param_decls,
-                  ret_dty,
-                  exec_decl,
+                  ret_dty: Box::new(ret_dty),
+                  exec,
                   prv_rels: vec![],
                   body: Box::new(body)
                 }
@@ -315,15 +318,15 @@ peg::parser! {
             }
 
         rule fun_parameter() -> ParamDecl
-            = mutbl:(m:mutability() __ {m})? ident:ident() _ ":" _ ty:ty() {
+            = mutbl:(m:mutability() __ {m})? exec_expr:(e:exec_expr() __ {e})? ident:ident() _ ":" _ ty:ty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                ParamDecl { ident, ty:Some(ty), mutbl }
+                ParamDecl { ident, ty:Some(ty), mutbl, exec_expr }
             }
 
         rule lambda_parameter() -> ParamDecl
-            = mutbl:(m:mutability() __ {m})? ident:ident() ty:(_ ":" _ tty:ty() { tty })? {
+            = mutbl:(m:mutability() __ {m})? exec_expr:(e:exec_expr() __ {e})? ident:ident() ty:(_ ":" _ tty:ty() { tty })? {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                ParamDecl { ident, ty, mutbl }
+                ParamDecl { ident, ty, mutbl, exec_expr }
         }
 
         /// Parse a sequence of expressions (might also just be one)
@@ -336,7 +339,8 @@ peg::parser! {
         pub(crate) rule pattern() -> Pattern =
             mutbl:(m:mutability() __ {m})? ident:ident() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
-                Pattern::Ident(mutbl, ident) }
+                Pattern::Ident(mutbl, ident)
+            }
             / tuple_pattern: "(" _ elems_pattern:pattern() ** (_ "," _) _ ")" {
                 Pattern::Tuple(elems_pattern)
             }
@@ -557,11 +561,11 @@ peg::parser! {
             }
 
         rule let_uninit() -> Expr =
-         begin:position!() "let" __ "mut" __ ident:ident() _ ":"
+         begin:position!() "let" maybe_exec_expr:(_ "(" _ e:exec_expr() _ ")" { e })? __ "mut" __ ident:ident() _ ":"
                 _ ty:ty() end:position!()
             {
                 Expr::with_span(
-                    ExprKind::LetUninit(ident, Box::new(ty)),
+                    ExprKind::LetUninit(maybe_exec_expr.map(|e| Box::new(e)), ident, Box::new(ty)),
                     Span::new(begin, end)
                 )
             }
@@ -783,7 +787,7 @@ peg::parser! {
                 ExecTyKind::GpuThread
             }
             / "view" {
-                ExecTyKind::View
+                ExecTyKind::Any
             }
 
         pub(crate) rule ownership() -> Ownership
@@ -1513,8 +1517,6 @@ mod tests {
 
     #[test]
     fn correctly_recognize_place_expression_vs_proj_expression() {
-        let zero_literal = 0;
-        let one_literal = 1;
         // Place expressions
         assert_eq!(
             descend::expression("x.0"),
@@ -2120,7 +2122,7 @@ mod tests {
     fn global_fun_def_all_function_kinds() {
         // all currently available kinds are tested
         let src = r#"fn test_kinds<n: nat, a: prv, d: dty, m: mem>(
-            ha_array: &a uniq cpu.mem [i32; n]
+            ex ha_array: &a uniq cpu.mem [i32; n]
         ) -[ex: cpu.thread]-> () <>{
             42
         }"#;
@@ -2134,6 +2136,8 @@ mod tests {
             IdentKinded::new(&Ident::new("d"), Kind::DataTy),
             IdentKinded::new(&Ident::new("m"), Kind::Memory),
         ];
+        let exec_ident = Ident::new("ex");
+        let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(exec_ident.clone())));
         let params = vec![ParamDecl {
             ident: Ident::new("ha_array"),
             ty: Some(Ty::new(TyKind::Data(Box::new(DataTy::new(
@@ -2148,24 +2152,27 @@ mod tests {
                 ))),
             ))))),
             mutbl: Mutability::Const,
+            exec_expr: Some(exec_expr.clone()),
         }];
         let ret_dty = DataTy::new(DataTyKind::Scalar(ScalarTy::Unit));
-        let exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::CpuThread));
+        let ident_exec = IdentExec::new(exec_ident, ExecTy::new(ExecTyKind::CpuThread));
         let prv_rels = vec![];
 
         let intended = FunDef {
             ident: Ident::new("test_kinds"),
-            param_decls: params,
-            exec_decl: exec,
-            prv_rels,
-            body: Box::new(Block::new(descend::expression(body).unwrap())),
             generic_params,
-            ret_dty,
+            generic_exec: Some(ident_exec),
+            param_decls: params,
+            body: Box::new(Block::new(descend::expression(body).unwrap())),
+            exec: exec_expr,
+            prv_rels,
+            ret_dty: Box::new(ret_dty),
         };
 
         assert_eq!(result.ident, intended.ident);
         assert_eq!(result.param_decls, intended.param_decls);
-        assert_eq!(result.exec_decl, intended.exec_decl);
+        assert_eq!(result.generic_exec, intended.generic_exec);
+        assert_eq!(result.exec, intended.exec);
         assert_eq!(result.prv_rels, intended.prv_rels);
         assert_eq!(result.body, intended.body);
         assert_eq!(result.generic_params, intended.generic_params);
@@ -2180,7 +2187,7 @@ mod tests {
             ha_array: &'a uniq cpu.mem [i32; n],
             hb_array: &'b shrd cpu.mem [i32; n]
         ) -[t: cpu.thread]-> () <>{
-            let answer_to_everything :i32 = 42;
+            let answer_to_everything: i32 = 42;
             answer_to_everything
         }"#;
         let src_2 = r#"fn no_kinds<>(
@@ -2193,8 +2200,6 @@ mod tests {
 
         let result_1 = descend::global_fun_def(src_1);
         let result_2 = descend::global_fun_def(src_2);
-
-        print!("{:?}", result_1);
 
         assert!(result_1.is_ok());
         assert!(result_2.is_ok());
@@ -2219,7 +2224,7 @@ mod tests {
     #[test]
     fn global_fun_def_no_function_parameters_required() {
         let src = r#"fn no_params<n: nat, a: prv, b: prv>() -[t: cpu.thread]-> () <>{
-            let answer_to_everything :i32 = 42;
+            let answer_to_everything: i32 = 42;
             answer_to_everything
         }"#;
 

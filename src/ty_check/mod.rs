@@ -66,6 +66,7 @@ fn ty_check_compil_unit(gl_ctx: &GlobalCtx, compil_unit: &mut CompilUnit) -> TyR
 
 struct ExprTyCtx<'ctxt> {
     gl_ctx: &'ctxt GlobalCtx,
+    // TODO allow to be empty: Option
     ident_exec: &'ctxt IdentExec,
     kind_ctx: &'ctxt mut KindCtx,
     exec: ExecExpr,
@@ -76,22 +77,28 @@ struct ExprTyCtx<'ctxt> {
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
 fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> TyResult<()> {
     // TODO check that every prv_rel only uses provenance variables bound in generic_params
-    let ident_exec = gf.exec_decl.clone();
+    let ident_exec = gf.generic_exec.as_ref().unwrap().clone();
     let mut kind_ctx = KindCtx::gl_fun_kind_ctx(gf.generic_params.clone(), gf.prv_rels.clone())?;
     let mut ty_ctx = TyCtx::new();
     // Build frame typing for this function
     // TODO give Frame its own type and move this into frame and/or ParamDecl
+    let mut exec = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
     let param_idents_ty: Vec<_> = gf
         .param_decls
         .iter()
-        .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
-            ident: ident.clone(),
-            ty: ty.as_ref().unwrap().clone(),
-            mutbl: *mutbl,
-            exec: ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
-                gf.exec_decl.ident.clone(),
-            ))),
-        })
+        .map(
+            |ParamDecl {
+                 ident,
+                 ty,
+                 mutbl,
+                 exec_expr,
+             }| IdentTyped {
+                ident: ident.clone(),
+                ty: ty.as_ref().unwrap().clone(),
+                exec: exec_expr.as_ref().unwrap_or(&exec).clone(),
+                mutbl: *mutbl,
+            },
+        )
         .collect();
     for pi in param_idents_ty {
         ty_ctx.append_ident_typed(pi);
@@ -100,11 +107,8 @@ fn ty_check_global_fun_def(gl_ctx: &GlobalCtx, gf: &mut FunDef) -> TyResult<()> 
         ty_ctx.append_prv_mapping(PrvMapping::new(prv));
     }
 
-    let mut exec = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
-        gf.exec_decl.ident.clone(),
-    )));
-    exec::ty_check(&kind_ctx, &ty_ctx, &gf.exec_decl, &mut exec)?;
-    ty_ctx.append_exec_mapping(gf.exec_decl.ident.clone(), exec.clone());
+    exec::ty_check(&kind_ctx, &ty_ctx, &ident_exec, &mut exec)?;
+    ty_ctx.append_exec_mapping(ident_exec.ident.clone(), exec.clone());
 
     let mut access_ctx = AccessCtx::new();
     let mut ctx = ExprTyCtx {
@@ -160,7 +164,9 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         }
         ExprKind::Block(block) => ty_check_block(ctx, block)?,
         ExprKind::Let(pattern, ty, e) => ty_check_let(ctx, pattern, ty, e)?,
-        ExprKind::LetUninit(ident, ty) => ty_check_let_uninit(ctx, ident, ty)?,
+        ExprKind::LetUninit(annot_exec, ident, ty) => {
+            ty_check_let_uninit(ctx, annot_exec, ident, ty)?
+        }
         ExprKind::Seq(es) => ty_check_seq(ctx, es)?,
         ExprKind::Lit(l) => ty_check_literal(l),
         ExprKind::Array(elems) => ty_check_array(ctx, elems)?,
@@ -168,7 +174,7 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         // ExprKind::Proj(e, i) => ty_check_proj(ctx, e, *i)?,
         ExprKind::App(ef, k_args, args) => ty_check_app(ctx, ef, k_args, args)?,
         ExprKind::DepApp(ef, k_args) => {
-            Ty::new(TyKind::FnTy(Box::new(ty_check_dep_app(ctx, ef, k_args)?.4)))
+            Ty::new(TyKind::FnTy(Box::new(ty_check_dep_app(ctx, ef, k_args)?)))
         }
         ExprKind::AppKernel(app_kernel) => ty_check_app_kernel(ctx, app_kernel)?,
         ExprKind::Ref(prv, own, pl_expr) => ty_check_borrow(ctx, prv, *own, pl_expr)?,
@@ -256,7 +262,7 @@ fn syncable_exec_ty(exec_ty: &ExecTy) -> bool {
         | ExecTyKind::GpuWarpGrp(_)
         | ExecTyKind::GpuWarp
         | ExecTyKind::GpuThread
-        | ExecTyKind::View => false,
+        | ExecTyKind::Any => false,
     }
 }
 
@@ -677,20 +683,25 @@ fn ty_check_lambda(
     fun_frame.append_idents_typed(
         params
             .iter()
-            .map(|ParamDecl { ident, ty, mutbl }| IdentTyped {
-                ident: ident.clone(),
-                ty: match ty {
-                    Some(tty) => tty.clone(),
-                    None => Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
-                        "param_ty",
-                        DataTyKind::Ident,
-                    ))))),
+            .map(
+                |ParamDecl {
+                     ident,
+                     ty,
+                     mutbl,
+                     exec_expr,
+                 }| IdentTyped {
+                    ident: ident.clone(),
+                    ty: match ty {
+                        Some(tty) => tty.clone(),
+                        None => Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
+                            "param_ty",
+                            DataTyKind::Ident,
+                        ))))),
+                    },
+                    mutbl: *mutbl,
+                    exec: exec_expr.as_ref().unwrap().clone(),
                 },
-                mutbl: *mutbl,
-                exec: ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
-                    lambda_ident_exec.ident.clone(),
-                ))),
-            })
+            )
             .collect(),
     );
     // Copy porvenance mappings into scope and append scope frame.
@@ -754,11 +765,19 @@ fn ty_check_lambda(
 
     let fun_ty = Ty::new(TyKind::FnTy(Box::new(FnTy::new(
         vec![],
+        Some(lambda_ident_exec.clone()),
         params
             .iter()
-            .map(|decl| decl.ty.as_ref().unwrap().clone())
+            .map(|decl| {
+                ParamSig::new(
+                    decl.exec_expr.as_ref().unwrap().clone(),
+                    decl.ty.as_ref().unwrap().clone(),
+                )
+            })
             .collect(),
-        lambda_ident_exec.ty.as_ref().clone(),
+        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
+            lambda_ident_exec.ident.clone(),
+        ))),
         Ty::new(TyKind::Data(Box::new(ret_dty.clone()))),
     ))));
 
@@ -1127,104 +1146,104 @@ fn ty_check_cast(ctx: &mut ExprTyCtx, e: &mut Expr, dty: &DataTy) -> TyResult<Ty
 fn ty_check_app(
     ctx: &mut ExprTyCtx,
     ef: &mut Expr,
-    k_args: &mut Vec<ArgKinded>,
+    gen_args: &mut Vec<ArgKinded>,
     args: &mut [Expr],
 ) -> TyResult<Ty> {
     // TODO check well-kinded: FrameTyping, Prv, Ty
-    let (f_remain_gen_args, f_subst_param_tys, f_subst_exec_level, f_subst_ret_ty, mut f_mono_ty) =
-        ty_check_dep_app(ctx, ef, k_args)?;
-    let exec_f = if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
-        if !callable_in(&fn_ty.exec_ty, ctx.exec.ty.as_ref().unwrap()) {
-            return Err(TyError::String(format!(
-                "Trying to apply function for execution resource `{:?}` \
-                under execution resource `{:?}`",
-                &fn_ty.exec_ty,
-                &ctx.exec.ty.as_ref().unwrap()
-            )));
-        }
-        fn_ty.exec_ty.clone()
-    } else {
-        return Err(TyError::String(format!(
-            "The provided function expression\n {:?}\n does not have a function type.",
-            ef
-        )));
-    };
-
+    let partially_applied_dep_fn_ty = ty_check_dep_app(ctx, ef, gen_args)?;
     for arg in args.iter_mut() {
         ty_check_expr(ctx, arg)?;
     }
-    let ret_dty = Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
+    let param_sigs_for_args = args
+        .iter()
+        .map(|arg| ParamSig::new(ctx.exec.clone(), arg.ty.as_ref().unwrap().as_ref().clone()))
+        .collect();
+    let ret_dty_placeholder = Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
         "ret_ty",
         DataTyKind::Ident,
     )))));
+    let mut mono_fn_ty = unify::inst_fn_ty_scheme(&partially_applied_dep_fn_ty);
     unify::unify(
         &mut FnTy::new(
             vec![],
-            args.iter()
-                .map(|arg| arg.ty.as_ref().unwrap().as_ref().clone())
-                .collect(),
-            exec_f,
-            ret_dty,
+            None,
+            param_sigs_for_args,
+            ctx.exec.clone(),
+            ret_dty_placeholder,
         ),
-        &mut f_mono_ty,
+        &mut mono_fn_ty,
     )?;
-    let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
-        f_remain_gen_args,
-        f_subst_param_tys,
-        &f_subst_exec_level,
-        &f_subst_ret_ty,
-        &f_mono_ty,
-    );
-    k_args.append(&mut inferred_k_args);
+    let mut inferred_k_args =
+        infer_kinded_args::infer_kinded_args(&partially_applied_dep_fn_ty, &mono_fn_ty);
+    gen_args.append(&mut inferred_k_args);
 
     // TODO check provenance relations
-    return Ok(f_mono_ty.ret_ty.as_ref().clone());
+    return Ok(mono_fn_ty.ret_ty.as_ref().clone());
 }
 
-fn ty_check_dep_app(
-    ctx: &mut ExprTyCtx,
-    ef: &mut Expr,
-    k_args: &mut [ArgKinded],
-) -> TyResult<(Vec<IdentKinded>, Vec<Ty>, ExecTy, Ty, FnTy)> {
+// fn owning_exec_for_expr(ty_ctx: &TyCtx, exec_ctx: &ExecExpr, expr: &Expr) -> ExecExpr {
+//     if let ExprKind::PlaceExpr(pl_expr) = &expr.expr {
+//         owning_exec_for_pl_expr(ty_ctx, pl_expr)
+//     } else {
+//         exec_ctx.clone()
+//     }
+// }
+//
+// fn owning_exec_for_pl_expr(ty_ctx: &TyCtx, pl_expr: &PlaceExpr) -> ExecExpr {
+//     match &pl_expr.pl_expr {
+//         PlaceExprKind::Ident(ident) => ty_ctx.ident_ty(ident).unwrap().exec.clone(),
+//         PlaceExprKind::Proj(pl_expr, _)
+//         | PlaceExprKind::Deref(pl_expr)
+//         | PlaceExprKind::Idx(pl_expr, _)
+//         | PlaceExprKind::View(pl_expr, _) => owning_exec_for_pl_expr(ty_ctx, pl_expr),
+//         PlaceExprKind::Select(pl_expr, exec_expr) => {
+//             let inner_exec = owning_exec_for_pl_expr(ty_ctx, pl_expr);
+//         }
+//     }
+// }
+
+fn ty_check_dep_app(ctx: &mut ExprTyCtx, ef: &mut Expr, gen_args: &[ArgKinded]) -> TyResult<FnTy> {
     ty_check_expr(ctx, ef)?;
     if let TyKind::FnTy(fn_ty) = &ef.ty.as_ref().unwrap().ty {
-        if fn_ty.generics.len() < k_args.len() {
-            return Err(TyError::String(format!(
-                "Wrong amount of generic arguments. Expected {}, found {}",
-                fn_ty.generics.len(),
-                k_args.len()
-            )));
-        }
-        for (gp, kv) in fn_ty.generics.iter().zip(&*k_args) {
-            check_arg_has_correct_kind(&ctx.kind_ctx, &gp.kind, kv)?;
-        }
-        let mut subst_param_tys = fn_ty.param_tys.clone();
-        for ty in &mut subst_param_tys {
-            utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), ty);
-        }
-        let mut subst_exec_level = fn_ty.exec_ty.clone();
-        utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), &mut subst_exec_level);
-        let mut subst_out_ty = fn_ty.ret_ty.as_ref().clone();
-        utils::subst_idents_kinded(fn_ty.generics.iter(), k_args.iter(), &mut subst_out_ty);
-        let mono_fun_ty = unify::inst_fn_ty_scheme(
-            &fn_ty.generics[k_args.len()..],
-            &subst_param_tys,
-            &fn_ty.exec_ty,
-            &subst_out_ty,
-        )?;
-        Ok((
-            fn_ty.generics[k_args.len()..].to_vec(),
-            subst_param_tys,
-            subst_exec_level,
-            subst_out_ty,
-            mono_fun_ty,
-        ))
+        apply_gen_args_to_fn_ty_checked(ctx.kind_ctx, &ctx.exec, fn_ty, gen_args)
     } else {
         Err(TyError::String(format!(
             "The provided function expression\n {:?}\n does not have a function type.",
             ef
         )))
     }
+}
+
+fn apply_gen_args_to_fn_ty_checked(
+    kind_ctx: &KindCtx,
+    exec: &ExecExpr,
+    fn_ty: &FnTy,
+    gen_args: &[ArgKinded],
+) -> TyResult<FnTy> {
+    let mut subst_fn_ty = fn_ty.clone();
+    apply_gen_args_checked(kind_ctx, &mut subst_fn_ty, gen_args)?;
+    apply_exec_checked(&mut subst_fn_ty, &exec)?;
+    Ok(subst_fn_ty)
+}
+
+fn apply_gen_args_checked(
+    kind_ctx: &KindCtx,
+    fn_ty: &mut FnTy,
+    gen_args: &[ArgKinded],
+) -> TyResult<()> {
+    if fn_ty.generics.len() < gen_args.len() {
+        return Err(TyError::String(format!(
+            "Wrong amount of generic arguments. Expected {}, found {}",
+            fn_ty.generics.len(),
+            gen_args.len()
+        )));
+    }
+    for (gen_param, gen_arg) in fn_ty.generics.iter().zip(gen_args) {
+        check_arg_has_correct_kind(kind_ctx, &gen_param.kind, gen_arg)?;
+    }
+    let substituted_gen_idents = fn_ty.generics.drain(..gen_args.len()).collect::<Vec<_>>();
+    utils::subst_idents_kinded(&substituted_gen_idents, gen_args, fn_ty);
+    Ok(())
 }
 
 fn check_arg_has_correct_kind(kind_ctx: &KindCtx, expected: &Kind, kv: &ArgKinded) -> TyResult<()> {
@@ -1236,6 +1255,27 @@ fn check_arg_has_correct_kind(kind_ctx: &KindCtx, expected: &Kind, kv: &ArgKinde
             expected, kv
         )))
     }
+}
+
+fn apply_exec_checked(fn_ty: &mut FnTy, exec: &ExecExpr) -> TyResult<()> {
+    let mut gen_exec_ident = None;
+    for ge in &fn_ty.generic_exec {
+        // FIXME this includes checking for exec < any, therefore not necessarily unifcation (wrong name)
+        unify::unify(
+            &mut exec.ty.as_ref().unwrap().as_ref().clone(),
+            &mut ge.ty.clone(),
+        )?;
+        gen_exec_ident = Some(ge.ident.clone());
+    }
+    // FIXME WHY IS NLL NOT WORKING HERE?!
+    fn_ty.generic_exec = None;
+    for gi in gen_exec_ident {
+        utils::subst_ident_exec(&gi, exec, fn_ty);
+    }
+    if &fn_ty.exec != exec {
+        return Err(TyError::IllegalExec);
+    }
+    Ok(())
 }
 
 fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyResult<Ty> {
@@ -1250,9 +1290,16 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         ty_check_expr(ctx, arg)?;
     }
     // new scope with gpu.grid<DIM, DIM> execution resource
+    let kernel_ctx_ident_exec = IdentExec::new(
+        Ident::new(&utils::fresh_name("grid")),
+        ExecTy::new(ExecTyKind::GpuGrid(
+            app_kernel.grid_dim.clone(),
+            app_kernel.block_dim.clone(),
+        )),
+    );
     let mut kernel_ctx = ExprTyCtx {
         gl_ctx: ctx.gl_ctx,
-        ident_exec: ctx.ident_exec,
+        ident_exec: &kernel_ctx_ident_exec,
         kind_ctx: ctx.kind_ctx,
         exec: ExecExpr::new(ExecExprKind::new(BaseExec::GpuGrid(
             app_kernel.grid_dim.clone(),
@@ -1312,58 +1359,66 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         ty_check_expr(&mut kernel_ctx, shrd_mem_arg)?;
     }
     // create extended argument list with references to shared memory
-    let extended_arg_tys = app_kernel
+    let extended_arg_sigs = app_kernel
         .args
         .iter()
-        .map(|a| a.ty.as_ref().unwrap().as_ref())
-        .cloned()
-        .chain(refs_to_shrd.into_iter().map(|a| *a.ty.unwrap()))
+        .map(|a| {
+            ParamSig::new(
+                kernel_ctx.exec.clone(),
+                a.ty.as_ref().unwrap().as_ref().clone(),
+            )
+        })
+        .chain(refs_to_shrd.into_iter().map(|a| {
+            let block_exec = exec_distrib_over_blocks(&kernel_ctx.exec);
+            ParamSig::new(block_exec, *a.ty.unwrap())
+        }))
         .collect::<Vec<_>>();
     // type check function application for generic args and extended argument list
-    let (f_remain_gen_args, f_subst_param_tys, f_subst_exec_level, f_subst_ret_ty, mut f_mono_ty) =
-        ty_check_dep_app(
-            &mut kernel_ctx,
-            &mut app_kernel.fun,
-            &mut app_kernel.gen_args,
-        )?;
-    // Get functions execution resource and check that it can be applied (i.e, that it must be
-    //   exectuted on an appropriate grid).
-    if let TyKind::FnTy(fn_ty) = &app_kernel.fun.ty.as_ref().unwrap().ty {
-        if !callable_in(&fn_ty.exec_ty, kernel_ctx.exec.ty.as_ref().unwrap()) {
-            return Err(TyError::String(format!(
-                "Trying to execute function for {:?} as kernel.",
-                &fn_ty.exec_ty,
-            )));
-        }
-    } else {
-        return Err(TyError::String(format!(
-            "Trying to execute expression which does not have a function type, as kernel, :\n\
-                    {:?}\n",
-            &app_kernel.fun
-        )));
-    };
+    let partially_applied_dep_fn_ty = ty_check_dep_app(
+        &mut kernel_ctx,
+        &mut app_kernel.fun,
+        &mut app_kernel.gen_args,
+    )?;
     // build expected type to unify with
     let unit_ty = Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
         ScalarTy::Unit,
     )))));
+    let mut mono_fn_ty = unify::inst_fn_ty_scheme(&partially_applied_dep_fn_ty);
     unify::unify(
         &mut FnTy::new(
             vec![],
-            extended_arg_tys,
-            *kernel_ctx.exec.ty.unwrap(),
+            None,
+            extended_arg_sigs,
+            kernel_ctx.exec,
             unit_ty.clone(),
         ),
-        &mut f_mono_ty,
+        &mut mono_fn_ty,
     )?;
-    let mut inferred_k_args = infer_kinded_args::infer_kinded_args_from_mono_ty(
-        f_remain_gen_args,
-        f_subst_param_tys,
-        &f_subst_exec_level,
-        &f_subst_ret_ty,
-        &f_mono_ty,
-    );
+    let mut inferred_k_args =
+        infer_kinded_args::infer_kinded_args(&partially_applied_dep_fn_ty, &mono_fn_ty);
     app_kernel.gen_args.append(&mut inferred_k_args);
     Ok(unit_ty)
+}
+
+fn exec_distrib_over_blocks(exec_expr: &ExecExpr) -> ExecExpr {
+    let base_clone = ExecExprKind::new(exec_expr.exec.base.clone());
+    let distrib_over_blocks = if let BaseExec::GpuGrid(gdim, _) = &exec_expr.exec.base {
+        match gdim {
+            Dim::XYZ(_) => base_clone
+                .distrib(DimCompo::X)
+                .distrib(DimCompo::Y)
+                .distrib(DimCompo::Z),
+            Dim::XY(_) => base_clone.distrib(DimCompo::X).distrib(DimCompo::Y),
+            Dim::XZ(_) => base_clone.distrib(DimCompo::X).distrib(DimCompo::Z),
+            Dim::YZ(_) => base_clone.distrib(DimCompo::Y).distrib(DimCompo::Z),
+            Dim::X(_) => base_clone.distrib(DimCompo::X).distrib(DimCompo::X),
+            Dim::Y(_) => base_clone.distrib(DimCompo::Y).distrib(DimCompo::Y),
+            Dim::Z(_) => base_clone.distrib(DimCompo::Z).distrib(DimCompo::Z),
+        }
+    } else {
+        panic!("Expected GPU grid.")
+    };
+    ExecExpr::new(distrib_over_blocks)
 }
 
 fn ty_check_tuple(ctx: &mut ExprTyCtx, elems: &mut [Expr]) -> TyResult<Ty> {
@@ -1440,8 +1495,7 @@ fn ty_check_literal(l: &mut Lit) -> Ty {
 }
 
 fn infer_pattern_ident_tys(
-    ty_ctx: &mut TyCtx,
-    exec: &ExecExpr,
+    ctx: &mut ExprTyCtx,
     pattern: &Pattern,
     pattern_ty: &Ty,
 ) -> TyResult<()> {
@@ -1456,20 +1510,15 @@ fn infer_pattern_ident_tys(
                 ident.clone(),
                 Ty::new(TyKind::Data(Box::new(pattern_dty.clone()))),
                 *mutbl,
-                exec.clone(),
+                ctx.exec.clone(),
             );
-            ty_ctx.append_ident_typed(ident_with_annotated_ty);
+            ctx.ty_ctx.append_ident_typed(ident_with_annotated_ty);
             Ok(())
         }
         (Pattern::Wildcard, _) => Ok(()),
         (Pattern::Tuple(patterns), DataTyKind::Tuple(elem_tys)) => {
             for (p, tty) in patterns.iter().zip(elem_tys) {
-                infer_pattern_ident_tys(
-                    ty_ctx,
-                    exec,
-                    p,
-                    &Ty::new(TyKind::Data(Box::new(tty.clone()))),
-                )?;
+                infer_pattern_ident_tys(ctx, p, &Ty::new(TyKind::Data(Box::new(tty.clone()))))?;
             }
             Ok(())
         }
@@ -1478,20 +1527,18 @@ fn infer_pattern_ident_tys(
 }
 
 fn infer_tys_and_append_idents(
-    kind_ctx: &KindCtx,
-    ty_ctx: &mut TyCtx,
-    exec: &ExecExpr,
+    ctx: &mut ExprTyCtx,
     pattern: &Pattern,
     pattern_ty: &mut Option<Box<Ty>>,
     assign_ty: &mut Ty,
 ) -> TyResult<()> {
     let pattern_ty = if let Some(pty) = pattern_ty {
-        unify::sub_unify(kind_ctx, ty_ctx, assign_ty, pty)?;
+        unify::sub_unify(&mut ctx.kind_ctx, &mut ctx.ty_ctx, assign_ty, pty)?;
         pty.as_ref().clone()
     } else {
         assign_ty.clone()
     };
-    infer_pattern_ident_tys(ty_ctx, exec, pattern, &pattern_ty)
+    infer_pattern_ident_tys(ctx, pattern, &pattern_ty)
 }
 
 fn ty_check_let(
@@ -1502,30 +1549,33 @@ fn ty_check_let(
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, expr)?;
     let e_ty = expr.ty.as_mut().unwrap();
-    infer_tys_and_append_idents(
-        ctx.kind_ctx,
-        ctx.ty_ctx,
-        &ctx.exec,
-        pattern,
-        pattern_ty,
-        e_ty,
-    )?;
+    infer_tys_and_append_idents(ctx, pattern, pattern_ty, e_ty)?;
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
 }
 
 // TODO respect exec?
-fn ty_check_let_uninit(ctx: &mut ExprTyCtx, ident: &Ident, ty: &Ty) -> TyResult<Ty> {
+fn ty_check_let_uninit(
+    ctx: &mut ExprTyCtx,
+    annot_exec: &Option<Box<ExecExpr>>,
+    ident: &Ident,
+    ty: &Ty,
+) -> TyResult<Ty> {
     // TODO is the type well-formed?
     if let TyKind::Data(dty) = &ty.ty {
+        let exec_expr = if let Some(ex) = annot_exec {
+            ex.as_ref().clone()
+        } else {
+            ctx.exec.clone()
+        };
         let ident_with_ty = IdentTyped::new(
             ident.clone(),
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Dead(
                 dty.clone(),
             ))))),
             Mutability::Mut,
-            ctx.exec.clone(),
+            exec_expr,
         );
         ctx.ty_ctx.append_ident_typed(ident_with_ty);
         Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
@@ -1687,7 +1737,7 @@ fn allowed_mem_for_exec(exec_ty: &ExecTyKind) -> Vec<Memory> {
             vec![Memory::GpuGlobal, Memory::GpuShared, Memory::GpuLocal]
         }
         ExecTyKind::GpuToThreads(_, _) => vec![Memory::GpuGlobal, Memory::GpuLocal],
-        ExecTyKind::View => vec![],
+        ExecTyKind::Any => vec![],
     }
 }
 
@@ -1831,8 +1881,10 @@ fn ty_well_formed(kind_ctx: &KindCtx, ty_ctx: &TyCtx, exec_ty: &ExecTy, ty: &Ty)
             let mut extended_kind_ctx = kind_ctx.clone();
             extended_kind_ctx.append_idents(fn_ty.generics.clone());
             ty_well_formed(&extended_kind_ctx, ty_ctx, exec_ty, &fn_ty.ret_ty)?;
-            for param_ty in &fn_ty.param_tys {
-                ty_well_formed(&extended_kind_ctx, ty_ctx, exec_ty, param_ty)?;
+            for param_sig in &fn_ty.param_sigs {
+                // TODO which checks are necessary for the execution resource in
+                //  param_sig.exec_expr?
+                ty_well_formed(&extended_kind_ctx, ty_ctx, exec_ty, &param_sig.ty)?;
             }
         }
     }
@@ -1840,7 +1892,7 @@ fn ty_well_formed(kind_ctx: &KindCtx, ty_ctx: &TyCtx, exec_ty: &ExecTy, ty: &Ty)
 }
 
 pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
-    if &callee_exec_ty.ty == &ExecTyKind::View {
+    if &callee_exec_ty.ty == &ExecTyKind::Any {
         true
     } else {
         let res = unify::unify(&mut callee_exec_ty.clone(), &mut caller_exec_ty.clone());
@@ -1850,7 +1902,7 @@ pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
 
 fn expand_exec_expr(ctx: &ExprTyCtx, exec_expr: &ExecExpr) -> TyResult<ExecExpr> {
     match &exec_expr.exec.base {
-        BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => Ok(exec_expr.clone()),
+        BaseExec::Any | BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => Ok(exec_expr.clone()),
         BaseExec::Ident(ident) => {
             let inner_exec_expr = ctx.ty_ctx.get_exec_expr(ident)?;
             let new_base = inner_exec_expr.exec.base.clone();
