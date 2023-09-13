@@ -78,9 +78,8 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
             );
             if let (Some(gel), Some(ger)) = (&fn_ty1.generic_exec, &fn_ty2.generic_exec) {
                 infer_kargs_exec_level(map, &gel.ty, &ger.ty);
-            } else {
-                panic!("Unexpected specific execution resource in function type")
             }
+            infer_kargs_exec_expr(map, &fn_ty1.exec, &fn_ty2.exec);
             infer_kargs_tys(map, &fn_ty1.ret_ty, &fn_ty2.ret_ty)
         }
         _ => panic_no_inst!(),
@@ -187,7 +186,6 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
             infer_kargs_dtys(map, &reff1.dty, &reff2.dty);
         }
         (DataTyKind::RawPtr(dty1), DataTyKind::RawPtr(dty2)) => infer_kargs_dtys(map, dty1, dty2),
-        (DataTyKind::Range, DataTyKind::Range) => (),
         (DataTyKind::Dead(dty1), DataTyKind::Dead(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         _ => panic_no_inst!(),
     }

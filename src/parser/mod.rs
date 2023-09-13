@@ -130,17 +130,22 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
         ident_names_to_exec_expr: Vec<(Box<str>, ExecExpr)>,
     }
     impl VisitMut for ReplaceExecIdents {
-        fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
-            match &mut pl_expr.pl_expr {
-                PlaceExprKind::Select(ple, exec) => {
-                    self.visit_pl_expr(ple);
-                    expand_exec_expr(&self.ident_names_to_exec_expr, exec);
-                }
-                _ => visit_mut::walk_pl_expr(self, pl_expr),
-            }
+        // fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
+        //     match &mut pl_expr.pl_expr {
+        //         PlaceExprKind::Select(ple, exec) => {
+        //             self.visit_pl_expr(ple);
+        //             expand_exec_expr(&self.ident_names_to_exec_expr, exec);
+        //         }
+        //         _ => visit_mut::walk_pl_expr(self, pl_expr),
+        //     }
+        // }
+
+        fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) {
+            expand_exec_expr(&self.ident_names_to_exec_expr, exec_expr)
         }
 
-        fn visit_indep(&mut self, indep: &mut Indep) {
+        fn visit_split(&mut self, indep: &mut Split) {
+            // manually expand to keep scopes for different branches of split
             expand_exec_expr(&self.ident_names_to_exec_expr, &mut indep.split_exec);
             for (i, (ident, branch)) in indep
                 .branch_idents
@@ -167,31 +172,59 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
         }
 
         fn visit_sched(&mut self, sched: &mut Sched) {
+            // manually expand to map inner_exec_ident to expanded exec
             expand_exec_expr(&self.ident_names_to_exec_expr, &mut sched.sched_exec);
             let body_exec = ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
             if let Some(ident) = &sched.inner_exec_ident {
                 self.ident_names_to_exec_expr
                     .push((ident.name.clone(), body_exec));
             }
-            self.visit_block(&mut sched.body);
+            visit_mut::walk_sched(self, sched);
             self.ident_names_to_exec_expr.pop();
+            // self.visit_block(&mut sched.body);
         }
 
-        fn visit_expr(&mut self, expr: &mut Expr) {
-            match &mut expr.expr {
-                ExprKind::Sync(exec) => {
-                    for exec in exec {
-                        expand_exec_expr(&self.ident_names_to_exec_expr, exec);
+        // fn visit_expr(&mut self, expr: &mut Expr) {
+        //     match &mut expr.expr {
+        //         ExprKind::Sync(exec) => {
+        //             for exec in exec {
+        //                 expand_exec_expr(&self.ident_names_to_exec_expr, exec);
+        //             }
+        //         }
+        //         _ => visit_mut::walk_expr(self, expr),
+        //     }
+        // }
+
+        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
+            if let Some(ident_exec) = fun_def.generic_exec.as_ref() {
+                match &ident_exec.ty.ty {
+                    ExecTyKind::CpuThread => {
+                        self.ident_names_to_exec_expr.push((
+                            ident_exec.ident.name.clone(),
+                            ExecExpr::new(ExecExprKind::new(BaseExec::CpuThread)),
+                        ));
+                        fun_def.generic_exec = None;
                     }
+                    ExecTyKind::GpuGrid(gdim, bdim) => {
+                        self.ident_names_to_exec_expr.push((
+                            ident_exec.ident.name.clone(),
+                            ExecExpr::new(ExecExprKind::new(BaseExec::GpuGrid(
+                                gdim.clone(),
+                                bdim.clone(),
+                            ))),
+                        ));
+                        fun_def.generic_exec = None;
+                    }
+                    _ => {}
                 }
-                _ => visit_mut::walk_expr(self, expr),
             }
+            visit_mut::walk_fun_def(self, fun_def)
         }
     }
 
     fn expand_exec_expr(exec_mapping: &[(Box<str>, ExecExpr)], exec_expr: &mut ExecExpr) {
         match &exec_expr.exec.base {
-            BaseExec::Any | BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => {}
+            BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => {}
             BaseExec::Ident(ident) => {
                 if let Some(exec) = get_exec_expr(exec_mapping, ident) {
                     let new_base = exec.exec.base.clone();
@@ -508,7 +541,7 @@ peg::parser! {
                 branch:(branch_ident:ident() _ "=>" _
                     branch_body:expression() { (branch_ident, branch_body) }) **<1,> (_ "," _) _
             "}" {
-                Expr::new(ExprKind::Indep(Box::new(Indep::new(dim,
+                Expr::new(ExprKind::Split(Box::new(Split::new(dim,
                     n, exec,
                     branch.iter().map(|(i, _)| i.clone()).collect(),
                     branch.iter().map(|(_, b)| b.clone()).collect()))))
@@ -520,11 +553,11 @@ peg::parser! {
                     None => DimCompo::X,
                 }, inner_exec_ident, sched_exec, body))))
             }
-            "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
-              "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
-              body_expr:block_expr() {
-                Expr::new(ExprKind::Lambda(params, exec_decl, Box::new(ret_dty), Box::new(body_expr)))
-            }
+            // "|" _ params:(lambda_parameter() ** (_ "," _)) _ "|" _
+            //   "-" _ "[" _ exec_decl:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
+            //   body_expr:block_expr() {
+            //     Expr::new(ExprKind::Lambda(params, exec_decl, Box::new(ret_dty), Box::new(body_expr)))
+            // }
             block:block_expr() { block }
             expression: expr_helper() { expression }
         }

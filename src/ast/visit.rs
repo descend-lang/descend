@@ -32,7 +32,7 @@ pub trait Visit: Sized {
     fn visit_lit(&mut self, _lit: &Lit) {}
     fn visit_ident(&mut self, _ident: &Ident) {}
     fn visit_pattern(&mut self, pattern: &Pattern) { walk_pattern(self, pattern) }
-    fn visit_indep(&mut self, par_branch: &Indep) { walk_indep(self, par_branch) }
+    fn visit_split(&mut self, split: &Split) { walk_split(self, split) }
     fn visit_sched(&mut self, par_for: &Sched) { walk_sched(self, par_for) }
     fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
     fn visit_app_kernel(&mut self, app_kernel: &AppKernel) { walk_app_kernel(self, app_kernel) }
@@ -168,7 +168,6 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
             visitor.visit_ref(reff);
         }
         DataTyKind::RawPtr(dty) => visitor.visit_dty(dty),
-        DataTyKind::Range => {}
         DataTyKind::Dead(dty) => visitor.visit_dty(dty),
     }
 }
@@ -252,8 +251,8 @@ pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
     }
 }
 
-pub fn walk_indep<V: Visit>(visitor: &mut V, indep: &Indep) {
-    let Indep {
+pub fn walk_split<V: Visit>(visitor: &mut V, indep: &Split) {
+    let Split {
         dim_compo,
         pos,
         split_exec,
@@ -321,12 +320,12 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
                 visitor.visit_expr(e)
             }
         }
-        ExprKind::Lambda(params, exec_decl, dty, expr) => {
-            walk_list!(visitor, visit_param_decl, params);
-            visitor.visit_ident_exec(exec_decl);
-            visitor.visit_dty(dty);
-            visitor.visit_expr(expr)
-        }
+        // ExprKind::Lambda(params, exec_decl, dty, expr) => {
+        //     walk_list!(visitor, visit_param_decl, params);
+        //     visitor.visit_ident_exec(exec_decl);
+        //     visitor.visit_dty(dty);
+        //     visitor.visit_expr(expr)
+        // }
         ExprKind::App(f, gen_args, args) => {
             visitor.visit_expr(f);
             walk_list!(visitor, visit_arg_kinded, gen_args);
@@ -359,8 +358,8 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_expr(coll);
             visitor.visit_expr(body);
         }
-        ExprKind::Indep(par_branch) => {
-            visitor.visit_indep(par_branch);
+        ExprKind::Split(par_branch) => {
+            visitor.visit_split(par_branch);
         }
         ExprKind::Sched(sched) => {
             visitor.visit_sched(sched);
@@ -445,7 +444,7 @@ pub fn walk_exec_expr<V: Visit>(visitor: &mut V, exec_expr: &ExecExpr) {
 pub fn walk_exec<V: Visit>(visitor: &mut V, exec: &ExecExprKind) {
     let ExecExprKind { base, path } = exec;
     match base {
-        BaseExec::Any | BaseExec::CpuThread => (),
+        BaseExec::CpuThread => (),
         BaseExec::Ident(ident) => visitor.visit_ident(ident),
         BaseExec::GpuGrid(gdim, bdim) => {
             visitor.visit_dim(gdim);

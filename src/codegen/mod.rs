@@ -23,8 +23,8 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     );
     let mut generated_initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 4);
     for fun_def in &mut initial_fns_to_generate {
-        inline_unit_exec_ty_value(fun_def);
-        let exec = match &fun_def.generic_exec.as_ref().unwrap().ty.ty {
+        // inline_unit_exec_ty_value(fun_def);
+        let exec = match &fun_def.exec.ty.as_ref().unwrap().ty {
             desc::ExecTyKind::CpuThread => desc::BaseExec::CpuThread,
             desc::ExecTyKind::GpuGrid(gdim, bdim) => {
                 desc::BaseExec::GpuGrid(gdim.clone(), bdim.clone())
@@ -33,10 +33,10 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
         };
         codegen_ctx.push_scope();
         codegen_ctx.exec = desc::ExecExpr::new(desc::ExecExprKind::new(exec));
-        codegen_ctx.exec_mapping.insert(
-            &fun_def.generic_exec.as_ref().unwrap().ident.name,
-            codegen_ctx.exec.clone(),
-        );
+        // codegen_ctx.exec_mapping.insert(
+        //     &fun_def.generic_exec.as_ref().unwrap().ident.name,
+        //     codegen_ctx.exec.clone(),
+        // );
         generated_initial_fns.push(gen_fun_def(fun_def, &mut codegen_ctx));
         codegen_ctx.drop_scope();
         debug_assert_eq!(codegen_ctx.view_ctx.map.len(), 0);
@@ -89,7 +89,7 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
                 .iter()
                 .all(|p| !is_view_dty(p.ty.as_ref().unwrap()))
                 && matches!(
-                    &f.generic_exec.as_ref().unwrap().ty.ty,
+                    &f.exec.ty.as_ref().unwrap().ty,
                     desc::ExecTyKind::GpuGrid(_, _)
                         | desc::ExecTyKind::GpuToThreads(_, _)
                         | desc::ExecTyKind::CpuThread
@@ -99,39 +99,39 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         .collect::<Vec<desc::FunDef>>()
 }
 
-fn inline_unit_exec_ty_value(fun_def: &mut desc::FunDef) {
-    struct InlineUnitExecTy {
-        ident: desc::Ident,
-        base_exec: desc::BaseExec,
-    }
-    impl VisitMut for InlineUnitExecTy {
-        fn visit_exec_expr(&mut self, exec_expr: &mut desc::ExecExpr) {
-            match &mut exec_expr.exec.base {
-                desc::BaseExec::Ident(i) if i.name == self.ident.name => {
-                    exec_expr.exec.base = self.base_exec.clone();
-                }
-                _ => desc::visit_mut::walk_exec_expr(self, exec_expr),
-            }
-        }
-    }
-    let mut inline_unit_exec_ty = InlineUnitExecTy {
-        ident: fun_def.generic_exec.as_ref().unwrap().ident.clone(),
-        base_exec: exec_from_unit_exec_ty(&fun_def.generic_exec.as_ref().unwrap().ty),
-    };
-    inline_unit_exec_ty.visit_fun_def(fun_def)
-}
-
-fn exec_from_unit_exec_ty(exec_ty: &desc::ExecTy) -> desc::BaseExec {
-    match &exec_ty.ty {
-        desc::ExecTyKind::GpuGrid(gdim, bdim) => {
-            desc::BaseExec::GpuGrid(gdim.clone(), bdim.clone())
-        }
-        desc::ExecTyKind::CpuThread => desc::BaseExec::CpuThread,
-        _ => {
-            panic!("Expected unit exec type, but found type that is inhibited by multiple values.")
-        }
-    }
-}
+// fn inline_unit_exec_ty_value(fun_def: &mut desc::FunDef) {
+//     struct InlineUnitExecTy {
+//         ident: desc::Ident,
+//         base_exec: desc::BaseExec,
+//     }
+//     impl VisitMut for InlineUnitExecTy {
+//         fn visit_exec_expr(&mut self, exec_expr: &mut desc::ExecExpr) {
+//             match &mut exec_expr.exec.base {
+//                 desc::BaseExec::Ident(i) if i.name == self.ident.name => {
+//                     exec_expr.exec.base = self.base_exec.clone();
+//                 }
+//                 _ => desc::visit_mut::walk_exec_expr(self, exec_expr),
+//             }
+//         }
+//     }
+//     let mut inline_unit_exec_ty = InlineUnitExecTy {
+//         ident: fun_def.generic_exec.as_ref().unwrap().ident.clone(),
+//         base_exec: exec_from_unit_exec_ty(&fun_def.generic_exec.as_ref().unwrap().ty),
+//     };
+//     inline_unit_exec_ty.visit_fun_def(fun_def)
+// }
+//
+// fn exec_from_unit_exec_ty(exec_ty: &desc::ExecTy) -> desc::BaseExec {
+//     match &exec_ty.ty {
+//         desc::ExecTyKind::GpuGrid(gdim, bdim) => {
+//             desc::BaseExec::GpuGrid(gdim.clone(), bdim.clone())
+//         }
+//         desc::ExecTyKind::CpuThread => desc::BaseExec::CpuThread,
+//         _ => {
+//             panic!("Expected unit exec type, but found type that is inhibited by multiple values.")
+//         }
+//     }
+// }
 
 fn mv_shrd_mem_params_into_decls(
     mut f: cu::FnDef,
@@ -176,7 +176,6 @@ struct CodegenCtx<'a> {
     exec: desc::ExecExpr,
     comp_unit: &'a [desc::FunDef],
     kernel_infos: Vec<KernelInfo>,
-    idx_checks: bool,
 }
 
 impl<'a> CodegenCtx<'a> {
@@ -188,7 +187,6 @@ impl<'a> CodegenCtx<'a> {
             exec,
             comp_unit,
             kernel_infos: vec![],
-            idx_checks: false,
         }
     }
 
@@ -262,37 +260,12 @@ impl<T: Debug + Clone> ScopeCtx<T> {
     }
 }
 
-enum CheckedExpr {
-    Expr(cu::Expr),
-    // TODO Wrap in Box
-    ExprIdxCheck(cu::Stmt, cu::Expr),
-}
-
-impl CheckedExpr {
-    fn map<F>(self, f: F) -> Self
-    where
-        F: FnOnce(cu::Expr) -> cu::Expr,
-    {
-        match self {
-            Self::Expr(e) => Self::Expr(f(e)),
-            Self::ExprIdxCheck(c, e) => Self::ExprIdxCheck(c, f(e)),
-        }
-    }
-
-    fn expr(&self) -> &cu::Expr {
-        match self {
-            Self::Expr(e) => e,
-            Self::ExprIdxCheck(c, e) => panic!("expected expr, found idxCheck"),
-        }
-    }
-}
-
 fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef {
     let desc::FunDef {
         ident: name,
-        generic_exec,
         generic_params: ty_idents,
         param_decls: params,
+        exec,
         ret_dty,
         body,
         ..
@@ -306,7 +279,7 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
             &desc::TyKind::Data(Box::new(ret_dty.as_ref().clone())),
             desc::Mutability::Mut,
         ),
-        if is_dev_fun(&generic_exec.as_ref().unwrap().ty) {
+        if is_dev_fun(exec.ty.as_ref().unwrap()) {
             cu::ExecKind::Device
         } else {
             cu::ExecKind::Host
@@ -501,7 +474,7 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             cu::Stmt::Skip
         }
         AppKernel(app_kernel) => gen_app_kernel(app_kernel, codegen_ctx),
-        Indep(pb) => gen_indep(pb, codegen_ctx),
+        Split(pb) => gen_indep(pb, codegen_ctx),
         Sched(pf) => gen_sched(pf, codegen_ctx),
         // FIXME this assumes that IfElse is not an Expression.
         IfElse(cond, e_tt, e_ff) => {
@@ -791,11 +764,11 @@ fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) ->
                 panic!("Unexpected syntactical construct with function type.")
             }
         }
-        desc::ExprKind::Lambda(_, _, _, _) => {
-            todo!("Is it really necessary and sensible to allow kernel execution of lambdas?")
-            // If yes: use exec instead of cu::ExecKernel
-            // create_named_fn_call("descend::exec".to_string(), vec![], full_arg_list)
-        }
+        // desc::ExprKind::Lambda(_, _, _, _) => {
+        //     todo!("Is it really necessary and sensible to allow kernel execution of lambdas?")
+        //     // If yes: use exec instead of cu::ExecKernel
+        //     // create_named_fn_call("descend::exec".to_string(), vec![], full_arg_list)
+        // }
         _ => panic!("Unexpected syntactical construct with function type."),
     };
     cu::Stmt::ExecKernel(Box::new(exec_kernel))
@@ -938,7 +911,7 @@ fn count_bytes(dtys: &[desc::DataTy]) -> desc::Nat {
     bytes
 }
 
-fn gen_indep(indep: &desc::Indep, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+fn gen_indep(indep: &desc::Split, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     let outer_exec = codegen_ctx.exec.clone();
     let expanded_outer_exec = expand_exec_expr(codegen_ctx, &outer_exec);
     codegen_ctx.push_scope();
@@ -1153,30 +1126,30 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
             lhs: Box::new(gen_pl_expr(pl_expr, &mut vec![], codegen_ctx)),
             rhs: Box::new(gen_expr(expr, codegen_ctx)),
         },
-        Lambda(params, exec_decl, dty, body) => cu::Expr::Lambda {
-            captures: {
-                // FIXME should list all captures not just generic arguments
-                // free_idents(body)
-                //     .iter()
-                //     .map(|ki| ki.ident.clone())
-                //     .collect()
-                vec![]
-            },
-            params: gen_param_decls(params.as_slice()),
-            body: Box::new(gen_stmt(
-                body,
-                !matches!(
-                    dty.as_ref(),
-                    desc::DataTy {
-                        dty: desc::DataTyKind::Scalar(desc::ScalarTy::Unit),
-                        ..
-                    }
-                ),
-                codegen_ctx,
-            )),
-            ret_ty: gen_ty(&desc::TyKind::Data(dty.clone()), desc::Mutability::Mut),
-            is_dev_fun: is_dev_fun(&exec_decl.ty),
-        },
+        // Lambda(params, exec_decl, dty, body) => cu::Expr::Lambda {
+        //     captures: {
+        //         // FIXME should list all captures not just generic arguments
+        //         // free_idents(body)
+        //         //     .iter()
+        //         //     .map(|ki| ki.ident.clone())
+        //         //     .collect()
+        //         vec![]
+        //     },
+        //     params: gen_param_decls(params.as_slice()),
+        //     body: Box::new(gen_stmt(
+        //         body,
+        //         !matches!(
+        //             dty.as_ref(),
+        //             desc::DataTy {
+        //                 dty: desc::DataTyKind::Scalar(desc::ScalarTy::Unit),
+        //                 ..
+        //             }
+        //         ),
+        //         codegen_ctx,
+        //     )),
+        //     ret_ty: gen_ty(&desc::TyKind::Data(dty.clone()), desc::Mutability::Mut),
+        //     is_dev_fun: is_dev_fun(&exec_decl.ty),
+        // },
         App(fun, kinded_args, args) => match &fun.expr {
             PlaceExpr(pl_expr) => match &pl_expr.pl_expr {
                 desc::PlaceExprKind::Ident(ident)
@@ -1256,7 +1229,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
         | While(_, _)
         | For(_, _, _)
         | ForNat(_, _, _)
-        | Indep(_)
+        | Split(_)
         | Sched(_)
         | Sync(_)
         | AppKernel(_) => panic!(
@@ -2071,9 +2044,6 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                 d::Dead(_) => {
                     panic!("Dead types are only for type checking and cannot be generated.")
                 }
-                desc::DataTyKind::Range => {
-                    panic!("Cannot generate type for ThreadHierchy or Range")
-                }
             }
         }
         FnTy(_) => unimplemented!("needed?"),
@@ -2110,9 +2080,7 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
 
 fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &desc::ExecExpr) -> desc::ExecExpr {
     match &exec_expr.exec.base {
-        desc::BaseExec::Any | desc::BaseExec::CpuThread | desc::BaseExec::GpuGrid(_, _) => {
-            exec_expr.clone()
-        }
+        desc::BaseExec::CpuThread | desc::BaseExec::GpuGrid(_, _) => exec_expr.clone(),
         desc::BaseExec::Ident(ident) => {
             let inner_exec_expr = codegen_ctx.exec_mapping.get(ident.name.as_ref());
             let new_base = inner_exec_expr.exec.base.clone();
@@ -2130,7 +2098,7 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
         desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
         }
-        desc::BaseExec::Any | desc::BaseExec::Ident(_) | desc::BaseExec::CpuThread => {
+        desc::BaseExec::Ident(_) | desc::BaseExec::CpuThread => {
             unreachable!()
         }
     };

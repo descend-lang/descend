@@ -87,6 +87,8 @@ pub struct ParamDecl {
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub expr: ExprKind,
+    // FIXME misusing span_derive_ignore to ignore type on equality checks
+    #[span_derive_ignore]
     pub ty: Option<Box<Ty>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
@@ -224,34 +226,7 @@ impl Sched {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct ExprSplit {
-    pub lrgn: Option<String>,
-    pub rrgn: Option<String>,
-    pub own: Ownership,
-    pub pos: Nat,
-    pub view: Box<PlaceExpr>,
-}
-
-impl ExprSplit {
-    pub fn new(
-        lrgn: Option<String>,
-        rrgn: Option<String>,
-        own: Ownership,
-        pos: Nat,
-        view: PlaceExpr,
-    ) -> Self {
-        ExprSplit {
-            lrgn,
-            rrgn,
-            own,
-            pos,
-            view: Box::new(view),
-        }
-    }
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub struct Indep {
+pub struct Split {
     pub dim_compo: DimCompo,
     pub pos: Nat,
     pub split_exec: Box<ExecExpr>,
@@ -259,7 +234,7 @@ pub struct Indep {
     pub branch_bodies: Vec<Expr>,
 }
 
-impl Indep {
+impl Split {
     pub fn new(
         dim_compo: DimCompo,
         pos: Nat,
@@ -267,7 +242,7 @@ impl Indep {
         branch_idents: Vec<Ident>,
         branch_bodies: Vec<Expr>,
     ) -> Self {
-        Indep {
+        Split {
             dim_compo,
             pos,
             split_exec: Box::new(split_exec),
@@ -336,11 +311,10 @@ pub enum ExprKind {
     // Anonymous function which can capture its surrounding context
     // | x_n: d_1, ..., x_n: d_n | [exec]-> d_r { e }
     // TODO body expression should always be block?! No but treated like one.
-    Lambda(Vec<ParamDecl>, IdentExec, Box<DataTy>, Box<Expr>),
+    //Lambda(Vec<ParamDecl>, IdentExec, Box<DataTy>, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
     App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
-    // TODO remove
     DepApp(Box<Expr>, Vec<ArgKinded>),
     AppKernel(Box<AppKernel>),
     // TODO branches must be blocks
@@ -361,7 +335,7 @@ pub enum ExprKind {
     UnOp(UnOp, Box<Expr>),
     Cast(Box<Expr>, Box<DataTy>),
     // TODO branches must be blocks or treated like blocks
-    Indep(Box<Indep>),
+    Split(Box<Split>),
     Sched(Box<Sched>),
     Sync(Option<ExecExpr>),
     Range(Box<Expr>, Box<Expr>),
@@ -570,6 +544,8 @@ impl ArgKinded {
 #[derive(Debug, Clone)]
 pub struct PlaceExpr {
     pub pl_expr: PlaceExprKind,
+    // FIXME misusing span_derive_ignore to ignore type on equality checks
+    #[span_derive_ignore]
     pub ty: Option<Box<Ty>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
@@ -615,7 +591,6 @@ pub enum PlaceExprKind {
 pub enum PlExprPathElem {
     View(View),
     Select(Box<ExecExpr>),
-    SplitAt(Box<Nat>),
     Proj(usize),
     Deref,
     Idx(Box<Nat>),
@@ -746,6 +721,8 @@ impl PlaceExpr {
 #[derive(Debug, Clone)]
 pub struct ExecExpr {
     pub exec: Box<ExecExprKind>,
+    // FIXME misusing span_derive_ignore to ignore type on equality checks
+    #[span_derive_ignore]
     pub ty: Option<Box<ExecTy>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
@@ -872,7 +849,6 @@ impl ExecExprKind {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum BaseExec {
-    Any,
     Ident(Ident),
     CpuThread,
     GpuGrid(Dim, Dim),
@@ -1130,7 +1106,6 @@ impl DataTy {
         match &self.dty {
             Scalar(_)
             | RawPtr(_)
-            | Range
             | Atomic(_)
             | Ident(_)
             | Ref(_)
@@ -1149,7 +1124,7 @@ impl DataTy {
             return true;
         }
         match &dty.dty {
-            DataTyKind::Scalar(_) | DataTyKind::Ident(_) | DataTyKind::Range => false,
+            DataTyKind::Scalar(_) | DataTyKind::Ident(_) => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
             DataTyKind::Atomic(aty) => &self.dty == &DataTyKind::Atomic(aty.clone()),
             DataTyKind::Ref(reff) => self.occurs_in(&reff.dty),
@@ -1170,7 +1145,7 @@ impl DataTy {
     pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
         use DataTyKind::*;
         match &self.dty {
-            Scalar(_) | Atomic(_) | Ident(_) | Range | Dead(_) => false,
+            Scalar(_) | Atomic(_) | Ident(_) | Dead(_) => false,
             Ref(reff) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = &reff.rgn {
                     prv_val_name == prv_val_n
@@ -1221,7 +1196,7 @@ pub enum DataTyKind {
     At(Box<DataTy>, Memory),
     Ref(Box<RefDty>),
     RawPtr(Box<DataTy>),
-    Range,
+    //Range,
     // TODO remove. This is an attribute of a typing context entry, not the type.
     // Only for type checking purposes.
     Dead(Box<DataTy>),

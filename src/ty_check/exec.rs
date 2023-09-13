@@ -7,19 +7,22 @@ use crate::ast::LeftOrRight;
 pub(super) fn ty_check(
     kind_ctx: &KindCtx,
     ty_ctx: &TyCtx,
-    ident_exec: &IdentExec,
+    ident_exec: Option<&IdentExec>,
     exec_expr: &mut ExecExpr,
 ) -> TyResult<()> {
     let mut exec_ty = match &exec_expr.exec.base {
         BaseExec::Ident(ident) => {
-            if ident == &ident_exec.ident {
-                ident_exec.ty.ty.clone()
+            if let Some(ie) = ident_exec {
+                if ident == &ie.ident {
+                    ie.ty.ty.clone()
+                } else {
+                    let inline_exec = ty_ctx.get_exec_expr(ident)?;
+                    inline_exec.ty.as_ref().unwrap().ty.clone()
+                }
             } else {
-                let inline_exec = ty_ctx.get_exec_expr(ident)?;
-                inline_exec.ty.as_ref().unwrap().ty.clone()
+                return Err(TyError::IllegalExec);
             }
         }
-        BaseExec::Any => ExecTyKind::Any,
         BaseExec::CpuThread => ExecTyKind::CpuThread,
         BaseExec::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid(gdim.clone(), bdim.clone()),
     };
@@ -27,10 +30,10 @@ pub(super) fn ty_check(
     for e in &exec_expr.exec.path {
         match e {
             ExecPathElem::ForAll(d) => {
-                exec_ty = ty_check_exec_distrib(*d, &exec_ty)?;
+                exec_ty = ty_check_exec_forall(*d, &exec_ty)?;
             }
             ExecPathElem::TakeRange(exec_split) => {
-                exec_ty = ty_check_exec_split_proj(
+                exec_ty = ty_check_exec_take_range(
                     exec_split.split_dim,
                     &exec_split.pos,
                     exec_split.left_or_right,
@@ -90,6 +93,7 @@ fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
     match exec_ty {
         ExecTyKind::GpuBlock(dim) => match dim.clone() {
             Dim::X(d) => {
+                // FIXME the comparison of Nats is not evaluated
                 if Nat::BinOp(BinOpNat::Mod, Box::new(d.0.clone()), Box::new(Nat::Lit(32)))
                     != Nat::Lit(0)
                 {
@@ -117,7 +121,7 @@ fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
     }
 }
 
-fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+fn ty_check_exec_forall(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
     let res_ty = match exec_ty {
         ExecTyKind::GpuGrid(gdim, bdim) => {
             let inner_dim = remove_dim(gdim, d)?.0;
@@ -153,7 +157,7 @@ fn ty_check_exec_distrib(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKi
             if dim_compo_matches_dim(d, dim) {
                 inner_exec.ty.clone()
             } else {
-                let forall_inner = ty_check_exec_distrib(d, &inner_exec.ty)?;
+                let forall_inner = ty_check_exec_forall(d, &inner_exec.ty)?;
                 ExecTyKind::GpuToThreads(dim.clone(), Box::new(ExecTy::new(forall_inner)))
             }
         }
@@ -218,7 +222,7 @@ pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<(Option<Dim>, Dim)
     }
 }
 
-fn ty_check_exec_split_proj(
+fn ty_check_exec_take_range(
     d: DimCompo,
     n: &Nat,
     proj: LeftOrRight,

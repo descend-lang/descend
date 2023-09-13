@@ -12,7 +12,7 @@ pub(super) struct BorrowCheckCtx<'ctxt> {
     // TODO refactor: move into ctx module and remove public
     pub gl_ctx: &'ctxt GlobalCtx,
     pub kind_ctx: &'ctxt KindCtx,
-    pub ident_exec: &'ctxt IdentExec,
+    pub ident_exec: Option<&'ctxt IdentExec>,
     pub ty_ctx: &'ctxt TyCtx,
     pub access_ctx: &'ctxt AccessCtx,
     pub exec: ExecExpr,
@@ -29,7 +29,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
         BorrowCheckCtx::<'ctxt> {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             kind_ctx: &*expr_ty_ctx.kind_ctx,
-            ident_exec: &*expr_ty_ctx.ident_exec,
+            ident_exec: expr_ty_ctx.ident_exec,
             ty_ctx: &*expr_ty_ctx.ty_ctx,
             access_ctx: &*expr_ty_ctx.access_ctx,
             exec: expr_ty_ctx.exec.clone(),
@@ -47,7 +47,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
         BorrowCheckCtx {
             gl_ctx: &*self.gl_ctx,
             kind_ctx: &*self.kind_ctx,
-            ident_exec: &*self.ident_exec,
+            ident_exec: self.ident_exec,
             ty_ctx: &*self.ty_ctx,
             access_ctx: &*self.access_ctx,
             exec: self.exec.clone(),
@@ -63,7 +63,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
 pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
     narrowing_check(ctx, p, &ctx.exec)?;
-    access_safety_check(ctx, p)?;
+    access_conflict_check(ctx, p)?;
     // no conflict with existing borrows
     // no conflicting access:
     //  no overlapping access with any exec != this.exec
@@ -233,7 +233,7 @@ fn narrowing_check(ctx: &BorrowCheckCtx, p: &PlaceExpr, exec: &ExecExpr) -> OwnR
     }
 }
 
-fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
+fn access_conflict_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
     for (ex, loans) in ctx.access_ctx.iter().filter(|(exec, _)| *exec != &ctx.exec) {
         if !no_uniq_loan_overlap(ctx.own, p, loans) {
             return Err(BorrowingError::ConflictingAccess);

@@ -134,7 +134,6 @@ impl PrintState {
 
     pub fn print_exec_expr(&mut self, exec_expr: &ExecExpr) {
         match &exec_expr.exec.base {
-            BaseExec::Any => self.string.push_str("Any"),
             BaseExec::Ident(ident) => self.print_ident(ident),
             BaseExec::CpuThread => self.string.push_str("cpu.thread"),
             BaseExec::GpuGrid(gdim, bdim) => {
@@ -150,7 +149,7 @@ impl PrintState {
             match pe {
                 ExecPathElem::TakeRange(split_proj) => self.print_take_range(split_proj),
                 ExecPathElem::ForAll(dim_compo) => {
-                    self.string.push_str("sched(");
+                    self.string.push_str("forall(");
                     self.print_dim_compo(dim_compo);
                     self.string.push(')');
                 }
@@ -271,7 +270,6 @@ impl PrintState {
             DataTyKind::RawPtr(_) => {
                 unimplemented!()
             }
-            DataTyKind::Range => self.string.push_str("Range"),
             DataTyKind::Dead(dty) => self.print_dty(dty),
         }
     }

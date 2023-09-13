@@ -7,9 +7,6 @@ use crate::ast::{
 pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
 pub static COPY_TO_HOST: &str = "copy_to_host";
-pub static EXEC: &str = "exec";
-pub static EXEC_XY: &str = "exec_xy";
-pub static SHARED_ALLOC: &str = "shared_alloc";
 pub static COPY_TO_GPU: &str = "copy_to_gpu";
 pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
@@ -23,8 +20,6 @@ pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
 pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
 pub static TO_ATOMIC_ARRAY: &str = "to_atomic_array";
 pub static TO_ATOMIC: &str = "to_atomic";
-
-pub static CREATE_ARRAY: &str = "create_array";
 
 pub static TO_VIEW: &str = "to_view";
 pub static REVERSE: &str = "rev";
@@ -211,7 +206,7 @@ fn shfl_up_ty() -> FnTy {
 fn nat_as_u64_ty() -> FnTy {
     let n = Ident::new("n");
     let n_nat = IdentKinded {
-        ident: n.clone(),
+        ident: n,
         kind: Kind::Nat,
     };
     let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
@@ -305,7 +300,7 @@ fn to_atomic_array_ty() -> FnTy {
                 )),
             ))))),
         )],
-        exec_expr.clone(),
+        exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
             Box::new(RefDty::new(
                 Provenance::Ident(r),
@@ -313,7 +308,7 @@ fn to_atomic_array_ty() -> FnTy {
                 Memory::Ident(m),
                 DataTy::new(DataTyKind::Array(
                     Box::new(DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32))),
-                    Nat::Ident(n.clone()),
+                    Nat::Ident(n),
                 )),
             )),
         ))))),
@@ -765,13 +760,13 @@ fn reverse_ty() -> FnTy {
         )],
         exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
-            Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-            Nat::Ident(n.clone()),
+            Box::new(DataTy::new(DataTyKind::Ident(d))),
+            Nat::Ident(n),
         ))))),
     )
 }
 
-//map_mut:<d: dty, d2: dty, n: nat>(lambda: |d| -[ex]-> d2, [[d;n]]) -[ex: Any]-> [[d2; n]]
+//map_mut:<d: dty, d2: dty, n: nat>(|d| -[ex]-> d2, [[d;n]]) -[ex: Any]-> [[d2; n]]
 fn map_ty() -> FnTy {
     let d = Ident::new("d");
     let d2 = Ident::new("d2");
@@ -792,14 +787,14 @@ fn map_ty() -> FnTy {
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
     FnTy::new(
-        vec![d_dty.clone(), d2_dty.clone(), n_nat.clone()],
-        Some(ident_exec.clone()),
+        vec![d_dty, d2_dty, n_nat],
+        Some(ident_exec),
         vec![
             ParamSig::new(
                 exec_expr.clone(),
                 Ty::new(TyKind::FnTy(Box::new(FnTy::new(
                     vec![],
-                    Some(ident_exec),
+                    None,
                     vec![ParamSig::new(
                         exec_expr.clone(),
                         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(

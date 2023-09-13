@@ -14,8 +14,8 @@ fn par_transpose<r: prv>(
 ) -[grid: gpu.grid<X<64>, X<32>>]-> () {
     sched block in grid {
         sched thread in block {
-            (*out_vec).to_view.map::<[f64; 2048]>(to_view).transp[[block]][[thread]] =
-                (*in_vec).to_view.map::<[f64; 2048]>(to_view)[[block]][[thread]]
+            (*out_vec).to_view.map(to_view).transp[[block]][[thread]] =
+                (*in_vec).to_view.map(to_view)[[block]][[thread]]
         }
     }
 }

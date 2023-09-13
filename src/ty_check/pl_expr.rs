@@ -2,18 +2,19 @@ use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
-    utils, ArgKinded, BaseExec, BinOpNat, DataTy, DataTyKind, ExecExpr, ExecExprKind, ExecTy,
-    ExecTyKind, FnTy, Ident, IdentExec, Memory, Nat, Ownership, ParamSig, PlaceExpr, PlaceExprKind,
-    Provenance, Ty, TyKind, View,
+    utils, ArgKinded, BaseExec, DataTy, DataTyKind, ExecExpr, ExecExprKind, ExecTy, ExecTyKind,
+    FnTy, Ident, IdentExec, Memory, Nat, Ownership, ParamSig, PlaceExpr, PlaceExprKind, Provenance,
+    Ty, TyKind, View,
 };
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 
+use crate::ty_check::unify::{substitute, ConstrainMap};
 use crate::ty_check::{exec, unify, ExprTyCtx};
 
 pub(super) struct PlExprTyCtx<'ctxt> {
     gl_ctx: &'ctxt GlobalCtx,
     kind_ctx: &'ctxt KindCtx,
-    ident_exec: &'ctxt IdentExec,
+    ident_exec: Option<&'ctxt IdentExec>,
     exec: ExecExpr,
     ty_ctx: &'ctxt TyCtx,
     exec_borrow_ctx: &'ctxt AccessCtx,
@@ -25,7 +26,7 @@ impl<'ctxt> PlExprTyCtx<'ctxt> {
         PlExprTyCtx {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             kind_ctx: &*expr_ty_ctx.kind_ctx,
-            ident_exec: &*expr_ty_ctx.ident_exec,
+            ident_exec: expr_ty_ctx.ident_exec,
             exec: expr_ty_ctx.exec.clone(),
             ty_ctx: &*expr_ty_ctx.ty_ctx,
             exec_borrow_ctx: &*expr_ty_ctx.access_ctx,
@@ -93,35 +94,59 @@ fn ty_check_view_pl_expr(
     let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
     let view_fn_ty = ty_check_view(ctx, view)?;
     let in_dty = pl_expr.ty.as_ref().unwrap().dty().clone();
-    let res_dty = ty_check_app_view_fn_ty(&in_dty, view_fn_ty)?;
+    let (res_dty, constr_map) = ty_check_app_view_fn_ty(ctx, &in_dty, view_fn_ty)?;
+    // substitute gener arguments that were added by inference in ty_check_view
+    subst_view(&constr_map, view);
     Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
 }
 
-fn ty_check_app_view_fn_ty(in_dty: &DataTy, mut view_fn_ty: FnTy) -> TyResult<DataTy> {
-    let ident_exec = Ident::new(&utils::fresh_name("view_fn"));
+// TODO refactor by separating Constrainable and substitue into Substitutable trait, then implement
+//  substitutable for ArgKinded
+fn subst_view(constr_map: &ConstrainMap, view: &mut View) {
+    for ga in &mut view.gen_args {
+        subst_gen_arg(constr_map, ga);
+    }
+    for arg in &mut view.args {
+        subst_view(constr_map, arg);
+    }
+}
+
+fn subst_gen_arg(constr_map: &ConstrainMap, gen_arg: &mut ArgKinded) {
+    match gen_arg {
+        ArgKinded::DataTy(dty) => substitute(constr_map, dty),
+        ArgKinded::Nat(n) => substitute(constr_map, n),
+        ArgKinded::Memory(mem) => substitute(constr_map, mem),
+        ArgKinded::Provenance(prv) => substitute(constr_map, prv),
+        _ => unreachable!(),
+    }
+}
+
+fn ty_check_app_view_fn_ty(
+    ctx: &PlExprTyCtx,
+    in_dty: &DataTy,
+    mut view_fn_ty: FnTy,
+) -> TyResult<(DataTy, ConstrainMap)> {
     let mut arg_dty_fn_ty = FnTy::new(
         vec![],
         None,
         vec![ParamSig::new(
-            ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.clone()))),
+            ctx.exec.clone(),
             Ty::new(TyKind::Data(Box::new(in_dty.clone()))),
         )],
-        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(Ident::new_impli(
-            "view_ex",
-        )))),
+        ctx.exec.clone(),
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
             Ident::new_impli("ret_dty"),
         ))))),
     );
-    unify::unify(&mut view_fn_ty, &mut arg_dty_fn_ty)?;
+    let (constr_map, _) = unify::constrain(&mut arg_dty_fn_ty, &mut view_fn_ty)?;
     let res_dty = arg_dty_fn_ty.ret_ty.dty().clone();
-    Ok(res_dty)
+    Ok((res_dty, constr_map))
 }
 
-fn ty_check_view(ctx: &PlExprTyCtx, view: &View) -> TyResult<FnTy> {
+fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     let arg_tys = view
         .args
-        .iter()
+        .iter_mut()
         .map(|v| Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))))
         .collect::<TyResult<Vec<_>>>()?;
     let view_fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?;
@@ -131,43 +156,38 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &View) -> TyResult<FnTy> {
         view_fn_ty,
         &view.gen_args,
     )?;
-    let mut actual_view_fn_ty = create_view_ty_with_input_view_and_free_ret(arg_tys);
+    let mut actual_view_fn_ty = create_view_ty_with_input_view_and_free_ret(&ctx.exec, arg_tys);
     let mut mono_fn_ty = unify::inst_fn_ty_scheme(&partially_applied_view_fn_ty);
     unify::unify(&mut actual_view_fn_ty, &mut mono_fn_ty)?;
     let mut inferred_k_args =
         super::infer_kinded_args::infer_kinded_args(&partially_applied_view_fn_ty, &mono_fn_ty);
-    // TODO reintroduce. Problem: may contain implicit identifiers that are not substituted later
-    // view.gen_args.append(&mut inferred_k_args);
-    // let res_view_ty = FnTy::new(
-    //     vec![],
-    //     view_fn_ty.generic_exec.clone(),
-    //     vec![actual_view_fn_ty.param_sigs.pop().unwrap()],
-    //     view_fn_ty.exec.clone(),
-    //     actual_view_fn_ty.ret_ty.as_ref().clone(),
-    // );
-    Ok(actual_view_fn_ty.clone())
+    view.gen_args.append(&mut inferred_k_args);
+    let res_view_ty = FnTy::new(
+        vec![],
+        actual_view_fn_ty.generic_exec.clone(),
+        vec![actual_view_fn_ty.param_sigs.pop().unwrap()],
+        actual_view_fn_ty.exec.clone(),
+        actual_view_fn_ty.ret_ty.as_ref().clone(),
+    );
+    Ok(res_view_ty)
 }
 
-fn create_view_ty_with_input_view_and_free_ret(mut arg_tys: Vec<Ty>) -> FnTy {
-    let ident_exec = Ident::new(&utils::fresh_name("view_exec"));
+// FIXME use utils::fresh_ident for place holder identifiers
+fn create_view_ty_with_input_view_and_free_ret(exec: &ExecExpr, mut arg_tys: Vec<Ty>) -> FnTy {
     arg_tys.push(Ty::new(TyKind::Data(Box::new(DataTy::new(
-        DataTyKind::Ident(Ident::new_impli("in_view_dty")),
+        utils::fresh_ident("in_view_dty", DataTyKind::Ident),
     )))));
     FnTy::new(
         vec![],
         None,
         arg_tys
             .into_iter()
-            .map(|ty| {
-                ParamSig::new(
-                    ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.clone()))),
-                    ty,
-                )
-            })
+            .map(|ty| ParamSig::new(exec.clone(), ty))
             .collect(),
-        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec))),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
-            Ident::new_impli("view_out_dty"),
+        exec.clone(),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
+            "view_out_dty",
+            DataTyKind::Ident,
         ))))),
     )
 }
@@ -347,39 +367,39 @@ fn ty_check_select(
     Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
 }
 
-fn ty_check_split_at(
-    ctx: &PlExprTyCtx,
-    p: &mut PlaceExpr,
-    split_pos: &Nat,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-    let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, p)?;
-    if let DataTyKind::ArrayShape(elem_dty, n) = &p.ty.as_ref().unwrap().dty().dty {
-        if split_pos > n {
-            return Err(TyError::String(
-                "Trying to access array out-of-bounds.".to_string(),
-            ));
-        }
-
-        let lhs_size = split_pos.clone();
-        let rhs_size = Nat::BinOp(
-            BinOpNat::Sub,
-            Box::new(n.clone()),
-            Box::new(split_pos.clone()),
-        );
-        Ok((
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
-                vec![
-                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), lhs_size)),
-                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), rhs_size)),
-                ],
-            ))))),
-            mems,
-            passed_prvs,
-        ))
-    } else {
-        Err(TyError::UnexpectedType)
-    }
-}
+//fn ty_check_split_at(
+//    ctx: &PlExprTyCtx,
+//    p: &mut PlaceExpr,
+//    split_pos: &Nat,
+//) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+//    let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, p)?;
+//    if let DataTyKind::ArrayShape(elem_dty, n) = &p.ty.as_ref().unwrap().dty().dty {
+//        if split_pos > n {
+//            return Err(TyError::String(
+//                "Trying to access array out-of-bounds.".to_string(),
+//            ));
+//        }
+//
+//        let lhs_size = split_pos.clone();
+//        let rhs_size = Nat::BinOp(
+//            BinOpNat::Sub,
+//            Box::new(n.clone()),
+//            Box::new(split_pos.clone()),
+//        );
+//        Ok((
+//            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
+//                vec![
+//                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), lhs_size)),
+//                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), rhs_size)),
+//                ],
+//            ))))),
+//            mems,
+//            passed_prvs,
+//        ))
+//    } else {
+//        Err(TyError::UnexpectedType)
+//    }
+//}
 
 fn ty_check_index_copy(
     ctx: &PlExprTyCtx,

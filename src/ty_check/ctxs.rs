@@ -260,8 +260,7 @@ impl TyCtx {
             use DataTyKind as d;
 
             match &dty.dty {
-                d::Range
-                | d::Atomic(_)
+                d::Atomic(_)
                 | d::Scalar(_)
                 | d::Array(_, _)
                 | d::ArrayShape(_, _)

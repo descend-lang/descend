@@ -20,13 +20,13 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
     tmp: &r3 uniq gpu.shared [i32; bs]
 ) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
     let block_group = &shrd (*vec).to_view.grp::<1024>;
-    let view_out = &uniq out_vec.to_view.grp::<1>;
+    let view_out = &uniq (*out_vec).to_view.grp::<1>;
     sched block in grid {
-        let ib = &shrd *block_group[[block]];
-        let out_elem = &uniq *view_out[[block]];
+        let ib = &shrd (*block_group)[[block]];
+        let out_elem = &uniq (*view_out)[[block]];
         let tmp_view = to_view_mut(&uniq *tmp);
         sched thread in block {
-            let inp = &shrd *ib[[thread]];
+            let inp = &shrd (*ib)[[thread]];
             let tmp_in = &uniq *tmp_view[[thread]];
             *tmp_in = *inp
         };
