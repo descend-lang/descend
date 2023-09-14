@@ -1,0 +1,88 @@
+fn sgemm() -> () {
+    def tile(s1: Nat, s2: Nat) = pl_expr.
+        to_view.map(to_view).map(grp::<bsx>).grp::<bsx>.map(transp).transp;
+}
+
+val keplerBest: ToBeTyped[Expr] = {
+    val v3: Nat = 128
+    val v4: Nat = 4
+    val v5: Nat = 8
+    val v6: Nat = 64
+    val v7: Nat = 8
+
+    def tile: ToBeTyped[Expr] = depFun((s1: Nat, s2: Nat) =>
+      map(map(transpose) o split(s2) o transpose) o split(s1) )
+
+    val zeros = depFun((n1: Nat, n2: Nat, n3: Nat, n4: Nat) =>
+      generate(fun(IndexType(n4))(_ =>
+        generate(fun(IndexType(n3))(_ =>
+          generate(fun(IndexType(n2))(_ =>
+            generate(fun(IndexType(n1))(_ => lf32(0.0f))))))))))
+
+    def tile2: ToBeTyped[Expr] = depFun((s1: Nat, s2: Nat) => impl{ n1: Nat => impl{ n2: Nat => fun(ArrayType(n1, ArrayType(n2, f32)))(x =>
+      transpose (map (transpose) (split (s1) (map (split (s2)) (x))))  ) }})
+
+    def redOp: ToBeTyped[Expr] = fun((8`.`32`.`8`.`4`.`f32) ->: ( (8`.`64`.`f32) x (8`.`128`.`f32) ) ->: (8`.`32`.`8`.`4`.`f32) )((p14, p15) =>
+      let(p15 |> fun(p29 =>
+          zip (p29._1) (p29._2)
+            |> toLocalFun(mapLocal(1) (fun(p31 => makePair (mapLocal(0) (id) (p31._1)) (mapLocal(0) (id) (p31._2)) )))
+            |> unzip
+        ))
+      be (p16 =>
+        zip (p14) (split (v5) (transpose (p16._1)))
+          |> mapLocal(1) (fun(p17 =>
+          zip (p17._1) (split (v4) (reorderWithStride (v3/v4) (transpose (p16._2))))
+            |> mapLocal(0) (fun(p18 =>
+            zip (transpose (p17._2)) (transpose (p18._2))
+              |> oclReduceSeq (AddressSpace.Private) (fun( (p20, p21) =>
+                let (makePair (toPrivate(mapSeq (id) (p21._1))) (toPrivate(mapSeq (id) (p21._2))))
+                be (fun(p22 =>
+                    zip (p20) (p22._1) |> mapSeq (fun(p23 =>
+                      zip (p23._1) (p22._2) |> mapSeq (fun(p24 =>
+                        p24._1 + (p23._2 * p24._2) )) )) ))
+              )) (p18._1 |> mapSeq (mapSeq (fun(x => x))) )
+              |> mapSeq (mapSeq (fun(x => x)))
+          ))
+        ))
+      ))
+
+    depFun((n: Nat, m: Nat, k: Nat) =>
+      fun((k`.`m`.`f32) ->: (k`.`n`.`f32) ->: (m`.`n`.`f32) ->: f32 ->: f32 ->: (m`.`n`.`f32))
+      /*
+       * The matrix A is assumed to be transposed already.
+       */
+      ((A, B, C, alpha, beta) =>
+        zip (tile2 (v7) (v6) (A)) (tile (v6) (v3) (C))
+        |> mapWorkGroup(1)(
+          //BEGIN mapWorkGroup(1) Function
+          fun(p2 =>
+          zip (tile2 (v7) (v3) (B)) (p2._2)
+          |> mapWorkGroup(0)(
+            //BEGIN mapWorkGroup(0) Function
+            fun(p3 =>
+            zip (p2._1) (p3._1)
+            |> oclReduceSeq (AddressSpace.Private) (redOp)
+              (zeros (v4) (v5) (v3 * Cst(1) /^ v4) (v6 * Cst(1) /^ v5)
+                |> mapLocal(1) (mapLocal(0) (mapSeq (mapSeq (id)))))
+            //mapSeq was removed because reduce does not wrap reduced results in arrays anymore
+            |> fun(x =>
+              zip (x) (split (v5) (p3._2))
+                |> mapLocal(1) (fun(y =>
+                zip (y._1) (split (v4) (reorderWithStride (v3/v4) (transpose (y._2)))) |> mapLocal(0) (fun(z =>
+                  zip (z._1) (transpose (z._2)) |> mapSeq (fun(a =>
+                    zip (a._1) (a._2) |> mapSeq (fun(x =>
+                      (x._1 * alpha) + (x._2 * beta) )))))))))
+            |> map (fun(p4 => p4
+              |> map (transpose)
+              |> join
+              |> transpose
+              |> map (reorderWithStride (v3 / v4))
+            )) |> join |> transpose
+          )
+          //END mapWorkGroup(0) Function
+          ) |> join |> transpose
+        )
+       //END mapWorkGroup(1) Function
+        )  |> join
+      ))
+  }

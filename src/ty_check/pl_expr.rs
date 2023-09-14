@@ -2,14 +2,14 @@ use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
-    utils, ArgKinded, BaseExec, DataTy, DataTyKind, ExecExpr, ExecExprKind, ExecTy, ExecTyKind,
-    FnTy, Ident, IdentExec, Memory, Nat, Ownership, ParamSig, PlaceExpr, PlaceExprKind, Provenance,
-    Ty, TyKind, View,
+    utils, DataTy, DataTyKind, ExecExpr, ExecTyKind, FnTy, Ident, IdentExec, Memory, Nat,
+    Ownership, ParamSig, PlaceExpr, PlaceExprKind, Provenance, Ty, TyKind, View,
 };
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 
-use crate::ty_check::unify::{substitute, ConstrainMap};
-use crate::ty_check::{exec, unify, ExprTyCtx};
+use crate::ty_check::unify;
+use crate::ty_check::unify::ConstrainMap;
+use crate::ty_check::{exec, ExprTyCtx};
 
 pub(super) struct PlExprTyCtx<'ctxt> {
     gl_ctx: &'ctxt GlobalCtx,
@@ -95,30 +95,9 @@ fn ty_check_view_pl_expr(
     let view_fn_ty = ty_check_view(ctx, view)?;
     let in_dty = pl_expr.ty.as_ref().unwrap().dty().clone();
     let (res_dty, constr_map) = ty_check_app_view_fn_ty(ctx, &in_dty, view_fn_ty)?;
-    // substitute gener arguments that were added by inference in ty_check_view
-    subst_view(&constr_map, view);
+    // substitute implicit identifiers in view, that were inferred from the input data type
+    unify::substitute(&constr_map, view);
     Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
-}
-
-// TODO refactor by separating Constrainable and substitue into Substitutable trait, then implement
-//  substitutable for ArgKinded
-fn subst_view(constr_map: &ConstrainMap, view: &mut View) {
-    for ga in &mut view.gen_args {
-        subst_gen_arg(constr_map, ga);
-    }
-    for arg in &mut view.args {
-        subst_view(constr_map, arg);
-    }
-}
-
-fn subst_gen_arg(constr_map: &ConstrainMap, gen_arg: &mut ArgKinded) {
-    match gen_arg {
-        ArgKinded::DataTy(dty) => substitute(constr_map, dty),
-        ArgKinded::Nat(n) => substitute(constr_map, n),
-        ArgKinded::Memory(mem) => substitute(constr_map, mem),
-        ArgKinded::Provenance(prv) => substitute(constr_map, prv),
-        _ => unreachable!(),
-    }
 }
 
 fn ty_check_app_view_fn_ty(
@@ -158,7 +137,9 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     )?;
     let mut actual_view_fn_ty = create_view_ty_with_input_view_and_free_ret(&ctx.exec, arg_tys);
     let mut mono_fn_ty = unify::inst_fn_ty_scheme(&partially_applied_view_fn_ty);
-    unify::unify(&mut actual_view_fn_ty, &mut mono_fn_ty)?;
+    let (constr_map, _) = unify::constrain(&mut actual_view_fn_ty, &mut mono_fn_ty)?;
+    // substitute implicit identifiers in view, that were inferred without the input data type
+    unify::substitute(&constr_map, view);
     let mut inferred_k_args =
         super::infer_kinded_args::infer_kinded_args(&partially_applied_view_fn_ty, &mono_fn_ty);
     view.gen_args.append(&mut inferred_k_args);
@@ -172,7 +153,6 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     Ok(res_view_ty)
 }
 
-// FIXME use utils::fresh_ident for place holder identifiers
 fn create_view_ty_with_input_view_and_free_ret(exec: &ExecExpr, mut arg_tys: Vec<Ty>) -> FnTy {
     arg_tys.push(Ty::new(TyKind::Data(Box::new(DataTy::new(
         utils::fresh_ident("in_view_dty", DataTyKind::Ident),
@@ -323,8 +303,6 @@ fn ty_check_deref(
     }
 }
 
-// FIXME needs to be qualified over ownership
-//  whether a selct is possible also depends on the ownership that we are selecting with
 fn ty_check_select(
     ctx: &PlExprTyCtx,
     p: &mut PlaceExpr,
@@ -366,40 +344,6 @@ fn ty_check_select(
     }
     Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
 }
-
-//fn ty_check_split_at(
-//    ctx: &PlExprTyCtx,
-//    p: &mut PlaceExpr,
-//    split_pos: &Nat,
-//) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-//    let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, p)?;
-//    if let DataTyKind::ArrayShape(elem_dty, n) = &p.ty.as_ref().unwrap().dty().dty {
-//        if split_pos > n {
-//            return Err(TyError::String(
-//                "Trying to access array out-of-bounds.".to_string(),
-//            ));
-//        }
-//
-//        let lhs_size = split_pos.clone();
-//        let rhs_size = Nat::BinOp(
-//            BinOpNat::Sub,
-//            Box::new(n.clone()),
-//            Box::new(split_pos.clone()),
-//        );
-//        Ok((
-//            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
-//                vec![
-//                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), lhs_size)),
-//                    DataTy::new(DataTyKind::ArrayShape(elem_dty.clone(), rhs_size)),
-//                ],
-//            ))))),
-//            mems,
-//            passed_prvs,
-//        ))
-//    } else {
-//        Err(TyError::UnexpectedType)
-//    }
-//}
 
 fn ty_check_index_copy(
     ctx: &PlExprTyCtx,

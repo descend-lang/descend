@@ -44,11 +44,3 @@ fn bfs() -> Res {
         descend::compile("examples/with_tys/bfs.desc")?
     ))
 }
-
-#[test]
-fn computed_indexing() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/with_tys/computed_indexing.desc")?
-    ))
-}

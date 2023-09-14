@@ -119,14 +119,17 @@ impl DataTy {
     }
 }
 
-pub(super) trait Constrainable: Visitable {
+pub(super) trait Substitutable {
+    fn substitute(&mut self, subst: &ConstrainMap);
+}
+
+pub(super) trait Constrainable: Visitable + Substitutable {
     fn constrain(
         &mut self,
         other: &mut Self,
         constr_map: &mut ConstrainMap,
         prv_rels: &mut Vec<PrvConstr>,
     ) -> UnifyResult<()>;
-    fn substitute(&mut self, subst: &ConstrainMap);
     fn occurs_check<S: Constrainable>(ident_kinded: &IdentKinded, s: &S) -> bool {
         utils::free_kinded_idents(s).contains(ident_kinded)
     }
@@ -173,7 +176,9 @@ impl Constrainable for FnTy {
         substitute(constr_map, other);
         Ok(())
     }
+}
 
+impl Substitutable for FnTy {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_fn_ty(self);
@@ -196,7 +201,9 @@ impl Constrainable for ParamSig {
         substitute(constr_map, other);
         Ok(())
     }
+}
 
+impl Substitutable for ParamSig {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_param_sig(self);
@@ -277,7 +284,9 @@ impl Constrainable for ExecExpr {
         }
         Ok(())
     }
+}
 
+impl Substitutable for ExecExpr {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_exec_expr(self);
@@ -299,7 +308,9 @@ impl Constrainable for Ty {
             _ => Err(UnifyError::CannotUnify),
         }
     }
+}
 
+impl Substitutable for Ty {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_ty(self);
@@ -430,7 +441,9 @@ impl Constrainable for DataTy {
         }
         Ok(())
     }
+}
 
+impl Substitutable for DataTy {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_dty(self);
@@ -473,7 +486,9 @@ impl Constrainable for ExecTy {
             _ => Err(UnifyError::CannotUnify),
         }
     }
+}
 
+impl Substitutable for ExecTy {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_exec_ty(self);
@@ -505,7 +520,9 @@ impl Constrainable for Dim {
             _ => Err(UnifyError::CannotUnify),
         }
     }
+}
 
+impl Substitutable for Dim {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_dim(self);
@@ -581,7 +598,9 @@ impl Constrainable for Nat {
             _ => Self::unify(self, other, constr_map),
         }
     }
+}
 
+impl Substitutable for Nat {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_nat(self);
@@ -638,7 +657,9 @@ impl Constrainable for Memory {
             _ => Err(UnifyError::CannotUnify),
         }
     }
+}
 
+impl Substitutable for Memory {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_mem(self);
@@ -700,23 +721,32 @@ impl Constrainable for Provenance {
             }
         }
     }
+}
 
+impl Substitutable for Provenance {
     fn substitute(&mut self, subst: &ConstrainMap) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_prv(self);
     }
 }
 
-pub(super) fn substitute<C: Constrainable>(subst: &ConstrainMap, c: &mut C) {
-    c.substitute(subst)
+impl Substitutable for View {
+    fn substitute(&mut self, subst: &ConstrainMap) {
+        let mut apply_subst = ApplySubst::new(subst);
+        apply_subst.visit_view(self);
+    }
 }
 
-struct ApplySubst<'a> {
+pub(super) fn substitute<S: Substitutable>(subst: &ConstrainMap, s: &mut S) {
+    s.substitute(subst)
+}
+
+pub(super) struct ApplySubst<'a> {
     subst: &'a ConstrainMap,
 }
 
 impl<'a> ApplySubst<'a> {
-    fn new(subst: &'a ConstrainMap) -> Self {
+    pub(super) fn new(subst: &'a ConstrainMap) -> Self {
         ApplySubst { subst }
     }
 }

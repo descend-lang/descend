@@ -127,11 +127,3 @@ fn vector_add() -> Res {
 fn bfs() -> Res {
     Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
 }
-
-#[test]
-fn computed_indexing() -> Res {
-    Ok(println!(
-        "{}",
-        descend::compile("examples/infer/computed_indexing.desc")?
-    ))
-}

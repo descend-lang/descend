@@ -319,7 +319,7 @@ peg::parser! {
 
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
-            "(" _ param_decls:(fun_parameter() ** (_ "," _)) _ ")" _
+            "(" _ param_decls:(param_decl() ** (_ "," _)) _ ")" _
             "-" _ "[" _ ident_exec:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
             body:block() {
                 let generic_params = match generic_params {
@@ -350,8 +350,8 @@ peg::parser! {
                 IdentKinded::new(&name, kind)
             }
 
-        rule fun_parameter() -> ParamDecl
-            = mutbl:(m:mutability() __ {m})? exec_expr:(e:exec_expr() __ {e})? ident:ident() _ ":" _ ty:ty() {
+        rule param_decl() -> ParamDecl
+            = mutbl:(m:mutability() __ {m})? exec_expr:("[" _ e:exec_expr() _ "]" __ {e})? ident:ident() _ ":" _ ty:ty() {
                 let mutbl = mutbl.unwrap_or(Mutability::Const);
                 ParamDecl { ident, ty:Some(ty), mutbl, exec_expr }
             }
@@ -768,7 +768,7 @@ peg::parser! {
 
         rule exec() -> ExecExprKind =
             base:base_exec()
-            maybe_exec_path_elems:(_ "." _  exec_path_elems: exec_path_elem() **<1,> _ "." _ { exec_path_elems })? {
+            maybe_exec_path_elems:(_ "." _  exec_path_elems: exec_path_elem() **<1,> (_ "." _) _ { exec_path_elems })? {
                 if let Some(path) = maybe_exec_path_elems {
                     ExecExprKind::with_path(base, path)
                 } else { ExecExprKind::new(base) }
@@ -780,8 +780,8 @@ peg::parser! {
             / "gpu.grid" _ "<" _ gdim:dim() _ "," _ bdim:dim() _ ">" { BaseExec::GpuGrid(gdim, bdim) }
 
         rule exec_path_elem() -> ExecPathElem =
-            "distrib" _ "<" _ dim_compo:dim_component() _ ">" { ExecPathElem::ForAll(dim_compo) }
-            / "split_proj" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { LeftOrRight::Left }/ "1" { LeftOrRight::Right }) _ ">" {
+            "forall" _ "(" _ dim_compo:dim_component() _ ")" { ExecPathElem::ForAll(dim_compo) }
+            / "take" _ "<" _ dim_compo:dim_component() _ "," _ pos:nat() _ "," _ proj:("0" { LeftOrRight::Left }/ "1" { LeftOrRight::Right }) _ ">" {
                 ExecPathElem::TakeRange(Box::new(TakeRange::new(dim_compo, pos, proj)))
             }
             / "to_warps" { ExecPathElem::ToWarps }
