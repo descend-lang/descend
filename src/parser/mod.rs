@@ -819,7 +819,7 @@ peg::parser! {
             / "gpu.thread" {
                 ExecTyKind::GpuThread
             }
-            / "view" {
+            / "any" {
                 ExecTyKind::Any
             }
 
@@ -892,7 +892,7 @@ peg::parser! {
                 / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "AtomicU32" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
-                / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "view"
+                / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "any"
                 / view_name())
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']
             )

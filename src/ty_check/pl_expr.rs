@@ -80,7 +80,7 @@ fn ty_check_and_passed_mems_prvs(
         // TC-Select
         PlaceExprKind::Select(p, select_exec) => ty_check_select(ctx, p, select_exec)?,
         PlaceExprKind::View(pl_expr, view) => ty_check_view_pl_expr(ctx, pl_expr, view)?,
-        PlaceExprKind::Idx(pl_expr, idx) => ty_check_index_copy(ctx, pl_expr, idx)?,
+        PlaceExprKind::Idx(pl_expr, idx) => ty_check_index(ctx, pl_expr, idx)?,
     };
     pl_expr.ty = Some(Box::new(ty));
     Ok((mem, prvs))
@@ -177,12 +177,6 @@ fn ty_check_ident(
     ident: &Ident,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
     if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
-        // let ident_dty = if let TyKind::Data(dty) = &tty.ty {
-        //     dty.as_ref()
-        // } else {
-        //     return Err(TyError::UnexpectedType);
-        // };
-
         if !&tty.is_fully_alive() {
             return Err(TyError::String(format!(
                 "The value in this identifier `{}` has been moved out.",
@@ -276,7 +270,7 @@ fn ty_check_deref(
     };
     match &borr_dty.dty {
         DataTyKind::Ref(reff) => {
-            if &reff.own < &ctx.own {
+            if reff.own < ctx.own {
                 return Err(TyError::String(
                     "Trying to dereference and mutably use a shrd reference.".to_string(),
                 ));
@@ -345,7 +339,7 @@ fn ty_check_select(
     Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
 }
 
-fn ty_check_index_copy(
+fn ty_check_index(
     ctx: &PlExprTyCtx,
     pl_expr: &mut PlaceExpr,
     idx: &mut Nat,
@@ -376,18 +370,11 @@ fn ty_check_index_copy(
         }
     };
 
-    if &n < idx {
+    if &n <= idx {
         return Err(TyError::String(
             "Trying to access array out-of-bounds.".to_string(),
         ));
     }
 
-    if elem_dty.copyable() {
-        Ok((Ty::new(TyKind::Data(Box::new(elem_dty))), mems, passed_prvs))
-    } else {
-        Err(TyError::String(format!(
-            "Cannot move out of array type: {:?}",
-            elem_dty
-        )))
-    }
+    Ok((Ty::new(TyKind::Data(Box::new(elem_dty))), mems, passed_prvs))
 }

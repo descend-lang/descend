@@ -8,6 +8,8 @@ pub static GPU_DEVICE: &str = "gpu_device";
 pub static GPU_ALLOC: &str = "gpu_alloc_copy";
 pub static COPY_TO_HOST: &str = "copy_to_host";
 pub static COPY_TO_GPU: &str = "copy_to_gpu";
+
+pub static CREATE_ARRAY: &str = "create_array";
 pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
 pub static SHFL_UP: &str = "shfl_up";
@@ -26,7 +28,8 @@ pub static REVERSE: &str = "rev";
 pub static GROUP: &str = "grp";
 pub static JOIN: &str = "join";
 pub static TRANSPOSE: &str = "transp";
-pub static SPLIT_AT: &str = "split_at";
+pub static TAKE_LEFT: &str = "take_left";
+pub static TAKE_RIGHT: &str = "take_right";
 pub static MAP: &str = "map";
 
 pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
@@ -36,6 +39,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (GPU_ALLOC, gpu_alloc_copy_ty()),
         (COPY_TO_HOST, copy_to_host_ty()),
         (COPY_TO_GPU, copy_to_gpu_ty()),
+        (CREATE_ARRAY, create_array_ty()),
         (TO_RAW_PTR, to_raw_ptr_ty()),
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
         (SHFL_UP, shfl_up_ty()),
@@ -55,7 +59,8 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (GROUP, group_ty()),
         (JOIN, join_ty()),
         (TRANSPOSE, transpose_ty()),
-        (SPLIT_AT, split_at_ty()),
+        (TAKE_LEFT, take_ty(TakeSide::Left)),
+        (TAKE_RIGHT, take_ty(TakeSide::Right)),
     ];
 
     decls.to_vec()
@@ -72,7 +77,7 @@ fn create_array_ty() -> FnTy {
         ident: d.clone(),
         kind: Kind::DataTy,
     };
-    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::CpuThread));
+    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
     FnTy::new(
         vec![n_nat, d_dty],
@@ -869,9 +874,16 @@ fn group_ty() -> FnTy {
     )
 }
 
-// split_at:
-//  <split_pos: nat, n: nat, d: dty>([[d; n]]) -> ([[d; split_pos]], [[d; n-split_pos]])
-fn split_at_ty() -> FnTy {
+pub enum TakeSide {
+    Left,
+    Right,
+}
+
+// take_left:
+//  <split_pos: nat, n: nat, d: dty>([[d; n]]) -> [[d; split_pos]]
+// take_right:
+//  <split_pos: nat, n: nat, d: dty>([[d; n]]) -> [[d; n - split_pos]])
+fn take_ty(take_side: TakeSide) -> FnTy {
     let s = Ident::new("s");
     let n = Ident::new("n");
     let d = Ident::new("d");
@@ -890,33 +902,32 @@ fn split_at_ty() -> FnTy {
     let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
+    let output_dty = match take_side {
+        TakeSide::Left => DataTy::new(DataTyKind::ArrayShape(
+            Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+            Nat::Ident(s.clone()),
+        )),
+        TakeSide::Right => DataTy::new(DataTyKind::ArrayShape(
+            Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+            Nat::BinOp(
+                BinOpNat::Sub,
+                Box::new(Nat::Ident(n.clone())),
+                Box::new(Nat::Ident(s)),
+            ),
+        )),
+    };
     FnTy::new(
         vec![s_nat, n_nat, d_ty],
         Some(ident_exec),
         vec![ParamSig::new(
             exec_expr.clone(),
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
-                Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-                Nat::Ident(n.clone()),
+                Box::new(DataTy::new(DataTyKind::Ident(d))),
+                Nat::Ident(n),
             ))))),
         )],
         exec_expr,
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Tuple(
-            vec![
-                DataTy::new(DataTyKind::ArrayShape(
-                    Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-                    Nat::Ident(s.clone()),
-                )),
-                DataTy::new(DataTyKind::ArrayShape(
-                    Box::new(DataTy::new(DataTyKind::Ident(d))),
-                    Nat::BinOp(
-                        BinOpNat::Sub,
-                        Box::new(Nat::Ident(n)),
-                        Box::new(Nat::Ident(s)),
-                    ),
-                )),
-            ],
-        ))))),
+        Ty::new(TyKind::Data(Box::new(output_dty))),
     )
 }
 

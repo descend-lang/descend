@@ -165,9 +165,9 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
     let ty = match &mut expr.expr {
         ExprKind::PlaceExpr(pl_expr) => {
             if pl_expr.is_place() {
-                ty_check_pl_expr_without_deref(ctx, pl_expr)?
+                ty_check_place(ctx, pl_expr)?
             } else {
-                ty_check_pl_expr_with_deref(ctx, pl_expr)?
+                ty_check_pl_expr_non_place(ctx, pl_expr)?
             }
         }
         ExprKind::Block(block) => ty_check_block(ctx, block)?,
@@ -188,7 +188,7 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr) -> TyResult<()> {
         ExprKind::Ref(prv, own, pl_expr) => ty_check_borrow(ctx, prv, *own, pl_expr)?,
         ExprKind::Assign(pl_expr, e) => {
             if pl_expr.is_place() {
-                ty_check_assign_place(ctx, &pl_expr, e)?
+                ty_check_assign_place(ctx, pl_expr, e)?
             } else {
                 ty_check_assign_deref(ctx, pl_expr, e)?
             }
@@ -824,8 +824,13 @@ fn check_mutable(ty_ctx: &TyCtx, pl: &Place) -> TyResult<()> {
     Ok(())
 }
 
-fn ty_check_assign_place(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr, e: &mut Expr) -> TyResult<Ty> {
+fn ty_check_assign_place(
+    ctx: &mut ExprTyCtx,
+    pl_expr: &mut PlaceExpr,
+    e: &mut Expr,
+) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
+    pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), pl_expr)?;
     let pl = pl_expr.to_place().unwrap();
     let mut place_ty = ctx.ty_ctx.place_dty(&pl)?;
     // FIXME this should be checked for ArrayViews as well
@@ -1533,7 +1538,7 @@ fn infer_tys_and_append_idents(
     assign_ty: &mut Ty,
 ) -> TyResult<()> {
     let pattern_ty = if let Some(pty) = pattern_ty {
-        unify::sub_unify(&mut ctx.kind_ctx, &mut ctx.ty_ctx, assign_ty, pty)?;
+        unify::sub_unify(ctx.kind_ctx, ctx.ty_ctx, assign_ty, pty)?;
         pty.as_ref().clone()
     } else {
         assign_ty.clone()
@@ -1594,7 +1599,7 @@ fn ty_check_seq(ctx: &mut ExprTyCtx, es: &mut [Expr]) -> TyResult<Ty> {
     Ok(es.last().unwrap().ty.as_ref().unwrap().as_ref().clone())
 }
 
-fn ty_check_pl_expr_with_deref(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> {
+fn ty_check_pl_expr_non_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> {
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Shrd), pl_expr)?;
     if !pl_expr.ty.as_ref().unwrap().is_fully_alive() {
         return Err(TyError::String(format!(
@@ -1622,8 +1627,9 @@ fn ty_check_pl_expr_with_deref(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> 
     }
 }
 
-fn ty_check_pl_expr_without_deref(ctx: &mut ExprTyCtx, pl_expr: &PlaceExpr) -> TyResult<Ty> {
-    let place = pl_expr.to_place().unwrap();
+fn ty_check_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> {
+    pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), pl_expr)?;
+    let place = pl_expr.clone().to_place().unwrap();
     // If place is an identifier referring to a globally declared function
     let pl_ty = if let Ok(fun_ty) = ctx.gl_ctx.fn_ty_by_ident(&place.ident) {
         Ty::new(TyKind::FnTy(Box::new(fun_ty.clone())))

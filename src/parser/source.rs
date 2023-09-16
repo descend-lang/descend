@@ -54,6 +54,7 @@ impl<'a> SourceCode<'a> {
     pub fn get_line(&self, num: u32) -> &str {
         let num = num as usize;
         let begin_line = self.line_offsets[num] as usize;
+        // FIXME missing closing scope curly braces lead to an out-of-bounds index
         let end_line = (self.line_offsets[num + 1] - 1) as usize;
         &self.source[begin_line..end_line]
     }

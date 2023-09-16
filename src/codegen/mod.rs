@@ -4,6 +4,7 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
+use crate::ast::DataTyKind;
 use crate::ty_check;
 use cu_ast as cu;
 use std::collections::HashMap;
@@ -1558,26 +1559,65 @@ enum IdxOrProj {
     Proj(usize),
 }
 
+fn flattened_elem_counts_per_dim(
+    dty: &desc::DataTy,
+    mut elem_counts: Vec<desc::Nat>,
+) -> Vec<desc::Nat> {
+    match &dty.dty {
+        DataTyKind::Array(d, n) | DataTyKind::ArrayShape(d, n) => {
+            for elem_count in &mut elem_counts {
+                *elem_count = desc::Nat::BinOp(
+                    desc::BinOpNat::Mul,
+                    Box::new(elem_count.clone()),
+                    Box::new(n.clone()),
+                );
+            }
+            elem_counts.push(n.clone());
+            flattened_elem_counts_per_dim(d, elem_counts)
+        }
+        _ => elem_counts,
+    }
+}
+
 fn gen_pl_expr(
     pl_expr: &desc::PlaceExpr,
-    path: &mut Vec<IdxOrProj>,
+    path: &mut Vec<desc::Nat>,
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Expr {
-    fn gen_indexing_and_projs(expr: cu::Expr, path: &[IdxOrProj]) -> cu::Expr {
-        let mut res_expr = expr;
-        for p in path.iter().rev() {
-            res_expr = match p {
-                IdxOrProj::Proj(proj) => cu::Expr::Proj {
-                    tuple: Box::new(res_expr),
-                    n: *proj,
-                },
-                IdxOrProj::Idx(i) => cu::Expr::ArraySubscript {
-                    array: Box::new(res_expr),
-                    index: i.clone(),
-                },
+    fn gen_flat_indexing(
+        expr: cu::Expr,
+        path: &[desc::Nat],
+        operand_dty: &desc::DataTy,
+    ) -> cu::Expr {
+        let elem_counts = flattened_elem_counts_per_dim(operand_dty, vec![]);
+        let mut elem_counts_iter = elem_counts.iter();
+        // skip outermost dimension
+        elem_counts_iter.next();
+        let mut flat_index = None;
+        for i in path.iter().rev() {
+            let dim_index = if let Some(elem_count) = elem_counts_iter.next() {
+                desc::Nat::BinOp(
+                    desc::BinOpNat::Mul,
+                    Box::new(i.clone()),
+                    Box::new(elem_count.clone()),
+                )
+            } else {
+                i.clone()
             };
+            flat_index = Some(if let Some(fi) = flat_index {
+                desc::Nat::BinOp(desc::BinOpNat::Add, Box::new(fi), Box::new(dim_index))
+            } else {
+                dim_index
+            });
         }
-        res_expr
+        if let Some(fi) = flat_index {
+            cu::Expr::ArraySubscript {
+                array: Box::new(expr),
+                index: fi,
+            }
+        } else {
+            expr
+        }
     }
     let inlined_view_pl_expr = inline_view_expr(pl_expr, codegen_ctx);
     match &inlined_view_pl_expr.pl_expr {
@@ -1590,24 +1630,35 @@ fn gen_pl_expr(
             } else {
                 ident.name.to_string()
             };
-            gen_indexing_and_projs(cu::Expr::Ident(name), path)
+            gen_flat_indexing(
+                cu::Expr::Ident(name),
+                path,
+                inlined_view_pl_expr.ty.unwrap().dty(),
+            )
         }
-        desc::PlaceExprKind::Proj(ple, n) => {
-            path.push(IdxOrProj::Proj(*n));
-            gen_pl_expr(ple, path, codegen_ctx)
-        }
+        desc::PlaceExprKind::Proj(ple, n) => cu::Expr::Proj {
+            tuple: Box::new(gen_pl_expr(ple, path, codegen_ctx)),
+            n: *n,
+        },
         desc::PlaceExprKind::Deref(ple) => {
             let inner_ple = gen_pl_expr(ple, &mut vec![], codegen_ctx);
-            let current_expr = if let Some(IdxOrProj::Idx(_)) = path.last() {
-                inner_ple
-            } else {
+            if path.is_empty() {
                 cu::Expr::Deref(Box::new(inner_ple))
-            };
-            gen_indexing_and_projs(current_expr, path)
+            } else {
+                gen_flat_indexing(
+                    inner_ple,
+                    path,
+                    inlined_view_pl_expr.ty.as_ref().unwrap().dty(),
+                )
+            }
         }
         desc::PlaceExprKind::Select(ple, exec) => {
-            let dim_compo = exec.exec.active_distrib_dim().unwrap();
-            path.push(IdxOrProj::Idx(parall_idx(dim_compo, exec)));
+            let dim_compo = exec.exec.active_distrib_dim();
+            if let Some(dc) = dim_compo {
+                path.push(parall_idx(dc, exec));
+            } else {
+                path.push(desc::Nat::Lit(0));
+            }
             gen_pl_expr(ple.as_ref(), path, codegen_ctx)
         }
         desc::PlaceExprKind::View(ple, view) => {
@@ -1618,7 +1669,7 @@ fn gen_pl_expr(
             }
         }
         desc::PlaceExprKind::Idx(pl_expr, idx) => {
-            path.push(IdxOrProj::Idx(idx.as_ref().clone()));
+            path.push(idx.as_ref().clone());
             gen_pl_expr(pl_expr, path, codegen_ctx)
         }
     }
@@ -1668,7 +1719,7 @@ fn insert_into_pl_expr(mut pl_expr: desc::PlaceExpr, insert: &desc::PlaceExpr) -
     pl_expr
 }
 
-fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_view(view: &desc::View, path: &mut Vec<desc::Nat>) -> bool {
     if view.name.name.as_ref() == ty_check::pre_decl::TO_VIEW {
     } else if view.name.name.as_ref() == ty_check::pre_decl::GROUP {
         if let desc::ArgKinded::Nat(s) = &view.gen_args[0] {
@@ -1676,7 +1727,7 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> boo
                 return false;
             }
         } else {
-            panic!("Unexpected argument.")
+            panic!("Cannot create `group` from the provided arguments.")
         }
     } else if view.name.name.as_ref() == ty_check::pre_decl::JOIN {
         if let desc::ArgKinded::Nat(n) = &view.gen_args[1] {
@@ -1684,7 +1735,7 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> boo
                 return false;
             }
         } else {
-            panic!("Cannot create `to_view` from the provided arguments.");
+            panic!("Cannot create `join` from the provided arguments.");
         }
     } else if view.name.name.as_ref() == ty_check::pre_decl::TRANSPOSE {
         transform_path_with_transpose(path);
@@ -1696,13 +1747,21 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> boo
         } else {
             panic!("Cannot create `reverse` from the provided arguments.");
         }
-    } else if view.name.name.as_ref() == ty_check::pre_decl::SPLIT_AT {
+    } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_LEFT {
         if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
-            if !transform_path_with_split_at(k, path) {
+            if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Left) {
                 return false;
             }
         } else {
-            panic!("Cannot create `split_at` from the provided arguments.");
+            panic!("Cannot create `take_left` from the provided arguments.");
+        }
+    } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_RIGHT {
+        if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
+            if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Right) {
+                return false;
+            }
+        } else {
+            panic!("Cannot create `take_right` from the provided arguments.");
         }
     } else if view.name.name.as_ref() == ty_check::pre_decl::MAP {
         if let Some(f) = view.args.first() {
@@ -1718,12 +1777,12 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<IdxOrProj>) -> boo
     true
 }
 
-fn transform_path_with_group(grp_size: &desc::Nat, path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_group(grp_size: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
     let i = path.pop();
     let j = path.pop();
     match (i, j) {
-        (Some(IdxOrProj::Idx(i)), Some(IdxOrProj::Idx(j))) => {
-            path.push(IdxOrProj::Idx(desc::Nat::BinOp(
+        (Some(i), Some(j)) => {
+            path.push(desc::Nat::BinOp(
                 desc::BinOpNat::Add,
                 Box::new(desc::Nat::BinOp(
                     desc::BinOpNat::Mul,
@@ -1731,26 +1790,26 @@ fn transform_path_with_group(grp_size: &desc::Nat, path: &mut Vec<IdxOrProj>) ->
                     Box::new(grp_size.clone()),
                 )),
                 Box::new(j),
-            )));
+            ));
             true
         }
-        (Some(IdxOrProj::Idx(i)), None) => {
-            path.push(IdxOrProj::Idx(desc::Nat::BinOp(
+        (Some(i), None) => {
+            path.push(desc::Nat::BinOp(
                 desc::BinOpNat::Mul,
                 Box::new(i),
                 Box::new(grp_size.clone()),
-            )));
+            ));
             true
         }
         _ => false,
     }
 }
 
-fn transform_path_with_rev(len: &desc::Nat, path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_rev(len: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
     let i = path.pop();
     match i {
-        Some(IdxOrProj::Idx(i)) => {
-            path.push(IdxOrProj::Idx(desc::Nat::BinOp(
+        Some(i) => {
+            path.push(desc::Nat::BinOp(
                 desc::BinOpNat::Sub,
                 Box::new(desc::Nat::BinOp(
                     desc::BinOpNat::Sub,
@@ -1758,14 +1817,14 @@ fn transform_path_with_rev(len: &desc::Nat, path: &mut Vec<IdxOrProj>) -> bool {
                     Box::new(desc::Nat::Lit(1)),
                 )),
                 Box::new(i),
-            )));
+            ));
             true
         }
         _ => false,
     }
 }
 
-fn transform_path_with_transpose(path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_transpose(path: &mut Vec<desc::Nat>) -> bool {
     let i = path.pop();
     let j = path.pop();
     match (i, j) {
@@ -1778,55 +1837,57 @@ fn transform_path_with_transpose(path: &mut Vec<IdxOrProj>) -> bool {
     }
 }
 
-fn transform_path_with_join(row_size: &desc::Nat, path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_join(row_size: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
     let i = path.pop();
     match i {
-        Some(IdxOrProj::Idx(i)) => {
-            path.push(IdxOrProj::Idx(desc::Nat::BinOp(
+        Some(idx) => {
+            path.push(desc::Nat::BinOp(
                 desc::BinOpNat::Mod,
-                Box::new(i.clone()),
+                Box::new(idx.clone()),
                 Box::new(row_size.clone()),
-            )));
-            path.push(IdxOrProj::Idx(desc::Nat::BinOp(
+            ));
+            path.push(desc::Nat::BinOp(
                 desc::BinOpNat::Div,
-                Box::new(i),
+                Box::new(idx),
                 Box::new(row_size.clone()),
-            )));
+            ));
             true
         }
         _ => false,
     }
 }
 
-fn transform_path_with_split_at(split_pos: &desc::Nat, path: &mut Vec<IdxOrProj>) -> bool {
-    let proj = path.pop();
+fn transform_path_with_take(
+    split_pos: &desc::Nat,
+    path: &mut Vec<desc::Nat>,
+    take_side: ty_check::pre_decl::TakeSide,
+) -> bool {
     let idx = path.pop();
-    match (proj, idx) {
-        (Some(IdxOrProj::Proj(pr)), Some(IdxOrProj::Idx(i))) => {
-            if pr == 0 {
-                path.push(IdxOrProj::Idx(i));
+    match idx {
+        Some(i) => match take_side {
+            ty_check::pre_decl::TakeSide::Left => {
+                path.push(i);
                 true
-            } else if pr == 1 {
-                path.push(IdxOrProj::Idx(desc::Nat::BinOp(
+            }
+            ty_check::pre_decl::TakeSide::Right => {
+                path.push(desc::Nat::BinOp(
                     desc::BinOpNat::Add,
                     Box::new(i),
                     Box::new(split_pos.clone()),
-                )));
+                ));
                 true
-            } else {
-                panic!("split_at can only generate a 2-tuple shape.")
             }
-        }
+        },
         _ => false,
     }
 }
 
-fn transform_path_with_map(f: &desc::View, path: &mut Vec<IdxOrProj>) -> bool {
+fn transform_path_with_map(f: &desc::View, path: &mut Vec<desc::Nat>) -> bool {
     let i = path.pop();
     match i {
-        Some(i @ IdxOrProj::Idx(_)) => {
+        Some(idx) => {
             transform_path_with_view(f, path);
-            path.push(i);
+            path.push(idx);
             true
         }
         _ => false,
