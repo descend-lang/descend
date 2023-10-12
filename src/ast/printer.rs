@@ -225,6 +225,7 @@ impl PrintState {
     pub fn print_aty(&mut self, aty: &AtomicTy) {
         match &aty {
             AtomicTy::AtomicU32 => self.string.push_str("AtomicU32"),
+            AtomicTy::AtomicI32 => self.string.push_str("AtomicI32"),
         }
     }
 
@@ -252,6 +253,13 @@ impl PrintState {
                 print_list!(self, Self::print_dty, dtys);
                 self.string.push(')');
             }
+            DataTyKind::Struct(struct_decl) => {
+                self.string.push_str("struct ");
+                self.print_ident(&struct_decl.ident);
+                self.string.push_str(" { ");
+                print_list!(self, Self::print_field, &struct_decl.fields);
+                self.string.push_str(" }");
+            }
             DataTyKind::At(dty, mem) => {
                 self.print_dty(dty);
                 self.string.push('@');
@@ -272,6 +280,12 @@ impl PrintState {
             }
             DataTyKind::Dead(dty) => self.print_dty(dty),
         }
+    }
+
+    fn print_field(&mut self, field: &(Ident, DataTy)) {
+        self.print_ident(&field.0);
+        self.string.push_str(" : ");
+        self.print_dty(&field.1)
     }
 
     fn print_sty(&mut self, sty: &ScalarTy) {

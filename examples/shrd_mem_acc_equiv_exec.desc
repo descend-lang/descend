@@ -1,0 +1,31 @@
+fn host() -[t: cpu.thread]-> () {
+  let mut gpu = gpu_device(0);
+  kernel::<<<XY<32, 8>, XY<8, 32>; [[f32; 8]; 32]>>>()
+}
+
+fn kernel<r: prv>(
+    [grid.forall(X).forall(Y)] shrd_mem: &r uniq gpu.shared [[f32; 8]; 32]
+) -[grid: gpu.grid<XY<32, 8>, XY<8, 32>>]-> () {
+    sched(Y) grid_slice_y in grid {
+        sched(X) block in grid_slice_y {
+            let moved_uniq_ref = shrd_mem
+        }
+    }
+}
+
+
+
+arr: [t; n]
+
+sched(X) block in grid {
+    sched(X) thread in block {
+        let reff = &uniq arr;
+        (*reff) = ...;
+    }
+
+    arr.to_view.rev[[thread]] =...
+
+}
+
+// 1. resolve place expressions for syntactic comparison
+// 2.

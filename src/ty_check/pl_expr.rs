@@ -75,6 +75,10 @@ fn ty_check_and_passed_mems_prvs(
         PlaceExprKind::Ident(ident) => ty_check_ident(ctx, ident)?,
         // TC-Proj
         PlaceExprKind::Proj(tuple_expr, n) => ty_check_proj(ctx, tuple_expr, *n)?,
+        // TC-Field
+        PlaceExprKind::FieldProj(struct_expr, ident) => {
+            ty_check_field_proj(ctx, struct_expr, ident)?
+        }
         // TC-Deref
         PlaceExprKind::Deref(borr_expr) => ty_check_deref(ctx, borr_expr)?,
         // TC-Select
@@ -179,7 +183,7 @@ fn ty_check_ident(
     if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
         if !&tty.is_fully_alive() {
             return Err(TyError::String(format!(
-                "The value in this identifier `{}` has been moved out.",
+                "The value in `{}` has been moved out.",
                 ident
             )));
         }
@@ -220,6 +224,7 @@ fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
     }
 }
 
+// TODO refactor by fusing with ty_check_field_proj
 fn ty_check_proj(
     ctx: &PlExprTyCtx,
     tuple_expr: &mut PlaceExpr,
@@ -252,6 +257,43 @@ fn ty_check_proj(
         dty_kind => Err(TyError::ExpectedTupleType(
             TyKind::Data(Box::new(DataTy::new(dty_kind.clone()))),
             tuple_expr.clone(),
+        )),
+    }
+}
+
+fn ty_check_field_proj(
+    ctx: &PlExprTyCtx,
+    struct_expr: &mut PlaceExpr,
+    ident: &Ident,
+) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, struct_expr)?;
+    let struct_dty = match &struct_expr.ty.as_ref().unwrap().ty {
+        TyKind::Data(dty) => dty,
+        ty_kind => {
+            return Err(TyError::ExpectedTupleType(
+                ty_kind.clone(),
+                struct_expr.clone(),
+            ));
+        }
+    };
+
+    match &struct_dty.dty {
+        DataTyKind::Struct(struct_decl) => {
+            if let Some(field) = struct_decl.fields.iter().find(|f| &f.0 == ident) {
+                Ok((
+                    Ty::new(TyKind::Data(Box::new(field.1.clone()))),
+                    mem,
+                    passed_prvs,
+                ))
+            } else {
+                Err(TyError::String(
+                    "Trying to access non existing struct field.".to_string(),
+                ))
+            }
+        }
+        dty_kind => Err(TyError::ExpectedTupleType(
+            TyKind::Data(Box::new(DataTy::new(dty_kind.clone()))),
+            struct_expr.clone(),
         )),
     }
 }

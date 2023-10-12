@@ -42,7 +42,9 @@ pub trait Visit: Sized {
     fn visit_exec(&mut self, exec: &ExecExprKind) { walk_exec(self, exec) }
     fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
+    fn visit_fun_decl(&mut self, fun_decl: &FunDecl) { walk_fun_decl(self, fun_decl) }
     fn visit_param_sig(&mut self, param_sig: &ParamSig) { walk_param_sig(self, param_sig) }
+    fn visit_field(&mut self, field: &(Ident, DataTy)) { walk_field(self, field) }
 }
 
 macro_rules! walk_list {
@@ -152,6 +154,10 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
         DataTyKind::Atomic(aty) => visitor.visit_atomic_ty(aty),
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
+        DataTyKind::Struct(struct_decl) => {
+            visitor.visit_ident(&struct_decl.ident);
+            walk_list!(visitor, visit_field, &struct_decl.fields)
+        }
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
@@ -216,6 +222,10 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
         }
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
+        }
+        PlaceExprKind::FieldProj(pl_expr, field_name) => {
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_ident(field_name);
         }
         PlaceExprKind::View(pl_expr, view) => {
             visitor.visit_pl_expr(pl_expr);
@@ -387,6 +397,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
                 visitor.visit_exec_expr(e)
             }
         }
+        ExprKind::Unsafe(expr) => visitor.visit_expr(expr),
         ExprKind::Cast(expr, dty) => {
             visitor.visit_expr(expr);
             visitor.visit_dty(dty)
@@ -500,8 +511,34 @@ pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
     visitor.visit_block(body)
 }
 
+pub fn walk_fun_decl<V: Visit>(visitor: &mut V, fun_decl: &FunDecl) {
+    let FunDecl {
+        ident: _,
+        generic_params,
+        generic_exec,
+        param_decls: params,
+        ret_dty,
+        exec,
+        prv_rels,
+    } = fun_decl;
+    walk_list!(visitor, visit_ident_kinded, generic_params);
+    for exec_decl in generic_exec {
+        visitor.visit_ident_exec(exec_decl);
+    }
+    walk_list!(visitor, visit_param_decl, params);
+    visitor.visit_dty(ret_dty);
+    visitor.visit_exec_expr(exec);
+    walk_list!(visitor, visit_prv_rel, prv_rels);
+}
+
 pub fn walk_param_sig<V: Visit>(visitor: &mut V, param_sig: &ParamSig) {
     let ParamSig { exec_expr, ty } = param_sig;
     visitor.visit_exec_expr(exec_expr);
     visitor.visit_ty(ty);
+}
+
+pub fn walk_field<V: Visit>(visitor: &mut V, field: &(Ident, DataTy)) {
+    let (ident, dty) = field;
+    visitor.visit_ident(ident);
+    visitor.visit_dty(dty);
 }

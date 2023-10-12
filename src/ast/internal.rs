@@ -87,7 +87,12 @@ pub struct Loan {
     pub own: Ownership,
 }
 
-pub type Path = Vec<usize>;
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum PathElem {
+    Proj(usize),
+    FieldProj(Box<Ident>),
+}
+pub type Path = Vec<PathElem>;
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct Place {
     pub ident: Ident,
@@ -101,8 +106,11 @@ impl Place {
     pub fn to_place_expr(&self) -> PlaceExpr {
         self.path.iter().fold(
             PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
-            |pl_expr, path_entry| {
-                PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), *path_entry))
+            |pl_expr, path_entry| match path_entry {
+                PathElem::Proj(n) => PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), *n)),
+                PathElem::FieldProj(field) => {
+                    PlaceExpr::new(PlaceExprKind::FieldProj(Box::new(pl_expr), field.clone()))
+                }
             },
         )
     }
@@ -117,6 +125,7 @@ impl Place {
 
 pub enum PlaceCtx {
     Proj(Box<PlaceCtx>, usize),
+    FieldProj(Box<PlaceCtx>, Box<Ident>),
     Deref(Box<PlaceCtx>),
     Select(Box<PlaceCtx>, Box<ExecExpr>),
     View(Box<PlaceCtx>, Box<View>),
@@ -131,6 +140,10 @@ impl PlaceCtx {
             Self::Proj(pl_ctx, n) => PlaceExpr::new(PlaceExprKind::Proj(
                 Box::new(pl_ctx.insert_pl_expr(pl_expr)),
                 n.clone(),
+            )),
+            Self::FieldProj(pl_ctx, field_name) => PlaceExpr::new(PlaceExprKind::FieldProj(
+                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
+                field_name.clone(),
             )),
             Self::Deref(pl_ctx) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
                 pl_ctx.insert_pl_expr(pl_expr),
@@ -157,10 +170,18 @@ impl PlaceCtx {
             PlaceCtx::Hole => PlaceCtx::Hole,
             PlaceCtx::Proj(pl_ctx, i) => {
                 if let PlaceCtx::Hole = **pl_ctx {
-                    panic!("There must an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
+                    panic!("There must be an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
                 } else {
                     let inner_ctx = pl_ctx.without_innermost_deref();
                     PlaceCtx::Proj(Box::new(inner_ctx), *i)
+                }
+            }
+            PlaceCtx::FieldProj(pl_ctx, field_name) => {
+                if let PlaceCtx::Hole = **pl_ctx {
+                    panic!("There must be an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
+                } else {
+                    let inner_ctx = pl_ctx.without_innermost_deref();
+                    PlaceCtx::FieldProj(Box::new(inner_ctx), field_name.clone())
                 }
             }
             PlaceCtx::Deref(pl_ctx) => {

@@ -3,7 +3,7 @@ use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
-use crate::ty_check::ExprTyCtx;
+use crate::ty_check::{exec, ExprTyCtx};
 use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
@@ -18,6 +18,7 @@ pub(super) struct BorrowCheckCtx<'ctxt> {
     pub exec: ExecExpr,
     pub reborrows: Vec<internal::Place>,
     pub own: Ownership,
+    pub unsafe_flag: bool,
 }
 
 impl<'ctxt> BorrowCheckCtx<'ctxt> {
@@ -35,6 +36,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
             exec: expr_ty_ctx.exec.clone(),
             reborrows: reborrows.to_vec(),
             own,
+            unsafe_flag: expr_ty_ctx.unsafe_flag,
         }
     }
 
@@ -53,6 +55,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
             exec: self.exec.clone(),
             reborrows: extended_reborrows,
             own: self.own,
+            unsafe_flag: self.unsafe_flag,
         }
     }
 }
@@ -61,13 +64,15 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
 // Ownership Safety
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
-pub(super) fn ownership_safe(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
-    narrowing_check(ctx, p, &ctx.exec)?;
-    access_conflict_check(ctx, p)?;
-    // no conflict with existing borrows
-    // no conflicting access:
-    //  no overlapping access with any exec != this.exec
-    //  if exec = this.exec: then no access through different view
+pub(super) fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
+    if !ctx.unsafe_flag {
+        narrowing_check(ctx, p, &ctx.exec)?;
+        access_conflict_check(ctx, p)?;
+    }
+    borrow_check(ctx, p)
+}
+
+pub(super) fn borrow_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
     let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
     if p.is_place() {
         ownership_safe_place(ctx, p)
@@ -169,7 +174,8 @@ fn subst_pl_with_potential_prvs_ownership_safe(
     let mut loans: HashSet<Loan> = HashSet::new();
     for pl_expr in loans_in_prv.iter().map(|loan| &loan.place_expr) {
         let insert_dereferenced_pl_expr = pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
-        let loans_for_possible_prv_pl_expr = ownership_safe(ctx, &insert_dereferenced_pl_expr)?;
+        let loans_for_possible_prv_pl_expr =
+            access_safety_check(ctx, &insert_dereferenced_pl_expr)?;
         loans.extend(loans_for_possible_prv_pl_expr);
     }
     Ok(loans)
@@ -197,40 +203,55 @@ fn ownership_safe_deref_abs(
     Ok(passed_through_prvs)
 }
 
-fn narrowing_check(ctx: &BorrowCheckCtx, p: &PlaceExpr, exec: &ExecExpr) -> OwnResult<()> {
+fn narrowing_check(
+    ctx: &BorrowCheckCtx,
+    p: &PlaceExpr,
+    active_ctx_exec: &ExecExpr,
+) -> OwnResult<()> {
     if ctx.own == Ownership::Shrd {
         return Ok(());
     }
     match &p.pl_expr {
         PlaceExprKind::Ident(ident) => {
-            let from = &ctx.ty_ctx.ident_ty(ident)?.exec;
-            no_distrib_in_diff(exec, from)?;
-            Ok(())
+            narrowable(&ctx.ty_ctx.ident_ty(ident)?.exec, active_ctx_exec)
         }
         PlaceExprKind::Select(pl_expr, select_exec) => {
-            if exec.exec.base != select_exec.exec.base {
-                return Err(BorrowingError::WrongDevice(
-                    exec.exec.base.clone(),
-                    select_exec.exec.base.clone(),
-                ));
-            }
-            if exec.exec.path.len() < select_exec.exec.path.len() {
-                panic!("Unexpected: Can only select for current execution resource.",)
-            }
-            for (u, f) in exec.exec.path.iter().zip(&select_exec.exec.path) {
-                if u != f {
-                    panic!("Unexpected: Trying to borrow from divergent execution resource.")
-                }
-            }
-            no_distrib_in_diff(exec, select_exec)?;
-            let outer_exec = exec.remove_last_distrib();
+            narrowable(select_exec, active_ctx_exec)?;
+            let mut outer_exec = active_ctx_exec.remove_last_distrib();
+            exec::ty_check(ctx.kind_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
             narrowing_check(ctx, pl_expr, &outer_exec)
         }
         PlaceExprKind::View(pl_expr, _)
         | PlaceExprKind::Deref(pl_expr)
         | PlaceExprKind::Proj(pl_expr, _)
-        | PlaceExprKind::Idx(pl_expr, _) => narrowing_check(ctx, pl_expr, exec),
+        | PlaceExprKind::FieldProj(pl_expr, _)
+        | PlaceExprKind::Idx(pl_expr, _) => narrowing_check(ctx, pl_expr, active_ctx_exec),
     }
+}
+
+fn narrowable(from: &ExecExpr, to: &ExecExpr) -> OwnResult<()> {
+    let normal_from = exec::normalize(from.clone());
+    let normal_to = exec::normalize(to.clone());
+    exec_is_prefix_of(&normal_from, &normal_to)?;
+    no_forall_in_diff(&normal_from, &normal_to)
+}
+
+fn exec_is_prefix_of(prefix: &ExecExpr, of: &ExecExpr) -> OwnResult<()> {
+    if prefix.exec.base != of.exec.base {
+        return Err(BorrowingError::WrongDevice(
+            of.exec.base.clone(),
+            prefix.exec.base.clone(),
+        ));
+    }
+    if of.exec.path.len() < prefix.exec.path.len() {
+        return Err(BorrowingError::CannotNarrow);
+    }
+    for (u, f) in prefix.exec.path.iter().zip(&of.exec.path) {
+        if u != f {
+            return Err(BorrowingError::DivergingExec);
+        }
+    }
+    Ok(())
 }
 
 fn access_conflict_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
@@ -242,7 +263,10 @@ fn access_conflict_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
     Ok(())
 }
 
-fn no_distrib_in_diff(under: &ExecExpr, from: &ExecExpr) -> OwnResult<()> {
+fn no_forall_in_diff(from: &ExecExpr, under: &ExecExpr) -> OwnResult<()> {
+    if from.exec.path.len() > under.exec.path.len() {
+        return Err(BorrowingError::CannotNarrow);
+    }
     for e in &under.exec.path[from.exec.path.len()..] {
         if let ExecPathElem::ForAll(_) = e {
             return Err(BorrowingError::MultipleDistribs);
@@ -272,21 +296,19 @@ fn ownership_safe_under_existing_borrows(
     ctx: &BorrowCheckCtx,
     pl_expr: &PlaceExpr,
 ) -> OwnResult<()> {
-    for prv_mapping in ctx.ty_ctx.prv_mappings() {
-        let PrvMapping { prv, loans } = prv_mapping;
-        let no_uniq_overlap = no_uniq_loan_overlap(ctx.own, pl_expr, loans);
-        if !no_uniq_overlap {
-            return at_least_one_borrowing_place_and_all_in_reborrow(
-                ctx.ty_ctx,
-                prv,
-                &ctx.reborrows,
-            );
+    if !ctx.unsafe_flag {
+        for prv_mapping in ctx.ty_ctx.prv_mappings() {
+            let PrvMapping { prv, loans } = prv_mapping;
+            let no_uniq_overlap = no_uniq_loan_overlap(ctx.own, pl_expr, loans);
+            if !no_uniq_overlap {
+                return at_least_one_borrowing_place_and_all_in_reborrow(
+                    ctx.ty_ctx,
+                    prv,
+                    &ctx.reborrows,
+                );
+            }
         }
     }
-    // for (_, loans) in exec_borrow_ctx.iter() {
-    //     no_uniq_loan_overlap(own, pl_expr, loans);
-    // }
-
     Ok(())
 }
 
@@ -330,8 +352,8 @@ fn conflicting_path(pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> bool 
         match lr {
             (PlExprPathElem::Idx(_), _) => return true,
             (v @ PlExprPathElem::View(_), path_elem) if v != path_elem => return true,
-            (path_eleml, path_elemr) if path_eleml == path_elemr => {}
             (PlExprPathElem::Proj(i), PlExprPathElem::Proj(j)) if i != j => return false,
+            (path_eleml, path_elemr) if path_eleml == path_elemr => {}
             _ => panic!("unexpected"),
         }
     }

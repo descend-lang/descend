@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use crate::ast::internal::PathElem;
 use descend_derive::span_derive;
 pub use span::*;
 
@@ -16,16 +17,64 @@ pub mod visit_mut;
 
 #[derive(Clone, Debug)]
 pub struct CompilUnit<'a> {
-    pub fun_defs: Vec<FunDef>,
+    pub items: Vec<Item>,
     pub source: &'a SourceCode<'a>,
 }
 
 impl<'a> CompilUnit<'a> {
-    pub fn new(fun_defs: Vec<FunDef>, source: &'a SourceCode<'a>) -> Self {
-        CompilUnit { fun_defs, source }
+    pub fn new(items: Vec<Item>, source: &'a SourceCode<'a>) -> Self {
+        CompilUnit { items, source }
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Item {
+    FunDef(Box<FunDef>),
+    FunDecl(Box<FunDecl>),
+    StructDecl(Box<StructDecl>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunDecl {
+    pub ident: Ident,
+    pub generic_params: Vec<IdentKinded>,
+    pub generic_exec: Option<IdentExec>,
+    pub param_decls: Vec<ParamDecl>,
+    pub ret_dty: Box<DataTy>,
+    pub exec: ExecExpr,
+    pub prv_rels: Vec<PrvRel>,
+}
+
+impl FunDecl {
+    pub fn fn_ty(&self) -> FnTy {
+        let param_sigs: Vec<_> = self
+            .param_decls
+            .iter()
+            .map(|p_decl| {
+                ParamSig::new(
+                    p_decl.exec_expr.as_ref().unwrap_or(&self.exec).clone(),
+                    p_decl.ty.as_ref().unwrap().clone(),
+                )
+            })
+            .collect();
+        FnTy {
+            generics: self.generic_params.clone(),
+            generic_exec: self.generic_exec.clone(),
+            param_sigs,
+            exec: self.exec.clone(),
+            ret_ty: Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct StructDecl {
+    pub ident: Ident,
+    pub generic_params: Vec<IdentKinded>,
+    pub fields: Vec<(Ident, DataTy)>,
+}
+
+// TODO refactor to make use of FunDecl
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunDef {
     pub ident: Ident,
@@ -338,6 +387,7 @@ pub enum ExprKind {
     Split(Box<Split>),
     Sched(Box<Sched>),
     Sync(Option<ExecExpr>),
+    Unsafe(Box<Expr>),
     Range(Box<Expr>, Box<Expr>),
 }
 
@@ -579,6 +629,7 @@ pub enum PlaceExprKind {
     Select(Box<PlaceExpr>, Box<ExecExpr>),
     // p.0 | p.1
     Proj(Box<PlaceExpr>, usize),
+    FieldProj(Box<PlaceExpr>, Box<Ident>),
     // *p
     Deref(Box<PlaceExpr>),
     // Index into array, e.g., arr[i]
@@ -592,6 +643,7 @@ pub enum PlExprPathElem {
     View(View),
     Select(Box<ExecExpr>),
     Proj(usize),
+    FieldProj(Ident),
     Deref,
     Idx(Box<Nat>),
     Ident(Ident),
@@ -617,7 +669,7 @@ impl PlaceExpr {
     pub fn is_place(&self) -> bool {
         match &self.pl_expr {
             PlaceExprKind::Ident(_) => true,
-            PlaceExprKind::Proj(ple, _) => ple.is_place(),
+            PlaceExprKind::Proj(ple, _) | PlaceExprKind::FieldProj(ple, _) => ple.is_place(),
             PlaceExprKind::Select(_, _)
             | PlaceExprKind::Deref(_)
             | PlaceExprKind::Idx(_, _)
@@ -656,10 +708,23 @@ impl PlaceExpr {
                 let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
-                        pl.path.push(*n);
+                        pl.path.push(PathElem::Proj(*n));
                         (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
                     _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
+                }
+            }
+            PlaceExprKind::FieldProj(inner_ple, field_name) => {
+                let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                match pl_ctx {
+                    internal::PlaceCtx::Hole => {
+                        pl.path.push(PathElem::FieldProj(field_name.clone()));
+                        (pl_ctx, internal::Place::new(pl.ident, pl.path))
+                    }
+                    _ => (
+                        internal::PlaceCtx::FieldProj(Box::new(pl_ctx), field_name.clone()),
+                        pl,
+                    ),
                 }
             }
             PlaceExprKind::Idx(inner_ple, idx) => {
@@ -707,6 +772,10 @@ impl PlaceExpr {
                     path.push(PlExprPathElem::Proj(*n));
                     as_ident_and_path_rec(inner_ple, path)
                 }
+                PlaceExprKind::FieldProj(inner_ple, ident) => {
+                    path.push(PlExprPathElem::FieldProj(ident.as_ref().clone()));
+                    as_ident_and_path_rec(inner_ple, path)
+                }
                 PlaceExprKind::Idx(inner_ple, idx) => {
                     path.push(PlExprPathElem::Idx(idx.clone()));
                     as_ident_and_path_rec(inner_ple, path)
@@ -737,6 +806,7 @@ impl ExecExpr {
         }
     }
 
+    // TODO how does this relate to is_prefix_of. Refactor.
     pub fn is_sub_exec_of(&self, exec: &ExecExpr) -> bool {
         if self.exec.path.len() > exec.exec.path.len() {
             return self.exec.path[..exec.exec.path.len()] == exec.exec.path;
@@ -832,7 +902,7 @@ impl ExecExprKind {
         self
     }
 
-    pub fn distrib(mut self, dim_compo: DimCompo) -> Self {
+    pub fn forall(mut self, dim_compo: DimCompo) -> Self {
         self.path.push(ExecPathElem::ForAll(dim_compo));
         self
     }
@@ -1114,7 +1184,11 @@ impl DataTy {
             | ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys
                 .iter()
-                .fold(true, |acc, ty| acc & ty.is_fully_alive()),
+                .fold(true, |acc, dty| acc & dty.is_fully_alive()),
+            Struct(struct_decl) => struct_decl
+                .fields
+                .iter()
+                .fold(true, |acc, (_, dty)| acc & dty.is_fully_alive()),
             Dead(_) => false,
         }
     }
@@ -1133,6 +1207,13 @@ impl DataTy {
                 let mut found = false;
                 for elem_dty in elem_dtys {
                     found = self.occurs_in(elem_dty);
+                }
+                found
+            }
+            DataTyKind::Struct(struct_decl) => {
+                let mut found = false;
+                for (_, dty) in &struct_decl.fields {
+                    found = self.occurs_in(dty)
                 }
                 found
             }
@@ -1161,6 +1242,10 @@ impl DataTy {
             Tuple(elem_tys) => elem_tys
                 .iter()
                 .any(|ty| ty.contains_ref_to_prv(prv_val_name)),
+            Struct(struct_decl) => struct_decl
+                .fields
+                .iter()
+                .any(|(_, dty)| dty.contains_ref_to_prv(prv_val_name)),
         }
     }
 }
@@ -1193,6 +1278,7 @@ pub enum DataTyKind {
     // [[ dty; n ]]
     ArrayShape(Box<DataTy>, Nat),
     Tuple(Vec<DataTy>),
+    Struct(Box<StructDecl>),
     At(Box<DataTy>, Memory),
     Ref(Box<RefDty>),
     RawPtr(Box<DataTy>),
@@ -1219,6 +1305,7 @@ pub enum ScalarTy {
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum AtomicTy {
     AtomicU32,
+    AtomicI32,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]

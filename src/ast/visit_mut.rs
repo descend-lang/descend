@@ -43,7 +43,9 @@ pub trait VisitMut: Sized {
     fn visit_exec_path_elem(&mut self, exec_path_elem: &mut ExecPathElem) { walk_exec_path_elem(self, exec_path_elem) }
     fn visit_param_decl(&mut self, param_decl: &mut ParamDecl) { walk_param_decl(self, param_decl) }
     fn visit_fun_def(&mut self, fun_def: &mut FunDef) { walk_fun_def(self, fun_def) }
+    fn visit_fun_decl(&mut self, fun_decl: &mut FunDecl) { walk_fun_decl(self, fun_decl) }
     fn visit_param_sig(&mut self, param_sig: &mut ParamSig) { walk_param_sig(self, param_sig) }
+    fn visit_field(&mut self, field: &mut (Ident, DataTy)) { walk_field(self, field) }
 }
 
 // Taken from the Rust compiler
@@ -154,6 +156,10 @@ pub fn walk_dty<V: VisitMut>(visitor: &mut V, dty: &mut DataTy) {
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
         DataTyKind::Atomic(aty) => visitor.visit_atomic_ty(aty),
         DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
+        DataTyKind::Struct(struct_decl) => {
+            visitor.visit_ident(&mut struct_decl.ident);
+            walk_list!(visitor, visit_field, &mut struct_decl.fields)
+        }
         DataTyKind::Array(dty, n) => {
             visitor.visit_dty(dty);
             visitor.visit_nat(n)
@@ -218,6 +224,10 @@ pub fn walk_pl_expr<V: VisitMut>(visitor: &mut V, pl_expr: &mut PlaceExpr) {
         }
         PlaceExprKind::Proj(pl_expr, _) => {
             visitor.visit_pl_expr(pl_expr);
+        }
+        PlaceExprKind::FieldProj(pl_expr, field_name) => {
+            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_ident(field_name);
         }
         PlaceExprKind::View(pl_expr, view) => {
             visitor.visit_pl_expr(pl_expr);
@@ -387,6 +397,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
                 visitor.visit_exec_expr(e)
             }
         }
+        ExprKind::Unsafe(expr) => visitor.visit_expr(expr),
         ExprKind::Cast(expr, dty) => {
             visitor.visit_expr(expr);
             visitor.visit_dty(dty)
@@ -504,8 +515,34 @@ pub fn walk_fun_def<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDef) {
     visitor.visit_block(body)
 }
 
+pub fn walk_fun_decl<V: VisitMut>(visitor: &mut V, fun_decl: &mut FunDecl) {
+    let FunDecl {
+        ident: _,
+        generic_params,
+        generic_exec,
+        param_decls: params,
+        ret_dty,
+        exec,
+        prv_rels,
+    } = fun_decl;
+    walk_list!(visitor, visit_ident_kinded, generic_params);
+    for exec_decl in generic_exec {
+        visitor.visit_ident_exec(exec_decl);
+    }
+    walk_list!(visitor, visit_param_decl, params);
+    visitor.visit_dty(ret_dty);
+    visitor.visit_exec_expr(exec);
+    walk_list!(visitor, visit_prv_rel, prv_rels);
+}
+
 pub fn walk_param_sig<V: VisitMut>(visitor: &mut V, param_sig: &mut ParamSig) {
     let ParamSig { exec_expr, ty } = param_sig;
     visitor.visit_exec_expr(exec_expr);
     visitor.visit_ty(ty);
+}
+
+pub fn walk_field<V: VisitMut>(visitor: &mut V, field: &mut (Ident, DataTy)) {
+    let (ident, dty) = field;
+    visitor.visit_ident(ident);
+    visitor.visit_dty(dty);
 }

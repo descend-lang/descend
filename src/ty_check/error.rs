@@ -182,7 +182,10 @@ impl TyError {
                         BorrowingError::WrongDevice(under, from) => {
                             eprintln!("error: wrong device\nunder:{:?}\nfrom:{:?}", under, from)
                         }
-                        BorrowingError::MultipleDistribs => eprintln!("{:?}", conflict),
+
+                        BorrowingError::CannotNarrow
+                        | BorrowingError::DivergingExec
+                        | BorrowingError::MultipleDistribs => eprintln!("{:?}", conflict),
                         BorrowingError::TyError(ty_err) => {
                             ty_err.emit(source);
                         }
@@ -305,6 +308,8 @@ pub enum BorrowingError {
     TemporaryConflictingBorrow(String),
     WrongDevice(BaseExec, BaseExec),
     MultipleDistribs,
+    CannotNarrow,
+    DivergingExec,
     TyError(Box<TyError>),
 }
 

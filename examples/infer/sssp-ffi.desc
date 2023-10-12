@@ -1,0 +1,231 @@
+// 1. complex types such as CSRGraph should not be references
+// 2. many initialisations that are not required for correctness because the initialisiation happens
+//    via references in foreign functions
+// 3. references to gpu.local missing
+// 4. shfl_sync has the wrong execution resource: gpu.warp is not specific enough. It should be
+//    w.forall with w: gpu.warp
+// 5. changed int (i32) to u32 in quite a few places. The original code compares int and unsigned
+//    several times (not allowed in Descend)
+// 6. wrong synchronization generated
+// 7. it should be possible to declare shared memory statically
+
+fn sssp_kernel<r: prv, sm_count: nat>(
+    graph: &r shrd gpu.global CSRGraph,
+    wl: &r shrd gpu.global worklist,
+    work_count: &r shrd gpu.global u32,
+    [grid.forall(X)] leader_lane_tb_storage: &r uniq gpu.shared [u8; 768*32],
+    [grid.forall(X)] temp_storage: &r uniq gpu.shared [TempStorage; 768/32] // ??? WarpScan::TempStorage
+) -[grid: gpu.grid<X<sm_count-1>, X<768>>]-> () {
+    sched block in grid {
+        init_regular(wl);
+        sched warp in block.to_warps {
+            let[warp.forall(X)] mut total_work: u32;
+            sched lane in warp {
+                total_work = 0u32
+            };
+            let leader_lane_storage = &uniq (*leader_lane_tb_storage).to_view.grp::<32*32>[[warp]];
+            let tb_coop_threshold = max(32u32 * 4u32, ((*graph).nedges / (*graph).nnodes) * 4u32);
+            while true {
+                let mut m_assignment: u64;
+                sched lane in warp {
+                    m_assignment = 0u64
+                };
+                let num = get_assignment(wl, graph, m_assignment, get_warp_id(), work_count, total_work);
+                let ptr = agm_get_real_ptr(m_assignment);
+                let src_bag_id = agm_get_bag_id(m_assignment);
+                let[warp.forall(X)] mut m_first_edge: u32;
+                let[warp.forall(X)] mut m_size: u32;
+                let[warp.forall(X)] mut m_vertex: u32;
+
+                sched lane in warp {
+                    let wl_offset = get_lane_id();
+                    if wl_offset < num {
+                        m_vertex = pop_work(wl, ptr + wl_offset);
+                        if m_vertex < (*graph).nnodes {
+                            m_first_edge = unsafe (*(*graph).row_start)[m_vertex];
+                                                                // FIXME Index is treated as Nat
+                            m_size = unsafe (*(*graph).row_start)[m_vertex + 1] - m_first_edge;
+                            total_work = total_work + 1u32
+                        }
+                    }
+                };
+
+                let mut process_mask = ballot_sync(m_size >= tb_coop_threshold);
+                let tb_coop_lane = find_ms_bit(process_mask);
+                sched lane in warp {
+                    // NOT_FOUND == 0xffffffff == 4294967295
+                    if tb_coop_lane != 4294967295u32 {
+                        tb_coop_assign(wl, m_vertex, m_first_edge, m_assignment, m_size, tb_coop_lane)
+                    }
+                };
+
+                // 16 == HOR_EDGE
+                process_mask = ballot_sync(m_size >= 16u32);
+
+                while process_mask != 0u32 {
+                    let leader = find_ms_bit(process_mask);
+                    let leader_first_edge = shfl_sync(m_first_edge, leader);
+                    let leader_size = shfl_sync(m_size, leader);
+                    let leader_vertex = shfl_sync(m_vertex, leader);
+                    sched lane in warp {
+                        // for (offset = get_lane_id; offset < leader_size; offset += 32)
+                        {
+                            let mut offset = get_lane_id();
+                            while offset < leader_size {
+                                let edge = leader_first_edge + offset;
+                                let dst = unsafe (*(*graph).edge_dst)[edge];
+                                let wt = unsafe (*(*graph).edge_data)[edge];
+                                let new_dist = thread_load(unsafe &shrd (*(*graph).node_data)[leader_vertex]) + wt;
+                                let dst_dist = thread_load(unsafe &shrd (*(*graph).node_data)[dst]);
+                                if (dst_dist > new_dist) {
+                                    atomicMin(unsafe &shrd (*(*graph).node_data)[dst], new_dist);
+                                    let dst_bag_id = dist_to_bag_id_int(wl, src_bag_id, new_dist);
+                                    push_work(wl, dst_bag_id, dst)
+                                };
+                                offset = offset + 32u32
+                            }
+                        };
+                        process_mask = set_bits(process_mask, 0u32, leader, 1u32)
+                    };
+
+                    // 16 == HOR_EDGE
+                    if (m_size >= 16u32) {
+                        m_size = 0u32
+                    }
+                };
+                sync(warp);
+                let mut warp_offset: u32;
+                let mut warp_total: u32;
+                warp_offset = 0u32;
+                warp_total = 0u32;
+                cub_exclusive_sum(&uniq (*temp_storage).to_view[[warp]], m_size, warp_offset, warp_total);
+
+                sched lane in warp {
+                    let mut write_idx = warp_offset;
+                    let write_end = warp_offset + m_size;
+                    while write_idx < write_end {
+                        unsafe (*leader_lane_storage)[write_idx] = get_lane_id() as u8;
+                        write_idx = write_idx + 1u32
+                    }
+                };
+                sync(warp);
+                // for (read_dix_start = 0; read_idx_start < warp_total; read_idx_start += 32)
+                {
+                    let mut read_idx_start = 0u32;
+                    while read_idx_start < warp_total {
+                        let[warp.forall(X)] mut m_read_idx: u32;
+                        let[warp.forall(X)] mut leader: u32;
+                        sched lane in warp {
+                            m_read_idx = read_idx_start + get_lane_id();
+                            leader = unsafe (*leader_lane_storage)[m_read_idx] as u32
+                        };
+                        let leader_warp_offset = shfl_sync(warp_offset, leader);
+                        let leader_first_edge = shfl_sync(m_first_edge, leader);
+                        let leader_vertex = shfl_sync(m_vertex, leader);
+
+                        sched lane in warp {
+                            if m_read_idx < warp_total {
+                                let offset = m_read_idx - leader_warp_offset;
+                                let edge = leader_first_edge + offset;
+                                let dst = unsafe (*(*graph).edge_dst)[edge];
+                                let wt = unsafe (*(*graph).edge_data)[edge];
+                                let new_dist = thread_load(unsafe &shrd (*(*graph).node_data)[leader_vertex]) + wt;
+                                let dst_dist = thread_load(unsafe &shrd (*(*graph).node_data)[dst]);
+                                if (dst_dist > new_dist) {
+                                    atomicMin(unsafe &shrd (*(*graph).node_data)[dst], new_dist);
+                                    let dst_bag_id = dist_to_bag_id_int(wl, src_bag_id, new_dist);
+                                    push_work(wl, dst_bag_id, dst)
+                                }
+                            }
+                        };
+                        read_idx_start = read_idx_start + 32u32
+                    }
+                };
+                sync(warp);
+                epilog(wl, m_assignment, num, false)
+            }
+        }
+    }
+}
+
+struct CSRGraph<r: prv, n: nat> {
+    nedges: u32,
+    nnodes: u32,
+    row_start: &r shrd gpu.global [u32; n],
+    edge_dst: &r shrd gpu.global [u32; n],
+    edge_data: &r shrd gpu.global [i32; n],
+    node_data: &r shrd gpu.global [i32; n]
+}
+
+struct worklist {}
+
+struct TempStorage {}
+
+fn epilog(wl: &shrd gpu.global worklist, m_assignment: u64, work_size: u32, coop: bool) -[w: gpu.warp]-> ();
+
+fn set_bits(bit_mask: u32, val: u32, start_pos: u32, len: u32) -[a: any]-> u32;
+
+fn atomicMin<r: prv>(ptr: &r shrd gpu.global i32, comp: i32) -[t: gpu.thread]-> ();
+
+fn init_regular<r: prv>(wl: &r shrd gpu.global worklist) -[b: gpu.block<X<768>>]-> ();
+
+fn max(lhs: u32, rhs: u32) -[y: any]-> u32;
+fn pop_work(wl: &shrd gpu.global worklist, idx: u32) -[t: gpu.thread]-> u32;
+//     unsafe cuda {
+//         wl.pop_work(idx);
+//     }
+// }
+fn push_work(wl: &shrd gpu.global worklist, bag_id: u32, node: u32) -[t: gpu.thread]-> ();
+fn tb_coop_assign(
+    wl: &shrd gpu.global worklist,
+    vertex_id: u32, first_edge: u32, m_assignment: u64, m_size: u32,
+    tb_coop_lane: u32
+) -[w: gpu.thread]-> ();
+//     unsafe cuda {
+//         wl.tb_coop_assign(vertex_id, first_edge, m_assignment, *m_size, tb_coop_lane);
+//     }
+// }
+fn get_assignment(
+    wl: &shrd gpu.global worklist, graph: &shrd gpu.global CSRGraph,
+    m_assignment: u64, warp_id: u32, work_count: &shrd gpu.global u32,
+    total_work: u32
+) -[w: gpu.warp]-> u32;
+//     unsafe cuda {
+//         wl.get_assignment(*graph, *m_assignment, thread_idx_x()/32, work_count, total_work);
+//     }
+// }
+//
+fn thread_load(addr: &shrd gpu.global i32) -[t: gpu.thread]-> i32;
+//     unsafe cuda {
+//         cub::ThreadLoad<cub::LOAD_CG>(addr)
+//     }
+// }
+//
+//
+fn agm_get_real_ptr(assignment: u64) -[y: any]-> u32;
+//     unsafe cuda {
+//         agm_get_real_ptr(assignment);
+//     }
+// }
+fn agm_get_bag_id(assignment: u64) -[y: any]-> u32;
+//     unsafe cuda {
+//         agm_get_bag_id(assignment);
+//     }
+// }
+fn find_ms_bit(bit_mask: u32) -[y: any]-> u32;
+//     unsafe cuda {
+//         find_ms_bit(bit_mask)
+//     }
+// }
+//
+fn cub_exclusive_sum<r: prv>(
+    storage: &r uniq gpu.shared TempStorage,
+    [w.forall(X)] m_size: u32,
+    [w.forall(X)] warp_offset: u32,
+    warp_total: u32
+) -[w: gpu.warp]-> ();
+//     unsafe cuda {
+//         WarpScan(*stoarge).ExclusiveSum(m_size, warp_offset, warp_total);
+//     }
+// }
+fn dist_to_bag_id_int(wl: &shrd gpu.global worklist, bag_id: u32, dst_dist: i32) -[t: gpu.thread]-> u32;

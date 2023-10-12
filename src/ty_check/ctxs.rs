@@ -1,4 +1,6 @@
-use crate::ast::internal::{ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PrvMapping};
+use crate::ast::internal::{
+    ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PathElem, PrvMapping,
+};
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
 use crate::ty_check::pre_decl;
@@ -251,7 +253,7 @@ impl TyCtx {
     }
 
     fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<TypedPlace> {
-        fn proj(mut pl: internal::Place, idx: usize) -> internal::Place {
+        fn proj(mut pl: internal::Place, idx: PathElem) -> internal::Place {
             pl.path.push(idx);
             pl
         }
@@ -272,8 +274,20 @@ impl TyCtx {
                 d::Tuple(tys) => {
                     let mut place_frame = vec![(pl.clone(), dty.clone())];
                     for (index, proj_ty) in tys.iter().enumerate() {
-                        let mut exploded_index = explode(proj(pl.clone(), index), proj_ty.clone());
+                        let mut exploded_index =
+                            explode(proj(pl.clone(), PathElem::Proj(index)), proj_ty.clone());
                         place_frame.append(&mut exploded_index);
+                    }
+                    place_frame
+                }
+                d::Struct(sdecl) => {
+                    let mut place_frame = vec![(pl.clone(), dty.clone())];
+                    for field in sdecl.fields.iter() {
+                        let mut exploded_field = explode(
+                            proj(pl.clone(), PathElem::FieldProj(Box::new(field.0.clone()))),
+                            field.1.clone(),
+                        );
+                        place_frame.append(&mut exploded_field);
                     }
                     place_frame
                 }
@@ -303,19 +317,29 @@ impl TyCtx {
     }
 
     pub fn place_dty(&self, place: &internal::Place) -> CtxResult<DataTy> {
-        fn proj_ty(dty: DataTy, path: &[usize]) -> CtxResult<DataTy> {
+        fn proj_ty(dty: DataTy, path: &[PathElem]) -> CtxResult<DataTy> {
             let mut res_dty = dty;
-            for n in path {
-                match &res_dty.dty {
-                    DataTyKind::Tuple(elem_tys) => {
+            for pe in path {
+                match (&res_dty.dty, pe) {
+                    (DataTyKind::Tuple(elem_tys), PathElem::Proj(n)) => {
                         if elem_tys.len() <= *n {
                             return Err(CtxError::IllegalProjection);
                         }
                         res_dty = elem_tys[*n].clone();
                     }
+                    (DataTyKind::Struct(struct_decl), PathElem::FieldProj(ident)) => {
+                        res_dty = if let Some(field) =
+                            struct_decl.fields.iter().find(|f| &f.0 == ident.as_ref())
+                        {
+                            field.1.clone()
+                        } else {
+                            panic!("Did not find field `{}` in struct.", ident.name)
+                        }
+                    }
                     t => {
                         panic!(
-                            "Trying to project element data type of a non tuple type:\n {:?}",
+                            "Trying to project element data type of a non record type or\
+                                wrong projection:\n {:?}",
                             t
                         )
                     }
@@ -332,17 +356,33 @@ impl TyCtx {
     }
 
     pub fn set_place_dty(&mut self, pl: &internal::Place, pl_ty: DataTy) -> &mut Self {
-        fn set_dty_for_path_in_dty(orig_dty: DataTy, path: &[usize], part_dty: DataTy) -> DataTy {
+        fn set_dty_for_path_in_dty(
+            orig_dty: DataTy,
+            path: &[PathElem],
+            part_dty: DataTy,
+        ) -> DataTy {
             if path.is_empty() {
                 return part_dty;
             }
 
-            let idx = path.first().unwrap();
-            match orig_dty.dty {
-                DataTyKind::Tuple(mut elem_tys) => {
-                    elem_tys[*idx] =
-                        set_dty_for_path_in_dty(elem_tys[*idx].clone(), &path[1..], part_dty);
+            let pe = path.first().unwrap();
+            match (orig_dty.dty, pe) {
+                (DataTyKind::Tuple(mut elem_tys), PathElem::Proj(n)) => {
+                    elem_tys[*n] =
+                        set_dty_for_path_in_dty(elem_tys[*n].clone(), &path[1..], part_dty);
                     DataTy::new(DataTyKind::Tuple(elem_tys))
+                }
+                (DataTyKind::Struct(mut struct_decl), PathElem::FieldProj(ident)) => {
+                    if let Some(field) = struct_decl
+                        .fields
+                        .iter_mut()
+                        .find(|f| &f.0 == ident.as_ref())
+                    {
+                        field.1 = set_dty_for_path_in_dty(field.1.clone(), &path[1..], part_dty);
+                        DataTy::new(DataTyKind::Struct(struct_decl))
+                    } else {
+                        panic!("Struct field with name `{}` does not exist.", ident.name)
+                    }
                 }
                 _ => panic!("Path not compatible with type."),
             }
@@ -470,6 +510,7 @@ fn get_select_for(exec: &ExecExpr, pl_expr: &PlaceExpr) -> Option<PlaceExpr> {
         PlaceExprKind::Select(ipl, _)
         | PlaceExprKind::View(ipl, _)
         | PlaceExprKind::Proj(ipl, _)
+        | PlaceExprKind::FieldProj(ipl, _)
         | PlaceExprKind::Idx(ipl, _)
         | PlaceExprKind::Deref(ipl) => get_select_for(exec, ipl),
         PlaceExprKind::Ident(_) => None,
@@ -579,37 +620,55 @@ impl KindCtx {
 }
 
 #[derive(Debug, Clone)]
+pub(super) enum GlobalItem {
+    FnTy(Box<FnTy>),
+    StructDecl(Box<StructDecl>),
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct GlobalCtx {
-    items: HashMap<Box<str>, FnTy>,
+    items: HashMap<Box<str>, GlobalItem>,
 }
 
 impl GlobalCtx {
-    pub fn from_iter<'a, I>(funs: I) -> Self
+    pub fn from_iter<'a, I>(items: I) -> Self
     where
-        I: Iterator<Item = &'a FunDef>,
+        I: Iterator<Item = &'a Item>,
     {
         let mut gl_ctx = GlobalCtx {
             items: HashMap::new(),
         };
         Self::append_fun_decls(&mut gl_ctx, &pre_decl::fun_decls());
-        gl_ctx
-            .items
-            .extend(funs.map(|fun_def| (fun_def.ident.name.clone(), fun_def.fn_ty())));
+        gl_ctx.items.extend(items.map(|item| match item {
+            Item::StructDecl(struct_decl) => (
+                struct_decl.ident.name.clone(),
+                GlobalItem::StructDecl(struct_decl.clone()),
+            ),
+            Item::FunDef(fun_def) => (
+                fun_def.ident.name.clone(),
+                GlobalItem::FnTy(Box::new(fun_def.fn_ty())),
+            ),
+            Item::FunDecl(fun_decl) => (
+                fun_decl.ident.name.clone(),
+                GlobalItem::FnTy(Box::new(fun_decl.fn_ty())),
+            ),
+        }));
         gl_ctx
     }
 
     fn append_fun_decls(gl_ctx: &mut GlobalCtx, fun_decls: &[(&str, FnTy)]) {
-        gl_ctx.items.extend(
-            fun_decls
-                .iter()
-                .map(|(name, ty)| (String::from(*name).into_boxed_str(), ty.clone())),
-        )
+        gl_ctx.items.extend(fun_decls.iter().map(|(name, ty)| {
+            (
+                String::from(*name).into_boxed_str(),
+                GlobalItem::FnTy(Box::new(ty.clone())),
+            )
+        }))
     }
 
     pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
         match self.items.get(&ident.name) {
-            Some(fn_ty) => Ok(fn_ty),
-            None => Err(CtxError::IdentNotFound(ident.clone())),
+            Some(GlobalItem::FnTy(fn_ty)) => Ok(fn_ty),
+            None | Some(GlobalItem::StructDecl(_)) => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
 }

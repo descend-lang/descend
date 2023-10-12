@@ -143,6 +143,10 @@ pub(super) enum Expr {
         tuple: Box<Expr>,
         n: usize,
     },
+    FieldProj {
+        struct_expr: Box<Expr>,
+        field_name: String,
+    },
     InitializerList {
         elems: Vec<Expr>,
     },

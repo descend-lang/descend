@@ -127,3 +127,27 @@ fn vector_add() -> Res {
 fn bfs() -> Res {
     Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
 }
+
+#[test]
+fn sgemm() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/sgemm.desc")?
+    ))
+}
+
+#[test]
+fn shrd_mem_acc_equiv_exec() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/shrd_mem_acc_equiv_exec.desc")?
+    ))
+}
+
+#[test]
+fn sssp_ffi_unsafe() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/sssp-ffi.desc")?
+    ))
+}

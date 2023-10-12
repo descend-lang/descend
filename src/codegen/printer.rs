@@ -244,6 +244,10 @@ impl std::fmt::Display for Expr {
             Cast { expr, ty } => write!(f, "({})({})", ty, expr),
             ArraySubscript { array, index } => write!(f, "{}[{}]", array, index),
             Proj { tuple, n } => write!(f, "{}.{}", tuple, n),
+            FieldProj {
+                struct_expr,
+                field_name,
+            } => write!(f, "{}.{}", struct_expr, field_name),
             InitializerList { elems } => {
                 write!(f, "{{")?;
                 fmt_vec(f, elems, ", ")?;

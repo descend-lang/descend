@@ -14,12 +14,33 @@ use crate::ast::visit_mut::VisitMut;
 
 pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
     let parser = Parser::new(source);
-    let mut fun_defs = parser.parse().map_err(|err| err.emit())?;
-    for fun_def in &mut fun_defs {
+    let mut items = parser.parse().map_err(|err| err.emit())?;
+    // TODO refactor to not require unnecessary copying out of items
+    let struct_copies = items
+        .iter()
+        .filter_map(|i| {
+            if let Item::StructDecl(struct_dty) = i {
+                Some(struct_dty.as_ref())
+            } else {
+                None
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for fun_def in &mut items.iter_mut().filter_map(|i| {
+        if let Item::FunDef(fun_def) = i {
+            Some(fun_def)
+        } else {
+            None
+        }
+    }) {
         replace_arg_kinded_idents(fun_def);
         replace_exec_idents_with_specific_execs(fun_def);
     }
-    Ok(CompilUnit::new(fun_defs, source))
+    for i in &mut items.iter_mut() {
+        replace_struct_idents_with_specific_struct_dtys(&struct_copies, i);
+    }
+    Ok(CompilUnit::new(items, source))
 }
 
 #[derive(Debug)]
@@ -32,7 +53,7 @@ impl<'a> Parser<'a> {
         Parser { source }
     }
 
-    fn parse(&self) -> Result<Vec<FunDef>, ParseError<'_>> {
+    fn parse(&self) -> Result<Vec<Item>, ParseError<'_>> {
         descend::compil_unit(self.source.str()).map_err(|peg_err| ParseError::new(self, peg_err))
     }
 }
@@ -130,20 +151,6 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
         ident_names_to_exec_expr: Vec<(Box<str>, ExecExpr)>,
     }
     impl VisitMut for ReplaceExecIdents {
-        // fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr) {
-        //     match &mut pl_expr.pl_expr {
-        //         PlaceExprKind::Select(ple, exec) => {
-        //             self.visit_pl_expr(ple);
-        //             expand_exec_expr(&self.ident_names_to_exec_expr, exec);
-        //         }
-        //         _ => visit_mut::walk_pl_expr(self, pl_expr),
-        //     }
-        // }
-
-        fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) {
-            expand_exec_expr(&self.ident_names_to_exec_expr, exec_expr)
-        }
-
         fn visit_split(&mut self, indep: &mut Split) {
             // manually expand to keep scopes for different branches of split
             expand_exec_expr(&self.ident_names_to_exec_expr, &mut indep.split_exec);
@@ -174,7 +181,7 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
         fn visit_sched(&mut self, sched: &mut Sched) {
             // manually expand to map inner_exec_ident to expanded exec
             expand_exec_expr(&self.ident_names_to_exec_expr, &mut sched.sched_exec);
-            let body_exec = ExecExpr::new(sched.sched_exec.exec.clone().distrib(sched.dim));
+            let body_exec = ExecExpr::new(sched.sched_exec.exec.clone().forall(sched.dim));
             if let Some(ident) = &sched.inner_exec_ident {
                 self.ident_names_to_exec_expr
                     .push((ident.name.clone(), body_exec));
@@ -182,6 +189,10 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
             visit_mut::walk_sched(self, sched);
             self.ident_names_to_exec_expr.pop();
             // self.visit_block(&mut sched.body);
+        }
+
+        fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) {
+            expand_exec_expr(&self.ident_names_to_exec_expr, exec_expr)
         }
 
         // fn visit_expr(&mut self, expr: &mut Expr) {
@@ -252,6 +263,30 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
     replace_exec_idents.visit_fun_def(fun_def);
 }
 
+fn replace_struct_idents_with_specific_struct_dtys(struct_dtys: &[StructDecl], item: &mut Item) {
+    struct ReplaceStructIdents<'a> {
+        struct_dtys: &'a [StructDecl],
+    }
+    impl<'a> VisitMut for ReplaceStructIdents<'a> {
+        fn visit_dty(&mut self, dty: &mut DataTy) {
+            if let DataTyKind::Ident(ident) = &mut dty.dty {
+                if let Some(struct_decl) = self.struct_dtys.iter().find(|s| &s.ident == ident) {
+                    dty.dty = DataTyKind::Struct(Box::new(struct_decl.clone()))
+                }
+            } else {
+                visit_mut::walk_dty(self, dty)
+            }
+        }
+    }
+
+    let mut replace_struct_idents = ReplaceStructIdents { struct_dtys };
+    match item {
+        Item::FunDef(fun_def) => replace_struct_idents.visit_fun_def(fun_def),
+        Item::FunDecl(fun_decl) => replace_struct_idents.visit_fun_decl(fun_decl),
+        _ => {}
+    }
+}
+
 pub mod error {
     use crate::error::ErrorReported;
     use crate::parser::{Parser, SourceCode};
@@ -312,10 +347,49 @@ pub mod error {
 peg::parser! {
     pub(crate) grammar descend() for str {
 
-        pub(crate) rule compil_unit() -> Vec<FunDef>
-            = _ funcs:(fun:global_fun_def() { fun }) ** _ _ {
-                funcs
+        pub(crate) rule compil_unit() -> Vec<Item>
+            = _ items:(item:item() { item }) ** _ _ {
+                items
             }
+
+        pub(crate) rule item() -> Item =
+              f:global_fun_def() { Item::FunDef(Box::new(f)) }
+            / fd: fun_decl() { Item::FunDecl(Box::new(fd)) }
+            / s: struct_decl() { Item::StructDecl(Box::new(s)) }
+
+        pub(crate) rule struct_decl() -> StructDecl =
+            "struct" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
+                "{" _ fields:field_decl() ** (_ "," _) _ "}" {
+            StructDecl {
+                ident, generic_params: generic_params.unwrap_or_default(), fields
+            }
+        }
+
+        rule field_decl() -> (Ident, DataTy) =
+            ident:ident() _ ":" _ dty:dty() {
+            (ident, dty)
+        }
+
+        pub(crate) rule fun_decl() -> FunDecl =
+            "fn" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
+            "(" _ param_decls:(param_decl() ** (_ "," _)) _ ")" _
+            "-" _ "[" _ ident_exec:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _ ";" {
+                 let generic_params = match generic_params {
+                    Some(generic_params) => generic_params,
+                    None => vec![]
+                };
+                let exec = ExecExpr::new(
+                    ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+                FunDecl {
+                  ident,
+                  generic_params,
+                  generic_exec: Some(ident_exec),
+                  param_decls,
+                  ret_dty: Box::new(ret_dty),
+                  exec,
+                  prv_rels: vec![],
+                }
+        }
 
         pub(crate) rule global_fun_def() -> FunDef
             = "fn" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
@@ -440,6 +514,7 @@ peg::parser! {
             --
             "-" _ x:(@) { utils::make_unary(UnOp::Neg, x) }
             "!" _ x:(@) { utils::make_unary(UnOp::Not, x) }
+            "unsafe" _ x:(@) { Expr::new(ExprKind::Unsafe(Box::new(x))) }
             --
             begin:position!() expr:@ end:position!() {
                 let expr: Expr = Expr {
@@ -594,7 +669,7 @@ peg::parser! {
             }
 
         rule let_uninit() -> Expr =
-         begin:position!() "let" maybe_exec_expr:(_ "(" _ e:exec_expr() _ ")" { e })? __ "mut" __ ident:ident() _ ":"
+         begin:position!() "let" maybe_exec_expr:(_ "[" _ e:exec_expr() _ "]" { e })? __ "mut" __ ident:ident() _ ":"
                 _ ty:ty() end:position!()
             {
                 Expr::with_span(
@@ -640,6 +715,7 @@ peg::parser! {
                 --
                 proj:@ _ "." _ n:nat_literal() { PlaceExpr::new(PlaceExprKind::Proj(Box::new(proj), n)) }
                 pl_expr:@ _ "." _ v:view_app() { PlaceExpr::new(PlaceExprKind::View(Box::new(pl_expr), Box::new(v))) }
+                fproj:@ _ "." _ i:ident() { PlaceExpr::new(PlaceExprKind::FieldProj(Box::new(fproj), Box::new(i))) }
                 --
                 begin:position!() pl_expr:@ end:position!() {
                     PlaceExpr {
@@ -891,7 +967,7 @@ peg::parser! {
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to_warps" / "to" / "with"
                 / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "AtomicU32" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
                 / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
-                / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync"
+                / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync" / "struct"/ "unsafe"
                 / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "any"
                 / view_name())
                 !['a'..='z'|'A'..='Z'|'0'..='9'|'_']

@@ -437,17 +437,25 @@ fn swappable_exec_path_elems(
     }
 }
 
-fn normalize(mut exec_path: Vec<ExecPathElem>) -> Vec<ExecPathElem> {
-    let mut forall_dims_encountered = Vec::with_capacity(3);
-    for i in 0..exec_path.len() - 1 {
-        for j in 0..exec_path.len() - i - 1 {
-            update_encountered_dims(&mut forall_dims_encountered, &exec_path[j]);
-            update_encountered_dims(&mut forall_dims_encountered, &exec_path[j + 1]);
-            if swappable_exec_path_elems(&forall_dims_encountered, &exec_path[j], &exec_path[j + 1])
-            {
-                exec_path.swap(j, j + 1)
+pub(super) fn normalize(mut exec: ExecExpr) -> ExecExpr {
+    assert!(exec.ty.is_some());
+    let mut exec_path = exec.exec.path;
+    if !exec_path.is_empty() {
+        let mut forall_dims_encountered = Vec::with_capacity(3);
+        for i in 0..(exec_path.len() - 1) {
+            for j in 0..(exec_path.len() - i - 1) {
+                update_encountered_dims(&mut forall_dims_encountered, &exec_path[j]);
+                update_encountered_dims(&mut forall_dims_encountered, &exec_path[j + 1]);
+                if swappable_exec_path_elems(
+                    &forall_dims_encountered,
+                    &exec_path[j],
+                    &exec_path[j + 1],
+                ) {
+                    exec_path.swap(j, j + 1)
+                }
             }
         }
     }
-    exec_path
+    exec.exec.path = exec_path;
+    exec
 }

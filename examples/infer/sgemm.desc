@@ -1,11 +1,11 @@
-// val M = 512
-// val N = 256
-// val K = 64
+// m = c * 1024
+// n = d * 1024
+// k = e * 8
 fn sgemm<r: prv, m: nat, n: nat, k: nat>(
-  a_transp_mat_h: &r shrd cpu.mem [[f32; m]; k],
-  b_mat_h: &r shrd cpu.mem [[f32; n]; k],
-  c_mat_h: &r shrd cpu.mem [[f32; n]; m],
-  out_mat_h: &r uniq cpu.mem [[f32; n]; m]
+  a_transp_mat_h: &r shrd cpu.mem [[i32; m]; k],
+  b_mat_h: &r shrd cpu.mem [[i32; n]; k],
+  c_mat_h: &r shrd cpu.mem [[i32; n]; m],
+  out_mat_h: &r uniq cpu.mem [[i32; n]; m]
 ) -[t: cpu.thread]-> () {
   let mut gpu = gpu_device(0);
   let a_transp_mat = gpu_alloc_copy(&uniq gpu, &shrd *a_transp_mat_h);
@@ -13,217 +13,81 @@ fn sgemm<r: prv, m: nat, n: nat, k: nat>(
   let c_mat = gpu_alloc_copy(&uniq gpu, &shrd *c_mat_h);
   let mut out_mat = gpu_alloc_copy(&uniq gpu, &shrd *out_mat_h);
 
-  sgemm_gpu::<<<XY<8, 16>, XY<32, 8>; [[f32; 32*2]; 8], [[f32; 32*4]; 8]>>>(
-    &shrd a_transp_mat, &shrd b_mat, &shrd c_mat, &uniq out_mat, 0.0f32, 0.0f32
+  sgemm_gpu::<<<XY<8, 16>, XY<32, 8>; [[i32; 32*2]; 8], [[i32; 32*4]; 8]>>>(
+    &shrd a_transp_mat, &shrd b_mat, &shrd c_mat, &uniq out_mat, 1, 1
   );
   copy_to_host(&shrd out_mat, out_mat_h)
 }
 
 fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
-  a_transp_mat: &r shrd gpu.global [[f32; m]; k],
-  b_mat: &r shrd gpu.global [[f32; n]; k],
-  c_mat: &r shrd gpu.global [[f32; n]; m],
-  out_mat: &r uniq gpu.global [[f32; n]; m],
-  alpha: f32, beta: f32,
-  [grid.forall(X).forall(Y)] a_tile: &r uniq gpu.shared [[f32; 32 * 2]; 8],
-  [grid.forall(X).forall(Y)] b_tile: &r uniq gpu.shared [[f32; 32 * 4]; 8]
+  a_transp_mat: &r shrd gpu.global [[i32; m]; k],
+  b_mat: &r shrd gpu.global [[i32; n]; k],
+  c_mat: &r shrd gpu.global [[i32; n]; m],
+  out_mat: &r uniq gpu.global [[i32; n]; m],
+  alpha: i32, beta: i32,
+  [grid.forall(X).forall(Y)] a_tile: &r uniq gpu.shared [[i32; 32 * 2]; 8],
+  [grid.forall(X).forall(Y)] b_tile: &r uniq gpu.shared [[i32; 32 * 4]; 8]
 ) -[grid: gpu.grid<XY<8, 16>, XY<32, 8>>]-> () {
   sched(Y) grid_slices_y in grid { sched(X) blocks in grid_slices_y {
     sched(Y) block_slices_y in blocks { sched(X) thread in block_slices_y {
       for_nat wgY in range(0, m/(64*16)) {
         for_nat wgX in range(0, n/(128*8)) {
-          let mut accum: [f32; 32] = create_array::<32>(0.0f32);
+          let mut accum: [i32; 32] = create_array::<32>(0);
           // dot product on tiles
-          for_nat k1 in range(0, k/8) {
+          for_nat tnum in range(0, k/8) {
             for_nat i in range(0, 2) {
               (*a_tile).to_view[[block_slices_y]].to_view.grp::<32>.transp[[thread]][i] =
                 (*a_transp_mat).to_view.map(to_view)
                   // tile2::<8, 64>
                   .map(grp::<64>).grp::<8>.map(transp).transp
-                    [[grid_slices_y]][[blocks]][[block_slices_y]].grp::<32>.transp[[thread]][i]
+                    .grp::<16>.transp[[grid_slices_y]][wgY][tnum][[block_slices_y]].grp::<32>.transp[[thread]][i]
             };
             for_nat i in range(0, 4) {
               (*b_tile).to_view[[block_slices_y]].to_view.grp::<32>.transp[[thread]][i] =
                 (*b_mat).to_view.map(to_view)
                   //tile2::<8, 128>
                   .map(grp::<128>).grp::<8>.map(transp).transp
-                    [[grid_slices_y]][[blocks]][[block_slices_y]].grp::<32>.transp[[grid]][i]
-            }
-            //sync(blocks)
+                    .grp::<8>.transp[[blocks]][wgX][tnum][[block_slices_y]].grp::<32>.transp[[thread]][i]
+            };
+            sync(blocks);
             // dot product on tile elements
-      //       for_nat i in range(0, 8) {
-      //         let mut a_tile_regs: [f32; 8] = create_array::<8>(0.0f32);
-      //         for_nat j in range(0, 8) {
-      //           a_tile_regs[j] = (*a_tile)[i].to_view.grp::<8>[[block_slices_y]][j]
-      //         };
-      //
-      //         let mut b_tile_regs: [f32; 4] = create_array::<4>(0.0f32);
-      //         for_nat j in range(0, 4) {
-      //           b_tile_regs[j] = (*b_tile)[i].to_view.grp::<32>.transp[[thread]][j]
-      //         };
-      //
-      //         for_nat j1 in range(0, 8) {
-      //           for_nat j2 in range(0, 4) {
-      //             accum[j1 * 4 + j2] = accum[j1 * 4 + j2] + (a_tile_regs[j1] * b_tile_regs[j2])
-      //           }
-      //         }
-      //       }
-      //       // sync(block)
+            for_nat i in range(0, 8) {
+              let mut a_tile_regs: [i32; 8] = create_array::<8>(0);
+              for_nat j in range(0, 8) {
+                a_tile_regs[j] = (*a_tile)[i].to_view.grp::<8>[[block_slices_y]][j]
+              };
+
+              let mut b_tile_regs: [i32; 4] = create_array::<4>(0);
+              for_nat j in range(0, 4) {
+                b_tile_regs[j] = (*b_tile)[i].to_view.grp::<32>.transp[[thread]][j]
+              };
+
+              for_nat j1 in range(0, 8) {
+                for_nat j2 in range(0, 4) {
+                  accum[j1 * 4 + j2] = accum[j1 * 4 + j2] + (a_tile_regs[j1] * b_tile_regs[j2])
+                }
+              }
+            };
+            sync(blocks)
+          };
+          //write results
+          for_nat i in range(0, 8) {
+            for_nat j in range(0, 4) {
+              (*out_mat).to_view.map(to_view)
+                // tile::<64, 128>
+                .grp::<64>.map(transp).map(grp::<128>).map(map(transp))
+                  .grp::<16>.transp[[grid_slices_y]][wgY].grp::<8>.transp[[blocks]][wgX]
+                  .grp::<8>[[block_slices_y]][i].grp::<32>.transp[[thread]][j]
+                = accum[i*4+j] * alpha +
+                    (*c_mat).to_view.map(to_view)
+                      // tile::<64, 128>
+                      .grp::<64>.map(transp).map(grp::<128>).map(map(transp))
+                        .grp::<16>.transp[[grid_slices_y]][wgY].grp::<8>.transp[[blocks]][wgX]
+                        .grp::<8>[[block_slices_y]][i].grp::<32>.transp[[thread]][j] * beta
+            }
           }
-      //     //write results
-      //     for_nat i in range(0, 8) {
-      //       for_nat j in range(0, 4) {
-      //         (*out_mat).to_view.map(to_view)
-      //           // tile::<64, 128>
-      //           .grp::<64>.map(transp).map(grp::<128>).map(map(transp))
-      //             .grp::<16>.transp[[grid_slices_y]][wgY].grp::<8>.transp[[block]][wgX]
-      //             .grp::<8>[[block_slices_y]][i].grp::<4>[[thread]][j]
-      //           = accum[i*4+j] * alpha +
-      //               (*c_mat).to_view.map(to_view)
-      //                 // tile::<64, 128>
-      //                 .grp::<64>.map(transp).map(grp::<128>).map(map(transp))
-      //                   .grp::<16>.transp[[grid_slices_y]][wgY].grp::<8>.transp[[block]][wgX]
-      //                   .grp::<8>[[block_slices_y]][i].grp::<4>[[thread]][j] * beta
-      //       }
-      //     }
         }
       }
     }}
   }}
 }
-//
-// fn tile<s1: nat, s2: nat, m:nat, n: nat, d: dty>(
-//   mat: [[[[d; n]]; m]]
-// ) -[v: any]-> [[ [[ [[ [[d; s2]]; s1]]; n/s2]]; m/s1]] {
-//   mat.grp::<s1>.map(transp).map(grp::<s2>).map(map(transp))
-// }
-//
-// fn tile2<s1: nat, s2: nat, m: nat, n: nat, d: dty>(
-//   mat: [[[[d; n]]; m]]
-// ) -[v: any]-> [[ [[ [[ [[d; s2]]; s1]]; m/s1]]; n/s2]] {
-//   mat.map(grp::<s2>).grp::<s1>.map(transp).transp
-// }
-
-// mat: [[d; n]; m]
-// tile:
-//   mat.grp::<64> : [[[d; n]; 64]; m/64]
-//   mat.grp::<64>.map(transp) : [[[d; 64]; n]; m/64]
-//   mat.grp::<64>.map(transp).map(grp::<128>) : [[[[d; 64]; 128]; n/128]; m/64]
-//   mat.grp::<64>.map(transp).map(grp::<128>).map(map(transp)) : [[[[d; 128]; 64]; n/128]; m/64]
-// out_mat[((((64 + N) + ((8 * N) * get_local_id(1))) + ((64 * N) * y_id_stride)) + (128 * x_id_stride)) + get_local_id(0)]
-// (*out_mat).tile.grp::<16>.transp[[block_y]] : [[[d; 128]; 64]; n/128]; m/(64*16)]
-// (*out_mat).tile.grp::<16>.transp[[block_y]][wgY] : [[d; 128]; 64]; n/128]
-// (*out_mat).tile.grp::<16>.transp[[block_y]][wgY].grp::<8>.transp[[block_x]] : [[d; 128]; 64]; n/(128*8)]
-// (*out_mat).tile.grp::<16>.transp[[block_y]][wgY].grp::<8>.transp[[block_x]][wgX] : [[d; 128]; 64]
-// (*out_mat).tile.grp::<16>.transp[[block_y]][wgY].grp::<8>.transp[[block_x]][wgX].grp::<8>[[thread_y]] : [[d; 128]; 8]
-// (*out_mat).tile.grp::<16>.transp[[block_y]][wgY].grp::<8>.transp[[block_x]][wgX].grp::<8>[[thread_y]][i] : [d; 128]
-// (*out_mat).tile.grp::<16>.transp[[block_y]][wgY].grp::<8>.transp[[block_x]][wgX].grp::<8>[[thread_y]][i].grp::<4>[[thread_x]][j] : d
-// a_transp_mat : [[d; m]; k]
-// b_mat : [[d; n]; k]
-
-// tile2:
-//  a_transp_mat.map(grp::<64>) : [[[d; 64]; m/64]; k]
-//  a_transp_mat.map(grp::<64>).grp::<8> : [[[[d; 64]; m/64]; 8]; k/8]
-//  a_transp_mat.map(grp::<64>).grp::<8>.map(transp) : [[[[d; 64]; 8]; m/64]; k/8]
-//  a_transp_mat.map(grp::<64>).grp::<8>.map(transp).transp : [[[[d; 64]; 8]; k/8]; m/64]
-// a_mat[((l_id_1317 + ((8 * i_1315) * M)) + (64 * y_id_stride)) + (l_id_1316 * M)]
-// (*a_mat).tile2[[block_y]][[block_x]][[thread_y]].grp::<32>.transp[[thread_x]][i]
-// fn tile<s1: nat, s2: nat, m:nat, n: nat, d: dty>(
-//   mat: [[[[d; n]]; m]]
-// ) -[v: Any]-> [[ [[ [[ [[d; s2]]; s1]]; n/s2]]; m/s1]] {
-//   mat.grp::<s1>.map(transp :> grp::<s2> :> map(transp))
-// }
-//
-// fn tile2<s1: nat, s2: nat, m: nat, n: nat, d: dty>(
-//   mat: [[[[d; n]]; m]]
-// ) -[v: Any]-> [[ [[ [[ [[d; s2]]; s1]]; m/s1]]; n/s2]] {
-//   mat.map(grp::<s2>).grp::<s1>.map(transp).transp
-// }
-//
-
-
-
-// val keplerBest: ToBeTyped[Expr] = {
-//     val v3: Nat = 128
-//     val v4: Nat = 4
-//     val v5: Nat = 8
-//     val v6: Nat = 64
-//     val v7: Nat = 8
-//
-//     def tile: ToBeTyped[Expr] = depFun((s1: Nat, s2: Nat) =>
-//       map(map(transpose) o split(s2) o transpose) o split(s1) )
-//
-//     val zeros = depFun((n1: Nat, n2: Nat, n3: Nat, n4: Nat) =>
-//       generate(fun(IndexType(n4))(_ =>
-//         generate(fun(IndexType(n3))(_ =>
-//           generate(fun(IndexType(n2))(_ =>
-//             generate(fun(IndexType(n1))(_ => lf32(0.0f))))))))))
-//
-//     def tile2: ToBeTyped[Expr] = depFun((s1: Nat, s2: Nat) => impl{ n1: Nat => impl{ n2: Nat => fun(ArrayType(n1, ArrayType(n2, f32)))(x =>
-//       transpose (map (transpose) (split (s1) (map (split (s2)) (x))))  ) }})
-//
-//     def redOp: ToBeTyped[Expr] = fun((8`.`32`.`8`.`4`.`f32) ->: ( (8`.`64`.`f32) x (8`.`128`.`f32) ) ->: (8`.`32`.`8`.`4`.`f32) )((p14, p15) =>
-//       let(p15 |> fun(p29 =>
-//           zip (p29._1) (p29._2)
-//             |> toLocalFun(mapLocal(1) (fun(p31 => makePair (mapLocal(0) (id) (p31._1)) (mapLocal(0) (id) (p31._2)) )))
-//             |> unzip
-//         ))
-//       be (p16 =>
-//         zip (p14) (split (v5) (transpose (p16._1)))
-//           |> mapLocal(1) (fun(p17 =>
-//           zip (p17._1) (split (v4) (reorderWithStride (v3/v4) (transpose (p16._2))))
-//             |> mapLocal(0) (fun(p18 =>
-//             zip (transpose (p17._2)) (transpose (p18._2))
-//               |> oclReduceSeq (AddressSpace.Private) (fun( (p20, p21) =>
-//                 let (makePair (toPrivate(mapSeq (id) (p21._1))) (toPrivate(mapSeq (id) (p21._2))))
-//                 be (fun(p22 =>
-//                     zip (p20) (p22._1) |> mapSeq (fun(p23 =>
-//                       zip (p23._1) (p22._2) |> mapSeq (fun(p24 =>
-//                         p24._1 + (p23._2 * p24._2) )) )) ))
-//               )) (p18._1 |> mapSeq (mapSeq (fun(x => x))) )
-//               |> mapSeq (mapSeq (fun(x => x)))
-//           ))
-//         ))
-//       ))
-//
-//     depFun((n: Nat, m: Nat, k: Nat) =>
-//       fun((k`.`m`.`f32) ->: (k`.`n`.`f32) ->: (m`.`n`.`f32) ->: f32 ->: f32 ->: (m`.`n`.`f32))
-//       /*
-//        * The matrix A is assumed to be transposed already.
-//        */
-//       ((A, B, C, alpha, beta) =>
-//         zip (tile2 (v7) (v6) (A)) (tile (v6) (v3) (C))
-//         |> mapWorkGroup(1)(
-//           //BEGIN mapWorkGroup(1) Function
-//           fun(p2 =>
-//           zip (tile2 (v7) (v3) (B)) (p2._2)
-//           |> mapWorkGroup(0)(
-//             //BEGIN mapWorkGroup(0) Function
-//             fun(p3 =>
-//             zip (p2._1) (p3._1)
-//             |> oclReduceSeq (AddressSpace.Private) (redOp)
-//               // zeros: [ [ [ [4; d]; 8]; 32;] 8]
-//               (zeros (v4) (v5) (v3 * Cst(1) /^ v4) (v6 * Cst(1) /^ v5)
-//                 |> mapLocal(1) (mapLocal(0) (mapSeq (mapSeq (id)))))
-//             //mapSeq was removed because reduce does not wrap reduced results in arrays anymore
-//             |> fun(x =>
-//               zip (x) (split (v5) (p3._2))
-//                 |> mapLocal(1) (fun(y =>
-//                 zip (y._1) (split (v4) (reorderWithStride (v3/v4) (transpose (y._2)))) |> mapLocal(0) (fun(z =>
-//                   zip (z._1) (transpose (z._2)) |> mapSeq (fun(a =>
-//                     zip (a._1) (a._2) |> mapSeq (fun(x =>
-//                       (x._1 * alpha) + (x._2 * beta) )))))))))
-//             |> map (fun(p4 => p4
-//               |> map (transpose)
-//               |> join
-//               |> transpose
-//               |> map (reorderWithStride (v3 / v4))
-//             )) |> join |> transpose
-//           )
-//           //END mapWorkGroup(0) Function
-//           ) |> join |> transpose
-//         )
-//        //END mapWorkGroup(1) Function
-//         )  |> join
-//       ))
-//   }

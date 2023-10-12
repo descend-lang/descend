@@ -75,6 +75,7 @@ pub(super) struct ConstrainMap {
     pub nat_unifier: HashMap<Box<str>, Nat>,
     pub mem_unifier: HashMap<Box<str>, Memory>,
     pub prv_unifier: HashMap<Box<str>, Provenance>,
+    pub exec_unifier: HashMap<Box<str>, ExecExpr>,
 }
 
 impl ConstrainMap {
@@ -84,6 +85,7 @@ impl ConstrainMap {
             nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
             prv_unifier: HashMap::new(),
+            exec_unifier: HashMap::new(),
         }
     }
 }
@@ -400,6 +402,33 @@ impl Constrainable for DataTy {
                     i += 1;
                     remain_lhs = &mut elem_dtys1[i..];
                     remain_rhs = &mut elem_dtys2[i..];
+                }
+            }
+            (DataTyKind::Struct(struct_decl1), DataTyKind::Struct(struct_decl2)) => {
+                let mut i = 0;
+                let mut remain_lhs = &mut struct_decl1.fields[i..];
+                let mut remain_rhs = &mut struct_decl2.fields[i..];
+                while let (Some((next_lhs, _)), Some((next_rhs, _))) =
+                    (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
+                {
+                    if next_lhs.0 != next_rhs.0 {
+                        return Err(UnifyError::CannotUnify);
+                    }
+                    next_lhs
+                        .1
+                        .constrain(&mut next_rhs.1, constr_map, prv_rels)?;
+                    for ((_, dty1), (_, dty2)) in struct_decl1
+                        .fields
+                        .iter_mut()
+                        .zip(struct_decl2.fields.iter_mut())
+                    {
+                        substitute(constr_map, dty1);
+                        substitute(constr_map, dty2);
+                    }
+
+                    i += 1;
+                    remain_lhs = &mut struct_decl1.fields[i..];
+                    remain_rhs = &mut struct_decl2.fields[i..];
                 }
             }
             (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2))

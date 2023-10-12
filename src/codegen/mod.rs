@@ -20,7 +20,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let mut codegen_ctx = CodegenCtx::new(
         // CpuThread is only a dummy and will be set according to the generated function.
         desc::ExecExpr::new(desc::ExecExprKind::new(desc::BaseExec::CpuThread)),
-        &comp_unit.fun_defs,
+        &comp_unit.items,
     );
     let mut generated_initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 4);
     for fun_def in &mut initial_fns_to_generate {
@@ -77,7 +77,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
 
 fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::FunDef> {
     comp_unit
-        .fun_defs
+        .items
         .iter()
         // Filter out the only functions that make sense to be generated without an explicit call.
         //
@@ -85,16 +85,25 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         // that are used in a function call, so that we can inline them (therefore these functions
         // are not inlcuded).
         // We know the values for GpuGrid, GlobalThreads and CpuThread, because all are unit types.
-        .filter(|f| {
-            f.param_decls
-                .iter()
-                .all(|p| !is_view_dty(p.ty.as_ref().unwrap()))
-                && matches!(
-                    &f.exec.ty.as_ref().unwrap().ty,
-                    desc::ExecTyKind::GpuGrid(_, _)
-                        | desc::ExecTyKind::GpuToThreads(_, _)
-                        | desc::ExecTyKind::CpuThread
-                )
+        .filter_map(|item| {
+            if let desc::Item::FunDef(f) = item {
+                if f.param_decls
+                    .iter()
+                    .all(|p| !is_view_dty(p.ty.as_ref().unwrap()))
+                    && matches!(
+                        &f.exec.ty.as_ref().unwrap().ty,
+                        desc::ExecTyKind::GpuGrid(_, _)
+                            | desc::ExecTyKind::GpuToThreads(_, _)
+                            | desc::ExecTyKind::CpuThread
+                    )
+                {
+                    Some(f.as_ref())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         })
         .cloned()
         .collect::<Vec<desc::FunDef>>()
@@ -175,12 +184,12 @@ struct CodegenCtx<'a> {
     inst_fn_ctx: HashMap<String, cu::FnDef>,
     exec_mapping: ExecMapping,
     exec: desc::ExecExpr,
-    comp_unit: &'a [desc::FunDef],
+    comp_unit: &'a [desc::Item],
     kernel_infos: Vec<KernelInfo>,
 }
 
 impl<'a> CodegenCtx<'a> {
-    fn new(exec: desc::ExecExpr, comp_unit: &'a [desc::FunDef]) -> Self {
+    fn new(exec: desc::ExecExpr, comp_unit: &'a [desc::Item]) -> Self {
         CodegenCtx {
             view_ctx: ViewCtx::new(),
             inst_fn_ctx: HashMap::new(),
@@ -736,13 +745,32 @@ fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) ->
     let exec_kernel = match &app_kernel.fun.expr {
         desc::ExprKind::PlaceExpr(pl_expr) => {
             if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
-                let fn_def = codegen_ctx
+                let fn_ident = codegen_ctx
                     .comp_unit
                     .iter()
-                    .find(|f| &f.ident == ident)
+                    .find_map(|item| {
+                        let fi = match item {
+                            desc::Item::FunDef(fun_def) => Some(&fun_def.ident),
+                            desc::Item::FunDecl(fun_decl) => Some(&fun_decl.ident),
+                            _ => None,
+                        };
+                        if let Some(i) = fi {
+                            if ident == i {
+                                fi
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap();
-                let tmp_global_fn_call =
-                    gen_global_fn_call(fn_def, &app_kernel.gen_args, &app_kernel.args, codegen_ctx);
+                let tmp_global_fn_call = gen_global_fn_call(
+                    fn_ident,
+                    &app_kernel.gen_args,
+                    &app_kernel.args,
+                    codegen_ctx,
+                );
                 let fun_name = convert_to_fn_name(&tmp_global_fn_call.fun);
                 let unnamed_shrd_mem_decls =
                     unnamed_shared_mem_decls(app_kernel.shared_mem_dtys.clone());
@@ -991,7 +1019,7 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
 fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     codegen_ctx.push_scope();
     let expanded_sched_exec_expr = expand_exec_expr(codegen_ctx, sched.sched_exec.as_ref());
-    let inner_exec = desc::ExecExpr::new(expanded_sched_exec_expr.exec.clone().distrib(sched.dim));
+    let inner_exec = desc::ExecExpr::new(expanded_sched_exec_expr.exec.clone().forall(sched.dim));
     let outer_exec = codegen_ctx.exec.clone();
     if let Some(id) = &sched.inner_exec_ident {
         codegen_ctx
@@ -1127,30 +1155,6 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
             lhs: Box::new(gen_pl_expr(pl_expr, &mut vec![], codegen_ctx)),
             rhs: Box::new(gen_expr(expr, codegen_ctx)),
         },
-        // Lambda(params, exec_decl, dty, body) => cu::Expr::Lambda {
-        //     captures: {
-        //         // FIXME should list all captures not just generic arguments
-        //         // free_idents(body)
-        //         //     .iter()
-        //         //     .map(|ki| ki.ident.clone())
-        //         //     .collect()
-        //         vec![]
-        //     },
-        //     params: gen_param_decls(params.as_slice()),
-        //     body: Box::new(gen_stmt(
-        //         body,
-        //         !matches!(
-        //             dty.as_ref(),
-        //             desc::DataTy {
-        //                 dty: desc::DataTyKind::Scalar(desc::ScalarTy::Unit),
-        //                 ..
-        //             }
-        //         ),
-        //         codegen_ctx,
-        //     )),
-        //     ret_ty: gen_ty(&desc::TyKind::Data(dty.clone()), desc::Mutability::Mut),
-        //     is_dev_fun: is_dev_fun(&exec_decl.ty),
-        // },
         App(fun, kinded_args, args) => match &fun.expr {
             PlaceExpr(pl_expr) => match &pl_expr.pl_expr {
                 desc::PlaceExprKind::Ident(ident)
@@ -1176,13 +1180,39 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
                     }
                 }
                 desc::PlaceExprKind::Ident(ident)
-                    if codegen_ctx.comp_unit.iter().any(|f| &f.ident == ident) =>
+                    if codegen_ctx.comp_unit.iter().any(|item| {
+                        let fi = match item {
+                            desc::Item::FunDef(fun_def) => Some(&fun_def.ident),
+                            desc::Item::FunDecl(fun_decl) => Some(&fun_decl.ident),
+                            _ => None,
+                        };
+                        if let Some(i) = fi {
+                            ident == i
+                        } else {
+                            false
+                        }
+                    }) =>
                 {
                     cu::Expr::FnCall(gen_global_fn_call(
                         codegen_ctx
                             .comp_unit
                             .iter()
-                            .find(|f| &f.ident == ident)
+                            .find_map(|item| {
+                                let fi = match item {
+                                    desc::Item::FunDef(fun_def) => Some(&fun_def.ident),
+                                    desc::Item::FunDecl(fun_decl) => Some(&fun_decl.ident),
+                                    _ => None,
+                                };
+                                if let Some(i) = fi {
+                                    if ident == i {
+                                        fi
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
                             .unwrap(),
                         kinded_args,
                         args,
@@ -1221,6 +1251,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
                 .map(|el| gen_expr(el, codegen_ctx))
                 .collect::<Vec<_>>(),
         ),
+        Unsafe(e) => gen_expr(e, codegen_ctx),
         Let(_, _, _)
         | LetUninit(_, _, _)
         | Block(_)
@@ -1259,7 +1290,7 @@ fn gen_lambda_call(
 }
 
 fn gen_global_fn_call(
-    fun: &desc::FunDef,
+    fun_ident: &desc::Ident,
     gen_args: &[desc::ArgKinded],
     args: &[desc::Expr],
     codegen_ctx: &mut CodegenCtx,
@@ -1286,7 +1317,7 @@ fn gen_global_fn_call(
     //     }
     //     create_named_fn_call(mangled, cu_gen_args, cu_args)
     // } else {
-    create_named_fn_call(fun.ident.name.to_string(), cu_gen_args, cu_args)
+    create_named_fn_call(fun_ident.name.to_string(), cu_gen_args, cu_args)
     // }
 }
 
@@ -1314,6 +1345,7 @@ fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
             desc::PlaceExprKind::Idx(pl_expr, _)
             | desc::PlaceExprKind::Select(pl_expr, _)
             | desc::PlaceExprKind::Deref(pl_expr)
+            | desc::PlaceExprKind::FieldProj(pl_expr, _)
             | desc::PlaceExprKind::Proj(pl_expr, _) => {
                 current = pl_expr.as_ref().clone();
             }
@@ -1640,6 +1672,10 @@ fn gen_pl_expr(
             tuple: Box::new(gen_pl_expr(ple, path, codegen_ctx)),
             n: *n,
         },
+        desc::PlaceExprKind::FieldProj(ple, ident) => cu::Expr::FieldProj {
+            struct_expr: Box::new(gen_pl_expr(ple, path, codegen_ctx)),
+            field_name: String::from(ident.name.clone()),
+        },
         desc::PlaceExprKind::Deref(ple) => {
             let inner_ple = gen_pl_expr(ple, &mut vec![], codegen_ctx);
             if path.is_empty() {
@@ -1905,7 +1941,7 @@ fn gen_indep_branch_cond(
             dim_compo,
             // The condition must range over the elements within the execution resource.
             // Use Distrib to indicate this.
-            &desc::ExecExpr::new(exec.clone().distrib(dim_compo)),
+            &desc::ExecExpr::new(exec.clone().forall(dim_compo)),
         ))),
         rhs: Box::new(cu::Expr::Nat(pos.clone())),
     }
@@ -2022,6 +2058,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
             match &dty.dty {
                 d::Atomic(a) => match a {
                     desc::AtomicTy::AtomicU32 => cu::Ty::Scalar(cu::ScalarTy::U32),
+                    desc::AtomicTy::AtomicI32 => cu::Ty::Scalar(cu::ScalarTy::I32),
                 },
                 d::Scalar(s) => match s {
                     desc::ScalarTy::Unit => cu::Ty::Scalar(cu::ScalarTy::Void),
@@ -2040,6 +2077,9 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                         .map(|dt| gen_ty(&Data(Box::new(dt.clone())), m))
                         .collect(),
                 ),
+                d::Struct(struct_decl) => {
+                    cu::Ty::Ident(String::from(struct_decl.ident.name.clone()))
+                }
                 d::Array(dt, n) => cu::Ty::Array(
                     Box::new(gen_ty(&Data(Box::new(dt.as_ref().clone())), m)),
                     n.clone(),

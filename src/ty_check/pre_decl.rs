@@ -1,7 +1,7 @@
 use crate::ast::{
-    AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, ExecExpr, ExecExprKind, ExecTy, ExecTyKind,
-    FnTy, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, Ownership, ParamSig, Provenance,
-    RefDty, ScalarTy, Ty, TyKind,
+    AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, DimCompo, ExecExpr, ExecExprKind, ExecTy,
+    ExecTyKind, FnTy, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, Ownership, ParamSig,
+    Provenance, RefDty, ScalarTy, Ty, TyKind,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -12,14 +12,22 @@ pub static COPY_TO_GPU: &str = "copy_to_gpu";
 pub static CREATE_ARRAY: &str = "create_array";
 pub static TO_RAW_PTR: &str = "to_raw_ptr";
 pub static OFFSET_RAW_PTR: &str = "offset_raw_ptr";
+
+pub static SHFL_SYNC: &str = "shfl_sync";
 pub static SHFL_UP: &str = "shfl_up";
+pub static BALLOT_SYNC: &str = "ballot_sync";
+
 pub static NAT_AS_U64: &str = "nat_as_u64";
 pub static THREAD_ID_X: &str = "thread_id_x";
+
+pub static GET_WARP_ID: &str = "get_warp_id";
+pub static GET_LANE_ID: &str = "get_lane_id";
 
 pub static ATOMIC_STORE: &str = "atomic_store";
 pub static ATOMIC_LOAD: &str = "atomic_load";
 pub static ATOMIC_FETCH_OR: &str = "atomic_fetch_or";
 pub static ATOMIC_FETCH_ADD: &str = "atomic_fetch_add";
+pub static ATOMIC_MIN: &str = "atomic_min";
 pub static TO_ATOMIC_ARRAY: &str = "to_atomic_array";
 pub static TO_ATOMIC: &str = "to_atomic";
 
@@ -42,14 +50,19 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (CREATE_ARRAY, create_array_ty()),
         (TO_RAW_PTR, to_raw_ptr_ty()),
         (OFFSET_RAW_PTR, offset_raw_ptr_ty()),
+        (SHFL_SYNC, shfl_sync_ty()),
         (SHFL_UP, shfl_up_ty()),
+        (BALLOT_SYNC, ballot_sync_ty()),
         (THREAD_ID_X, thread_id_x_ty()),
+        (GET_WARP_ID, get_warp_id_ty()),
+        (GET_LANE_ID, get_lane_id_ty()),
         (NAT_AS_U64, nat_as_u64_ty()),
         // Built-in atomic functions
         (ATOMIC_STORE, atomic_store_ty()),
         (ATOMIC_LOAD, atomic_load_ty()),
         (ATOMIC_FETCH_OR, atomic_fetch_or_ty()),
         (ATOMIC_FETCH_ADD, atomic_fetch_add_ty()),
+        (ATOMIC_MIN, atomic_min_ty()),
         (TO_ATOMIC_ARRAY, to_atomic_array_ty()),
         (TO_ATOMIC, to_atomic_ty()),
         // View constructors
@@ -176,6 +189,63 @@ fn offset_raw_ptr_ty() -> FnTy {
     )
 }
 
+// ballot_sync:
+//  <>(bool) -[w: gpu.warp]-> u32
+fn ballot_sync_ty() -> FnTy {
+    let ident_exec = IdentExec::new(Ident::new("w"), ExecTy::new(ExecTyKind::GpuWarp));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+    let param_exec = ExecExpr::new(exec_expr.exec.clone().forall(DimCompo::X));
+
+    FnTy::new(
+        vec![],
+        Some(ident_exec),
+        vec![ParamSig::new(
+            param_exec,
+            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                ScalarTy::Bool,
+            ))))),
+        )],
+        exec_expr,
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))),
+    )
+}
+
+// FIXME warp should have the type given in the comment below
+// shfl_sync:
+//  <w: gpu.warp>(u32, u32) -[w.forall]-> u32
+fn shfl_sync_ty() -> FnTy {
+    let ident_exec = IdentExec::new(Ident::new("w"), ExecTy::new(ExecTyKind::GpuWarp));
+    let exec_expr_lane = ExecExpr::new(
+        ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())).forall(DimCompo::X),
+    );
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
+    FnTy::new(
+        vec![],
+        Some(ident_exec),
+        vec![
+            ParamSig::new(
+                exec_expr_lane.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::U32,
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr_lane.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::U32,
+                ))))),
+            ),
+        ],
+        exec_expr,
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))),
+    )
+}
+
 // shfl_up:
 //  <>(u32, i32) -[gpu.warp]-> u32
 fn shfl_up_ty() -> FnTy {
@@ -224,6 +294,38 @@ fn nat_as_u64_ty() -> FnTy {
         exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U64,
+        ))))),
+    )
+}
+
+// get_warp_id: <>() -[w: gpu.Warp]-> u32
+fn get_warp_id_ty() -> FnTy {
+    let ident_exec = IdentExec::new(Ident::new("w"), ExecTy::new(ExecTyKind::GpuWarp));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
+    FnTy::new(
+        vec![],
+        Some(ident_exec),
+        vec![],
+        exec_expr,
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
+        ))))),
+    )
+}
+
+// get_lane_id: <>() -[w: gpu.Thread]-> u32
+fn get_lane_id_ty() -> FnTy {
+    let ident_exec = IdentExec::new(Ident::new("t"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
+    FnTy::new(
+        vec![],
+        Some(ident_exec),
+        vec![],
+        exec_expr,
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::U32,
         ))))),
     )
 }
@@ -448,6 +550,51 @@ fn atomic_fetch_or_ty() -> FnTy {
         exec_expr,
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
+        ))))),
+    )
+}
+
+// atomic_min:
+//  <r: prv, m: mem>(&r shrd m AtomicI32, i32) -[gpu.thread]-> i32
+fn atomic_min_ty() -> FnTy {
+    let r = Ident::new("r");
+    let m = Ident::new("m");
+    let r_prv = IdentKinded {
+        ident: r.clone(),
+        kind: Kind::Provenance,
+    };
+    let m_mem = IdentKinded {
+        ident: m.clone(),
+        kind: Kind::Memory,
+    };
+    let ident_exec = IdentExec::new(Ident::new("t"), ExecTy::new(ExecTyKind::GpuThread));
+    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+
+    FnTy::new(
+        vec![r_prv, m_mem],
+        Some(ident_exec),
+        vec![
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ref(
+                    Box::new(RefDty::new(
+                        Provenance::Ident(r),
+                        Ownership::Shrd,
+                        Memory::Ident(m),
+                        DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicI32)),
+                    )),
+                ))))),
+            ),
+            ParamSig::new(
+                exec_expr.clone(),
+                Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+                    ScalarTy::I32,
+                ))))),
+            ),
+        ],
+        exec_expr.clone(),
+        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
+            ScalarTy::I32,
         ))))),
     )
 }

@@ -17,6 +17,7 @@ pub fn infer_kinded_args(poly_fn_ty: &FnTy, mono_fn_ty: &FnTy) -> Vec<ArgKinded>
     for (subst_ty, mono_ty) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
         infer_kargs_param_sig(&mut res_map, subst_ty, mono_ty)
     }
+    infer_kargs_exec_expr(&mut res_map, &poly_fn_ty.exec, &mono_fn_ty.exec);
     infer_kargs_tys(&mut res_map, &poly_fn_ty.ret_ty, &mono_fn_ty.ret_ty);
     let mut res_vec = Vec::new();
     for gen_arg in &poly_fn_ty.generics {
@@ -155,6 +156,14 @@ fn infer_kargs_dims(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_di
     }
 }
 
+fn infer_kargs_field(
+    map: &mut HashMap<Ident, ArgKinded>,
+    poly_field: &(Ident, DataTy),
+    mono_field: &(Ident, DataTy),
+) {
+    infer_kargs_dtys(map, &poly_field.1, &mono_field.1)
+}
+
 fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono_dty: &DataTy) {
     match (&poly_dty.dty, &mono_dty.dty) {
         (DataTyKind::Ident(id), _) => insert_checked!(map, ArgKinded::DataTy, id, mono_dty),
@@ -166,6 +175,14 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
         }
         (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
             infer_from_lists!(infer_kargs_dtys, map, elem_dtys1, elem_dtys2)
+        }
+        (DataTyKind::Struct(struct_decl1), DataTyKind::Struct(struct_decl2)) => {
+            infer_from_lists!(
+                infer_kargs_field,
+                map,
+                &struct_decl1.fields,
+                &struct_decl2.fields
+            )
         }
         (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2)) => {
             infer_kargs_dtys(map, dty1, dty2);
