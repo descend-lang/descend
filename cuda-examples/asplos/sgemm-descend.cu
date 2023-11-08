@@ -3,7 +3,7 @@
 #include <cstdlib>
 
 #define BENCH
-#include "descend.cuh"
+#include "../descend.cuh"
 /*
 function declarations
 */
@@ -66,59 +66,59 @@ __global__ auto sgemm_gpu(const descend::i32 *const a_transp_mat,
     {
       {
         {
-          static_for<0, (m / (64 * 16))>([&](auto wgY) -> void {
-            static_for<0, (n / (128 * 8))>([&](auto wgX) -> void {
+          for (std::size_t wgY = 0; wgY < (m/ (64 * 16)); wgY = wgY + 1) {
+            for(std::size_t wgX = 0; wgX < (n/(128 * 8)); wgX = wgX + 1) {
               auto accum = descend::create_array<32, descend::i32>(0);
 
-              static_for<0, (k / 8)>([&](auto tnum) -> void {
-                static_for<0, 2>([&](auto i) -> void {
+              for(std::size_t tnum = 0; tnum < (k/8); tnum = tnum + 1) {
+                for(std::size_t i = 0; i < 2; i = i + 1) {
                   a_tile[(((threadIdx.y - 0) * (32 * 2)) +
                           ((i * 32) + (threadIdx.x - 0)))] =
                       a_transp_mat[((((tnum * 8) + (threadIdx.y - 0)) * m) +
                                     ((((wgY * 16) + (blockIdx.y - 0)) * 64) +
                                      ((i * 32) + (threadIdx.x - 0))))];
-                });
+                }
 
-                static_for<0, 4>([&](auto i) -> void {
+                for(std::size_t i = 0; i < 4; i = i + 1) {
                   b_tile[(((threadIdx.y - 0) * (32 * 4)) +
                           ((i * 32) + (threadIdx.x - 0)))] =
                       b_mat[((((tnum * 8) + (threadIdx.y - 0)) * n) +
                              ((((wgX * 8) + (blockIdx.x - 0)) * 128) +
                               ((i * 32) + (threadIdx.x - 0))))];
-                });
+                }
                 // FIXME added manually.
                 //  Should be enforced in Descend but is not. Also adding it leads to weired borrowing conflict.
                 __syncthreads();
 
-                static_for<0, 8>([&](auto i) -> void {
+                for(std::size_t i = 0; i < 8; i = i + 1) {
                   auto a_tile_regs =
                       descend::create_array<8, descend::i32>(0);
-                  static_for<0, 8>([&](auto j) -> void {
+                  for(std::size_t j = 0; j < 8; j = j + 1) {
                     a_tile_regs[j] = a_tile[((i * (32 * 2)) +
                                              (((threadIdx.y - 0) * 8) + j))];
-                  });
+                  }
 
                   auto b_tile_regs =
                       descend::create_array<4, descend::i32>(0);
-                  static_for<0, 4>([&](auto j) -> void {
+                  for(std::size_t j = 0; j < 4; j = j + 1) {
                     b_tile_regs[j] = b_tile[((i * (32 * 4)) +
                                              ((j * 32) + (threadIdx.x - 0)))];
-                  });
+                  }
 
-                  static_for<0, 8>([&](auto j1) -> void {
-                    static_for<0, 4>([&](auto j2) -> void {
+                  for(std::size_t j1 = 0; j1 < 8; j1 = j1 + 1) {
+                    for(std::size_t j2 = 0; j2 < 4; j2 = j2 + 1) {
                       accum[((j1 * 4) + j2)] =
                           (accum[((j1 * 4) + j2)] +
                            (a_tile_regs[j1] * b_tile_regs[j2]));
-                    });
-                  });
-                });
+                    }
+                  }
+                }
 
                 __syncthreads();
-              });
+              }
 
-              static_for<0, 8>([&](auto i) -> void {
-                static_for<0, 4>([&](auto j) -> void {
+              for(std::size_t i = 0; i < 8; i = i + 1) {
+                for(std::size_t j = 0; j < 4; j = j + 1) {
                   out_mat[((((((wgY * 16) + (blockIdx.y - 0)) * 64) +
                              (((threadIdx.y - 0) * 8) + i)) *
                             n) +
@@ -131,10 +131,10 @@ __global__ auto sgemm_gpu(const descend::i32 *const a_transp_mat,
                                ((((wgX * 8) + (blockIdx.x - 0)) * 128) +
                                 ((j * 32) + (threadIdx.x - 0))))] *
                         beta));
-                });
-              });
-            });
-          });
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -165,7 +165,7 @@ auto main() -> int {
     static constexpr auto n = 8192;
     static constexpr std::size_t k[] = {4096, 8192, 8192};
 
-    static_for<0, 1>([](auto i) {
+    static_for<0, 3>([](auto i) {
         const auto ha_mat_transp = new descend::i32[k[i]*m[i]];
         const auto hb_mat = new descend::i32[k[i]*n];
         const auto hc_mat = new descend::i32[m[i]*n];

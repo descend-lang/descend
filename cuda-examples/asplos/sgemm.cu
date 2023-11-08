@@ -2,6 +2,9 @@
 // local size: (32, 8, 1)
 // global size: (256, 128, 1)
 
+#define BENCH
+#include "../descend.cuh"
+
 struct Record_64_float_128_float {
   float _fst[64];
   float _snd[128];
@@ -13,7 +16,6 @@ __global__ void foo(global float* restrict output,
          const global float* restrict mat_a,
          const global float* restrict mat_b,
          const global float* restrict mat_c,
-         float alpha, float beta,
          local struct Record_64_float_128_float* restrict temp){
   /* Start of moved local vars */
   /* End of moved local vars */
@@ -356,4 +358,70 @@ __global__ void foo(global float* restrict output,
     
   }
   
+}
+
+template<std::size_t m, std::size_t n, std::size_t k>
+auto cpu_sgemm(
+        descend::i32 * const hout_mat,
+        descend::i32 const * const ha_mat_transp, // [[i32; m]; k]
+        descend::i32 const * const hb_mat, // [[i32; n]; k]
+        descend::i32 const * const hc_mat, // [[i32; n]; m]
+        descend::i32 alpha, descend::i32 beta) {
+    for (int j = 0; j < k; ++j) {
+        for (int i = 0; i < m; ++i)
+            for (int l = 0; l < n; ++l)
+                hout_mat[i * n + l] += ha_mat_transp[j * m + i] * hb_mat[j * n + l];
+    }
+
+    for (int i = 0; i < m; ++i)
+        for (int l = 0; l < n; ++l)
+            hout_mat[i*n + l] = alpha * hout_mat[i*n+l] + beta * hc_mat[i*n + l];
+}
+
+descend::Benchmark benchmark{descend::BenchConfig({"sgemm"})};
+auto main() -> int {
+    static constexpr std::size_t m[] = {8192, 8192, 16384};
+    static constexpr auto n = 8192;
+    static constexpr std::size_t k[] = {4096, 8192, 8192};
+
+    static_for<0, 3>([](auto i) {
+        const auto ha_mat_transp = new descend::i32[k[i]*m[i]];
+        const auto hb_mat = new descend::i32[k[i]*n];
+        const auto hc_mat = new descend::i32[m[i]*n];
+        auto hout_mat = new descend::i32[m[i]*n];
+        std::fill(ha_mat_transp, ha_mat_transp + k[i]*m[i], 1);
+        std::fill(hb_mat, hb_mat + k[i]*n, 1);
+        std::fill(hc_mat, hc_mat + m[i]*n, 1);
+
+        std::cout << "Footprint: " << (k[i]*m[i] + k[i]*n + 2*m[i]*n)*sizeof(int)/1024/1024 << " MiB" << std::endl;
+        auto gold = new descend::i32[m[i]*n];
+        std::cout << "Compute gold..." << std::endl;
+        cpu_sgemm<m[i], n, k[i]>(gold, ha_mat_transp, hb_mat, hc_mat, 1, 1);
+        std::cout << "Gold computed. Starting measurement ..." << std::endl;
+
+        for (std::size_t iter = 0; iter < 100; iter++) {
+            std::fill(hout_mat, hout_mat + m[i]*n, 0);
+
+            sgemm<m[i], n, k[i]>(hout_mat, n, m[i], k[i], ha_mat_transp, hb_mat, hc_mat);
+
+            for (size_t j = 0; j < m[i]*n; j++) {
+                if (gold[j] != hout_mat[j]) {
+                    std::cout << "Error at " << j << ". Expected: " << gold[j] << " but found " << hout_mat[j] << "." << std::endl;
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+        delete[] gold;
+        delete[] ha_mat_transp;
+        delete[] hb_mat;
+        delete[] hc_mat;
+        delete[] hout_mat;
+
+        std::cout << "Input sizes: m =" << m[i] << ", n = " << n << ", k = " << k[i] << std::endl;
+        std::cout << benchmark.to_csv();
+
+        benchmark.reset();
+    });
+
+    exit(EXIT_SUCCESS);
 }

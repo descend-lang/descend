@@ -700,11 +700,11 @@ peg::parser! {
                     PlaceExpr::new(PlaceExprKind::Deref(Box::new(deref)))
                 }
                 --
-                pl_expr:@ _ "[" _ ".." _ split_pos:nat() _ ".." _ "]" {
+                pl_expr:@ _ "[" _ lower:nat() _ ".." _ upper:nat() "]" {
                     PlaceExpr::new(
                         PlaceExprKind::View(Box::new(pl_expr),
-                            Box::new(View { name: Ident::new("split_at"),
-                                gen_args: vec![ArgKinded::Nat(split_pos)], args: vec![] })))
+                            Box::new(View { name: Ident::new("select"),
+                                gen_args: vec![ArgKinded::Nat(lower), ArgKinded::Nat(upper)], args: vec![] })))
                 }
                 pl_expr:@ _ "[" _ idx:nat() _ "]" {
                     PlaceExpr::new(PlaceExprKind::Idx(Box::new(pl_expr), Box::new(idx)))

@@ -7,12 +7,13 @@
 // m = 9, n = 9
 fn jacobiSVD<r: prv>(
     // n = threads.x * 81 * 2 * sizeof(f32)
-    s_V: &r uniq gpu.shared [f32; 16 * 81],
-    s_S: &r uniq gpu.shared [f32; 16 * 81],
-    s_acc1: &r uniq gpu.shared [f32; 256],
-    s_acc2: &r uniq gpu.shared [f32; 256],
-    s_d: &r uniq gpu.shared [f32; 16*9]
-) -[block: gpu.block<XY<16, 16>>]-> () {
+    [grid.forall(X).forall(Y)] s_V: &r uniq gpu.shared [f32; 16 * 81],
+    [grid.forall(X).forall(Y)] s_S: &r uniq gpu.shared [f32; 16 * 81],
+    [grid.forall(X).forall(Y)] s_acc1: &r uniq gpu.shared [f32; 256],
+    [grid.forall(X).forall(Y)] s_acc2: &r uniq gpu.shared [f32; 256],
+    [grid.forall(X).forall(Y)] s_d: &r uniq gpu.shared [f32; 16*9]
+) -[grid: gpu.grid<XY<1, 1>, XY<16, 16>>]-> () {
+    sched(Y) grid_row in grid { sched(X) block in grid_row {
     sched(Y) block_row in block {
         let s_Sbr = &uniq (*s_S).to_view.grp::<81>[[block_row]].grp::<9>;
         let s_Vbr = &uniq (*s_V).to_view.grp::<81>[[block_row]].grp::<9>;
@@ -45,15 +46,16 @@ fn jacobiSVD<r: prv>(
         for_nat it in range(0, 30) {
             for_nat i in range(0, 8) {
                 for_nat j in range(i+1, 9) {
-                    let Si = &shrd (*s_Sbr)[i];
-                    let Sj = &shrd (*s_Sbr)[j];
+                    // FIXME requires check that indices are not equal for safe code
+                    let Si = unsafe &uniq (*s_Sbr)[i];
+                    let Sj = unsafe &uniq (*s_Sbr)[j];
 
-                    let Vi = &uniq (*s_Vbr)[i];
-                    let Vj = &uniq (*s_Vbr)[j];
+                    let Vi = unsafe &uniq (*s_Vbr)[i];
+                    let Vj = unsafe &uniq (*s_Vbr)[j];
 
-                    let p = 0.0f32;
+                    let mut p = 0.0f32;
                     for_nat k in range(0, 9) {
-                        p = p + Si[k] * Sj[k]
+                        p = p + (*Si)[k] * (*Sj)[k]
                     };
                     let di = (*s_dbr)[i];
                     let dj = (*s_dbr)[j];
@@ -64,9 +66,12 @@ fn jacobiSVD<r: prv>(
                     let mut s = 0.0f32;
                     let mut t0 = 0.0f32;
                     let mut t1 = 0.0f32;
-                    let cond: bool = fabs(p) > m * eps() * sqrt(di * dj);
+                    let cond: bool = fabs(p) > 9f32 * eps() * sqrt(di * dj);
+                    // if (cond) continue; -- First of: continue does not exist in Descend,
+                    //   secondly: a continue like this must not be allowed because it possibly
+                    //      leads to barrier divergence. This was the mistake in an earlier version of the original
 
-                    indep(X) 9 block_slice_y {
+                    indep(X) 9 block_row {
                         active_x => {
                             // for-loop over k from original code not required when m=9 anx X<16>
                             sched active_thread in active_x {
@@ -82,12 +87,12 @@ fn jacobiSVD<r: prv>(
                                         c = p / (r2 * s)
                                     };
 
-                                    t0 = c * Si[[active_thread]] + s * Sj[[active_thread]];
-                                    t1 = c * Sj[[active_thread]] - s * Si[[active_thread]];
-                                    Si[[active_thread]] = t0;
-                                    Sj[[active_thread]] = t1;
-                                    (*s_acc1br)[..9][[active_thread]] = t0 * t0;
-                                    (*s_acc2br)[..9][[active_thread]] = t1 * t1
+                                    t0 = c * (*Si)[[active_thread]] + s * (*Sj)[[active_thread]];
+                                    t1 = c * (*Sj)[[active_thread]] - s * (*Si)[[active_thread]];
+                                    (*Si)[[active_thread]] = t0;
+                                    (*Sj)[[active_thread]] = t1;
+                                    (*s_acc1br)[0..9][[active_thread]] = t0 * t0;
+                                    (*s_acc2br)[0..9][[active_thread]] = t1 * t1
                                 }
                             }
                         },
@@ -104,21 +109,21 @@ fn jacobiSVD<r: prv>(
                             b = b + (*s_acc2br)[k]
                         };
                         unsafe (*s_dbr)[i] = a;
-                        unsafe (*s_dbr)[j] = a
+                        unsafe (*s_dbr)[j] = b
                     };
 
                     sync(block);
 
                     if cond {
                         // do not use for-loop from original, because enough threads are started
-                        indep(X) 9 block_slice_y {
+                        indep(X) 9 block_row {
                             active_x => {
                                 sched(X) active_thread in active_x {
-                                    let t00 = Vi[[active_thread]] * c + Vj[[active_thread]] * s;
-                                    let t11 = Vj[[active_thread]] * c - Vi[[active_thread]] * s;
+                                    let t00 = (*Vi)[[active_thread]] * c + (*Vj)[[active_thread]] * s;
+                                    let t11 = (*Vj)[[active_thread]] * c - (*Vi)[[active_thread]] * s;
 
-                                    Vi[[active_thread]] = t00;
-                                    Vj[[active_thread]] = t11
+                                    (*Vi)[[active_thread]] = t00;
+                                    (*Vj)[[active_thread]] = t11
                                 }
                             },
                             inactive => { () }
@@ -129,5 +134,10 @@ fn jacobiSVD<r: prv>(
                 }
             }
         }
-    }
+    }}}
 }
+
+fn fabs(v: f32) -[t: any]-> f32;
+fn eps() -[t: any]-> f32;
+fn sqrt(v: f32) -[t: any]-> f32;
+fn hypot(v1: f32, v2:f32) -[a: any]-> f32;
