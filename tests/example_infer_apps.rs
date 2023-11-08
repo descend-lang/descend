@@ -151,3 +151,11 @@ fn sssp_ffi_unsafe() -> Res {
         descend::compile("examples/infer/sssp-ffi.desc")?
     ))
 }
+
+#[test]
+fn jacobisvd() -> Res {
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/jacobisvd.desc")?
+    ))
+}

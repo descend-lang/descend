@@ -1,5 +1,4 @@
 #include <iostream>
-#include <numeric>
 #include <cstdlib>
 
 #define BENCH
@@ -54,17 +53,17 @@ __global__ auto gpu_matmul(const descend::i32 *const a_mat,
     {
       {
         {
-          const auto a_row =
-              (&(a_mat[((((blockIdx.y - 0) * bs) + (threadIdx.y - 0)) * n)]));
 
           auto c_elem =
-              (&(c_mat[(((((blockIdx.y - 0) * bs) + (threadIdx.y - 0)) * k) +
-                         (((blockIdx.x - 0) * bs) + (threadIdx.x - 0)))]));
-          auto sum = 0.0f;
-          for (std::size_t i = 0; i < n; i = i + 1) {
-            sum = sum +
-                  (a_row[i]) * (b_mat[((i * k) + (((blockIdx.x - 0) * bs) +
-                                                    (threadIdx.x - 0)))]);
+              (&c_mat[(((((blockIdx.y - 0) * bs) + (threadIdx.y - 0)) * k) +
+                       (((blockIdx.x - 0) * bs) + (threadIdx.x - 0)))]);
+          auto sum = 0;
+          for (std::size_t i = 0; (i < n); i = (i + 1u)) {
+            sum = (sum +
+                   (a_mat[(((((blockIdx.y - 0) * bs) + (threadIdx.y - 0)) * n) +
+                           i)] *
+                    b_mat[((i * k) +
+                           (((blockIdx.x - 0) * bs) + (threadIdx.x - 0)))]));
           }
 
           (*c_elem) = sum;
@@ -73,6 +72,7 @@ __global__ auto gpu_matmul(const descend::i32 *const a_mat,
     }
   }
 }
+
 
 template<std::size_t m, std::size_t n, std::size_t k>
 auto cpu_matmul(descend::i32 * const hc_mat, descend::i32 const * const ha_mat, descend::i32 const * const hb_mat) {

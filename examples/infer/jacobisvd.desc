@@ -1,0 +1,133 @@
+// original source:
+// https://github.com/arrayfire/arrayfire/blob/master/src/backend/cuda/kernel/homography.hpp
+
+// threads(16, 16)
+// blocks(1, divup(??, threads.y);
+// iterations = 30; -- JacobiSVD specific iters
+// m = 9, n = 9
+fn jacobiSVD<r: prv>(
+    // n = threads.x * 81 * 2 * sizeof(f32)
+    s_V: &r uniq gpu.shared [f32; 16 * 81],
+    s_S: &r uniq gpu.shared [f32; 16 * 81],
+    s_acc1: &r uniq gpu.shared [f32; 256],
+    s_acc2: &r uniq gpu.shared [f32; 256],
+    s_d: &r uniq gpu.shared [f32; 16*9]
+) -[block: gpu.block<XY<16, 16>>]-> () {
+    sched(Y) block_row in block {
+        let s_Sbr = &uniq (*s_S).to_view.grp::<81>[[block_row]].grp::<9>;
+        let s_Vbr = &uniq (*s_V).to_view.grp::<81>[[block_row]].grp::<9>;
+        let s_dbr = &uniq (*s_d).to_view.grp::<9>[[block_row]];
+        let s_acc1br = &uniq (*s_acc1).to_view.grp::<16>[[block_row]];
+        let s_acc2br = &uniq (*s_acc2).to_view.grp::<16>[[block_row]];
+        indep(X) 9 block_row {
+            active_x => {
+                sched(X) active_thread in active_x {
+                    let mut acc1: f32 = 0.0f32;
+                    for_nat i in range(0, 9) {
+                        let val = (*s_Sbr)[[active_thread]][i];
+                        acc1 = acc1 + (val * val);
+                        let mut mat_elem: f32;
+                        if thread_id_x() == (nat_as_u64::<i>() as u32) {
+                            mat_elem = 1.0f32
+                        } else {
+                            mat_elem = 0.0f32
+                        };
+                        (*s_Vbr)[[active_thread]][i] = mat_elem
+                    };
+                    (*s_dbr)[[active_thread]] = acc1
+                }
+            },
+            inactive => { () }
+        };
+
+        sync(block);
+
+        for_nat it in range(0, 30) {
+            for_nat i in range(0, 8) {
+                for_nat j in range(i+1, 9) {
+                    let Si = &shrd (*s_Sbr)[i];
+                    let Sj = &shrd (*s_Sbr)[j];
+
+                    let Vi = &uniq (*s_Vbr)[i];
+                    let Vj = &uniq (*s_Vbr)[j];
+
+                    let p = 0.0f32;
+                    for_nat k in range(0, 9) {
+                        p = p + Si[k] * Sj[k]
+                    };
+                    let di = (*s_dbr)[i];
+                    let dj = (*s_dbr)[j];
+
+                    sync(block);
+
+                    let mut c = 0.0f32;
+                    let mut s = 0.0f32;
+                    let mut t0 = 0.0f32;
+                    let mut t1 = 0.0f32;
+                    let cond: bool = fabs(p) > m * eps() * sqrt(di * dj);
+
+                    indep(X) 9 block_slice_y {
+                        active_x => {
+                            // for-loop over k from original code not required when m=9 anx X<16>
+                            sched active_thread in active_x {
+                                if cond {
+                                    let y = di - dj;
+                                    let r = hypot(p * 2.0f32, y);
+                                    let r2 = r * 2.0f32;
+                                    if y >= 0.0f32 {
+                                        c = sqrt((r + y) / r2);
+                                        s = p / (r2 * c)
+                                    } else {
+                                        s = sqrt((r - y) / r2);
+                                        c = p / (r2 * s)
+                                    };
+
+                                    t0 = c * Si[[active_thread]] + s * Sj[[active_thread]];
+                                    t1 = c * Sj[[active_thread]] - s * Si[[active_thread]];
+                                    Si[[active_thread]] = t0;
+                                    Sj[[active_thread]] = t1;
+                                    (*s_acc1br)[..9][[active_thread]] = t0 * t0;
+                                    (*s_acc2br)[..9][[active_thread]] = t1 * t1
+                                }
+                            }
+                        },
+                        inactive => { () }
+                    };
+
+                    sync(block);
+
+                    if cond {
+                        let mut a = 0.0f32;
+                        let mut b = 0.0f32;
+                        for_nat k in range(0, 9) {
+                            a = a + (*s_acc1br)[k];
+                            b = b + (*s_acc2br)[k]
+                        };
+                        unsafe (*s_dbr)[i] = a;
+                        unsafe (*s_dbr)[j] = a
+                    };
+
+                    sync(block);
+
+                    if cond {
+                        // do not use for-loop from original, because enough threads are started
+                        indep(X) 9 block_slice_y {
+                            active_x => {
+                                sched(X) active_thread in active_x {
+                                    let t00 = Vi[[active_thread]] * c + Vj[[active_thread]] * s;
+                                    let t11 = Vj[[active_thread]] * c - Vi[[active_thread]] * s;
+
+                                    Vi[[active_thread]] = t00;
+                                    Vj[[active_thread]] = t11
+                                }
+                            },
+                            inactive => { () }
+                        }
+                    };
+
+                    sync(block)
+                }
+            }
+        }
+    }
+}

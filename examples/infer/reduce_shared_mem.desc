@@ -24,7 +24,7 @@ fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
     sched block in grid {
         let ib = &shrd (*block_group)[[block]];
         let out_elem = &uniq (*view_out)[[block]];
-        let tmp_view = to_view_mut(&uniq *tmp);
+        let tmp_view = to_view(&uniq *tmp);
         sched thread in block {
             let inp = &shrd (*ib)[[thread]];
             let tmp_in = &uniq *tmp_view[[thread]];

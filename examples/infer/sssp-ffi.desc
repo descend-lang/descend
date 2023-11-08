@@ -1,7 +1,7 @@
-// 1. complex types such as CSRGraph should not be references
+// 1. complex types such as CSRGraph should not be references (OK)
 // 2. many initialisations that are not required for correctness because the initialisiation happens
 //    via references in foreign functions
-// 3. references to gpu.local missing (wrongly using gpu.global)
+// 3. references to gpu.local missing (wrongly using gpu.global) (OK)
 // 4. shfl_sync has the wrong execution resource: gpu.warp is not specific enough. It should be
 //    w.forall with w: gpu.warp
 // 5. changed int (i32) to u32 in quite a few places. The original code compares int and unsigned
@@ -157,7 +157,7 @@ fn sssp_kernel<r: prv, sm_count: nat>(
     }
 }
 
-struct CSRGraph<r: prv, n: nat> {
+cuda struct CSRGraph<r: prv, n: nat> {
     nedges: u32,
     nnodes: u32,
     row_start: &r shrd gpu.global [u32; n],
@@ -166,9 +166,9 @@ struct CSRGraph<r: prv, n: nat> {
     node_data: &r shrd gpu.global [i32; n]
 }
 
-struct worklist {}
+cuda struct worklist {}
 
-struct TempStorage {}
+cuda struct TempStorage {}
 
 fn epilog(wl: &shrd gpu.global worklist, m_assignment: u64, work_size: u32, coop: bool) -[w: gpu.warp]-> ();
 
@@ -179,11 +179,12 @@ fn atomicMin<r: prv>(ptr: &r shrd gpu.global i32, comp: i32) -[t: gpu.thread]-> 
 fn init_regular<r: prv>(wl: &r shrd gpu.global worklist) -[b: gpu.block<X<768>>]-> ();
 
 fn max(lhs: u32, rhs: u32) -[y: any]-> u32;
-fn pop_work(wl: &shrd gpu.global worklist, idx: u32) -[t: gpu.thread]-> u32;
+
+fn pop_work(wl: &shrd gpu.global worklist, idx: u32) -[t: gpu.thread]-> u32; //{
 //     unsafe cuda {
 //         wl.pop_work(idx);
 //     }
-// }
+//}
 fn push_work(wl: &shrd gpu.global worklist, bag_id: u32, node: u32) -[t: gpu.thread]-> ();
 fn tb_coop_assign(
     wl: &shrd gpu.global worklist,
