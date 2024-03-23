@@ -1,11 +1,11 @@
 use super::{
     BaseExec, BinOpNat, Dim, Dim1d, Dim2d, DimCompo, ExecExpr, ExecPathElem, ExecTy, ExecTyKind,
-    IdentExec, KindCtx, Nat, TyCtx, TyError, TyResult,
+    IdentExec, Nat, TyCtx, TyError, TyResult,
 };
-use crate::ast::LeftOrRight;
+use crate::ast::{LeftOrRight, NatCtx};
 
 pub(super) fn ty_check(
-    kind_ctx: &KindCtx,
+    nat_ctx: &NatCtx,
     ty_ctx: &TyCtx,
     ident_exec: Option<&IdentExec>,
     exec_expr: &mut ExecExpr,
@@ -43,7 +43,7 @@ pub(super) fn ty_check(
             ExecPathElem::ToThreads(d) => {
                 exec_ty = ty_check_exec_to_threads(*d, &exec_ty)?;
             }
-            ExecPathElem::ToWarps => exec_ty = ty_check_exec_to_warps(&exec_ty)?,
+            ExecPathElem::ToWarps => exec_ty = ty_check_exec_to_warps(nat_ctx, &exec_ty)?,
         }
     }
     exec_expr.ty = Some(Box::new(ExecTy::new(exec_ty)));
@@ -89,14 +89,11 @@ fn ty_check_exec_to_threads(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecT
     }
 }
 
-fn ty_check_exec_to_warps(exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+fn ty_check_exec_to_warps(nat_ctx: &NatCtx, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
     match exec_ty {
         ExecTyKind::GpuBlock(dim) => match dim.clone() {
             Dim::X(d) => {
-                // FIXME the comparison of Nats is not evaluated
-                if Nat::BinOp(BinOpNat::Mod, Box::new(d.0.clone()), Box::new(Nat::Lit(32)))
-                    != Nat::Lit(0)
-                {
+                if d.0.eval(nat_ctx)? % 32 != 0 {
                     Err(TyError::String(format!(
                         "Size of GpuBlock needs to be evenly divisible by 32 to create warps, instead got: {:?}",
                         exec_ty
@@ -414,48 +411,67 @@ fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
     })
 }
 
-fn update_encountered_dims(forall_dims_encountered: &mut Vec<DimCompo>, e: &ExecPathElem) {
-    if let ExecPathElem::ForAll(d) = e {
-        if forall_dims_encountered.contains(d) {
-            forall_dims_encountered.clear();
-            forall_dims_encountered.push(*d);
-        }
-    }
-}
-
-fn swappable_exec_path_elems(
-    dims_encountered: &[DimCompo],
-    lhs: &ExecPathElem,
-    rhs: &ExecPathElem,
-) -> bool {
-    match (lhs, rhs) {
-        (ExecPathElem::ForAll(dl), ExecPathElem::ForAll(dr)) => dl > dr,
-        (ExecPathElem::ForAll(_), ExecPathElem::TakeRange(r)) => {
-            !dims_encountered.contains(&r.split_dim)
-        }
-        _ => false,
-    }
-}
-
 pub(super) fn normalize(mut exec: ExecExpr) -> ExecExpr {
     assert!(exec.ty.is_some());
     let mut exec_path = exec.exec.path;
     if !exec_path.is_empty() {
-        let mut forall_dims_encountered = Vec::with_capacity(3);
-        for i in 0..(exec_path.len() - 1) {
-            for j in 0..(exec_path.len() - i - 1) {
-                update_encountered_dims(&mut forall_dims_encountered, &exec_path[j]);
-                update_encountered_dims(&mut forall_dims_encountered, &exec_path[j + 1]);
-                if swappable_exec_path_elems(
-                    &forall_dims_encountered,
-                    &exec_path[j],
-                    &exec_path[j + 1],
-                ) {
+        let boundaries = level_boundaries(&exec_path);
+        sort_within_boundaries(&mut exec_path, &boundaries);
+    }
+    exec.exec.path = exec_path;
+    exec
+}
+
+// FIXME: not correct if first take_range on dimension of lower level followed by forall on different dimension in upper level
+//  for fix: see formalism
+fn level_boundaries(exec_path: &[ExecPathElem]) -> Vec<usize> {
+    let mut forall_dims_encountered = Vec::with_capacity(3);
+    let mut boundaries = Vec::with_capacity(3);
+    for (i, elem) in exec_path.iter().enumerate() {
+        match elem {
+            ExecPathElem::ForAll(d) => {
+                if forall_dims_encountered.contains(d) {
+                    forall_dims_encountered.clear();
+                    boundaries.push(i);
+                }
+                forall_dims_encountered.push(*d);
+            }
+            ExecPathElem::TakeRange(take_range) => {
+                if forall_dims_encountered.contains(&take_range.split_dim) {
+                    forall_dims_encountered.clear();
+                    boundaries.push(i);
+                }
+            }
+            ExecPathElem::ToWarps => {
+                forall_dims_encountered.clear();
+                boundaries.push(i);
+            }
+            ExecPathElem::ToThreads(_) => unimplemented!(),
+        }
+    }
+    // upper boundary of last level
+    boundaries.push(exec_path.len());
+    boundaries
+}
+
+fn sort_within_boundaries(exec_path: &mut Vec<ExecPathElem>, boundaries: &[usize]) {
+    let mut lower_bound = 0;
+    for b in boundaries {
+        for i in lower_bound..*b {
+            for j in lower_bound..(*b - i - 1) {
+                if swappable_exec_path_elems(&exec_path[j], &exec_path[j + 1]) {
                     exec_path.swap(j, j + 1)
                 }
             }
         }
+        lower_bound = *b;
     }
-    exec.exec.path = exec_path;
-    exec
+}
+
+fn swappable_exec_path_elems(lhs: &ExecPathElem, rhs: &ExecPathElem) -> bool {
+    match (lhs, rhs) {
+        (ExecPathElem::ForAll(dl), ExecPathElem::ForAll(dr)) => dl > dr,
+        (ExecPathElem::ForAll(_), ExecPathElem::TakeRange(_)) => true,
+        _ => false,
+    }
 }

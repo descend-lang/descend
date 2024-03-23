@@ -572,8 +572,8 @@ impl Nat {
             .insert(ident.name.clone(), self.clone())
         {
             if &old != self {
-                println!(
-                    "WARNING: Not able to check equality of Nats `{}` and `{}`",
+                panic!(
+                    "not able to check equality of Nats `{}` and `{}`",
                     old, self
                 )
             }
@@ -589,11 +589,7 @@ impl Nat {
         if n1 == n2 {
             Ok(())
         } else {
-            println!(
-                "WARNING: Not able to check equality of Nats `{}` and `{}`",
-                n1, n2
-            );
-            Ok(())
+            panic!("not able to check equality of Nats `{}` and `{}`", n1, n2);
         }
     }
 }

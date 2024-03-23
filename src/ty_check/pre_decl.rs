@@ -1,7 +1,7 @@
 use crate::ast::{
     AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, DimCompo, ExecExpr, ExecExprKind, ExecTy,
-    ExecTyKind, FnTy, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, Ownership, ParamSig,
-    Provenance, RefDty, ScalarTy, Ty, TyKind,
+    ExecTyKind, FnTy, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, NatConstr, Ownership,
+    ParamSig, Provenance, RefDty, ScalarTy, Ty, TyKind,
 };
 
 pub static GPU_DEVICE: &str = "gpu_device";
@@ -38,7 +38,7 @@ pub static JOIN: &str = "join";
 pub static TRANSPOSE: &str = "transp";
 pub static TAKE_LEFT: &str = "take_left";
 pub static TAKE_RIGHT: &str = "take_right";
-pub static SELECT: &str = "select";
+pub static SELECT_RANGE: &str = "select_range";
 pub static MAP: &str = "map";
 
 pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
@@ -73,9 +73,9 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
         (GROUP, group_ty()),
         (JOIN, join_ty()),
         (TRANSPOSE, transpose_ty()),
-        (TAKE_LEFT, take_ty(TakeSide::Left)),
-        (TAKE_RIGHT, take_ty(TakeSide::Right)),
-        (SELECT, select_ty()),
+        // (TAKE_LEFT, take_ty(TakeSide::Left)),
+        // (TAKE_RIGHT, take_ty(TakeSide::Right)),
+        (SELECT_RANGE, select_range_ty()),
     ];
 
     decls.to_vec()
@@ -108,6 +108,7 @@ fn create_array_ty() -> FnTy {
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Nat::Ident(n),
         ))))),
+        vec![],
     )
 }
 
@@ -152,6 +153,7 @@ fn to_raw_ptr_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
         ))))),
+        vec![],
     )
 }
 
@@ -188,6 +190,7 @@ fn offset_raw_ptr_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::RawPtr(
             Box::new(DataTy::new(DataTyKind::Ident(d))),
         ))))),
+        vec![],
     )
 }
 
@@ -211,6 +214,7 @@ fn ballot_sync_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -245,6 +249,7 @@ fn shfl_sync_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -275,6 +280,7 @@ fn shfl_up_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -297,6 +303,7 @@ fn nat_as_u64_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U64,
         ))))),
+        vec![],
     )
 }
 
@@ -313,6 +320,7 @@ fn get_warp_id_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -329,6 +337,7 @@ fn get_lane_id_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -346,6 +355,7 @@ fn thread_id_x_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -368,6 +378,7 @@ fn gpu_device_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Gpu,
         ))))),
+        vec![],
     )
 }
 
@@ -421,6 +432,7 @@ fn to_atomic_array_ty() -> FnTy {
                 )),
             )),
         ))))),
+        vec![],
     )
 }
 
@@ -463,6 +475,7 @@ fn to_atomic_ty() -> FnTy {
                 DataTy::new(DataTyKind::Atomic(AtomicTy::AtomicU32)),
             )),
         ))))),
+        vec![],
     )
 }
 
@@ -508,6 +521,7 @@ fn atomic_store_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Unit,
         ))))),
+        vec![],
     )
 }
 
@@ -553,6 +567,7 @@ fn atomic_fetch_or_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -598,6 +613,7 @@ fn atomic_min_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::I32,
         ))))),
+        vec![],
     )
 }
 
@@ -643,6 +659,7 @@ fn atomic_fetch_add_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -680,6 +697,7 @@ fn atomic_load_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::U32,
         ))))),
+        vec![],
     )
 }
 
@@ -737,6 +755,7 @@ fn gpu_alloc_copy_ty() -> FnTy {
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Memory::GpuGlobal,
         ))))),
+        vec![],
     )
 }
 
@@ -792,6 +811,7 @@ fn copy_to_host_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Unit,
         ))))),
+        vec![],
     )
 }
 
@@ -847,11 +867,10 @@ fn copy_to_gpu_ty() -> FnTy {
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
             ScalarTy::Unit,
         ))))),
+        vec![],
     )
 }
 
-// TODO FIX Error: t: ty is too general this means it could contain functions
-//  (which is not well-kinded).
 // to_view:
 //  <r: prv, m: mem, n: nat, d: dty>([d; n]) -[view]-> [[d; n]]
 fn to_view_ty() -> FnTy {
@@ -883,6 +902,7 @@ fn to_view_ty() -> FnTy {
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Nat::Ident(n),
         ))))),
+        vec![],
     )
 }
 
@@ -917,6 +937,7 @@ fn reverse_ty() -> FnTy {
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Nat::Ident(n),
         ))))),
+        vec![],
     )
 }
 
@@ -959,6 +980,7 @@ fn map_ty() -> FnTy {
                     Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
                         d2.clone(),
                     ))))),
+                    vec![],
                 )))),
             ),
             ParamSig::new(
@@ -974,6 +996,7 @@ fn map_ty() -> FnTy {
             Box::new(DataTy::new(DataTyKind::Ident(d2))),
             Nat::Ident(n),
         ))))),
+        vec![],
     )
 }
 
@@ -1016,10 +1039,18 @@ fn group_ty() -> FnTy {
             ))),
             Nat::BinOp(
                 BinOpNat::Div,
-                Box::new(Nat::Ident(n)),
-                Box::new(Nat::Ident(s)),
+                Box::new(Nat::Ident(n.clone())),
+                Box::new(Nat::Ident(s.clone())),
             ),
         ))))),
+        vec![NatConstr::Eq(
+            Box::new(Nat::BinOp(
+                BinOpNat::Mod,
+                Box::new(Nat::Ident(n)),
+                Box::new(Nat::Ident(s)),
+            )),
+            Box::new(Nat::Lit(0)),
+        )],
     )
 }
 
@@ -1032,56 +1063,56 @@ pub enum TakeSide {
 //  <split_pos: nat, n: nat, d: dty>([[d; n]]) -> [[d; split_pos]]
 // take_right:
 //  <split_pos: nat, n: nat, d: dty>([[d; n]]) -> [[d; n - split_pos]])
-fn take_ty(take_side: TakeSide) -> FnTy {
-    let s = Ident::new("s");
-    let n = Ident::new("n");
-    let d = Ident::new("d");
-    let s_nat = IdentKinded {
-        ident: s.clone(),
-        kind: Kind::Nat,
-    };
-    let n_nat = IdentKinded {
-        ident: n.clone(),
-        kind: Kind::Nat,
-    };
-    let d_ty = IdentKinded {
-        ident: d.clone(),
-        kind: Kind::DataTy,
-    };
-    let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
-    let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
-
-    let output_dty = match take_side {
-        TakeSide::Left => DataTy::new(DataTyKind::ArrayShape(
-            Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-            Nat::Ident(s.clone()),
-        )),
-        TakeSide::Right => DataTy::new(DataTyKind::ArrayShape(
-            Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-            Nat::BinOp(
-                BinOpNat::Sub,
-                Box::new(Nat::Ident(n.clone())),
-                Box::new(Nat::Ident(s)),
-            ),
-        )),
-    };
-    FnTy::new(
-        vec![s_nat, n_nat, d_ty],
-        Some(ident_exec),
-        vec![ParamSig::new(
-            exec_expr.clone(),
-            Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
-                Box::new(DataTy::new(DataTyKind::Ident(d))),
-                Nat::Ident(n),
-            ))))),
-        )],
-        exec_expr,
-        Ty::new(TyKind::Data(Box::new(output_dty))),
-    )
-}
+// fn take_ty(take_side: TakeSide) -> FnTy {
+//     let s = Ident::new("s");
+//     let n = Ident::new("n");
+//     let d = Ident::new("d");
+//     let s_nat = IdentKinded {
+//         ident: s.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let n_nat = IdentKinded {
+//         ident: n.clone(),
+//         kind: Kind::Nat,
+//     };
+//     let d_ty = IdentKinded {
+//         ident: d.clone(),
+//         kind: Kind::DataTy,
+//     };
+//     let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::Any));
+//     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
+//
+//     let output_dty = match take_side {
+//         TakeSide::Left => DataTy::new(DataTyKind::ArrayShape(
+//             Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+//             Nat::Ident(s.clone()),
+//         )),
+//         TakeSide::Right => DataTy::new(DataTyKind::ArrayShape(
+//             Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
+//             Nat::BinOp(
+//                 BinOpNat::Sub,
+//                 Box::new(Nat::Ident(n.clone())),
+//                 Box::new(Nat::Ident(s)),
+//             ),
+//         )),
+//     };
+//     FnTy::new(
+//         vec![s_nat, n_nat, d_ty],
+//         Some(ident_exec),
+//         vec![ParamSig::new(
+//             exec_expr.clone(),
+//             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
+//                 Box::new(DataTy::new(DataTyKind::Ident(d))),
+//                 Nat::Ident(n),
+//             ))))),
+//         )],
+//         exec_expr,
+//         Ty::new(TyKind::Data(Box::new(output_dty))),
+//     )
+// }
 
 // select: <l: nat, u: nat, n: nat, d: dty>([[ d; n ]]) -[a: any]-> [[ d; u-l ]]
-fn select_ty() -> FnTy {
+fn select_range_ty() -> FnTy {
     let l = Ident::new("l");
     let u = Ident::new("u");
     let n = Ident::new("n");
@@ -1112,7 +1143,7 @@ fn select_ty() -> FnTy {
             exec_expr.clone(),
             Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::ArrayShape(
                 Box::new(DataTy::new(DataTyKind::Ident(d.clone()))),
-                Nat::Ident(n),
+                Nat::Ident(n.clone()),
             ))))),
         )],
         exec_expr,
@@ -1120,10 +1151,26 @@ fn select_ty() -> FnTy {
             Box::new(DataTy::new(DataTyKind::Ident(d))),
             Nat::BinOp(
                 BinOpNat::Sub,
-                Box::new(Nat::Ident(u)),
-                Box::new(Nat::Ident(l)),
+                Box::new(Nat::Ident(u.clone())),
+                Box::new(Nat::Ident(l.clone())),
             ),
         ))))),
+        vec![NatConstr::And(
+            Box::new(NatConstr::Lt(
+                Box::new(Nat::Ident(l)),
+                Box::new(Nat::Ident(u.clone())),
+            )),
+            Box::new(NatConstr::Or(
+                Box::new(NatConstr::Lt(
+                    Box::new(Nat::Ident(u.clone())),
+                    Box::new(Nat::Ident(n.clone())),
+                )),
+                Box::new(NatConstr::Eq(
+                    Box::new(Nat::Ident(u)),
+                    Box::new(Nat::Ident(n)),
+                )),
+            )),
+        )],
     )
 }
 
@@ -1187,6 +1234,7 @@ fn join_ty() -> FnTy {
                 Box::new(Nat::Ident(o)),
             ),
         ))))),
+        vec![],
     )
 }
 
@@ -1232,5 +1280,6 @@ fn transpose_ty() -> FnTy {
             ))),
             Nat::Ident(n),
         ))))),
+        vec![],
     )
 }

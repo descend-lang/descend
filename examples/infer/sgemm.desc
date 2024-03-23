@@ -30,19 +30,19 @@ fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
 ) -[grid: gpu.grid<XY<8, 16>, XY<32, 8>>]-> () {
   sched(Y) grid_slices_y in grid { sched(X) blocks in grid_slices_y {
     sched(Y) block_slices_y in blocks { sched(X) thread in block_slices_y {
-      for_nat wgY in range(0, m/(64*16)) {
-        for_nat wgX in range(0, n/(128*8)) {
+      for wgY in range(0, m/(64*16)) {
+        for wgX in range(0, n/(128*8)) {
           let mut accum: [i32; 32] = create_array::<32>(0);
           // dot product on tiles
-          for_nat tnum in range(0, k/8) {
-            for_nat i in range(0, 2) {
+          for tnum in range(0, k/8) {
+            for i in range(0, 2) {
               (*a_tile).to_view[[block_slices_y]].to_view.grp::<32>.transp[[thread]][i] =
                 (*a_transp_mat).to_view.map(to_view)
                   // tile2::<8, 64>
                   .map(grp::<64>).grp::<8>.map(transp).transp
                     .grp::<16>.transp[[grid_slices_y]][wgY][tnum][[block_slices_y]].grp::<32>.transp[[thread]][i]
             };
-            for_nat i in range(0, 4) {
+            for i in range(0, 4) {
               (*b_tile).to_view[[block_slices_y]].to_view.grp::<32>.transp[[thread]][i] =
                 (*b_mat).to_view.map(to_view)
                   //tile2::<8, 128>
@@ -51,19 +51,19 @@ fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
             };
             sync(blocks);
             // dot product on tile elements
-            for_nat i in range(0, 8) {
+            for i in range(0, 8) {
               let mut a_tile_regs: [i32; 8] = create_array::<8>(0);
-              for_nat j in range(0, 8) {
+              for j in range(0, 8) {
                 a_tile_regs[j] = (*a_tile)[i].to_view.grp::<8>[[block_slices_y]][j]
               };
 
               let mut b_tile_regs: [i32; 4] = create_array::<4>(0);
-              for_nat j in range(0, 4) {
+              for j in range(0, 4) {
                 b_tile_regs[j] = (*b_tile)[i].to_view.grp::<32>.transp[[thread]][j]
               };
 
-              for_nat j1 in range(0, 8) {
-                for_nat j2 in range(0, 4) {
+              for j1 in range(0, 8) {
+                for j2 in range(0, 4) {
                   accum[j1 * 4 + j2] = accum[j1 * 4 + j2] + (a_tile_regs[j1] * b_tile_regs[j2])
                 }
               }
@@ -71,8 +71,8 @@ fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
             sync(blocks)
           };
           //write results
-          for_nat i in range(0, 8) {
-            for_nat j in range(0, 4) {
+          for i in range(0, 8) {
+            for j in range(0, 4) {
               (*out_mat).to_view.map(to_view)
                 // tile::<64, 128>
                 .grp::<64>.map(transp).map(grp::<128>).map(map(transp))

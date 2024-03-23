@@ -3,7 +3,6 @@ use crate::ast::internal::{
 };
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
-use crate::ty_check::pre_decl;
 use std::collections::hash_map::Iter;
 use std::collections::{HashMap, HashSet};
 
@@ -620,55 +619,103 @@ impl KindCtx {
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum GlobalItem {
-    FnTy(Box<FnTy>),
+pub(super) enum GlobalDecl {
+    FnDecl(Box<str>, Box<FnTy>),
     StructDecl(Box<StructDecl>),
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct GlobalCtx {
-    items: HashMap<Box<str>, GlobalItem>,
+pub(super) struct GlobalCtx<'a> {
+    compil_unit: &'a CompilUnit<'a>,
+    checked_funs: Vec<(&'a FunDef, Box<[usize]>)>,
+    decls: Vec<GlobalDecl>,
+    //items: HashMap<Box<str>, GlobalItem>,
 }
 
-impl GlobalCtx {
-    pub fn from_iter<'a, I>(items: I) -> Self
-    where
-        I: Iterator<Item = &'a Item>,
-    {
-        let mut gl_ctx = GlobalCtx {
-            items: HashMap::new(),
-        };
-        Self::append_fun_decls(&mut gl_ctx, &pre_decl::fun_decls());
-        gl_ctx.items.extend(items.map(|item| match item {
-            Item::StructDecl(struct_decl) => (
-                struct_decl.ident.name.clone(),
-                GlobalItem::StructDecl(struct_decl.clone()),
-            ),
-            Item::FunDef(fun_def) => (
-                fun_def.ident.name.clone(),
-                GlobalItem::FnTy(Box::new(fun_def.fn_ty())),
-            ),
-            Item::FunDecl(fun_decl) => (
-                fun_decl.ident.name.clone(),
-                GlobalItem::FnTy(Box::new(fun_decl.fn_ty())),
-            ),
-        }));
-        gl_ctx
+impl<'a> GlobalCtx<'a> {
+    pub fn new(compil_unit: &'a CompilUnit, decls: Vec<GlobalDecl>) -> Self {
+        GlobalCtx {
+            compil_unit,
+            checked_funs: vec![],
+            decls,
+        }
     }
 
-    fn append_fun_decls(gl_ctx: &mut GlobalCtx, fun_decls: &[(&str, FnTy)]) {
-        gl_ctx.items.extend(fun_decls.iter().map(|(name, ty)| {
-            (
-                String::from(*name).into_boxed_str(),
-                GlobalItem::FnTy(Box::new(ty.clone())),
-            )
-        }))
+    pub fn has_been_checked(&self, name: &str, nat_args: &[usize]) -> bool {
+        self.checked_funs.iter().any(|(fun_def, nargs)| {
+            fun_def.ident.name.as_ref() == name && nargs.as_ref() == nat_args
+        })
     }
 
-    pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
-        match self.items.get(&ident.name) {
-            Some(GlobalItem::FnTy(fn_ty)) => Ok(fn_ty),
-            None | Some(GlobalItem::StructDecl(_)) => Err(CtxError::IdentNotFound(ident.clone())),
+    pub fn add_checked_fun(&mut self, fun_def: &'a FunDef, nat_vals: Box<[usize]>) {
+        self.checked_funs.push((fun_def, nat_vals))
+    }
+
+    pub fn find_fun(&self, name: &str) -> Option<&'a FunDef> {
+        self.compil_unit.items.iter().find_map(|item| {
+            if let Item::FunDef(fun_def) = item {
+                if fun_def.ident.name.as_ref() == name {
+                    Some(fun_def.as_ref())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    }
+    //    pub fn from_iter<'a, I>(items: I) -> Self
+    //    where
+    //        I: Iterator<Item = &'a Item>,
+    //    {
+    //        let mut gl_ctx = GlobalCtx {
+    //            items: HashMap::new(),
+    //        };
+    //        Self::append_fun_decls(&mut gl_ctx, &pre_decl::fun_decls());
+    //        gl_ctx.items.extend(items.map(|item| match item {
+    //            Item::StructDecl(struct_decl) => (
+    //                struct_decl.ident.name.clone(),
+    //                GlobalItem::StructDecl(struct_decl.clone()),
+    //            ),
+    //            Item::FunDef(fun_def) => (
+    //                fun_def.ident.name.clone(),
+    //                GlobalItem::FnTy(Box::new(fun_def.fn_ty())),
+    //            ),
+    //            Item::FunDecl(fun_decl) => (
+    //                fun_decl.ident.name.clone(),
+    //                GlobalItem::FnTy(Box::new(fun_decl.fn_ty())),
+    //            ),
+    //        }));
+    //        gl_ctx
+    //    }
+    //
+    //    fn append_fun_decls(gl_ctx: &mut GlobalCtx, fun_decls: &[(&str, FnTy)]) {
+    //        gl_ctx.items.extend(fun_decls.iter().map(|(name, ty)| {
+    //            (
+    //                String::from(*name).into_boxed_str(),
+    //                GlobalItem::FnTy(Box::new(ty.clone())),
+    //            )
+    //        }))
+    //    }
+
+    pub fn pre_decl_fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
+        if let Some(fn_ty) = self.decls.iter().find_map(|decl| match decl {
+            GlobalDecl::FnDecl(name, fn_ty) if name == &ident.name => Some(fn_ty),
+            GlobalDecl::FnDecl(_, _) | GlobalDecl::StructDecl(_) => None,
+        }) {
+            Ok(fn_ty)
+        } else {
+            Err(CtxError::IdentNotFound(ident.clone()))
+        }
+    }
+
+    pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<FnTy> {
+        if let Some(fn_def) = self.find_fun(&ident.name) {
+            Ok(fn_def.fn_ty())
+        } else if let Ok(fn_ty) = self.pre_decl_fn_ty_by_ident(ident) {
+            Ok(fn_ty.clone())
+        } else {
+            return Err(CtxError::IdentNotFound(ident.clone()));
         }
     }
 }

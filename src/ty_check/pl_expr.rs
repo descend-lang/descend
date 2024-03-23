@@ -2,7 +2,7 @@ use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
 use crate::ast::{
-    utils, DataTy, DataTyKind, ExecExpr, ExecTyKind, FnTy, Ident, IdentExec, Memory, Nat,
+    utils, DataTy, DataTyKind, ExecExpr, ExecTyKind, FnTy, Ident, IdentExec, Memory, Nat, NatCtx,
     Ownership, ParamSig, PlaceExpr, PlaceExprKind, Provenance, Ty, TyKind, View,
 };
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
@@ -12,7 +12,8 @@ use crate::ty_check::unify::ConstrainMap;
 use crate::ty_check::{exec, ExprTyCtx};
 
 pub(super) struct PlExprTyCtx<'ctxt> {
-    gl_ctx: &'ctxt GlobalCtx,
+    gl_ctx: &'ctxt GlobalCtx<'ctxt>,
+    nat_ctx: &'ctxt NatCtx,
     kind_ctx: &'ctxt KindCtx,
     ident_exec: Option<&'ctxt IdentExec>,
     exec: ExecExpr,
@@ -25,6 +26,7 @@ impl<'ctxt> PlExprTyCtx<'ctxt> {
     pub(super) fn new(expr_ty_ctx: &'ctxt ExprTyCtx, own: Ownership) -> Self {
         PlExprTyCtx {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
+            nat_ctx: &*expr_ty_ctx.nat_ctx,
             kind_ctx: &*expr_ty_ctx.kind_ctx,
             ident_exec: expr_ty_ctx.ident_exec,
             exec: expr_ty_ctx.exec.clone(),
@@ -39,6 +41,7 @@ impl<'ctxt> From<&'ctxt BorrowCheckCtx<'ctxt>> for PlExprTyCtx<'ctxt> {
     fn from(ctx: &'ctxt BorrowCheckCtx<'ctxt>) -> Self {
         PlExprTyCtx::<'ctxt> {
             gl_ctx: ctx.gl_ctx,
+            nat_ctx: ctx.nat_ctx,
             kind_ctx: ctx.kind_ctx,
             ident_exec: ctx.ident_exec,
             exec: ctx.exec.clone(),
@@ -120,6 +123,7 @@ fn ty_check_app_view_fn_ty(
         Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Ident(
             Ident::new_impli("ret_dty"),
         ))))),
+        vec![],
     );
     let (constr_map, _) = unify::constrain(&mut arg_dty_fn_ty, &mut view_fn_ty)?;
     let res_dty = arg_dty_fn_ty.ret_ty.dty().clone();
@@ -132,7 +136,7 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
         .iter_mut()
         .map(|v| Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))))
         .collect::<TyResult<Vec<_>>>()?;
-    let view_fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?;
+    let view_fn_ty = ctx.gl_ctx.pre_decl_fn_ty_by_ident(&view.name)?;
     let partially_applied_view_fn_ty = super::apply_gen_args_to_fn_ty_checked(
         ctx.kind_ctx,
         &ctx.exec,
@@ -153,6 +157,7 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
         vec![actual_view_fn_ty.param_sigs.pop().unwrap()],
         actual_view_fn_ty.exec.clone(),
         actual_view_fn_ty.ret_ty.as_ref().clone(),
+        vec![],
     );
     Ok(res_view_ty)
 }
@@ -173,6 +178,7 @@ fn create_view_ty_with_input_view_and_free_ret(exec: &ExecExpr, mut arg_tys: Vec
             "view_out_dty",
             DataTyKind::Ident,
         ))))),
+        vec![],
     )
 }
 
@@ -180,33 +186,30 @@ fn ty_check_ident(
     ctx: &PlExprTyCtx,
     ident: &Ident,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-    if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
-        if !&tty.is_fully_alive() {
-            return Err(TyError::String(format!(
-                "The value in `{}` has been moved out.",
-                ident
-            )));
-        }
-        // FIXME Should throw an error if thread local memory is accessed by a block
-        //  for example.
-        let mem = default_mem_by_exec(&ctx.exec.ty.as_ref().unwrap().ty);
-        Ok((
-            tty.clone(),
-            if mem.is_some() {
-                vec![mem.unwrap()]
-            } else {
-                vec![]
-            },
-            vec![],
-        ))
-    } else {
-        let fn_ty = ctx.gl_ctx.fn_ty_by_ident(ident)?;
-        Ok((
-            Ty::new(TyKind::FnTy(Box::new(fn_ty.clone()))),
-            vec![],
-            vec![],
-        ))
+    // if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
+    let tty = ctx.ty_ctx.ty_of_ident(ident)?;
+    if !&tty.is_fully_alive() {
+        return Err(TyError::String(format!(
+            "The value in `{}` has been moved out.",
+            ident
+        )));
     }
+    // FIXME Should throw an error if thread local memory is accessed by a block
+    //  for example.
+    let mem = default_mem_by_exec(&ctx.exec.ty.as_ref().unwrap().ty);
+    Ok((
+        tty.clone(),
+        if mem.is_some() {
+            vec![mem.unwrap()]
+        } else {
+            vec![]
+        },
+        vec![],
+    ))
+    // } else {
+    //     let fn_ty = ctx.gl_ctx.fn_ty_by_ident(ident)?;
+    //     Ok((Ty::new(TyKind::FnTy(Box::new(fn_ty))), vec![], vec![]))
+    // }
 }
 
 fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
@@ -344,7 +347,7 @@ fn ty_check_select(
     p: &mut PlaceExpr,
     select_exec: &mut ExecExpr,
 ) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
-    exec::ty_check(ctx.kind_ctx, ctx.ty_ctx, ctx.ident_exec, select_exec)?;
+    exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, select_exec)?;
     // FIXME this check is required for uniq accesses, but not for shared accesses because there
     //  the duplication of accesses is fine. Move this check into ownership/borrow checking?
     //    if &ctx.exec != select_exec {
@@ -353,9 +356,10 @@ fn ty_check_select(
     //        ));
     //    }
     let mut outer_exec = select_exec.remove_last_distrib();
-    exec::ty_check(ctx.kind_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
+    exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
     let outer_ctx = PlExprTyCtx {
         gl_ctx: ctx.gl_ctx,
+        nat_ctx: ctx.nat_ctx,
         kind_ctx: ctx.kind_ctx,
         ident_exec: ctx.ident_exec,
         exec: outer_exec,
@@ -412,7 +416,7 @@ fn ty_check_index(
         }
     };
 
-    if &n <= idx {
+    if n.eval(ctx.nat_ctx)? <= idx.eval(ctx.nat_ctx)? {
         return Err(TyError::String(
             "Trying to access array out-of-bounds.".to_string(),
         ));

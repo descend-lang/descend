@@ -17,3 +17,7 @@ fn par_scale_vec<n: nat, r: prv>(
         }
     }
 }
+
+fn main() -[t:cpu.thread]-> () {
+    unsafe scale_vec::<64*1024>(_)
+}

@@ -13,17 +13,16 @@ fn gpu_reduce<r: prv, gs: nat, bs: nat>(
 ) -[grid: gpu.grid<X<gs>, X<bs>>]-> () {
     sched block in grid {
         let ib = &uniq (*input).to_view.grp::<bs>[[block]];
-        for_nat k in halved_range(bs/2) {
-            let split_ib = &uniq (*ib)[..2*k..].0;
-            let active_halves = &uniq (*split_ib)[..k..];
-            let active_half0 = &uniq (*active_halves).0;
-            let active_half1 = &uniq (*active_halves).1;
+        for k in halved_range(bs/2) {
+            let split_ib = &uniq (*ib)[0..2*k];
+            let active_half_l = &uniq (*split_ib)[0..k];
+            let active_half_r = &shrd (*split_ib)[k..2*k];
 
             indep(X) k block {
                 active_threads => {
                     sched thread in active_threads {
-                        let fst_half = &uniq (*active_half0)[[thread]];
-                        let snd_half = &shrd (*active_half1)[[thread]];
+                        let fst_half = &uniq (*active_half_l)[[thread]];
+                        let snd_half = &shrd (*active_half_r)[[thread]];
                         *fst_half = *fst_half + *snd_half
                     }
                 },

@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::fmt;
 
 use crate::ast::internal::PathElem;
@@ -63,6 +62,7 @@ impl FunDecl {
             param_sigs,
             exec: self.exec.clone(),
             ret_ty: Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
+            nat_constrs: vec![],
         }
     }
 }
@@ -105,6 +105,7 @@ impl FunDef {
             param_sigs,
             exec: self.exec.clone(),
             ret_ty: Box::new(Ty::new(TyKind::Data(self.ret_dty.clone()))),
+            nat_constrs: vec![],
         }
     }
 }
@@ -329,13 +330,14 @@ pub struct AppKernel {
     pub block_dim: Dim,
     pub shared_mem_dtys: Vec<DataTy>,
     pub shared_mem_prvs: Vec<String>,
-    pub fun: Box<Expr>,
+    pub fun_ident: Box<Ident>,
     pub gen_args: Vec<ArgKinded>,
     pub args: Vec<Expr>,
 }
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind {
+    Hole,
     Lit(Lit),
     // An l-value equivalent: *p, p.n, x
     PlaceExpr(Box<PlaceExpr>),
@@ -363,8 +365,8 @@ pub enum ExprKind {
     //Lambda(Vec<ParamDecl>, IdentExec, Box<DataTy>, Box<Expr>),
     // Function application
     // e_f(e_1, ..., e_n)
-    App(Box<Expr>, Vec<ArgKinded>, Vec<Expr>),
-    DepApp(Box<Expr>, Vec<ArgKinded>),
+    App(Box<Ident>, Vec<ArgKinded>, Vec<Expr>),
+    DepApp(Ident, Vec<ArgKinded>),
     AppKernel(Box<AppKernel>),
     // TODO branches must be blocks
     IfElse(Box<Expr>, Box<Expr>, Box<Expr>),
@@ -376,7 +378,7 @@ pub enum ExprKind {
     For(Ident, Box<Expr>, Box<Expr>),
     // for n in range(..) { e }
     // TODO body must be block
-    ForNat(Ident, Nat, Box<Expr>),
+    ForNat(Ident, Box<NatRange>, Box<Expr>),
     // while( e_1 ) { e_2 }
     // TODO body must be block
     While(Box<Expr>, Box<Expr>),
@@ -646,6 +648,7 @@ pub enum PlExprPathElem {
     FieldProj(Ident),
     Deref,
     Idx(Box<Nat>),
+    RangeSelec(Box<Nat>, Box<Nat>),
     Ident(Ident),
 }
 
@@ -994,6 +997,7 @@ pub struct FnTy {
     pub param_sigs: Vec<ParamSig>,
     pub exec: ExecExpr,
     pub ret_ty: Box<Ty>,
+    pub nat_constrs: Vec<NatConstr>,
 }
 
 impl FnTy {
@@ -1003,6 +1007,7 @@ impl FnTy {
         param_sigs: Vec<ParamSig>,
         exec: ExecExpr,
         ret_ty: Ty,
+        nat_constrs: Vec<NatConstr>,
     ) -> Self {
         FnTy {
             generics,
@@ -1010,8 +1015,18 @@ impl FnTy {
             param_sigs,
             exec,
             ret_ty: Box::new(ret_ty),
+            nat_constrs,
         }
     }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub enum NatConstr {
+    True,
+    Eq(Box<Nat>, Box<Nat>),
+    Lt(Box<Nat>, Box<Nat>),
+    And(Box<NatConstr>, Box<NatConstr>),
+    Or(Box<NatConstr>, Box<NatConstr>),
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1339,12 +1354,76 @@ impl IdentKinded {
     pub fn new(ident: &Ident, kind: Kind) -> Self {
         IdentKinded {
             ident: ident.clone(),
-            kind: kind.clone(),
+            kind,
         }
     }
 }
 
-#[derive(Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum NatRange {
+    Simple { lower: Nat, upper: Nat },
+    Halved { upper: Nat },
+    Doubled { upper: Nat },
+}
+
+impl NatRange {
+    pub fn lift(&self, nat_ctx: &NatCtx) -> Result<NatRangeIter, NatEvalError> {
+        let range_iter = match self {
+            NatRange::Simple { lower, upper } => {
+                let lower = lower.eval(nat_ctx)?;
+                let upper = upper.eval(nat_ctx)?;
+                NatRangeIter::new(lower, Box::new(|x| x + 1), Box::new(move |c| c >= upper))
+            }
+            NatRange::Halved { upper } => {
+                let upper = upper.eval(nat_ctx)?;
+                NatRangeIter::new(upper, Box::new(|x| x / 2), Box::new(|c| c == 0))
+            }
+            NatRange::Doubled { upper } => {
+                let upper = upper.eval(nat_ctx)?;
+                NatRangeIter::new(1, Box::new(|x| x * 2), Box::new(move |c| c >= upper))
+            }
+        };
+        Ok(range_iter)
+    }
+}
+
+pub struct NatRangeIter {
+    current: usize,
+    // go from current to next value
+    step_fun: Box<dyn Fn(usize) -> usize>,
+    // determine whether the current value is still within range
+    end_cond: Box<dyn Fn(usize) -> bool>,
+}
+
+impl NatRangeIter {
+    fn new(
+        start: usize,
+        step_fun: Box<dyn Fn(usize) -> usize>,
+        end_cond: Box<dyn Fn(usize) -> bool>,
+    ) -> Self {
+        NatRangeIter {
+            current: start,
+            step_fun,
+            end_cond,
+        }
+    }
+}
+
+impl Iterator for NatRangeIter {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.current = (self.step_fun)(self.current);
+
+        if !(self.end_cond)(self.current) {
+            Some(self.current)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Nat {
     Ident(Ident),
     Lit(usize),
@@ -1361,111 +1440,91 @@ pub enum Nat {
     App(Ident, Box<[Nat]>),
 }
 
-impl Nat {
-    // Very naive implementation covering only one case.
-    pub fn simplify(&self) -> Nat {
-        match self {
-            Nat::BinOp(BinOpNat::Mul, l, r) => match l.as_ref() {
-                Nat::BinOp(BinOpNat::Div, ll, lr) if lr.as_ref() == r.as_ref() => ll.simplify(),
-                _ => Nat::BinOp(
-                    BinOpNat::Mul,
-                    Box::new(l.simplify()),
-                    Box::new(r.simplify()),
-                ),
-            },
-            Nat::BinOp(BinOpNat::Add, l, r) => match (l.as_ref(), r.as_ref()) {
-                (Nat::Lit(0), r) => r.simplify(),
-                (l, Nat::Lit(0)) => l.simplify(),
-                _ => Nat::BinOp(
-                    BinOpNat::Add,
-                    Box::new(l.simplify()),
-                    Box::new(r.simplify()),
-                ),
-            },
-            Nat::BinOp(op, l, r) => {
-                Nat::BinOp(op.clone(), Box::new(l.simplify()), Box::new(r.simplify()))
-            }
-            _ => self.clone(),
+pub struct NatCtx {
+    frames: Vec<Vec<(Box<str>, usize)>>,
+}
+
+impl NatCtx {
+    pub fn new() -> Self {
+        NatCtx {
+            frames: vec![vec![]],
         }
     }
 
-    pub fn eval(&self) -> Result<usize, String> {
+    pub fn with_frame(frame: Vec<(Box<str>, usize)>) -> Self {
+        let mut ctx = NatCtx { frames: vec![] };
+        ctx.push_frame(frame);
+        ctx
+    }
+
+    pub fn append(&mut self, nat_name: &str, val: usize) {
+        self.frames
+            .last_mut()
+            .unwrap()
+            .push((Box::from(nat_name), val))
+    }
+
+    pub fn find(&self, name: &str) -> Option<usize> {
+        self.frames.iter().flatten().rev().find_map(|(i, n)| {
+            if i.as_ref() == name {
+                Some(*n)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn push_empty_frame(&mut self) -> &mut Self {
+        self.frames.push(vec![]);
+        self
+    }
+
+    fn push_frame(&mut self, frame: Vec<(Box<str>, usize)>) -> &mut Self {
+        self.frames.push(frame);
+        self
+    }
+
+    pub fn drop_frame(&mut self) -> &mut Self {
+        self.frames.pop().expect("There must always be a scope.");
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct NatEvalError {
+    unevaluable: Nat,
+}
+
+impl Nat {
+    pub fn eval(&self, nat_ctx: &NatCtx) -> Result<usize, NatEvalError> {
         match self {
-            Nat::Ident(_)
-            | Nat::GridIdx
+            Nat::GridIdx
             | Nat::BlockIdx(_)
             | Nat::BlockDim(_)
             | Nat::ThreadIdx(_)
             | Nat::WarpGrpIdx
             | Nat::WarpIdx
-            | Nat::LaneIdx => Err("Cannot evaluate.".to_string()),
+            | Nat::LaneIdx => Err(NatEvalError {
+                unevaluable: self.clone(),
+            }),
+            Nat::Ident(i) => {
+                if let Some(n) = nat_ctx.find(&i.name) {
+                    Ok(n)
+                } else {
+                    Err(NatEvalError {
+                        unevaluable: self.clone(),
+                    })
+                }
+            }
             Nat::Lit(n) => Ok(*n),
             Nat::BinOp(op, l, r) => match op {
-                BinOpNat::Add => Ok(l.eval()? + r.eval()?),
-                BinOpNat::Sub => Ok(l.eval()? - r.eval()?),
-                BinOpNat::Mul => Ok(l.eval()? * r.eval()?),
-                BinOpNat::Div => Ok(l.eval()? / r.eval()?),
-                BinOpNat::Mod => Ok(l.eval()? % r.eval()?),
+                BinOpNat::Add => Ok(l.eval(nat_ctx)? + r.eval(nat_ctx)?),
+                BinOpNat::Sub => Ok(l.eval(nat_ctx)? - r.eval(nat_ctx)?),
+                BinOpNat::Mul => Ok(l.eval(nat_ctx)? * r.eval(nat_ctx)?),
+                BinOpNat::Div => Ok(l.eval(nat_ctx)? / r.eval(nat_ctx)?),
+                BinOpNat::Mod => Ok(l.eval(nat_ctx)? % r.eval(nat_ctx)?),
             },
             Nat::App(_, _) => unimplemented!(),
-        }
-    }
-}
-
-#[test]
-fn test_simplify() {
-    let d = Nat::Ident(Ident::new("d"));
-    let i = Nat::Ident(Ident::new("i"));
-    let n = Nat::BinOp(
-        BinOpNat::Mul,
-        Box::new(Nat::BinOp(
-            BinOpNat::Div,
-            Box::new(i.clone()),
-            Box::new(d.clone()),
-        )),
-        Box::new(d),
-    );
-    let r = n.simplify();
-    if i != r {
-        panic!("{}", r)
-    }
-}
-
-impl PartialEq for Nat {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Nat::Lit(l), Nat::Lit(o)) => l == o,
-            (Nat::Ident(i), Nat::Ident(o)) if i == o => true,
-            (Nat::BinOp(op, lhs, rhs), Nat::BinOp(oop, olhs, orhs))
-                if op == oop && lhs == olhs && rhs == orhs =>
-            {
-                true
-            }
-            _ => match (self.eval(), other.eval()) {
-                (Ok(n), Ok(o)) => n == o,
-                _ => false,
-            },
-        }
-    }
-}
-
-impl PartialOrd for Nat {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Nat::Lit(l), Nat::Lit(o)) if l < o => Some(Ordering::Less),
-            (Nat::Lit(l), Nat::Lit(o)) if l == o => Some(Ordering::Equal),
-            (Nat::Lit(l), Nat::Lit(o)) if l > o => Some(Ordering::Greater),
-            (Nat::BinOp(op, lhs, rhs), Nat::BinOp(oop, olhs, orhs))
-                if op == oop && lhs == olhs && rhs == orhs =>
-            {
-                Some(Ordering::Equal)
-            }
-            _ => match (self.eval(), other.eval()) {
-                (Ok(n), Ok(o)) if n < o => Some(Ordering::Less),
-                (Ok(n), Ok(o)) if n == o => Some(Ordering::Equal),
-                (Ok(n), Ok(o)) if n > o => Some(Ordering::Greater),
-                _ => None,
-            },
         }
     }
 }
@@ -1501,8 +1560,8 @@ mod size_asserts {
     static_assert_size!(ExecPathElem, 16);
     static_assert_size!(ExecTy, 80);
     static_assert_size!(ExecTyKind, 64);
-    static_assert_size!(Expr, 128);
-    static_assert_size!(ExprKind, 104);
+    static_assert_size!(Expr, 104);
+    static_assert_size!(ExprKind, 80);
     static_assert_size!(FunDef, 192);
     static_assert_size!(Ident, 32); // maybe too large?
     static_assert_size!(IdentExec, 40);

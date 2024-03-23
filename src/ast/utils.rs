@@ -66,8 +66,8 @@ visitable_mut!(ParamSig, visit_param_sig);
 visitable_mut!(FnTy, visit_fn_ty);
 
 /*
- * gen_idents: a list of generic identifiers to be substituted (this list can be longer than args.
- *  In that case, only the first gen_args.len() many identifiers are substituted.
+ * gen_idents: a list of generic identifiers to be substituted (this list can be longer than
+ *  gen_args. In that case, only the first gen_args.len() many identifiers are substituted.
  * gen_args: the kinded expressions that are substituting the generic identifiers
  * t: the term to substitute in
  */
@@ -210,7 +210,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
     fn visit_expr(&mut self, expr: &mut Expr) {
         match &mut expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
-                self.visit_nat(collec);
+                self.visit_nat_range(collec);
                 let mut scoped_bound_idents = self.bound_idents.clone();
                 scoped_bound_idents.extend(std::iter::once(IdentKinded::new(ident, Kind::Nat)));
                 let mut subst_inner_kinded_idents =
@@ -397,7 +397,7 @@ impl Visit for FreeKindedIdents {
     fn visit_expr(&mut self, expr: &Expr) {
         match &expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
-                self.visit_nat(collec);
+                self.visit_nat_range(collec);
                 let mut scoped_bound_idents = self.bound_idents.clone();
                 scoped_bound_idents.extend(std::iter::once(IdentKinded::new(ident, Kind::Nat)));
                 let mut inner_free_idents =

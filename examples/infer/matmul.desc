@@ -25,7 +25,7 @@ fn gpu_matmul<m: nat, n: nat, k: nat, bs: nat, r: prv>(
                     let b_col = &shrd (*b_mat).to_view.grp::<k>.transp.grp::<bs>[[block]][[thread]];
                     let mut c_elem = &uniq (*c_mat).to_view.grp::<k>.grp::<bs>[[block_row]].transp.grp::<bs>[[block]].transp[[thread_row]][[thread]];
                     let mut sum = 0;
-                    for_nat i in range(0, n) {
+                    for i in range(0, n) {
                         sum = sum + (*a_row)[i] * (*b_col)[i]
                     };
                     *c_elem = sum

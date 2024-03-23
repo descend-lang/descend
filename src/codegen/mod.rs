@@ -4,7 +4,6 @@ mod printer;
 use crate::ast as desc;
 use crate::ast::visit::Visit;
 use crate::ast::visit_mut::VisitMut;
-use crate::ast::DataTyKind;
 use crate::ty_check;
 use cu_ast as cu;
 use std::collections::HashMap;
@@ -378,83 +377,76 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
         }
         ForNat(ident, range, body) => {
             let i = cu::Expr::Ident(ident.name.to_string());
-            let (init, cond, iter) = match range {
-                desc::Nat::App(r_name, input) => {
-                    let (init_decl, cond, iter) = match r_name.name.as_ref() {
-                        "range" => {
-                            let init_decl = cu::Stmt::VarDecl {
-                                name: ident.name.to_string(),
-                                ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                addr_space: None,
-                                expr: Some(cu::Expr::Nat(input[0].clone())),
-                                is_extern: false,
-                            };
-                            let cond = cu::Expr::BinOp {
-                                op: cu::BinOp::Lt,
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::Nat(input[1].clone())),
-                            };
-                            let iter = cu::Expr::Assign {
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::BinOp {
-                                    op: cu::BinOp::Add,
-                                    lhs: Box::new(i),
-                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(1))),
-                                }),
-                            };
-                            (init_decl, cond, iter)
-                        }
-                        "halved_range" => {
-                            let init_decl = cu::Stmt::VarDecl {
-                                name: ident.name.to_string(),
-                                ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                addr_space: None,
-                                expr: Some(cu::Expr::Nat(input[0].clone())),
-                                is_extern: false,
-                            };
-                            let cond = cu::Expr::BinOp {
-                                op: cu::BinOp::Gt,
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(0))),
-                            };
-                            let iter = cu::Expr::Assign {
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::BinOp {
-                                    op: cu::BinOp::Shr,
-                                    lhs: Box::new(i),
-                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(1))),
-                                }),
-                            };
-                            (init_decl, cond, iter)
-                        }
-                        "doubled_range" => {
-                            let init_decl = cu::Stmt::VarDecl {
-                                name: ident.name.to_string(),
-                                ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-                                addr_space: None,
-                                expr: Some(cu::Expr::Lit(cu::Lit::U32(1))),
-                                is_extern: false,
-                            };
-                            let cond = cu::Expr::BinOp {
-                                op: cu::BinOp::Le,
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::Nat(input[0].clone())),
-                            };
-                            let iter = cu::Expr::Assign {
-                                lhs: Box::new(i.clone()),
-                                rhs: Box::new(cu::Expr::BinOp {
-                                    op: cu::BinOp::Mul,
-                                    lhs: Box::new(i),
-                                    rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(2))),
-                                }),
-                            };
-                            (init_decl, cond, iter)
-                        }
-                        _ => unimplemented!(),
+            let (init, cond, iter) = match range.as_ref() {
+                desc::NatRange::Simple { lower, upper } => {
+                    let init_decl = cu::Stmt::VarDecl {
+                        name: ident.name.to_string(),
+                        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+                        addr_space: None,
+                        expr: Some(cu::Expr::Nat(lower.clone())),
+                        is_extern: false,
+                    };
+                    let cond = cu::Expr::BinOp {
+                        op: cu::BinOp::Lt,
+                        lhs: Box::new(i.clone()),
+                        rhs: Box::new(cu::Expr::Nat(upper.clone())),
+                    };
+                    let iter = cu::Expr::Assign {
+                        lhs: Box::new(i.clone()),
+                        rhs: Box::new(cu::Expr::BinOp {
+                            op: cu::BinOp::Add,
+                            lhs: Box::new(i),
+                            rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(1))),
+                        }),
                     };
                     (init_decl, cond, iter)
                 }
-                _ => panic!("Currently ranges are assumed to be predeclared functions."),
+                desc::NatRange::Halved { upper } => {
+                    let init_decl = cu::Stmt::VarDecl {
+                        name: ident.name.to_string(),
+                        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+                        addr_space: None,
+                        expr: Some(cu::Expr::Nat(upper.clone())),
+                        is_extern: false,
+                    };
+                    let cond = cu::Expr::BinOp {
+                        op: cu::BinOp::Gt,
+                        lhs: Box::new(i.clone()),
+                        rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(0))),
+                    };
+                    let iter = cu::Expr::Assign {
+                        lhs: Box::new(i.clone()),
+                        rhs: Box::new(cu::Expr::BinOp {
+                            op: cu::BinOp::Shr,
+                            lhs: Box::new(i),
+                            rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(1))),
+                        }),
+                    };
+                    (init_decl, cond, iter)
+                }
+                desc::NatRange::Doubled { upper } => {
+                    let init_decl = cu::Stmt::VarDecl {
+                        name: ident.name.to_string(),
+                        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+                        addr_space: None,
+                        expr: Some(cu::Expr::Lit(cu::Lit::U32(1))),
+                        is_extern: false,
+                    };
+                    let cond = cu::Expr::BinOp {
+                        op: cu::BinOp::Le,
+                        lhs: Box::new(i.clone()),
+                        rhs: Box::new(cu::Expr::Nat(upper.clone())),
+                    };
+                    let iter = cu::Expr::Assign {
+                        lhs: Box::new(i.clone()),
+                        rhs: Box::new(cu::Expr::BinOp {
+                            op: cu::BinOp::Mul,
+                            lhs: Box::new(i),
+                            rhs: Box::new(cu::Expr::Lit(cu::Lit::U32(2))),
+                        }),
+                    };
+                    (init_decl, cond, iter)
+                }
             };
 
             cu::Stmt::ForLoop {
@@ -742,65 +734,29 @@ fn gen_for_range(
 }
 
 fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
-    let exec_kernel = match &app_kernel.fun.expr {
-        desc::ExprKind::PlaceExpr(pl_expr) => {
-            if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
-                let fn_ident = codegen_ctx
-                    .comp_unit
-                    .iter()
-                    .find_map(|item| {
-                        let fi = match item {
-                            desc::Item::FunDef(fun_def) => Some(&fun_def.ident),
-                            desc::Item::FunDecl(fun_decl) => Some(&fun_decl.ident),
-                            _ => None,
-                        };
-                        if let Some(i) = fi {
-                            if ident == i {
-                                fi
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap();
-                let tmp_global_fn_call = gen_global_fn_call(
-                    fn_ident,
-                    &app_kernel.gen_args,
-                    &app_kernel.args,
-                    codegen_ctx,
-                );
-                let fun_name = convert_to_fn_name(&tmp_global_fn_call.fun);
-                let unnamed_shrd_mem_decls =
-                    unnamed_shared_mem_decls(app_kernel.shared_mem_dtys.clone());
-                let num_shrd_mem_decls = app_kernel.shared_mem_dtys.len();
-                codegen_ctx.kernel_infos.push(KernelInfo {
-                    name: fun_name.clone(),
-                    unnamed_shrd_mem_decls,
-                    num_shrd_mem_decls,
-                });
-                let shared_mem_bytes = count_bytes(&app_kernel.shared_mem_dtys);
-                cu::ExecKernel {
-                    fun_name,
-                    template_args: tmp_global_fn_call.template_args.clone(),
-                    grid_dim: Box::new(gen_dim3(&app_kernel.grid_dim)),
-                    block_dim: Box::new(gen_dim3(&app_kernel.block_dim)),
-                    shared_mem_bytes: Box::new(shared_mem_bytes),
-                    args: tmp_global_fn_call.args,
-                }
-            } else {
-                panic!("Unexpected syntactical construct with function type.")
-            }
-        }
-        // desc::ExprKind::Lambda(_, _, _, _) => {
-        //     todo!("Is it really necessary and sensible to allow kernel execution of lambdas?")
-        //     // If yes: use exec instead of cu::ExecKernel
-        //     // create_named_fn_call("descend::exec".to_string(), vec![], full_arg_list)
-        // }
-        _ => panic!("Unexpected syntactical construct with function type."),
-    };
-    cu::Stmt::ExecKernel(Box::new(exec_kernel))
+    let tmp_global_fn_call = gen_global_fn_call(
+        &app_kernel.fun_ident,
+        &app_kernel.gen_args,
+        &app_kernel.args,
+        codegen_ctx,
+    );
+    let fun_name = convert_to_fn_name(&tmp_global_fn_call.fun);
+    let unnamed_shrd_mem_decls = unnamed_shared_mem_decls(app_kernel.shared_mem_dtys.clone());
+    let num_shrd_mem_decls = app_kernel.shared_mem_dtys.len();
+    codegen_ctx.kernel_infos.push(KernelInfo {
+        name: fun_name.clone(),
+        unnamed_shrd_mem_decls,
+        num_shrd_mem_decls,
+    });
+    let shared_mem_bytes = count_bytes(&app_kernel.shared_mem_dtys);
+    cu::Stmt::ExecKernel(Box::new(cu::ExecKernel {
+        fun_name,
+        template_args: tmp_global_fn_call.template_args.clone(),
+        grid_dim: Box::new(gen_dim3(&app_kernel.grid_dim)),
+        block_dim: Box::new(gen_dim3(&app_kernel.block_dim)),
+        shared_mem_bytes: Box::new(shared_mem_bytes),
+        args: tmp_global_fn_call.args,
+    }))
 }
 
 fn convert_to_fn_name(f_expr: &cu::Expr) -> String {
@@ -1102,6 +1058,7 @@ fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
 fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
     use desc::ExprKind::*;
     match &expr.expr {
+        Hole => cu::Expr::Empty,
         Lit(l) => gen_lit(*l),
         PlaceExpr(pl_expr) => gen_pl_expr(pl_expr, &mut vec![], codegen_ctx),
         BinOp(op, lhs, rhs) => gen_bin_op_expr(op, lhs, rhs, codegen_ctx),
@@ -1155,12 +1112,12 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
             lhs: Box::new(gen_pl_expr(pl_expr, &mut vec![], codegen_ctx)),
             rhs: Box::new(gen_expr(expr, codegen_ctx)),
         },
-        App(fun, kinded_args, args) => match &fun.expr {
-            PlaceExpr(pl_expr) => match &pl_expr.pl_expr {
-                desc::PlaceExprKind::Ident(ident)
+        App(ident, kinded_args, args) => // match &fun_ident.name {
+            // PlaceExpr(pl_expr) => match &pl_expr.pl_expr {
+            //     desc::PlaceExprKind::Ident(ident)
                     if ty_check::pre_decl::fun_decls()
                         .iter()
-                        .any(|(name, _)| &ident.name.as_ref() == name) =>
+                        .any(|(name, _)| &ident.name.as_ref() == name)
                 {
                     if ident.name.as_ref() == "nat_as_u64" {
                         gen_nat_as_u64(kinded_args)
@@ -1178,20 +1135,20 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
                             gen_fn_call_args(args, codegen_ctx),
                         ))
                     }
-                }
-                desc::PlaceExprKind::Ident(ident)
-                    if codegen_ctx.comp_unit.iter().any(|item| {
-                        let fi = match item {
-                            desc::Item::FunDef(fun_def) => Some(&fun_def.ident),
-                            desc::Item::FunDecl(fun_decl) => Some(&fun_decl.ident),
-                            _ => None,
-                        };
-                        if let Some(i) = fi {
-                            ident == i
-                        } else {
-                            false
-                        }
-                    }) =>
+                } else
+                // desc::PlaceExprKind::Ident(ident)
+                //     if codegen_ctx.comp_unit.iter().any(|item| {
+                //         let fi = match item {
+                //             desc::Item::FunDef(fun_def) => Some(&fun_def.ident),
+                //             desc::Item::FunDecl(fun_decl) => Some(&fun_decl.ident),
+                //             _ => None,
+                //         };
+                //         if let Some(i) = fi {
+                //             ident == i
+                //         } else {
+                //             false
+                //         }
+                //     }) =>
                 {
                     cu::Expr::FnCall(gen_global_fn_call(
                         codegen_ctx
@@ -1204,7 +1161,7 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
                                     _ => None,
                                 };
                                 if let Some(i) = fi {
-                                    if ident == i {
+                                    if ident.as_ref() == i {
                                         fi
                                     } else {
                                         None
@@ -1218,11 +1175,11 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
                         args,
                         codegen_ctx,
                     ))
-                }
-                _ => panic!("Unexpected functions cannot be stored in memory."),
-            },
-            _ => gen_lambda_call(fun, args, codegen_ctx),
-        },
+                },
+                // _ => panic!("Unexpected functions cannot be stored in memory."),
+            // },
+            // _ => gen_lambda_call(fun, args, codegen_ctx),
+        //},
         DepApp(fun, kinded_args) => {
             // let ident = extract_fn_ident(fun);
             // let fun_def = codegen_ctx
@@ -1596,7 +1553,7 @@ fn flattened_elem_counts_per_dim(
     mut elem_counts: Vec<desc::Nat>,
 ) -> Vec<desc::Nat> {
     match &dty.dty {
-        DataTyKind::Array(d, n) | DataTyKind::ArrayShape(d, n) => {
+        desc::DataTyKind::Array(d, n) | desc::DataTyKind::ArrayShape(d, n) => {
             for elem_count in &mut elem_counts {
                 *elem_count = desc::Nat::BinOp(
                     desc::BinOpNat::Mul,
@@ -1783,22 +1740,31 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<desc::Nat>) -> boo
         } else {
             panic!("Cannot create `reverse` from the provided arguments.");
         }
-    } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_LEFT {
-        if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
-            if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Left) {
+    } else if view.name.name.as_ref() == ty_check::pre_decl::SELECT_RANGE {
+        if let desc::ArgKinded::Nat(lower_bound) = &view.gen_args[0] {
+            if !transform_path_with_select_range(lower_bound, path) {
                 return false;
             }
         } else {
-            panic!("Cannot create `take_left` from the provided arguments.");
+            panic!("Cannot create `select_range` from the provided arguments.")
         }
-    } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_RIGHT {
-        if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
-            if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Right) {
-                return false;
-            }
-        } else {
-            panic!("Cannot create `take_right` from the provided arguments.");
-        }
+        // TODO remove. deprecated. superseeded by select_range
+        // } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_LEFT {
+        //     if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
+        //         if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Left) {
+        //             return false;
+        //         }
+        //     } else {
+        //         panic!("Cannot create `take_left` from the provided arguments.");
+        //     }
+        // } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_RIGHT {
+        //     if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
+        //         if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Right) {
+        //             return false;
+        //         }
+        //     } else {
+        //         panic!("Cannot create `take_right` from the provided arguments.");
+        //     }
     } else if view.name.name.as_ref() == ty_check::pre_decl::MAP {
         if let Some(f) = view.args.first() {
             if !transform_path_with_map(f, path) {
@@ -1893,6 +1859,22 @@ fn transform_path_with_join(row_size: &desc::Nat, path: &mut Vec<desc::Nat>) -> 
     }
 }
 
+fn transform_path_with_select_range(lower_bound: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
+    let idx = path.pop();
+    match idx {
+        Some(i) => {
+            path.push(desc::Nat::BinOp(
+                desc::BinOpNat::Add,
+                Box::new(i),
+                Box::new(lower_bound.clone()),
+            ));
+            true
+        }
+        None => false,
+    }
+}
+
+// TODO remove. depricated. superseded by range
 fn transform_path_with_take(
     split_pos: &desc::Nat,
     path: &mut Vec<desc::Nat>,

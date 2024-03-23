@@ -3,14 +3,16 @@ use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
-use crate::ty_check::{exec, ExprTyCtx};
+use crate::ty_check::exec::normalize;
+use crate::ty_check::{exec, pre_decl, ExprTyCtx};
 use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
 
 pub(super) struct BorrowCheckCtx<'ctxt> {
     // TODO refactor: move into ctx module and remove public
-    pub gl_ctx: &'ctxt GlobalCtx,
+    pub gl_ctx: &'ctxt GlobalCtx<'ctxt>,
+    pub nat_ctx: &'ctxt NatCtx,
     pub kind_ctx: &'ctxt KindCtx,
     pub ident_exec: Option<&'ctxt IdentExec>,
     pub ty_ctx: &'ctxt TyCtx,
@@ -29,6 +31,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
     ) -> Self {
         BorrowCheckCtx::<'ctxt> {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
+            nat_ctx: &*expr_ty_ctx.nat_ctx,
             kind_ctx: &*expr_ty_ctx.kind_ctx,
             ident_exec: expr_ty_ctx.ident_exec,
             ty_ctx: &*expr_ty_ctx.ty_ctx,
@@ -48,6 +51,7 @@ impl<'ctxt> BorrowCheckCtx<'ctxt> {
         extended_reborrows.extend(iter);
         BorrowCheckCtx {
             gl_ctx: &*self.gl_ctx,
+            nat_ctx: &*self.nat_ctx,
             kind_ctx: &*self.kind_ctx,
             ident_exec: self.ident_exec,
             ty_ctx: &*self.ty_ctx,
@@ -218,7 +222,7 @@ fn narrowing_check(
         PlaceExprKind::Select(pl_expr, select_exec) => {
             narrowable(select_exec, active_ctx_exec)?;
             let mut outer_exec = active_ctx_exec.remove_last_distrib();
-            exec::ty_check(ctx.kind_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
+            exec::ty_check(&ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
             narrowing_check(ctx, pl_expr, &outer_exec)
         }
         PlaceExprKind::View(pl_expr, _)
@@ -230,8 +234,8 @@ fn narrowing_check(
 }
 
 fn narrowable(from: &ExecExpr, to: &ExecExpr) -> OwnResult<()> {
-    let normal_from = exec::normalize(from.clone());
-    let normal_to = exec::normalize(to.clone());
+    let normal_from = normalize(from.clone());
+    let normal_to = normalize(to.clone());
     exec_is_prefix_of(&normal_from, &normal_to)?;
     no_forall_in_diff(&normal_from, &normal_to)
 }
@@ -351,7 +355,38 @@ fn conflicting_path(pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> bool 
     for lr in pathl.iter().zip(pathr) {
         match lr {
             (PlExprPathElem::Idx(_), _) => return true,
-            (v @ PlExprPathElem::View(_), path_elem) if v != path_elem => return true,
+            (v @ PlExprPathElem::View(iv), path_elem)
+                if v != path_elem && iv.name.name.as_ref() != pre_decl::SELECT_RANGE =>
+            {
+                return true
+            }
+            (PlExprPathElem::View(ivl), PlExprPathElem::View(ivr))
+                if ivl != ivr
+                    && ivl.name.name.as_ref() == pre_decl::SELECT_RANGE
+                    && ivr.name.name.as_ref() == pre_decl::SELECT_RANGE =>
+            {
+                match (
+                    &ivr.gen_args[0],
+                    &ivl.gen_args[1],
+                    &ivl.gen_args[0],
+                    &ivr.gen_args[1],
+                ) {
+                    (
+                        ArgKinded::Nat(lower_left),
+                        ArgKinded::Nat(upper_left),
+                        ArgKinded::Nat(lower_right),
+                        ArgKinded::Nat(upper_right),
+                    ) => {
+                        // intersecting ranges
+                        // TAKE CARE: the comparisons are partial and return false in case the
+                        //  the values are not comparable
+                        // return !((lower_left < lower_right && upper_left <= lower_right)
+                        //     || (lower_left >= upper_right && upper_left > upper_right));
+                        return false;
+                    }
+                    _ => panic!("expected nats"),
+                }
+            }
             (PlExprPathElem::Proj(i), PlExprPathElem::Proj(j)) if i != j => return false,
             (path_eleml, path_elemr) if path_eleml == path_elemr => {}
             _ => panic!("unexpected"),

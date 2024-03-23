@@ -4,6 +4,7 @@ use crate::ast::*;
 pub trait Visit: Sized {
     fn visit_binary_op_nat(&mut self, _op: &BinOpNat) {}
     fn visit_nat(&mut self, n: &Nat) { walk_nat(self, n) }
+    fn visit_nat_range(&mut self, nr: &NatRange) { walk_nat_range(self, nr) }
     fn visit_ident_kinded(&mut self, id_kind: &IdentKinded) { walk_ident_kinded(self, id_kind) }
     fn visit_ident_exec(&mut self, ident_exec: &IdentExec) { walk_ident_exec(self, ident_exec) }
     fn visit_prv_rel(&mut self, prv_rel: &PrvRel) { walk_prv_rel(self, prv_rel) }
@@ -20,6 +21,7 @@ pub trait Visit: Sized {
     fn visit_ref(&mut self, reff: &RefDty) { walk_ref(self, reff) }
     fn visit_dty(&mut self, dty: &DataTy) { walk_dty(self, dty) }
     fn visit_fn_ty(&mut self, fn_ty: &FnTy) { walk_fn_ty(self, fn_ty) }
+    fn visit_nat_constr(&mut self, nat_constr: &NatConstr) { walk_nat_constr(self, nat_constr) }
     fn visit_ty(&mut self, ty: &Ty) { walk_ty(self, ty) }
     fn visit_view(&mut self, view: &View) { walk_view(self, view) }
     fn visit_pl_expr(&mut self, pl_expr: &PlaceExpr) { walk_pl_expr(self, pl_expr) }
@@ -76,6 +78,16 @@ pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
             visitor.visit_ident(func);
             walk_list!(visitor, visit_nat, args.as_ref())
         }
+    }
+}
+
+pub fn walk_nat_range<V: Visit>(visitor: &mut V, nr: &NatRange) {
+    match nr {
+        NatRange::Simple { lower, upper } => {
+            visitor.visit_nat(lower);
+            visitor.visit_nat(upper);
+        }
+        NatRange::Halved { upper } | NatRange::Doubled { upper } => visitor.visit_nat(upper),
     }
 }
 
@@ -185,6 +197,7 @@ pub fn walk_fn_ty<V: Visit>(visitor: &mut V, fn_ty: &FnTy) {
         param_sigs,
         exec,
         ret_ty,
+        nat_constrs,
     } = fn_ty;
     walk_list!(visitor, visit_ident_kinded, generics);
     for exec_decl in generic_exec {
@@ -193,6 +206,29 @@ pub fn walk_fn_ty<V: Visit>(visitor: &mut V, fn_ty: &FnTy) {
     walk_list!(visitor, visit_param_sig, param_sigs);
     visitor.visit_exec_expr(exec);
     visitor.visit_ty(ret_ty);
+    walk_list!(visitor, visit_nat_constr, nat_constrs);
+}
+
+pub fn walk_nat_constr<V: Visit>(visitor: &mut V, nat_constr: &NatConstr) {
+    match nat_constr {
+        NatConstr::True => {}
+        NatConstr::Eq(l, r) => {
+            visitor.visit_nat(l);
+            visitor.visit_nat(r);
+        }
+        NatConstr::Lt(l, r) => {
+            visitor.visit_nat(l);
+            visitor.visit_nat(r);
+        }
+        NatConstr::And(l, r) => {
+            visitor.visit_nat_constr(l);
+            visitor.visit_nat_constr(r);
+        }
+        NatConstr::Or(l, r) => {
+            visitor.visit_nat_constr(l);
+            visitor.visit_nat_constr(r);
+        }
+    }
 }
 
 pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
@@ -337,12 +373,12 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
         //     visitor.visit_expr(expr)
         // }
         ExprKind::App(f, gen_args, args) => {
-            visitor.visit_expr(f);
+            visitor.visit_ident(f);
             walk_list!(visitor, visit_arg_kinded, gen_args);
             walk_list!(visitor, visit_expr, args);
         }
         ExprKind::DepApp(f, gen_args) => {
-            visitor.visit_expr(f);
+            visitor.visit_ident(f);
             walk_list!(visitor, visit_arg_kinded, gen_args);
         }
         ExprKind::AppKernel(app_kernel) => {
@@ -376,7 +412,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(ident);
-            visitor.visit_nat(range);
+            visitor.visit_nat_range(range);
             visitor.visit_expr(body)
         }
         ExprKind::While(cond, body) => {
@@ -402,7 +438,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
             visitor.visit_expr(expr);
             visitor.visit_dty(dty)
         }
-        ExprKind::Range(_, _) => (),
+        ExprKind::Range(_, _) | ExprKind::Hole => (),
     }
 }
 
@@ -412,7 +448,7 @@ pub fn walk_app_kernel<V: Visit>(visitor: &mut V, app_kernel: &AppKernel) {
         block_dim,
         shared_mem_dtys,
         shared_mem_prvs: _,
-        fun,
+        fun_ident,
         gen_args,
         args,
     } = app_kernel;
@@ -421,7 +457,7 @@ pub fn walk_app_kernel<V: Visit>(visitor: &mut V, app_kernel: &AppKernel) {
     for dty in shared_mem_dtys {
         visitor.visit_dty(dty);
     }
-    visitor.visit_expr(fun);
+    visitor.visit_ident(fun_ident);
     for garg in gen_args {
         visitor.visit_arg_kinded(garg);
     }

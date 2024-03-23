@@ -22,3 +22,7 @@ fn gpu_vec_add<r: prv, n: nat>(
         }
     }
 }
+
+fn main() -[t: cpu.thread]-> () {
+    unsafe inplace_vector_add::<64*1024>(_, _)
+}

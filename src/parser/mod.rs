@@ -95,23 +95,23 @@ fn replace_arg_kinded_idents(fun_def: &mut FunDef) {
                     );
                     self.visit_expr(&mut block.body)
                 }
-                ExprKind::DepApp(f, gen_args) => {
-                    self.visit_expr(f);
+                ExprKind::DepApp(fun_ident, gen_args) => {
+                    self.visit_ident(fun_ident);
                     self.subst_in_gen_args(gen_args);
                 }
                 ExprKind::AppKernel(app_kernel) => {
                     let AppKernel {
-                        fun,
+                        fun_ident,
                         gen_args,
                         args,
                         ..
                     } = app_kernel.as_mut();
-                    self.visit_expr(fun);
+                    self.visit_ident(fun_ident);
                     self.subst_in_gen_args(gen_args);
                     visit_mut::walk_list!(self, visit_expr, args)
                 }
-                ExprKind::App(f, gen_args, args) => {
-                    self.visit_expr(f);
+                ExprKind::App(fun_ident, gen_args, args) => {
+                    self.visit_ident(fun_ident);
                     self.subst_in_gen_args(gen_args);
                     visit_mut::walk_list!(self, visit_expr, args)
                 }
@@ -538,10 +538,7 @@ peg::parser! {
             {
                 Expr::new(
                     ExprKind::App(
-                        Box::new(Expr::with_span(
-                            ExprKind::PlaceExpr(Box::new(PlaceExpr::new(PlaceExprKind::Ident(func)))),
-                            Span::new(begin, place_end)
-                        )),
+                        Box::new(func),
                         kind_args.unwrap_or(vec![]),
                         args
                     )
@@ -550,10 +547,7 @@ peg::parser! {
             begin:position!() func:ident() end:position!() _ kind_args:kind_args() {
                 Expr::new(
                     ExprKind::DepApp(
-                        Box::new(Expr::with_span(
-                            ExprKind::PlaceExpr(Box::new(PlaceExpr::new(PlaceExprKind::Ident(func)))),
-                            Span::new(begin, end)
-                        )),
+                        func,
                         kind_args
                 ))
             }
@@ -572,9 +566,8 @@ peg::parser! {
                     else { vec![] };
                     Expr::new(ExprKind::AppKernel(Box::new(AppKernel {
                         grid_dim, block_dim, shared_mem_dtys, shared_mem_prvs,
-                        fun: Box::new(Expr::new(ExprKind::PlaceExpr(Box::new(
-                                PlaceExpr::new(PlaceExprKind::Ident(func))))
-                            )),
+                        fun_ident:
+                                Box::new(func),
                         gen_args,
                         args,
                     })))
@@ -609,8 +602,8 @@ peg::parser! {
                     None => ExprKind::If(Box::new(cond), Box::new(iftrue))
                 })
             }
-            "for_nat" __ ident:ident() __ "in" __ range:nat() _ body:block_expr() {
-                Expr::new(ExprKind::ForNat(ident, range, Box::new(body)))
+            "for" __ ident:ident() __ "in" __ range:nat_range() _ body:block_expr() {
+                Expr::new(ExprKind::ForNat(ident, Box::new(range), Box::new(body)))
             }
             "indep" _ "(" _ dim:dim_component() _ ")" __ n:nat() __ exec:exec_expr() _ "{" _
                 branch:(branch_ident:ident() _ "=>" _
@@ -634,6 +627,7 @@ peg::parser! {
             //     Expr::new(ExprKind::Lambda(params, exec_decl, Box::new(ret_dty), Box::new(body_expr)))
             // }
             block:block_expr() { block }
+            "_" { Expr::new(ExprKind::Hole) }
             expression: expr_helper() { expression }
         }
 
@@ -703,7 +697,7 @@ peg::parser! {
                 pl_expr:@ _ "[" _ lower:nat() _ ".." _ upper:nat() "]" {
                     PlaceExpr::new(
                         PlaceExprKind::View(Box::new(pl_expr),
-                            Box::new(View { name: Ident::new("select"),
+                            Box::new(View { name: Ident::new("select_range"),
                                 gen_args: vec![ArgKinded::Nat(lower), ArgKinded::Nat(upper)], args: vec![] })))
                 }
                 pl_expr:@ _ "[" _ idx:nat() _ "]" {
@@ -769,7 +763,17 @@ peg::parser! {
                     }
             }
 
-        /// Parse nat token
+        pub(crate) rule nat_range() -> NatRange =
+            lower:nat() _ ".." _ upper:nat() {
+                NatRange::Simple { lower, upper }
+            }
+        /   "halved_range" _ "(" _ upper:nat() _ ")" {
+                NatRange::Halved { upper }
+            }
+        /   "doubled_range" _ "(" _ upper:nat() _ ")" {
+                NatRange::Doubled { upper }
+            }
+
         pub(crate) rule nat() -> Nat = precedence! {
             func:ident() _
                 "(" _ args:nat() ** (_ "," _) _ ")" end:position!()
@@ -787,7 +791,6 @@ peg::parser! {
             name:ident() { Nat::Ident(name) }
             "(" _ n:nat() _ ")" { n }
         }
-            // TODO: binary operations are currently disabled
 
         rule nat_literal() -> usize
             = s:$("0" / (['1'..='9']['0'..='9']*)) { ?
@@ -966,7 +969,7 @@ peg::parser! {
         rule keyword() -> ()
             = (("crate" / "super" / "self" / "Self" / "const" / "mut" / "uniq" / "shrd" / "indep" / "in" / "to_thread_grp" / "to_warps" / "to" / "with"
                 / "f32" / "f64" / "i32" / "u8" / "u32" / "u64" / "bool" / "AtomicU32" / "Gpu" / "nat" / "mem" / "ty" / "prv" / "own"
-                / "let"("prov")? / "if" / "else" / "sched" / "for_nat" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
+                / "let"("prov")? / "if" / "else" / "sched" / "for" / "while" / "fn" / "with" / "split_exec" / "split"
                 / "cpu.mem" / "gpu.global" / "gpu.shared" / "sync" / "struct"/ "unsafe"
                 / "cpu.thread" / "gpu.grid" / "gpu.block" / "gpu.global_threads" / "gpu.block_grp" / "gpu.thread_grp" / "gpu.thread" / "any"
                 / view_name())
@@ -2231,7 +2234,7 @@ mod tests {
     fn global_fun_def_all_function_kinds() {
         // all currently available kinds are tested
         let src = r#"fn test_kinds<n: nat, a: prv, d: dty, m: mem>(
-            ex ha_array: &a uniq cpu.mem [i32; n]
+            [ex] ha_array: &a uniq cpu.mem [i32; n]
         ) -[ex: cpu.thread]-> () <>{
             42
         }"#;

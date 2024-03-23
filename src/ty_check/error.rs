@@ -1,7 +1,7 @@
 use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
-use crate::ast::{BaseExec, DataTy, Expr, Ident, Ownership, PlaceExpr, TyKind};
+use crate::ast::{BaseExec, DataTy, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -54,11 +54,14 @@ pub enum TyError {
     // The thread hierarchy dimension referred to does not exist
     IllegalDimension,
     UnifyError(UnifyError),
+    MissingMain,
+    NatEvalError(NatEvalError),
+    UnsafeRequired,
     // TODO remove as soon as possible
     String(String),
 }
 
-impl<'a> std::iter::FromIterator<TyError> for TyError {
+impl<'a> FromIterator<TyError> for TyError {
     fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
         TyError::MultiError(iter.into_iter().collect())
     }
@@ -236,6 +239,12 @@ impl From<SubTyError> for TyError {
 impl From<UnifyError> for TyError {
     fn from(err: UnifyError) -> Self {
         TyError::UnifyError(err)
+    }
+}
+
+impl From<NatEvalError> for TyError {
+    fn from(err: NatEvalError) -> Self {
+        TyError::NatEvalError(err)
     }
 }
 

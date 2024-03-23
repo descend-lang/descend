@@ -24,7 +24,7 @@ fn jacobiSVD<r: prv>(
             active_x => {
                 sched(X) active_thread in active_x {
                     let mut acc1: f32 = 0.0f32;
-                    for_nat i in range(0, 9) {
+                    for i in 0..9 {
                         let val = (*s_Sbr)[[active_thread]][i];
                         acc1 = acc1 + (val * val);
                         let mut mat_elem: f32;
@@ -43,9 +43,9 @@ fn jacobiSVD<r: prv>(
 
         sync(block);
 
-        for_nat it in range(0, 30) {
-            for_nat i in range(0, 8) {
-                for_nat j in range(i+1, 9) {
+        for it in 0..30 {
+            for i in 0..8 {
+                for j in (i+1)..9 {
                     // FIXME requires check that indices are not equal for safe code
                     let Si = unsafe &uniq (*s_Sbr)[i];
                     let Sj = unsafe &uniq (*s_Sbr)[j];
@@ -54,7 +54,7 @@ fn jacobiSVD<r: prv>(
                     let Vj = unsafe &uniq (*s_Vbr)[j];
 
                     let mut p = 0.0f32;
-                    for_nat k in range(0, 9) {
+                    for k in 0..9 {
                         p = p + (*Si)[k] * (*Sj)[k]
                     };
                     let di = (*s_dbr)[i];
@@ -104,7 +104,7 @@ fn jacobiSVD<r: prv>(
                     if cond {
                         let mut a = 0.0f32;
                         let mut b = 0.0f32;
-                        for_nat k in range(0, 9) {
+                        for k in 0..9 {
                             a = a + (*s_acc1br)[k];
                             b = b + (*s_acc2br)[k]
                         };
