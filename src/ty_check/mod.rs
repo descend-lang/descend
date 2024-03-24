@@ -55,33 +55,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
         TyError::MissingMain.emit(compil_unit.source);
         Err(ErrorReported)
     }
-    // ty_check_compil_unit(&gl_ctx, compil_unit).map_err(|err| {
-    //     err.emit(compil_unit.source);
-    //     ErrorReported
-    // })
 }
-
-// fn ty_check_compil_unit(gl_ctx: &GlobalCtx, compil_unit: &mut CompilUnit) -> TyResult<()> {
-//     let errs =
-//         compil_unit
-//             .items
-//             .iter_mut()
-//             .fold(Vec::<TyError>::new(), |mut errors, fun| match fun {
-//                 Item::FunDef(fun) => match ty_check_global_fun_def(gl_ctx, fun) {
-//                     Ok(()) => errors,
-//                     Err(err) => {
-//                         errors.push(err);
-//                         errors
-//                     }
-//                 },
-//                 _ => errors,
-//             });
-//     if errs.is_empty() {
-//         Ok(())
-//     } else {
-//         Err(errs.into_iter().collect::<TyError>())
-//     }
-// }
 
 struct ExprTyCtx<'gl, 'ctxt> {
     gl_ctx: &'ctxt mut GlobalCtx<'gl>,
