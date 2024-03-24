@@ -11,8 +11,8 @@ use crate::ty_check::unify;
 use crate::ty_check::unify::ConstrainMap;
 use crate::ty_check::{exec, ExprTyCtx};
 
-pub(super) struct PlExprTyCtx<'ctxt> {
-    gl_ctx: &'ctxt GlobalCtx<'ctxt>,
+pub(super) struct PlExprTyCtx<'gl, 'src, 'ctxt> {
+    gl_ctx: &'ctxt GlobalCtx<'gl, 'src>,
     nat_ctx: &'ctxt NatCtx,
     kind_ctx: &'ctxt KindCtx,
     ident_exec: Option<&'ctxt IdentExec>,
@@ -22,8 +22,8 @@ pub(super) struct PlExprTyCtx<'ctxt> {
     own: Ownership,
 }
 
-impl<'ctxt> PlExprTyCtx<'ctxt> {
-    pub(super) fn new(expr_ty_ctx: &'ctxt ExprTyCtx, own: Ownership) -> Self {
+impl<'gl, 'src, 'ctxt> PlExprTyCtx<'gl, 'src, 'ctxt> {
+    pub(super) fn new(expr_ty_ctx: &'ctxt ExprTyCtx<'gl, 'src, 'ctxt>, own: Ownership) -> Self {
         PlExprTyCtx {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             nat_ctx: &*expr_ty_ctx.nat_ctx,
@@ -37,9 +37,11 @@ impl<'ctxt> PlExprTyCtx<'ctxt> {
     }
 }
 
-impl<'ctxt> From<&'ctxt BorrowCheckCtx<'ctxt>> for PlExprTyCtx<'ctxt> {
-    fn from(ctx: &'ctxt BorrowCheckCtx<'ctxt>) -> Self {
-        PlExprTyCtx::<'ctxt> {
+impl<'gl, 'src, 'ctxt> From<&'ctxt BorrowCheckCtx<'gl, 'src, 'ctxt>>
+    for PlExprTyCtx<'gl, 'src, 'ctxt>
+{
+    fn from(ctx: &'ctxt BorrowCheckCtx<'gl, 'src, 'ctxt>) -> Self {
+        PlExprTyCtx {
             gl_ctx: ctx.gl_ctx,
             nat_ctx: ctx.nat_ctx,
             kind_ctx: ctx.kind_ctx,
@@ -136,7 +138,7 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
         .iter_mut()
         .map(|v| Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))))
         .collect::<TyResult<Vec<_>>>()?;
-    let view_fn_ty = ctx.gl_ctx.pre_decl_fn_ty_by_ident(&view.name)?;
+    let view_fn_ty = ctx.gl_ctx.decl_fn_ty_by_ident(&view.name)?;
     let partially_applied_view_fn_ty = super::apply_gen_args_to_fn_ty_checked(
         ctx.kind_ctx,
         &ctx.exec,

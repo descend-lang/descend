@@ -45,8 +45,7 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
             .collect(),
     );
     let mut nat_ctx = NatCtx::new();
-    if let Some(main_fun) = gl_ctx.find_fun("main") {
-        let mut main_fun = main_fun.clone();
+    if let Some(mut main_fun) = gl_ctx.find_fun_def("main") {
         ty_check_global_fun_def(&mut gl_ctx, &mut nat_ctx, &mut main_fun).map_err(|err| {
             err.emit(compil_unit.source);
             ErrorReported
@@ -57,8 +56,8 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
     }
 }
 
-struct ExprTyCtx<'gl, 'ctxt> {
-    gl_ctx: &'ctxt mut GlobalCtx<'gl>,
+struct ExprTyCtx<'src, 'compil, 'ctxt> {
+    gl_ctx: &'ctxt mut GlobalCtx<'src, 'compil>,
     nat_ctx: &'ctxt mut NatCtx,
     ident_exec: Option<&'ctxt IdentExec>,
     kind_ctx: &'ctxt mut KindCtx,
@@ -287,41 +286,6 @@ fn syncable_exec_ty(exec_ty: &ExecTy) -> bool {
         | ExecTyKind::Any => false,
     }
 }
-
-// fn ty_check_range(ctx: &mut ExprTyCtx, l: &mut Expr, u: &mut Expr) -> TyResult<Ty> {
-//     // FIXME this is wrong and should check that the current exec is legal
-//     if &ctx.ident_exec.ty.ty != &ExecTyKind::CpuThread
-//         && &ctx.ident_exec.ty.ty != &ExecTyKind::GpuThread
-//     {
-//         return Err(TyError::IllegalExec);
-//     }
-//
-//     ty_check_expr(ctx, l)?;
-//     ty_check_expr(ctx, u)?;
-//     if !matches_dty!(
-//         l.ty.as_ref().unwrap(),
-//         DataTy {
-//             dty: DataTyKind::Scalar(ScalarTy::I32),
-//             ..
-//         }
-//     ) {
-//         panic!("expected i32 for l in range")
-//     }
-//
-//     if !matches_dty!(
-//         &u.ty.as_ref().unwrap(),
-//         DataTy {
-//             dty: DataTyKind::Scalar(ScalarTy::I32),
-//             ..
-//         }
-//     ) {
-//         panic!("expected i32 for u in range")
-//     }
-//
-//     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
-//         DataTyKind::Range,
-//     )))))
-// }
 
 fn infer_and_append_prv(ty_ctx: &mut TyCtx, prv_name: &Option<String>) -> String {
     if let Some(prv) = prv_name.as_ref() {
@@ -711,119 +675,6 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
 }
-
-// fn ty_check_lambda(
-//     ctx: &mut ExprTyCtx,
-//     params: &mut [ParamDecl],
-//     lambda_ident_exec: &IdentExec,
-//     ret_dty: &DataTy,
-//     body: &mut Expr,
-// ) -> TyResult<Ty> {
-//     // Build frame typing for this function
-//     let mut fun_frame = Frame::new();
-//     fun_frame.append_idents_typed(
-//         params
-//             .iter()
-//             .map(
-//                 |ParamDecl {
-//                      ident,
-//                      ty,
-//                      mutbl,
-//                      exec_expr,
-//                  }| IdentTyped {
-//                     ident: ident.clone(),
-//                     ty: match ty {
-//                         Some(tty) => tty.clone(),
-//                         None => Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
-//                             "param_ty",
-//                             DataTyKind::Ident,
-//                         ))))),
-//                     },
-//                     mutbl: *mutbl,
-//                     exec: exec_expr.as_ref().unwrap().clone(),
-//                 },
-//             )
-//             .collect(),
-//     );
-//     // Copy porvenance mappings into scope and append scope frame.
-//     // FIXME check that no variables are captured.
-//     // let compare_ctx = ctx.ty_ctx.clone();
-//     ctx.ty_ctx.push_frame(fun_frame);
-//     let mut body_exec = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
-//         lambda_ident_exec.ident.clone(),
-//     )));
-//     exec::ty_check(
-//         &ctx.kind_ctx,
-//         &ctx.ty_ctx,
-//         lambda_ident_exec,
-//         &mut body_exec,
-//     )?;
-//     ctx.ty_ctx
-//         .append_exec_mapping(lambda_ident_exec.ident.clone(), body_exec.clone());
-//     let mut access_ctx = ExprTyCtx {
-//         gl_ctx: ctx.gl_ctx,
-//         ident_exec: ctx.ident_exec,
-//         kind_ctx: ctx.kind_ctx,
-//         exec: body_exec,
-//         ty_ctx: &mut *ctx.ty_ctx,
-//         access_ctx: &mut AccessCtx::new(),
-//     };
-//     ty_check_expr(&mut access_ctx, body)?;
-//     ctx.ty_ctx.pop_frame();
-//     // FIXME reintroduce after introducing temporary typing context
-//     // let no_move_ty_ctx = capture_ty_ctx.clone().drop_last_frame();
-//     // if no_move_ty_ctx != ty_ctx {
-//     //     // self.ty_check_expr(
-//     //     //     kind_ctx,
-//     //     //     no_move_ty_ctx,
-//     //     //     lambda_ident_exec,
-//     //     //     &body_exec,
-//     //     //     body,
-//     //     // )?;
-//     //     panic!(
-//     //         "{:?}\n\n\n{:?}\n\n\n{:?}",
-//     //         ty_ctx, capture_ty_ctx, no_move_ty_ctx
-//     //     );
-//     //     return Err(TyError::String(
-//     //         "Cannot move values into Lambda.".to_string(),
-//     //     ));
-//     // }
-//
-//     // t <= t_f
-//     let mut empty_ty_ctx = TyCtx::new();
-//     subty::check(
-//         ctx.kind_ctx,
-//         &mut empty_ty_ctx,
-//         body.ty.as_ref().unwrap().dty(),
-//         ret_dty,
-//     )?;
-//
-//     assert!(
-//         empty_ty_ctx.is_empty(),
-//         "Expected typing context to be empty. But TyCtx:\n {:?}",
-//         empty_ty_ctx
-//     );
-//
-//     let fun_ty = Ty::new(TyKind::FnTy(Box::new(FnTy::new(
-//         vec![],
-//         Some(lambda_ident_exec.clone()),
-//         params
-//             .iter()
-//             .map(|decl| {
-//                 ParamSig::new(
-//                     decl.exec_expr.as_ref().unwrap().clone(),
-//                     decl.ty.as_ref().unwrap().clone(),
-//                 )
-//             })
-//             .collect(),
-//         ExecExpr::new(ExecExprKind::new(BaseExec::Ident(
-//             lambda_ident_exec.ident.clone(),
-//         ))),
-//         Ty::new(TyKind::Data(Box::new(ret_dty.clone()))),
-//     ))));
-//
-//     Ok(fun_ty)
-// }
 
 fn ty_check_block(ctx: &mut ExprTyCtx, block: &mut Block) -> TyResult<Ty> {
     ctx.ty_ctx.push_empty_frame();
@@ -1223,7 +1074,7 @@ fn ty_check_app(
         infer_kinded_args::infer_kinded_args(&partially_applied_dep_fn_ty, &mono_fn_ty);
     gen_args.append(&mut inferred_gen_args);
 
-    if let Some(fn_def) = ctx.gl_ctx.find_fun(&fn_ident.name) {
+    if let Some(fn_def) = ctx.gl_ctx.find_fun_def(&fn_ident.name) {
         // Recursively check function definition with instantiated natural numbers
         let mut nat_names = vec![];
         let mut nat_vals = vec![];
@@ -1239,7 +1090,7 @@ fn ty_check_app(
             let mut fn_def_clone = fn_def.clone();
             ty_check_global_fun_def(ctx.gl_ctx, &mut called_nat_ctx, &mut fn_def_clone)?;
             ctx.gl_ctx
-                .add_checked_fun(&*fn_def, nat_vals.into_boxed_slice())
+                .add_checked_fun(fn_def.ident.name.as_ref(), nat_vals.into_boxed_slice())
         }
     }
 
@@ -1274,7 +1125,7 @@ fn ty_check_dep_app(
     gen_args: &[ArgKinded],
 ) -> TyResult<FnTy> {
     //ty_check_expr(ctx, ef)?;
-    let fn_ty = ctx.gl_ctx.fn_ty_by_ident(fn_ident)?;
+    let fn_ty = ctx.gl_ctx.decl_fn_ty_by_ident(fn_ident)?;
     apply_gen_args_to_fn_ty_checked(ctx.kind_ctx, &ctx.exec, &fn_ty, gen_args)
     // } else {
     //     Err(TyError::String(format!(
@@ -1493,7 +1344,10 @@ fn exec_distrib_over_blocks(exec_expr: &ExecExpr) -> ExecExpr {
     ExecExpr::new(distrib_over_blocks)
 }
 
-fn ty_check_tuple(ctx: &mut ExprTyCtx, elems: &mut [Expr]) -> TyResult<Ty> {
+fn ty_check_tuple<'src, 'compil, 'ctxt>(
+    ctx: &mut ExprTyCtx<'src, 'compil, 'ctxt>,
+    elems: &mut [Expr],
+) -> TyResult<Ty> {
     for elem in elems.iter_mut() {
         ty_check_expr(ctx, elem)?;
     }
@@ -1511,7 +1365,11 @@ fn ty_check_tuple(ctx: &mut ExprTyCtx, elems: &mut [Expr]) -> TyResult<Ty> {
     )))))
 }
 
-fn ty_check_proj(ctx: &mut ExprTyCtx, e: &mut Expr, i: usize) -> TyResult<Ty> {
+fn ty_check_proj<'src, 'compil, 'ctxt>(
+    ctx: &mut ExprTyCtx<'src, 'compil, 'ctxt>,
+    e: &mut Expr,
+    i: usize,
+) -> TyResult<Ty> {
     if let ExprKind::PlaceExpr(_) = e.expr {
         panic!("Place expression should have been typechecked by a different rule.")
     }
@@ -1525,7 +1383,10 @@ fn ty_check_proj(ctx: &mut ExprTyCtx, e: &mut Expr, i: usize) -> TyResult<Ty> {
     Ok(Ty::new(TyKind::Data(Box::new(elem_ty?))))
 }
 
-fn ty_check_array(ctx: &mut ExprTyCtx, elems: &mut Vec<Expr>) -> TyResult<Ty> {
+fn ty_check_array<'src, 'compil, 'ctxt>(
+    ctx: &mut ExprTyCtx<'src, 'compil, 'ctxt>,
+    elems: &mut Vec<Expr>,
+) -> TyResult<Ty> {
     assert!(!elems.is_empty());
     for elem in elems.iter_mut() {
         ty_check_expr(ctx, elem)?;

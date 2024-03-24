@@ -624,16 +624,30 @@ pub(super) enum GlobalDecl {
     StructDecl(Box<StructDecl>),
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct GlobalCtx<'a> {
-    compil_unit: &'a CompilUnit<'a>,
-    checked_funs: Vec<(&'a FunDef, Box<[usize]>)>,
+#[derive(Debug)]
+pub(super) struct GlobalCtx<'src, 'ctxt> {
+    compil_unit: &'ctxt mut CompilUnit<'src>,
+    checked_funs: Vec<(Box<str>, Box<[usize]>)>,
     decls: Vec<GlobalDecl>,
     //items: HashMap<Box<str>, GlobalItem>,
 }
 
-impl<'a> GlobalCtx<'a> {
-    pub fn new(compil_unit: &'a CompilUnit, decls: Vec<GlobalDecl>) -> Self {
+impl<'src, 'ctxt> GlobalCtx<'src, 'ctxt> {
+    pub fn new(compil_unit: &'ctxt mut CompilUnit<'src>, mut decls: Vec<GlobalDecl>) -> Self {
+        let mut compil_unit_decls = compil_unit
+            .items
+            .iter()
+            .map(|item| match item {
+                Item::FunDef(fun_def) => {
+                    GlobalDecl::FnDecl(fun_def.ident.name.clone(), Box::new(fun_def.fn_ty()))
+                }
+                Item::FunDecl(fun_decl) => {
+                    GlobalDecl::FnDecl(fun_decl.ident.name.clone(), Box::new(fun_decl.fn_ty()))
+                }
+                Item::StructDecl(struct_decl) => GlobalDecl::StructDecl(struct_decl.clone()),
+            })
+            .collect();
+        decls.append(&mut compil_unit_decls);
         GlobalCtx {
             compil_unit,
             checked_funs: vec![],
@@ -642,27 +656,32 @@ impl<'a> GlobalCtx<'a> {
     }
 
     pub fn has_been_checked(&self, name: &str, nat_args: &[usize]) -> bool {
-        self.checked_funs.iter().any(|(fun_def, nargs)| {
-            fun_def.ident.name.as_ref() == name && nargs.as_ref() == nat_args
-        })
+        self.checked_funs
+            .iter()
+            .any(|(fun_name, nargs)| fun_name.as_ref() == name && nargs.as_ref() == nat_args)
     }
 
-    pub fn add_checked_fun(&mut self, fun_def: &'a FunDef, nat_vals: Box<[usize]>) {
-        self.checked_funs.push((fun_def, nat_vals))
+    pub fn add_checked_fun(&mut self, fun_name: &str, nat_vals: Box<[usize]>) {
+        self.checked_funs.push((Box::from(fun_name), nat_vals))
     }
 
-    pub fn find_fun(&self, name: &str) -> Option<&'a FunDef> {
-        self.compil_unit.items.iter().find_map(|item| {
+    pub fn find_fun_def(&mut self, name: &str) -> Option<Box<FunDef>> {
+        let index = self.compil_unit.items.iter().position(|item| {
             if let Item::FunDef(fun_def) = item {
-                if fun_def.ident.name.as_ref() == name {
-                    Some(fun_def.as_ref())
-                } else {
-                    None
-                }
+                fun_def.ident.name.as_ref() == name
+            } else {
+                false
+            }
+        });
+        if let Some(i) = index {
+            if let Item::FunDef(fun_def) = self.compil_unit.items.remove(i) {
+                Some(fun_def)
             } else {
                 None
             }
-        })
+        } else {
+            None
+        }
     }
     //    pub fn from_iter<'a, I>(items: I) -> Self
     //    where
@@ -698,7 +717,7 @@ impl<'a> GlobalCtx<'a> {
     //        }))
     //    }
 
-    pub fn pre_decl_fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
+    pub fn decl_fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
         if let Some(fn_ty) = self.decls.iter().find_map(|decl| match decl {
             GlobalDecl::FnDecl(name, fn_ty) if name == &ident.name => Some(fn_ty),
             GlobalDecl::FnDecl(_, _) | GlobalDecl::StructDecl(_) => None,
@@ -709,15 +728,15 @@ impl<'a> GlobalCtx<'a> {
         }
     }
 
-    pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<FnTy> {
-        if let Some(fn_def) = self.find_fun(&ident.name) {
-            Ok(fn_def.fn_ty())
-        } else if let Ok(fn_ty) = self.pre_decl_fn_ty_by_ident(ident) {
-            Ok(fn_ty.clone())
-        } else {
-            return Err(CtxError::IdentNotFound(ident.clone()));
-        }
-    }
+    // pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<FnTy> {
+    //     if let Some(fn_def) = self.find_fun_def(&ident.name) {
+    //         Ok(fn_def.fn_ty())
+    //     } else if let Ok(fn_ty) = self.decl_fn_ty_by_ident(ident) {
+    //         Ok(fn_ty.clone())
+    //     } else {
+    //         return Err(CtxError::IdentNotFound(ident.clone()));
+    //     }
+    // }
 }
 
 #[test]

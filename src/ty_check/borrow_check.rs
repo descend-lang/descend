@@ -9,9 +9,9 @@ use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
 
-pub(super) struct BorrowCheckCtx<'ctxt> {
+pub(super) struct BorrowCheckCtx<'gl, 'src, 'ctxt> {
     // TODO refactor: move into ctx module and remove public
-    pub gl_ctx: &'ctxt GlobalCtx<'ctxt>,
+    pub gl_ctx: &'ctxt GlobalCtx<'gl, 'src>,
     pub nat_ctx: &'ctxt NatCtx,
     pub kind_ctx: &'ctxt KindCtx,
     pub ident_exec: Option<&'ctxt IdentExec>,
@@ -23,13 +23,13 @@ pub(super) struct BorrowCheckCtx<'ctxt> {
     pub unsafe_flag: bool,
 }
 
-impl<'ctxt> BorrowCheckCtx<'ctxt> {
+impl<'gl, 'src, 'ctxt> BorrowCheckCtx<'gl, 'src, 'ctxt> {
     pub(super) fn new(
-        expr_ty_ctx: &'ctxt ExprTyCtx,
+        expr_ty_ctx: &'ctxt ExprTyCtx<'gl, 'src, 'ctxt>,
         reborrows: Vec<internal::Place>,
         own: Ownership,
     ) -> Self {
-        BorrowCheckCtx::<'ctxt> {
+        BorrowCheckCtx {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             nat_ctx: &*expr_ty_ctx.nat_ctx,
             kind_ctx: &*expr_ty_ctx.kind_ctx,
