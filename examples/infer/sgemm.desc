@@ -1,11 +1,8 @@
-// m = c * 1024
-// n = d * 1024
-// k = e * 8
-fn sgemm<r: prv, m: nat, n: nat, k: nat>(
-  a_transp_mat_h: &r shrd cpu.mem [[i32; m]; k],
-  b_mat_h: &r shrd cpu.mem [[i32; n]; k],
-  c_mat_h: &r shrd cpu.mem [[i32; n]; m],
-  out_mat_h: &r uniq cpu.mem [[i32; n]; m]
+fn sgemm<m: nat, n: nat, k: nat, a: prv, b: prv, c: prv, d: prv>(
+  a_transp_mat_h: &a shrd cpu.mem [[i32; m]; k],
+  b_mat_h: &b shrd cpu.mem [[i32; n]; k],
+  c_mat_h: &c shrd cpu.mem [[i32; n]; m],
+  out_mat_h: &d uniq cpu.mem [[i32; n]; m]
 ) -[t: cpu.thread]-> () {
   let mut gpu = gpu_device(0);
   let a_transp_mat = gpu_alloc_copy(&uniq gpu, &shrd *a_transp_mat_h);
@@ -19,30 +16,30 @@ fn sgemm<r: prv, m: nat, n: nat, k: nat>(
   copy_to_host(&shrd out_mat, out_mat_h)
 }
 
-fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
-  a_transp_mat: &r shrd gpu.global [[i32; m]; k],
-  b_mat: &r shrd gpu.global [[i32; n]; k],
-  c_mat: &r shrd gpu.global [[i32; n]; m],
-  out_mat: &r uniq gpu.global [[i32; n]; m],
+fn sgemm_gpu<m: nat, n: nat, k: nat, a: prv, b: prv, c: prv, d: prv>(
+  a_transp_mat: &a shrd gpu.global [[i32; m]; k],
+  b_mat: &b shrd gpu.global [[i32; n]; k],
+  c_mat: &c shrd gpu.global [[i32; n]; m],
+  out_mat: &d uniq gpu.global [[i32; n]; m],
   alpha: i32, beta: i32,
   [grid.forall(X).forall(Y)] a_tile: &r uniq gpu.shared [[i32; 32 * 2]; 8],
   [grid.forall(X).forall(Y)] b_tile: &r uniq gpu.shared [[i32; 32 * 4]; 8]
 ) -[grid: gpu.grid<XY<8, 16>, XY<32, 8>>]-> () {
   sched(Y) grid_slices_y in grid { sched(X) blocks in grid_slices_y {
     sched(Y) block_slices_y in blocks { sched(X) thread in block_slices_y {
-      for wgY in range(0, m/(64*16)) {
-        for wgX in range(0, n/(128*8)) {
+      for wgY in 0..(m/(64*16)) {
+        for wgX in 0..(n/(128*8)) {
           let mut accum: [i32; 32] = create_array::<32>(0);
           // dot product on tiles
-          for tnum in range(0, k/8) {
-            for i in range(0, 2) {
+          for tnum in 0..k/8 {
+            for i in 0..2 {
               (*a_tile).to_view[[block_slices_y]].to_view.grp::<32>.transp[[thread]][i] =
                 (*a_transp_mat).to_view.map(to_view)
                   // tile2::<8, 64>
                   .map(grp::<64>).grp::<8>.map(transp).transp
                     .grp::<16>.transp[[grid_slices_y]][wgY][tnum][[block_slices_y]].grp::<32>.transp[[thread]][i]
             };
-            for i in range(0, 4) {
+            for i in 0..4 {
               (*b_tile).to_view[[block_slices_y]].to_view.grp::<32>.transp[[thread]][i] =
                 (*b_mat).to_view.map(to_view)
                   //tile2::<8, 128>
@@ -51,19 +48,19 @@ fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
             };
             sync(blocks);
             // dot product on tile elements
-            for i in range(0, 8) {
+            for i in 0..8 {
               let mut a_tile_regs: [i32; 8] = create_array::<8>(0);
-              for j in range(0, 8) {
+              for j in 0..8 {
                 a_tile_regs[j] = (*a_tile)[i].to_view.grp::<8>[[block_slices_y]][j]
               };
 
               let mut b_tile_regs: [i32; 4] = create_array::<4>(0);
-              for j in range(0, 4) {
+              for j in 0..4 {
                 b_tile_regs[j] = (*b_tile)[i].to_view.grp::<32>.transp[[thread]][j]
               };
 
-              for j1 in range(0, 8) {
-                for j2 in range(0, 4) {
+              for j1 in 0..8 {
+                for j2 in 0..4 {
                   accum[j1 * 4 + j2] = accum[j1 * 4 + j2] + (a_tile_regs[j1] * b_tile_regs[j2])
                 }
               }
@@ -71,8 +68,8 @@ fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
             sync(blocks)
           };
           //write results
-          for i in range(0, 8) {
-            for j in range(0, 4) {
+          for i in 0..8 {
+            for j in 0..4 {
               (*out_mat).to_view.map(to_view)
                 // tile::<64, 128>
                 .grp::<64>.map(transp).map(grp::<128>).map(map(transp))
@@ -90,4 +87,12 @@ fn sgemm_gpu<r: prv, m: nat, n: nat, k: nat>(
       }
     }}
   }}
+}
+
+fn main() -[t:cpu.thread]-> () <'a, 'b, 'c, 'd>{
+  let ha_mat: &'a shrd cpu.mem [[i32; 8192]; 4096]  = unsafe _;
+  let hb_mat: &'b shrd cpu.mem [[i32; 8192]; 4096] = unsafe _;
+  let hc_mat: &'c shrd cpu.mem [[i32; 8192]; 8192] = unsafe _;
+  let hout_mat: &'d uniq cpu.mem [[i32; 8192]; 8192] = unsafe _;
+  sgemm(ha_mat, hb_mat, hc_mat, hout_mat)
 }

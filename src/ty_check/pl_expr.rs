@@ -138,7 +138,7 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
         .iter_mut()
         .map(|v| Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))))
         .collect::<TyResult<Vec<_>>>()?;
-    let view_fn_ty = ctx.gl_ctx.decl_fn_ty_by_ident(&view.name)?;
+    let view_fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?;
     let partially_applied_view_fn_ty = super::apply_gen_args_to_fn_ty_checked(
         ctx.kind_ctx,
         &ctx.exec,
@@ -151,7 +151,7 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     // substitute implicit identifiers in view, that were inferred without the input data type
     unify::substitute(&constr_map, view);
     let mut inferred_k_args =
-        super::infer_kinded_args::infer_kinded_args(&partially_applied_view_fn_ty, &mono_fn_ty);
+        super::infer_kinded_args::infer_kinded_args(&partially_applied_view_fn_ty, &mono_fn_ty)?;
     view.gen_args.append(&mut inferred_k_args);
     let res_view_ty = FnTy::new(
         vec![],

@@ -1,4 +1,4 @@
-fn reduce<gs: nat, bs: nat, a: prv, b: prv>(
+fn reduce<gs: nat, bs: nat, a: prv>(
   ha_array: &a uniq cpu.mem [i32; gs*bs]
 ) -[t: cpu.thread]-> () {
     let mut gpu: Gpu = gpu_device(0);
@@ -31,4 +31,9 @@ fn gpu_reduce<r: prv, gs: nat, bs: nat>(
             sync
         }
     }
+}
+
+fn main() -[t:cpu.thread]-> () <'a>{
+    let a_array: &'a uniq cpu.mem [i32; 64*1024] = unsafe _;
+    reduce::<64, 1024>(a_array)
 }

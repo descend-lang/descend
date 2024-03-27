@@ -1,17 +1,25 @@
 // view rev_groupes(n1) = to_view.group(n1).rev
 
 fn reverse_blocks<m: nat, n1: nat, k: nat, r: prv>(
-    vec: &r uniq gpu.global [f64; k]
+    vec: &r uniq gpu.global [f64; m*n1]
 ) -[grid: gpu.grid<X<m>, X<n1>>]-> () {
     // FIXME, if n is used instead of n1, then k is generated, probably because n is part of the
     //  type definition of group_mut
     sched block in grid {
         let block_mem = &uniq (*vec).to_view.grp::<n1>[[block]];
         sched thread in block {
-            let tmp = (*block_mem).rev::<n1>[[thread]];
+            let tmp = (*block_mem).rev[[thread]];
             // sync(block);
             let elem_ref = &uniq (*block_mem)[[thread]];
             *elem_ref = tmp
         }
     }
+}
+
+fn main -[t:cpu.thread]-> () <'a>{
+    let vec: &'a uniq gpu.global [f64; 64*256] = unsafe _;
+    let mut gpu = gpu_device(0);
+    let gvec = gpu_alloc_copy(&uniq gpu, &shrd *vec);
+    reverse_blocks::<<<X<64>, X<256>>>>(&shrd d_vec, &uniq d_vec_out);
+    copy_to_host(&shrd gvec, vec)
 }

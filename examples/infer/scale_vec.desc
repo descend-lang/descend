@@ -18,6 +18,7 @@ fn par_scale_vec<n: nat, r: prv>(
     }
 }
 
-fn main() -[t:cpu.thread]-> () {
-    unsafe scale_vec::<64*1024>(_)
+fn main() -[t:cpu.thread]-> () <'a>{
+    let vec: &'a uniq cpu.mem [f64; 64*1024] = unsafe _;
+    scale_vec::<64*1024>(vec)
 }

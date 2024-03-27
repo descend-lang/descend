@@ -590,6 +590,17 @@ impl ArgKinded {
             ArgKinded::Nat(_) => Kind::Nat,
         }
     }
+
+    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+        match (self, other) {
+            (ArgKinded::Ident(i), ArgKinded::Ident(o)) => Ok(i == o),
+            (ArgKinded::Nat(n), ArgKinded::Nat(no)) => Ok(n.eval(nat_ctx)? == no.eval(nat_ctx)?),
+            (ArgKinded::Provenance(r), ArgKinded::Provenance(ro)) => Ok(r == ro),
+            (ArgKinded::DataTy(dty), ArgKinded::DataTy(dtyo)) => dty.equal(nat_ctx, dtyo),
+            (ArgKinded::Memory(mem), ArgKinded::Memory(memo)) => Ok(mem == memo),
+            _ => Ok(false),
+        }
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -608,6 +619,31 @@ pub struct View {
     pub name: Ident,
     pub gen_args: Vec<ArgKinded>,
     pub args: Vec<View>,
+}
+
+impl View {
+    pub fn equal(&self, nat_ctx: &NatCtx, other: &View) -> NatEvalResult<bool> {
+        if self.name.name != other.name.name {
+            return Ok(false);
+        }
+        if self.gen_args.len() != other.gen_args.len() {
+            return Ok(false);
+        }
+        for (ga, go) in self.gen_args.iter().zip(&other.gen_args) {
+            if !ga.equal(nat_ctx, go)? {
+                return Ok(false);
+            }
+        }
+        if self.args.len() != other.args.len() {
+            return Ok(false);
+        }
+        for (v, vo) in self.args.iter().zip(&other.args) {
+            if !v.equal(nat_ctx, vo)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
 
 // TODO create generic View struct to enable easier extensibility by introducing only
@@ -649,7 +685,6 @@ pub enum PlExprPathElem {
     Deref,
     Idx(Box<Nat>),
     RangeSelec(Box<Nat>, Box<Nat>),
-    Ident(Ident),
 }
 
 impl PlaceExpr {
@@ -832,6 +867,51 @@ impl ExecExpr {
             self.exec.base.clone(),
             removed_distrib_path,
         ))
+    }
+
+    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+        match (&self.exec.base, &other.exec.base) {
+            (BaseExec::Ident(i), BaseExec::Ident(o)) => {
+                if i != o {
+                    return Ok(false);
+                }
+            }
+            (BaseExec::CpuThread, BaseExec::CpuThread) => (),
+            (BaseExec::GpuGrid(gdim, bdim), BaseExec::GpuGrid(gdimo, bdimo)) => {
+                if !(gdim.equal(nat_ctx, gdimo)? && bdim.equal(nat_ctx, bdimo)?) {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+        if self.exec.path.len() != other.exec.path.len() {
+            return Ok(false);
+        }
+        for path_elems in self.exec.path.iter().zip(&other.exec.path) {
+            match path_elems {
+                (ExecPathElem::ToWarps, ExecPathElem::ToWarps) => (),
+                (ExecPathElem::ForAll(d), ExecPathElem::ForAll(o)) => {
+                    if d != o {
+                        return Ok(false);
+                    }
+                }
+                (ExecPathElem::ToThreads(d), ExecPathElem::ToThreads(o)) => {
+                    if d != o {
+                        return Ok(false);
+                    }
+                }
+                (ExecPathElem::TakeRange(r), ExecPathElem::TakeRange(ro)) => {
+                    if !(r.split_dim == ro.split_dim
+                        && r.left_or_right == ro.left_or_right
+                        && r.pos.eval(nat_ctx)? == ro.pos.eval(nat_ctx)?)
+                    {
+                        return Ok(false);
+                    }
+                }
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -1117,6 +1197,22 @@ impl Dim {
     pub fn new_1d<F: Fn(Box<Dim1d>) -> Self>(constr: F, n: Nat) -> Self {
         constr(Box::new(Dim1d(n)))
     }
+
+    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+        match (self, other) {
+            (Dim::XYZ(d), Dim::XYZ(o)) => Ok(d.0.eval(nat_ctx)? == o.0.eval(nat_ctx)?
+                && d.1.eval(nat_ctx)? == o.1.eval(nat_ctx)?
+                && d.2.eval(nat_ctx)? == o.2.eval(nat_ctx)?),
+            (Dim::XY(d), Dim::XY(o)) | (Dim::XZ(d), Dim::XZ(o)) | (Dim::YZ(d), Dim::YZ(o)) => {
+                Ok(d.0.eval(nat_ctx)? == o.0.eval(nat_ctx)?
+                    && d.1.eval(nat_ctx)? == o.1.eval(nat_ctx)?)
+            }
+            (Dim::X(d), Dim::X(o)) | (Dim::Y(d), Dim::Y(o)) | (Dim::Z(d), Dim::Z(o)) => {
+                Ok(d.0.eval(nat_ctx)? == o.0.eval(nat_ctx)?)
+            }
+            _ => Ok(false),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Hash, Debug, Copy, Clone)]
@@ -1263,6 +1359,38 @@ impl DataTy {
                 .any(|(_, dty)| dty.contains_ref_to_prv(prv_val_name)),
         }
     }
+
+    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+        match (&self.dty, &other.dty) {
+            (DataTyKind::Ident(i), DataTyKind::Ident(o)) => Ok(i == o),
+            (DataTyKind::Tuple(dtys), DataTyKind::Tuple(dtyos)) => {
+                for (d, o) in dtys.iter().zip(dtyos) {
+                    if !d.equal(nat_ctx, o)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            (DataTyKind::Ref(ref_dty), DataTyKind::Ref(ref_dtyo)) => Ok(ref_dty.own
+                == ref_dtyo.own
+                && ref_dty.rgn == ref_dtyo.rgn
+                && ref_dty.mem == ref_dtyo.mem
+                && ref_dty.dty.equal(nat_ctx, &ref_dtyo.dty)?),
+            (DataTyKind::Array(dty, n), DataTyKind::Array(dtyo, no))
+            | (DataTyKind::ArrayShape(dty, n), DataTyKind::ArrayShape(dtyo, no)) => {
+                Ok(dty.equal(nat_ctx, dtyo)? && n.eval(nat_ctx)? == no.eval(nat_ctx)?)
+            }
+            (DataTyKind::At(dty, mem), DataTyKind::At(dtyo, memo)) => {
+                Ok(dty.equal(nat_ctx, dtyo)? && mem == memo)
+            }
+            (DataTyKind::Struct(struct_decl), DataTyKind::Struct(struct_declo)) => {
+                Ok(struct_decl.ident == struct_declo.ident)
+            }
+            (DataTyKind::Atomic(aty), DataTyKind::Atomic(atyo)) => Ok(aty == atyo),
+            (DataTyKind::Scalar(sty), DataTyKind::Scalar(styo)) => Ok(sty == styo),
+            _ => Ok(false),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1367,7 +1495,7 @@ pub enum NatRange {
 }
 
 impl NatRange {
-    pub fn lift(&self, nat_ctx: &NatCtx) -> Result<NatRangeIter, NatEvalError> {
+    pub fn lift(&self, nat_ctx: &NatCtx) -> NatEvalResult<NatRangeIter> {
         let range_iter = match self {
             NatRange::Simple { lower, upper } => {
                 let lower = lower.eval(nat_ctx)?;
@@ -1484,7 +1612,7 @@ impl NatCtx {
         self
     }
 
-    pub fn drop_frame(&mut self) -> &mut Self {
+    pub fn pop_frame(&mut self) -> &mut Self {
         self.frames.pop().expect("There must always be a scope.");
         self
     }
@@ -1495,8 +1623,10 @@ pub struct NatEvalError {
     unevaluable: Nat,
 }
 
+pub type NatEvalResult<T> = Result<T, NatEvalError>;
+
 impl Nat {
-    pub fn eval(&self, nat_ctx: &NatCtx) -> Result<usize, NatEvalError> {
+    pub fn eval(&self, nat_ctx: &NatCtx) -> NatEvalResult<usize> {
         match self {
             Nat::GridIdx
             | Nat::BlockIdx(_)

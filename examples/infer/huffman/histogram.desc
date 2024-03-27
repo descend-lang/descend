@@ -1,4 +1,6 @@
-fn hist<i: prv, o: prv, gs:nat, ts:nat>(
+// FIXME using an abstract provenance that was not declared does not lead to an immediate error
+//  types need well-formedness checks
+fn hist<s: prv, o: prv, gs:nat, ts:nat>(
     h_in: &s shrd cpu.mem [u8; gs*256*ts],
     h_out: &o uniq cpu.mem [u32; 256]
 ) -[t: cpu.thread]-> () {
@@ -24,8 +26,10 @@ fn gpu_hist<gs:nat, ts:nat, r1: prv, r2: prv, r3: prv>(
         sync;
         let atomic_temp = to_atomic_array(temp);
         sched thread in block {
-            for_nat i in range(0, ts) {
+            for i in 0..ts {
                 let bucket = (*buffer_grouped)[[block]][[thread]][i];
+                // TODO introduce index type idx[n] of all indices of maximum size n
+                //  allow index expressions instead of nats for indexing
                 atomic_fetch_add(&shrd (*atomic_temp)[bucket], 1u32)
             };
             sync(block); // only required for correctness (?)
@@ -35,4 +39,10 @@ fn gpu_hist<gs:nat, ts:nat, r1: prv, r2: prv, r3: prv>(
             )
         }
     }
+}
+
+fn main() -[t:cpu.thread]-> () <'a, 'b>{
+    let in_arr: &'a shrd cpu.mem [u8; 256*256*1024]  = unsafe _;
+    let h_out: &'b uniq cpu.mem [u32; 256] = unsafe _;
+    hist(in_arr, h_out)
 }

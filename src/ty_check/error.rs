@@ -56,6 +56,7 @@ pub enum TyError {
     UnifyError(UnifyError),
     MissingMain,
     NatEvalError(NatEvalError),
+    CannotInferGenericArg(Ident),
     UnsafeRequired,
     // TODO remove as soon as possible
     String(String),
@@ -187,6 +188,8 @@ impl TyError {
                         }
 
                         BorrowingError::CannotNarrow
+                        | BorrowingError::Conflict { .. }
+                        | BorrowingError::NatEvalError(_)
                         | BorrowingError::DivergingExec
                         | BorrowingError::MultipleDistribs => eprintln!("{:?}", conflict),
                         BorrowingError::TyError(ty_err) => {
@@ -241,7 +244,6 @@ impl From<UnifyError> for TyError {
         TyError::UnifyError(err)
     }
 }
-
 impl From<NatEvalError> for TyError {
     fn from(err: NatEvalError) -> Self {
         TyError::NatEvalError(err)
@@ -306,6 +308,10 @@ impl From<CtxError> for SubTyError {
 #[must_use]
 #[derive(Debug)]
 pub enum BorrowingError {
+    Conflict {
+        checked: PlaceExpr,
+        existing: PlaceExpr,
+    },
     CtxError(CtxError),
     // "Trying to use place expression with {} capability while it refers to a \
     //     loan with {} capability.",
@@ -320,6 +326,7 @@ pub enum BorrowingError {
     CannotNarrow,
     DivergingExec,
     TyError(Box<TyError>),
+    NatEvalError(NatEvalError),
 }
 
 impl From<TyError> for BorrowingError {
@@ -330,5 +337,10 @@ impl From<TyError> for BorrowingError {
 impl From<CtxError> for BorrowingError {
     fn from(err: CtxError) -> Self {
         BorrowingError::CtxError(err)
+    }
+}
+impl From<NatEvalError> for BorrowingError {
+    fn from(err: NatEvalError) -> Self {
+        BorrowingError::NatEvalError(err)
     }
 }

@@ -1,6 +1,7 @@
 use super::ctxs::TyCtx;
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
+use crate::parser::descend::nat;
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::exec::normalize;
@@ -222,7 +223,7 @@ fn narrowing_check(
         PlaceExprKind::Select(pl_expr, select_exec) => {
             narrowable(select_exec, active_ctx_exec)?;
             let mut outer_exec = active_ctx_exec.remove_last_distrib();
-            exec::ty_check(&ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
+            exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
             narrowing_check(ctx, pl_expr, &outer_exec)
         }
         PlaceExprKind::View(pl_expr, _)
@@ -259,12 +260,92 @@ fn exec_is_prefix_of(prefix: &ExecExpr, of: &ExecExpr) -> OwnResult<()> {
 }
 
 fn access_conflict_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
-    for (ex, loans) in ctx.access_ctx.iter().filter(|(exec, _)| *exec != &ctx.exec) {
-        if !no_uniq_loan_overlap(ctx.own, p, loans) {
-            return Err(BorrowingError::ConflictingAccess);
+    for loan in ctx.access_ctx.hash_set() {
+        if possible_conflict_with_previous_access(ctx.nat_ctx, ctx.own, p, loan)? {
+            return Err(BorrowingError::Conflict {
+                checked: p.clone(),
+                existing: loan.place_expr.clone(),
+            });
         }
     }
     Ok(())
+}
+
+fn possible_conflict_with_previous_access(
+    nat_ctx: &NatCtx,
+    own: Ownership,
+    p: &PlaceExpr,
+    previous: &Loan,
+) -> NatEvalResult<bool> {
+    if own == Ownership::Shrd && previous.own == Ownership::Shrd {
+        return Ok(false);
+    }
+    let (p_ident, p_path) = p.as_ident_and_path();
+    let (l_ident, l_path) = previous.place_expr.as_ident_and_path();
+    if p_ident != l_ident {
+        return Ok(false);
+    }
+    for path_elems in p_path.iter().zip(&l_path) {
+        match path_elems {
+            (PlExprPathElem::Deref, PlExprPathElem::Deref) => {}
+            (PlExprPathElem::Proj(kp), PlExprPathElem::Proj(kl)) => {
+                if kp != kl {
+                    return Ok(false);
+                }
+            }
+            (PlExprPathElem::FieldProj(pident), PlExprPathElem::FieldProj(lident)) => {
+                if pident.name != lident.name {
+                    return Ok(false);
+                }
+            }
+            (PlExprPathElem::Idx(i), PlExprPathElem::Idx(j)) => {
+                if i.eval(nat_ctx)? != j.eval(nat_ctx)? {
+                    return Ok(false);
+                }
+            }
+            (
+                PlExprPathElem::RangeSelec(plower, pupper),
+                PlExprPathElem::RangeSelec(llower, lupper),
+            ) => {
+                if range_intersects(nat_ctx, plower, pupper, llower, lupper)? {
+                    return Ok(true);
+                }
+                if !(plower.eval(nat_ctx)? == llower.eval(nat_ctx)?
+                    && pupper.eval(nat_ctx)? == lupper.eval(nat_ctx)?)
+                {
+                    return Ok(false);
+                }
+            }
+            (PlExprPathElem::View(p_view), PlExprPathElem::View(l_view))
+                if p_view.equal(nat_ctx, l_view)? => {}
+            (PlExprPathElem::Select(pexec), PlExprPathElem::Select(lexec))
+                if pexec.equal(nat_ctx, lexec)? => {}
+            _ => {
+                return Ok(true);
+            }
+        }
+    }
+    if l_path.len() > p_path.len() {
+        for elem in &l_path[p_path.len()..] {
+            if let PlExprPathElem::Select(_) = elem {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn range_intersects(
+    nat_ctx: &NatCtx,
+    lower_left: &Nat,
+    upper_left: &Nat,
+    lower_right: &Nat,
+    upper_right: &Nat,
+) -> NatEvalResult<bool> {
+    Ok((lower_left.eval(nat_ctx)? < lower_right.eval(nat_ctx)?
+        && upper_left.eval(nat_ctx)? <= lower_right.eval(nat_ctx)?)
+        || (lower_left.eval(nat_ctx)? >= upper_right.eval(nat_ctx)?
+            && upper_left.eval(nat_ctx)? > upper_right.eval(nat_ctx)?))
 }
 
 fn no_forall_in_diff(from: &ExecExpr, under: &ExecExpr) -> OwnResult<()> {
@@ -303,7 +384,7 @@ fn ownership_safe_under_existing_borrows(
     if !ctx.unsafe_flag {
         for prv_mapping in ctx.ty_ctx.prv_mappings() {
             let PrvMapping { prv, loans } = prv_mapping;
-            let no_uniq_overlap = no_uniq_loan_overlap(ctx.own, pl_expr, loans);
+            let no_uniq_overlap = no_uniq_loan_overlap(ctx.own, pl_expr, loans).is_none();
             if !no_uniq_overlap {
                 return at_least_one_borrowing_place_and_all_in_reborrow(
                     ctx.ty_ctx,
@@ -316,11 +397,18 @@ fn ownership_safe_under_existing_borrows(
     Ok(())
 }
 
-fn no_uniq_loan_overlap(own: Ownership, pl_expr: &PlaceExpr, loans: &HashSet<Loan>) -> bool {
-    loans.iter().all(|loan| {
-        !((own == Ownership::Uniq || loan.own == Ownership::Uniq)
-            && overlap(&loan.place_expr, pl_expr))
-    })
+// returns None if there is no unique loan overlap or Some with the existing overlapping loan
+fn no_uniq_loan_overlap(
+    own: Ownership,
+    pl_expr: &PlaceExpr,
+    loans: &HashSet<Loan>,
+) -> Option<Loan> {
+    for l in loans {
+        if (own == Ownership::Uniq || l.own == Ownership::Uniq) && overlap(&l.place_expr, pl_expr) {
+            return Some(l.clone());
+        }
+    }
+    None
 }
 
 fn at_least_one_borrowing_place_and_all_in_reborrow(

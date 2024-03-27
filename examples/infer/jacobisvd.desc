@@ -1,6 +1,10 @@
 // original source:
 // https://github.com/arrayfire/arrayfire/blob/master/src/backend/cuda/kernel/homography.hpp
 
+fn main() -[t:cpu.thread]-> () {
+    let
+}
+
 // threads(16, 16)
 // blocks(1, divup(??, threads.y);
 // iterations = 30; -- JacobiSVD specific iters
@@ -47,11 +51,11 @@ fn jacobiSVD<r: prv>(
             for i in 0..8 {
                 for j in (i+1)..9 {
                     // FIXME requires check that indices are not equal for safe code
-                    let Si = unsafe &uniq (*s_Sbr)[i];
-                    let Sj = unsafe &uniq (*s_Sbr)[j];
+                    let Si = &uniq (*s_Sbr)[i];
+                    let Sj = &uniq (*s_Sbr)[j];
 
-                    let Vi = unsafe &uniq (*s_Vbr)[i];
-                    let Vj = unsafe &uniq (*s_Vbr)[j];
+                    let Vi = &uniq (*s_Vbr)[i];
+                    let Vj = &uniq (*s_Vbr)[j];
 
                     let mut p = 0.0f32;
                     for k in 0..9 {
@@ -108,8 +112,8 @@ fn jacobiSVD<r: prv>(
                             a = a + (*s_acc1br)[k];
                             b = b + (*s_acc2br)[k]
                         };
-                        unsafe (*s_dbr)[i] = a;
-                        unsafe (*s_dbr)[j] = b
+                        (*s_dbr)[i] = a;
+                        (*s_dbr)[j] = b
                     };
 
                     sync(block);

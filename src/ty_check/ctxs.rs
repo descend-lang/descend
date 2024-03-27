@@ -3,61 +3,10 @@ use crate::ast::internal::{
 };
 use crate::ast::*;
 use crate::ty_check::error::CtxError;
-use std::collections::hash_map::Iter;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 // TODO introduce proper struct
 pub(super) type TypedPlace = (internal::Place, DataTy);
-
-// #[derive(PartialEq, Eq, Debug, Clone)]
-// struct ScopedCtx<T> {
-//     scopes: Vec<T>,
-// }
-//
-// impl<T> ScopedCtx<T> {
-//     fn new() -> Self {
-//         ScopedCtx { scopes: vec![] }
-//     }
-//
-//     fn push(&mut self, v: T) -> &mut Self {
-//         self.last_scope_mut().push(v);
-//         self
-//     }
-//
-//     fn push_scope(&mut self, s: Vec<T>) -> &mut Self {
-//         self.scopes.push(s);
-//         self
-//     }
-//
-//     fn push_empty_scope(&mut self) -> &mut Self {
-//         self.scopes.push(vec![]);
-//         self
-//     }
-//
-//     fn pop_scope(&mut self) -> Vec<T> {
-//         self.scopes
-//             .pop()
-//             .expect("It should never be the case that there is no scope.")
-//     }
-//
-//     pub fn is_empty(&self) -> bool {
-//         if self.scopes.len() == 1 {
-//             self.scopes
-//                 .first()
-//                 .expect("It should never be the case that there is no scope.")
-//                 .is_empty()
-//         } else {
-//             false
-//         }
-//     }
-//
-//     fn last_scope_mut(&mut self) -> &mut Vec<T> {
-//         self.scopes
-//             .iter_mut()
-//             .last()
-//             .expect("It should never be the case that there is no scope.")
-//     }
-// }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct TyCtx {
@@ -71,7 +20,7 @@ impl TyCtx {
         }
     }
 
-    pub fn get_exec_expr(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
+    pub fn get_exec_expr_for_exec_ident(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
         let exec_expr = self.flat_bindings().rev().find_map(|entry| match entry {
             FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
             _ => None,
@@ -459,60 +408,76 @@ impl TyCtx {
 }
 
 pub(super) struct AccessCtx {
-    ctx: HashMap<ExecExpr, HashSet<Loan>>,
+    ctx: HashSet<Loan>,
 }
 
 impl AccessCtx {
     pub fn new() -> Self {
         AccessCtx {
-            ctx: HashMap::new(),
+            ctx: HashSet::new(),
         }
     }
 
-    pub fn insert(&mut self, exec: &ExecExpr, loans: HashSet<Loan>) {
-        let new_loans = if let Some(old) = self.ctx.get(exec) {
-            old.union(&loans).cloned().collect()
-        } else {
-            loans
-        };
-        self.ctx.insert(exec.clone(), new_loans);
+    pub fn insert(&mut self, loans: HashSet<Loan>) {
+        self.ctx.extend(loans.into_iter())
     }
 
-    pub fn iter(&self) -> Iter<ExecExpr, HashSet<Loan>> {
-        self.ctx.iter()
+    pub fn hash_set(&self) -> &HashSet<Loan> {
+        &self.ctx
     }
 
-    pub fn clear_for(&mut self, exec: &ExecExpr) {
-        let mut outer_accesses = HashSet::new();
-        for (ex, accesses) in &self.ctx {
-            if ex.is_sub_exec_of(exec) {
-                let accs = accesses
-                    .iter()
-                    .filter_map(|acc| {
-                        get_select_for(&ex, &acc.place_expr).map(|select| Loan {
-                            own: acc.own,
-                            place_expr: select,
-                        })
-                    })
-                    .collect::<HashSet<_>>();
-                outer_accesses.extend(accs);
+    pub fn clear_sync_for(&mut self, ty_ctx: &TyCtx, exec: &ExecExpr) {
+        self.ctx = self
+            .ctx
+            .iter()
+            .filter_map(|l| {
+                trim_after_select_of(ty_ctx, exec, l.place_expr.clone()).map(|place_expr| Loan {
+                    own: l.own,
+                    place_expr,
+                })
+            })
+            .collect();
+    }
+
+    pub fn garbage_collect(&mut self, ty_ctx: &TyCtx) {
+        // TODO make more efficient
+        //  drain is unstable for HashSet, use Vec anyway?
+        let mut cleaned_up_set = HashSet::new();
+        for l in &self.ctx {
+            let ident = &l.place_expr.as_ident_and_path().0;
+            if ty_ctx.contains(ident) {
+                cleaned_up_set.insert(l.clone());
             }
         }
-        self.insert(exec, outer_accesses);
-        self.ctx.retain(|ex, _| !ex.is_sub_exec_of(exec))
+        self.ctx = cleaned_up_set;
     }
 }
 
-fn get_select_for(exec: &ExecExpr, pl_expr: &PlaceExpr) -> Option<PlaceExpr> {
-    match &pl_expr.pl_expr {
-        PlaceExprKind::Select(ipl, sel_exec) if &**sel_exec == exec => Some(ipl.as_ref().clone()),
+fn trim_after_select_of(ty_ctx: &TyCtx, exec: &ExecExpr, pl_expr: PlaceExpr) -> Option<PlaceExpr> {
+    match pl_expr.pl_expr {
+        PlaceExprKind::Select(p, sel_exec) if sel_exec.as_ref() == exec => {
+            Some(PlaceExpr::new(PlaceExprKind::Select(p, sel_exec)))
+        }
         PlaceExprKind::Select(ipl, _)
         | PlaceExprKind::View(ipl, _)
         | PlaceExprKind::Proj(ipl, _)
         | PlaceExprKind::FieldProj(ipl, _)
         | PlaceExprKind::Idx(ipl, _)
-        | PlaceExprKind::Deref(ipl) => get_select_for(exec, ipl),
-        PlaceExprKind::Ident(_) => None,
+        | PlaceExprKind::Deref(ipl) => trim_after_select_of(ty_ctx, exec, *ipl),
+        PlaceExprKind::Ident(ident) => {
+            let ident_exec = &ty_ctx
+                .ident_ty(&ident)
+                .expect("valid identifier must exist for every expression in access context")
+                .exec;
+            // FIXME: what we really want is check: ident_ty.exec is_more_specific_than exec
+            //  current assumption is: longer path => more specific (which is
+            //  Not always correct!!! (e.g. wenn different ranges of threads in a block are taken)
+            if exec.exec.path.len() < ident_exec.exec.path.len() {
+                None
+            } else {
+                Some(PlaceExpr::new(PlaceExprKind::Ident(ident)))
+            }
+        }
     }
 }
 
@@ -625,15 +590,15 @@ pub(super) enum GlobalDecl {
 }
 
 #[derive(Debug)]
-pub(super) struct GlobalCtx<'src, 'ctxt> {
-    compil_unit: &'ctxt mut CompilUnit<'src>,
+pub(super) struct GlobalCtx<'src, 'compil> {
+    compil_unit: &'compil mut CompilUnit<'src>,
     checked_funs: Vec<(Box<str>, Box<[usize]>)>,
     decls: Vec<GlobalDecl>,
     //items: HashMap<Box<str>, GlobalItem>,
 }
 
-impl<'src, 'ctxt> GlobalCtx<'src, 'ctxt> {
-    pub fn new(compil_unit: &'ctxt mut CompilUnit<'src>, mut decls: Vec<GlobalDecl>) -> Self {
+impl<'src, 'compil> GlobalCtx<'src, 'compil> {
+    pub fn new(compil_unit: &'compil mut CompilUnit<'src>, mut decls: Vec<GlobalDecl>) -> Self {
         let mut compil_unit_decls = compil_unit
             .items
             .iter()
@@ -661,11 +626,13 @@ impl<'src, 'ctxt> GlobalCtx<'src, 'ctxt> {
             .any(|(fun_name, nargs)| fun_name.as_ref() == name && nargs.as_ref() == nat_args)
     }
 
-    pub fn add_checked_fun(&mut self, fun_name: &str, nat_vals: Box<[usize]>) {
-        self.checked_funs.push((Box::from(fun_name), nat_vals))
+    pub fn push_fun_checked_under_nats(&mut self, fun_def: Box<FunDef>, nat_vals: Box<[usize]>) {
+        let fun_name = fun_def.ident.name.clone();
+        self.compil_unit.items.push(Item::FunDef(fun_def));
+        self.checked_funs.push((fun_name, nat_vals))
     }
 
-    pub fn find_fun_def(&mut self, name: &str) -> Option<Box<FunDef>> {
+    pub fn pop_fun_def(&mut self, name: &str) -> Option<Box<FunDef>> {
         let index = self.compil_unit.items.iter().position(|item| {
             if let Item::FunDef(fun_def) = item {
                 fun_def.ident.name.as_ref() == name
@@ -683,41 +650,8 @@ impl<'src, 'ctxt> GlobalCtx<'src, 'ctxt> {
             None
         }
     }
-    //    pub fn from_iter<'a, I>(items: I) -> Self
-    //    where
-    //        I: Iterator<Item = &'a Item>,
-    //    {
-    //        let mut gl_ctx = GlobalCtx {
-    //            items: HashMap::new(),
-    //        };
-    //        Self::append_fun_decls(&mut gl_ctx, &pre_decl::fun_decls());
-    //        gl_ctx.items.extend(items.map(|item| match item {
-    //            Item::StructDecl(struct_decl) => (
-    //                struct_decl.ident.name.clone(),
-    //                GlobalItem::StructDecl(struct_decl.clone()),
-    //            ),
-    //            Item::FunDef(fun_def) => (
-    //                fun_def.ident.name.clone(),
-    //                GlobalItem::FnTy(Box::new(fun_def.fn_ty())),
-    //            ),
-    //            Item::FunDecl(fun_decl) => (
-    //                fun_decl.ident.name.clone(),
-    //                GlobalItem::FnTy(Box::new(fun_decl.fn_ty())),
-    //            ),
-    //        }));
-    //        gl_ctx
-    //    }
-    //
-    //    fn append_fun_decls(gl_ctx: &mut GlobalCtx, fun_decls: &[(&str, FnTy)]) {
-    //        gl_ctx.items.extend(fun_decls.iter().map(|(name, ty)| {
-    //            (
-    //                String::from(*name).into_boxed_str(),
-    //                GlobalItem::FnTy(Box::new(ty.clone())),
-    //            )
-    //        }))
-    //    }
 
-    pub fn decl_fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
+    pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
         if let Some(fn_ty) = self.decls.iter().find_map(|decl| match decl {
             GlobalDecl::FnDecl(name, fn_ty) if name == &ident.name => Some(fn_ty),
             GlobalDecl::FnDecl(_, _) | GlobalDecl::StructDecl(_) => None,
@@ -727,16 +661,6 @@ impl<'src, 'ctxt> GlobalCtx<'src, 'ctxt> {
             Err(CtxError::IdentNotFound(ident.clone()))
         }
     }
-
-    // pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<FnTy> {
-    //     if let Some(fn_def) = self.find_fun_def(&ident.name) {
-    //         Ok(fn_def.fn_ty())
-    //     } else if let Ok(fn_ty) = self.decl_fn_ty_by_ident(ident) {
-    //         Ok(fn_ty.clone())
-    //     } else {
-    //         return Err(CtxError::IdentNotFound(ident.clone()));
-    //     }
-    // }
 }
 
 #[test]

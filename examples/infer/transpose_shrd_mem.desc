@@ -1,11 +1,9 @@
-fn transpose<width: nat, gs: nat, bsx: nat, bsy: nat, r: prv>(
+fn transpose<gs: nat, bsx: nat, bsy: nat, width: nat, r: prv>(
     h_vec: &r uniq cpu.mem [[f32; width]; width]
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
     let d_vec = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
     let mut d_vec_out = gpu_alloc_copy(&uniq gpu, &shrd *h_vec);
-    // FIXME it looks like generic nats are not inferred if they only appear in the execution resource level
-    // FIXME the parser subsitutes identifiers that are generic parametres. It crashes if the identifier was not declared.
     par_transpose::<<<XY<gs, gs>, XY<bsx, bsy>; [[f32; bsx]; bsx]>>>(&shrd d_vec, &uniq d_vec_out);
     copy_to_host(&shrd d_vec_out, h_vec)
 }
@@ -13,28 +11,39 @@ fn transpose<width: nat, gs: nat, bsx: nat, bsy: nat, r: prv>(
 // view rect_tile<width: nat, height: nat> = map(grp::<width>).grp::<height>.map(transpose).transpose
 // view tile<size: nat> = rect_tile::<size, size>
 // view block_tile<size: nat> = grp<8>.transpose
-fn par_transpose<width: nat, gs: nat, bsx: nat, bsy: nat, r: prv, r2: prv>(
+fn par_transpose<gs: nat, bsx: nat, bsy: nat, width: nat, r: prv, r2: prv>(
     in_vec: &r shrd gpu.global [[f32; width]; width],
     out_vec: &r uniq gpu.global [[f32; width]; width],
-    tmp: &r2 uniq gpu.shared [[f32; bsx]; bsx]
+    // FIXME check hat this parameter has correct execution resource when calling kernel
+    [grid.forall(X).forall(Y)] tmp: &r2 uniq gpu.shared [[f32; bsx]; bsx]
 ) -[grid: gpu.grid<XY<gs, gs>, XY<bsx, bsy>>]-> () {
     sched(Y) block_y in grid {
         sched(X) block_x in block_y {
-            let block_tile = &shrd (*in_vec).to_view.map::<[f32; width]>(to_view).map::<[[f32; width]]>(grp::<bsx>).grp::<bsx>.map(transp).transp[[block_y]][[block_x]];
-            let out_block_tile = &uniq (*out_vec).to_view.map::<[f32; width]>(to_view).map::<[[f32; width]]>(grp::<bsx>).grp::<bsx>.map(transp)[[block_y]][[block_x]];
+            let block_tile = &shrd (*in_vec).to_view.map(to_view).map(grp::<bsx>)
+                .grp::<bsx>.map(transp).transp[[block_y]][[block_x]];
+            let out_block_tile = &uniq (*out_vec).to_view.map(to_view).map(grp::<bsx>)
+                .grp::<bsx>.map(transp)[[block_y]][[block_x]];
             sched(Y) thread_y in block_x {
                 sched(X) thread_x in thread_y {
                     for i in 0..(bsx/bsy) {
-                        let tmp_tile = &uniq (*tmp).to_view.map::<[f32; width]>(to_view).grp::<bsy>.transp[[thread_y]].transp[[thread_x]][i];
-                        *tmp_tile = (*block_tile).grp::<bsy>.transp[[thread_y]].transp[[thread_x]][i]
+                        let tmp_tile = &uniq (*tmp).to_view.map(to_view).grp::<bsy>
+                            .transp[[thread_y]].transp[[thread_x]][i];
+                        *tmp_tile = (*block_tile).grp::<bsy>
+                            .transp[[thread_y]].transp[[thread_x]][i]
                     };
                     sync(block_x);
                     for i in 0..(bsx/bsy) {
-                        let tmp_tile = &uniq (*tmp).to_view.map::<[f32; width]>(to_view).grp::<bsy>.transp[[thread_y]].transp[[thread_x]][i];
+                        let tmp_tile = &uniq (*tmp).to_view.map(to_view).grp::<bsy>
+                            .transp[[thread_y]].transp[[thread_x]][i];
                         (*out_block_tile).grp::<bsy>[[thread_y]].transp[[thread_x]][i] = *tmp_tile
                     }
                 }
             }
         }
     }
+}
+
+fn main() -[t:cpu.thread]-> () {
+    let vec: &'a uniq cpu.mem [[f32; 256*32]; 256*32] = unsafe _;
+    transpose::<256, 32, 8>(vec)
 }

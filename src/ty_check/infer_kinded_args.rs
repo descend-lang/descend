@@ -1,3 +1,4 @@
+use super::{TyError, TyResult};
 use crate::ast::{
     ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident,
     Memory, Nat, ParamSig, Provenance, Ty, TyKind,
@@ -9,7 +10,7 @@ use std::collections::HashMap;
 //  introduced by the polymorphic function, therefore finding an identifier on the poly type
 //  means that it was introduced by the polymorphic function (even though the identifier may be an
 //  instantiation of a bound identifier
-pub fn infer_kinded_args(poly_fn_ty: &FnTy, mono_fn_ty: &FnTy) -> Vec<ArgKinded> {
+pub fn infer_kinded_args(poly_fn_ty: &FnTy, mono_fn_ty: &FnTy) -> TyResult<Vec<ArgKinded>> {
     if poly_fn_ty.param_sigs.len() != mono_fn_ty.param_sigs.len() {
         panic!("Unexpected difference in amount of paramters.")
     }
@@ -21,13 +22,19 @@ pub fn infer_kinded_args(poly_fn_ty: &FnTy, mono_fn_ty: &FnTy) -> Vec<ArgKinded>
     infer_kargs_tys(&mut res_map, &poly_fn_ty.ret_ty, &mono_fn_ty.ret_ty);
     let mut res_vec = Vec::new();
     for gen_arg in &poly_fn_ty.generics {
-        let res_karg = res_map.get(&gen_arg.ident).unwrap();
-        if gen_arg.kind != res_karg.kind() {
-            panic!("Unexpected: Kinds of identifier and argument do not match.")
+        // FIXME unwrap leads to panic when the value for ident could not be inferred
+        //  as does happen when the identifier is not used in the argument type or part of
+        //  an expression in the case of nats
+        if let Some(res_karg) = res_map.get(&gen_arg.ident) {
+            if gen_arg.kind != res_karg.kind() {
+                panic!("Unexpected: Kinds of identifier and argument do not match.")
+            }
+            res_vec.push(res_karg.clone());
+        } else {
+            return Err(TyError::CannotInferGenericArg(gen_arg.ident.clone()));
         }
-        res_vec.push(res_karg.clone());
     }
-    res_vec
+    Ok(res_vec)
 }
 
 macro_rules! infer_from_lists {

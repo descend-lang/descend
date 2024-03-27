@@ -1,4 +1,4 @@
-fn transpose<n: nat, r: prv, r2: prv>(
+fn transpose<r: prv>(
     h_vec: &r uniq cpu.mem [[f64; 2048]; 2048]
 ) -[t: cpu.thread]-> () {
     let mut gpu = gpu_device(0);
@@ -18,6 +18,11 @@ fn par_transpose<r: prv>(
                 (*in_vec).to_view.map(to_view)[[block]][[thread]]
         }
     }
+}
+
+fn main() -[t:cpu.thread]-> () {
+    let vec: &'a uniq cpu.mem [[f64; 2048]; 2048] = unsafe _;
+    transpose(vec)
 }
 
 // __global__ void par_transpose(double *in_vec, double *out_vec) {

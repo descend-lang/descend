@@ -589,7 +589,7 @@ impl Nat {
         if n1 == n2 {
             Ok(())
         } else {
-            panic!("not able to check equality of Nats `{}` and `{}`", n1, n2);
+            Err(UnifyError::CannotUnify)
         }
     }
 }

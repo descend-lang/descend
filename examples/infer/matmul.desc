@@ -1,4 +1,4 @@
-fn matmul<m: nat, n: nat, k: nat, bs: nat, a: prv, b: prv, c: prv>(
+fn matmul<bs: nat, m: nat, n: nat, k: nat, a: prv, b: prv, c: prv>(
     ha_mat: &a shrd cpu.mem [i32; m*n],
     hb_mat: &b shrd cpu.mem [i32; n*k],
     hc_mat: &c uniq cpu.mem [i32; m*k]
@@ -12,7 +12,7 @@ fn matmul<m: nat, n: nat, k: nat, bs: nat, a: prv, b: prv, c: prv>(
     copy_to_host(&shrd c_mat, hc_mat)
 }
 
-fn gpu_matmul<m: nat, n: nat, k: nat, bs: nat, r: prv>(
+fn gpu_matmul<bs: nat, m: nat, n: nat, k: nat, r: prv>(
     a_mat: &r shrd gpu.global [i32; m*n],
     b_mat: &r shrd gpu.global [i32; n*k],
     c_mat: &r uniq gpu.global [i32; m*k]
@@ -21,11 +21,13 @@ fn gpu_matmul<m: nat, n: nat, k: nat, bs: nat, r: prv>(
         sched(X) block in block_row {
             sched(Y) thread_row in block {
                 sched(X) thread in thread_row {
-                    let a_row = &shrd (*a_mat).to_view.grp::<n>.grp::<bs>[[block_row]][[thread_row]];
+                    let a_row = &shrd (*a_mat).to_view.grp::<n>
+                        .grp::<bs>[[block_row]][[thread_row]];
                     let b_col = &shrd (*b_mat).to_view.grp::<k>.transp.grp::<bs>[[block]][[thread]];
-                    let mut c_elem = &uniq (*c_mat).to_view.grp::<k>.grp::<bs>[[block_row]].transp.grp::<bs>[[block]].transp[[thread_row]][[thread]];
+                    let mut c_elem = &uniq (*c_mat).to_view.grp::<k>.grp::<bs>[[block_row]]
+                        .transp.grp::<bs>[[block]].transp[[thread_row]][[thread]];
                     let mut sum = 0;
-                    for i in range(0, n) {
+                    for i in 0..n {
                         sum = sum + (*a_row)[i] * (*b_col)[i]
                     };
                     *c_elem = sum
@@ -33,4 +35,11 @@ fn gpu_matmul<m: nat, n: nat, k: nat, bs: nat, r: prv>(
             }
         }
     }
+}
+
+fn main() -[t:cpu.thread]-> () <'a, 'b, 'c>{
+    let ha_mat: &'a shrd cpu.mem [i32; 8192*8192]  = unsafe _;
+    let hb_mat: &'b shrd cpu.mem [i32; 8192*4096] = unsafe _;
+    let hc_mat: &'c uniq cpu.mem [i32; 8192*4096] = unsafe _;
+    matmul::<16>(ha_mat, hb_mat, hc_mat)
 }
