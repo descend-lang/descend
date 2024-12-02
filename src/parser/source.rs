@@ -51,12 +51,16 @@ impl<'a> SourceCode<'a> {
     }
 
     /// Returns a slice of the source string containing the line with (0-based) line number `num`
-    pub fn get_line(&self, num: u32) -> &str {
+    /// or None for EOF
+    pub fn get_line(&self, num: u32) -> Option<&str> {
         let num = num as usize;
         let begin_line = self.line_offsets[num] as usize;
-        // FIXME missing closing scope curly braces lead to an out-of-bounds index
-        let end_line = (self.line_offsets[num + 1] - 1) as usize;
-        &self.source[begin_line..end_line]
+        if let Some(next_line_offset) = self.line_offsets.get(num + 1) {
+            let end_line = (next_line_offset - 1) as usize;
+            Some(&self.source[begin_line..end_line])
+        } else {
+            None
+        }
     }
 
     /// Get line and column (both 0-based) corresponding to an offset in the
@@ -91,7 +95,7 @@ mod tests {
         let src = SourceCode::new(String::from("first\nsecond\nthird"));
         assert_eq!(
             src.get_line(1),
-            "second",
+            Some("second"),
             "Expected str slice to second line, but found something different."
         );
     }

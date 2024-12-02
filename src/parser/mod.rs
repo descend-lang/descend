@@ -1063,6 +1063,7 @@ peg::parser! {
 mod tests {
     use super::*;
 
+
     #[test]
     fn nat_literal() {
         assert_eq!(descend::nat("0"), Ok(Nat::Lit(0)), "cannot parse 0");
@@ -2465,5 +2466,17 @@ mod tests {
         let result = descend::compil_unit(src)
             .expect("Cannot parse compilation unit with multiple functions");
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn empty_annotate_snippet() {
+        let source = SourceCode::new("fn\n".to_string());
+        assert!(parse(&source).is_err(), "Expected a parsing error and specifically not a panic!");
+    }
+
+    #[test]
+    fn empty_annotate_snippet2() {
+        let source = SourceCode::new("fn ".to_string());
+        assert!(parse(&source).is_err(),  "Expected a parsing error and specifically not a panic!");
     }
 }

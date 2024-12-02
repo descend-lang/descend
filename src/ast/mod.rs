@@ -1683,25 +1683,25 @@ mod size_asserts {
         };
     }
     static_assert_size!(Dim, 16);
-    static_assert_size!(DataTy, 112);
-    static_assert_size!(DataTyKind, 72);
+    static_assert_size!(DataTy, 104);
+    static_assert_size!(DataTyKind, 64);
     static_assert_size!(ExecExpr, 32);
     static_assert_size!(ExecExprKind, 64);
     static_assert_size!(ExecPathElem, 16);
-    static_assert_size!(ExecTy, 80);
-    static_assert_size!(ExecTyKind, 64);
-    static_assert_size!(Expr, 104);
-    static_assert_size!(ExprKind, 80);
+    static_assert_size!(ExecTy, 64);
+    static_assert_size!(ExecTyKind, 48);
+    static_assert_size!(Expr, 96);
+    static_assert_size!(ExprKind, 72);
     static_assert_size!(FunDef, 192);
     static_assert_size!(Ident, 32); // maybe too large?
     static_assert_size!(IdentExec, 40);
     static_assert_size!(Lit, 16);
     static_assert_size!(Memory, 32);
-    static_assert_size!(Nat, 56);
+    static_assert_size!(Nat, 48);
     static_assert_size!(ParamDecl, 104);
     static_assert_size!(Pattern, 40);
-    static_assert_size!(PlaceExpr, 64);
-    static_assert_size!(PlaceExprKind, 40);
+    static_assert_size!(PlaceExpr, 56);
+    static_assert_size!(PlaceExprKind, 32);
     static_assert_size!(ScalarTy, 1);
     static_assert_size!(Ty, 32);
     static_assert_size!(TyKind, 16);

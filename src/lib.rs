@@ -5,8 +5,8 @@ use crate::error::ErrorReported;
 mod ast;
 mod codegen;
 pub mod error;
-mod parser;
-mod ty_check;
+pub mod parser;
+pub mod ty_check;
 
 pub fn compile(file_path: &str) -> Result<String, ErrorReported> {
     let source = parser::SourceCode::from_file(file_path)?;

@@ -60,15 +60,8 @@ pub fn single_line_snippet<'a>(
     begin_column: u32,
     end_column: u32,
 ) -> Snippet<'a> {
-    let line = source.get_line(line_num);
-    Snippet {
-        title: Some(Annotation {
-            id: None,
-            label: Some(label),
-            annotation_type: AnnotationType::Error,
-        }),
-        footer: vec![],
-        slices: vec![Slice {
+    let slices = if let Some(line) = source.get_line(line_num) {
+        vec![Slice {
             source: line,
             line_start: line_num as usize + 1,
             origin: source.file_path,
@@ -78,7 +71,18 @@ pub fn single_line_snippet<'a>(
                 annotation_type: AnnotationType::Error,
             }],
             fold: false,
-        }],
+        }]
+    } else {
+        vec![]
+    };
+    Snippet {
+        title: Some(Annotation {
+            id: None,
+            label: Some(label),
+            annotation_type: AnnotationType::Error,
+        }),
+        footer: vec![],
+        slices,
         opt: default_format(),
     }
 }
