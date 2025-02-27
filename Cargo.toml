@@ -6,6 +6,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "descendc"
+path = "src/main.rs"
+
 [dependencies.peg]
 version = "0.8.0"
 
@@ -15,6 +19,25 @@ features = ["color"]
 
 [dependencies.descend_derive]
 path = "./descend_derive"
+
+[dependencies.clap]
+version = "4.3"
+features = ["derive"]
+
+[dependencies.which]
+version = "7.0.2"
+
+[dependencies.log]
+version = "0.4.27"
+
+[dependencies.env_logger]
+version = "0.11.7"
+
+[dependencies.predicates]
+version= "3.1.3"
+
+[dependencies.assert_cmd]
+version = "2.0.16"
 
 [workspace]
 members = ["descend_derive"]

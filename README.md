@@ -110,7 +110,7 @@ codegen
 
 cuda-examples/
 ---------------------
-* Contains handwritte or generated CUDA programs
+* Contains handwritten or generated CUDA programs
 * Contains `descend.cuh`; the header file which is required in order to compile Descend programs,
   that were translated to CUDA, with `nvcc` (contains for example the implementation of `exec`)
 
