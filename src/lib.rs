@@ -9,14 +9,6 @@ pub mod error;
 pub mod parser;
 pub mod ty_check;
 
-/**
-pub fn compile(file_path: &str) -> Result<String, ErrorReported> {
-    let source = parser::SourceCode::from_file(file_path)?;
-    let mut compil_unit = parser::parse(&source)?;
-    ty_check::ty_check(&mut compil_unit)?;
-    Ok(codegen::gen(&compil_unit, false))
-}
-*/
 
 pub fn compile(file_path: &str, output_path: Option<&str>) -> Result<String, ErrorReported> {
     let source = parser::SourceCode::from_file(file_path)?;
@@ -33,4 +25,3 @@ pub fn compile(file_path: &str, output_path: Option<&str>) -> Result<String, Err
 
     Ok(generated_code)
 }
-

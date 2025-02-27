@@ -8,7 +8,7 @@ type Res = Result<(), descend::error::ErrorReported>;
 fn transpose() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/transpose.desc")?
+        descend::compile("examples/infer/transpose.desc", None)?
     ))
 }
 
@@ -16,7 +16,7 @@ fn transpose() -> Res {
 fn transpose_shrd_mem() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/transpose_shrd_mem.desc")?
+        descend::compile("examples/infer/transpose_shrd_mem.desc", None)?
     ))
 }
 
@@ -24,7 +24,7 @@ fn transpose_shrd_mem() -> Res {
 fn matmul() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/matmul.desc")?
+        descend::compile("examples/infer/matmul.desc", None)?
     ))
 }
 
@@ -32,7 +32,7 @@ fn matmul() -> Res {
 fn scale_vec() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/scale_vec.desc")?
+        descend::compile("examples/infer/scale_vec.desc", None)?
     ))
 }
 
@@ -40,7 +40,7 @@ fn scale_vec() -> Res {
 fn reverse_vec() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/reverse_vec.desc")?
+        descend::compile("examples/infer/reverse_vec.desc", None)?
     ))
 }
 
@@ -49,7 +49,7 @@ fn reverse_vec() -> Res {
 fn bitonic_sort() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc")?
+        descend::compile("examples/infer/bitonic_sort/bitonic_sort.desc", None)?
     ))
 }
 
@@ -62,7 +62,7 @@ fn scan() -> Res {
     );
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/scan.desc")?
+        descend::compile("examples/infer/scan.desc", None)?
     ))
 }
 
@@ -70,7 +70,7 @@ fn scan() -> Res {
 fn reduce_shared_mem() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/reduce_shared_mem.desc")?
+        descend::compile("examples/infer/reduce_shared_mem.desc", None)?
     ))
 }
 
@@ -78,7 +78,7 @@ fn reduce_shared_mem() -> Res {
 fn vlc_encode() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/huffman/vlc_encode.desc")?
+        descend::compile("examples/infer/huffman/vlc_encode.desc", None)?
     ))
 }
 
@@ -86,7 +86,7 @@ fn vlc_encode() -> Res {
 fn vlc_encode_cg() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/huffman/vlc_encode_cg.desc")?
+        descend::compile("examples/infer/huffman/vlc_encode_cg.desc", None)?
     ))
 }
 
@@ -94,7 +94,7 @@ fn vlc_encode_cg() -> Res {
 fn vlc_encode_reuse() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/huffman/vlc_encode_reuse.desc")?
+        descend::compile("examples/infer/huffman/vlc_encode_reuse.desc", None)?
     ))
 }
 
@@ -102,7 +102,7 @@ fn vlc_encode_reuse() -> Res {
 fn histogram() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/huffman/histogram.desc")?
+        descend::compile("examples/infer/huffman/histogram.desc", None)?
     ))
 }
 
@@ -110,7 +110,7 @@ fn histogram() -> Res {
 fn tree_reduce() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/tree_reduce.desc")?
+        descend::compile("examples/infer/tree_reduce.desc", None)?
     ))
 }
 
@@ -118,21 +118,21 @@ fn tree_reduce() -> Res {
 fn vector_add() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/vec_add.desc")?
+        descend::compile("examples/infer/vec_add.desc", None)?
     ))
 }
 
 #[ignore]
 #[test]
 fn bfs() -> Res {
-    Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
+    Ok(println!("{}", descend::compile("examples/infer/bfs.desc", None)?))
 }
 
 #[test]
 fn sgemm() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/sgemm.desc")?
+        descend::compile("examples/infer/sgemm.desc", None)?
     ))
 }
 
@@ -140,7 +140,7 @@ fn sgemm() -> Res {
 fn shrd_mem_acc_equiv_exec() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/shrd_mem_acc_equiv_exec.desc")?
+        descend::compile("examples/shrd_mem_acc_equiv_exec.desc", None)?
     ))
 }
 
@@ -148,7 +148,7 @@ fn shrd_mem_acc_equiv_exec() -> Res {
 fn sssp_ffi_unsafe() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/sssp-ffi.desc")?
+        descend::compile("examples/infer/sssp-ffi.desc", None)?
     ))
 }
 
@@ -156,6 +156,6 @@ fn sssp_ffi_unsafe() -> Res {
 fn jacobisvd() -> Res {
     Ok(println!(
         "{}",
-        descend::compile("examples/infer/jacobisvd.desc")?
+        descend::compile("examples/infer/jacobisvd.desc", None)?
     ))
 }
