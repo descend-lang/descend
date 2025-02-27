@@ -16,5 +16,9 @@ features = ["color"]
 [dependencies.descend_derive]
 path = "./descend_derive"
 
+[dependencies.clap]
+version = "4.3"
+features = ["derive"]
+
 [workspace]
 members = ["descend_derive"]
