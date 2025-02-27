@@ -94,3 +94,91 @@ impl std::fmt::Debug for ErrorReported {
         write!(f, "Aborting due to previous error.")
     }
 }
+
+impl std::fmt::Display for ErrorReported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Aborting due to a previous error.")
+    }
+}
+
+#[derive(Debug)]
+pub struct NVCCError {
+    message: String,
+}
+
+impl NVCCError {
+    pub fn new<S: Into<String>>(message: S) -> Self {
+        NVCCError {
+            message: message.into(),
+        }
+    }
+
+    pub fn emit(&self) -> ErrorReported {
+        println!("{}", self.to_string());
+        ErrorReported
+    }
+
+    fn to_string(&self) -> String {
+        let label = format!("{}", self.message);
+        let snippet = Snippet {
+            title: Some(Annotation {
+                id: None,
+                label: Some(&label),
+                annotation_type: AnnotationType::Error,
+            }),
+            footer: vec![],
+            slices: vec![],
+            opt: default_format(),
+        };
+        DisplayList::from(snippet).to_string()
+    }
+}
+
+impl std::fmt::Display for NVCCError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NVCC Error: {}", self.message)
+    }
+}
+
+impl std::error::Error for NVCCError {}
+
+#[derive(Debug)]
+pub struct ExecutableError {
+    message: String,
+}
+
+impl ExecutableError {
+    pub fn new<S: Into<String>>(message: S) -> Self {
+        ExecutableError {
+            message: message.into(),
+        }
+    }
+
+    pub fn emit(&self) -> ErrorReported {
+        println!("{}", self.to_string());
+        ErrorReported
+    }
+
+    fn to_string(&self) -> String {
+        let label = format!("{}", self.message);
+        let snippet = Snippet {
+            title: Some(Annotation {
+                id: None,
+                label: Some(&label),
+                annotation_type: AnnotationType::Error,
+            }),
+            footer: vec![],
+            slices: vec![],
+            opt: default_format(),
+        };
+        DisplayList::from(snippet).to_string()
+    }
+}
+
+impl std::fmt::Display for ExecutableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Executable Error: {}", self.message)
+    }
+}
+
+impl std::error::Error for ExecutableError {}
