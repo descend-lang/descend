@@ -42,8 +42,6 @@ struct Cli {
 fn main() {
     let args = Cli::parse();
 
-    println!("Compiling: {}", args.input);
-
     if args.debug {
         println!("Debug mode enabled.");
     }
@@ -67,9 +65,6 @@ fn main() {
                     eprintln!("Error writing CUDA file {}: {}", cuda_file, e);
                     exit(1);
                 }
-                println!("CUDA code saved to: {}", cuda_file);
-
-                println!("Compiling CUDA with nvcc...");
 
                 // Include `descend.cuh` directory in the compilation command
                 let mut nvcc_cmd = Command::new("nvcc");
@@ -88,10 +83,8 @@ fn main() {
 
                 match nvcc_output {
                     Ok(output) if output.status.success() => {
-                        println!("Successfully compiled: {}", executable);
 
                         if args.run {
-                            println!("Running {}...", executable);
                             let run_output = Command::new(format!("./{}", executable)).output();
 
                             match run_output {
