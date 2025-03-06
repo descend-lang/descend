@@ -3,26 +3,20 @@ use descend::{compile, error::ErrorReported};
 use std::fs::write;
 use std::process::{Command, exit};
 
-/// Descend Compiler CLI
 #[derive(Parser, Debug)]
 #[command(name = "descendc", version = "1.0", about = "Descend GPU Compiler")]
 struct Cli {
-    /// Input Descend source file
     pub input: String,
 
-    /// Output CUDA file (optional, default: input_name.cu)
     #[arg(short, long)]
     pub output: Option<String>,
 
-    /// Print CUDA code to stdout instead of saving
     #[arg(long)]
     pub emit_cuda: bool,
 
-    /// Compile CUDA code with `nvcc`
     #[arg(long)]
     pub compile: bool,
 
-    /// Run the compiled executable
     #[arg(long)]
     pub run: bool,
 
@@ -38,11 +32,9 @@ struct Cli {
     #[arg(long, default_value = "")]
     pub nvcc_flags: String,
 
-    /// Enable debug mode
     #[arg(short, long)]
     pub debug: bool,
 
-    /// Enable verbose output
     #[arg(short, long)]
     pub verbose: bool,
 }
@@ -59,21 +51,18 @@ fn main() {
         println!("Verbose output enabled.");
     }
 
-    // Step 1: Compile Descend to CUDA code
     match compile(&args.input, None) {
         Ok(cuda_code) => {
-            // Step 2: Print CUDA code instead of saving it if `--emit-cuda` is set
+            // Print CUDA code instead of saving it if `--emit-cuda` is set
             if args.emit_cuda {
                 println!("Generated CUDA Code:\n{}", cuda_code);
-                return; // Exit early, no further processing needed
+                return;
             }
 
-            // Step 3: Compile CUDA code with `nvcc` if `--compile` is set
             if args.compile {
                 let cuda_file = args.output.clone().unwrap_or_else(|| args.input.replace(".desc", ".cu"));
                 let executable = cuda_file.replace(".cu", ""); // Remove .cu for output binary
 
-                // Save CUDA file before compilation
                 if let Err(e) = write(&cuda_file, &cuda_code) {
                     eprintln!("Error writing CUDA file {}: {}", cuda_file, e);
                     exit(1);
@@ -101,7 +90,6 @@ fn main() {
                     Ok(output) if output.status.success() => {
                         println!("Successfully compiled: {}", executable);
 
-                        // Step 4: Run the executable if `--run` is set
                         if args.run {
                             println!("Running {}...", executable);
                             let run_output = Command::new(format!("./{}", executable)).output();
