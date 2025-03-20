@@ -37,6 +37,14 @@ struct Cli {
 
     #[arg(short, long)]
     pub verbose: bool,
+
+    #[arg(long)]
+    pub suppress_warnings: bool,
+}
+
+// maybe there is a better way to do this?
+fn check_command_exists(cmd: &str) -> bool {
+    Command::new(cmd).arg("--version").output().is_ok()
 }
 
 fn main() {
@@ -45,8 +53,23 @@ fn main() {
     if args.debug {
         println!("Debug mode enabled.");
     }
+
     if args.verbose {
         println!("Verbose output enabled.");
+    }
+
+    if !check_command_exists("clang-format") {
+        eprintln!("Error: 'clang-format' is not installed. Please install clang-format to proceed.");
+        exit(1);
+    }
+
+    if args.compile && !check_command_exists("nvcc") {
+        if args.suppress_warnings {
+            eprintln!("Warning: 'nvcc' not found, but warnings are suppressed. Compilation will likely fail.");
+        } else {
+            eprintln!("Error: 'nvcc' is not installed. Please install the CUDA Toolkit to compile the code.");
+            exit(1);
+        }
     }
 
     match compile(&args.input, None) {
@@ -56,7 +79,8 @@ fn main() {
                 println!("Generated CUDA Code:\n{}", cuda_code);
                 return;
             }
-
+            
+            // compilation output is .cu file with the same name
             if args.compile {
                 let cuda_file = args.output.clone().unwrap_or_else(|| args.input.replace(".desc", ".cu"));
                 let executable = cuda_file.replace(".cu", ""); // Remove .cu for output binary
