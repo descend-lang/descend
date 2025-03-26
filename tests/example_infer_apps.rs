@@ -125,7 +125,10 @@ fn vector_add() -> Res {
 #[ignore]
 #[test]
 fn bfs() -> Res {
-    Ok(println!("{}", descend::compile("examples/infer/bfs.desc", None)?))
+    Ok(println!(
+        "{}",
+        descend::compile("examples/infer/bfs.desc", None)?
+    ))
 }
 
 #[test]

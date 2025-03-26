@@ -8,6 +8,6 @@ fn test_emit_cuda_on_transpose_desc() {
     cmd.arg("emit").arg("examples/infer/transpose.desc");
 
     cmd.assert()
-       .success()
-       .stdout(predicate::str::contains("Generated CUDA Code"));
+        .success()
+        .stdout(predicate::str::contains("Generated CUDA Code"));
 }

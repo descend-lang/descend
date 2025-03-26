@@ -1,9 +1,9 @@
-use clap::{Parser, Subcommand, Args};
-use descend::{compile, error::ErrorReported};
-use std::fs::write;
-use std::process::{Command, exit};
 use anyhow::{Context, Result};
+use clap::{Args, Parser, Subcommand};
+use descend::{compile, error::ErrorReported};
 use log::{debug, error, info, warn};
+use std::fs::write;
+use std::process::{exit, Command};
 use which::which;
 
 #[derive(Parser, Debug)]
@@ -86,13 +86,19 @@ fn generate_cuda(input: &str) -> Result<String> {
 }
 
 fn write_cuda_file(cuda_code: &str, filename: &str) -> Result<()> {
-    write(filename, cuda_code)
-        .with_context(|| format!("Error writing CUDA file {}", filename))
+    write(filename, cuda_code).with_context(|| format!("Error writing CUDA file {}", filename))
 }
 
-fn build_cuda(cuda_file: &str, executable: &str, optimize: u8, arch: &str, nvcc_flags: &str) -> Result<()> {
+fn build_cuda(
+    cuda_file: &str,
+    executable: &str,
+    optimize: u8,
+    arch: &str,
+    nvcc_flags: &str,
+) -> Result<()> {
     let mut nvcc_cmd = Command::new("nvcc");
-    nvcc_cmd.arg(cuda_file)
+    nvcc_cmd
+        .arg(cuda_file)
         .arg("-o")
         .arg(executable)
         .arg(format!("-O{}", optimize))
@@ -103,10 +109,14 @@ fn build_cuda(cuda_file: &str, executable: &str, optimize: u8, arch: &str, nvcc_
         nvcc_cmd.arg(format!("-arch={}", arch));
     }
     debug!("Running NVCC command: {:?}", nvcc_cmd);
-    let output = nvcc_cmd.output()
+    let output = nvcc_cmd
+        .output()
         .with_context(|| "Failed to run nvcc command")?;
     if !output.status.success() {
-        return Err(anyhow::anyhow!("nvcc compilation failed:\n{}", String::from_utf8_lossy(&output.stderr)));
+        return Err(anyhow::anyhow!(
+            "nvcc compilation failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
     Ok(())
 }
@@ -115,8 +125,14 @@ fn run_executable(executable: &str) -> Result<()> {
     let output = Command::new(format!("./{}", executable))
         .output()
         .with_context(|| "Failed to run the executable")?;
-    println!("Program output:\n{}", String::from_utf8_lossy(&output.stdout));
-    eprintln!("Program errors:\n{}", String::from_utf8_lossy(&output.stderr));
+    println!(
+        "Program output:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    eprintln!(
+        "Program errors:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 
@@ -145,11 +161,19 @@ fn handle_build_run(
         }
     }
     let cuda_code = generate_cuda(&common.input)?;
-    let cuda_file = common.output.unwrap_or_else(|| common.input.replace(".desc", ".cu"));
+    let cuda_file = common
+        .output
+        .unwrap_or_else(|| common.input.replace(".desc", ".cu"));
     let executable = cuda_file.replace(".cu", "");
     write_cuda_file(&cuda_code, &cuda_file)?;
     println!("CUDA code written to {}", cuda_file);
-    build_cuda(&cuda_file, &executable, build_run.optimize, &build_run.arch, &build_run.nvcc_flags)?;
+    build_cuda(
+        &cuda_file,
+        &executable,
+        build_run.optimize,
+        &build_run.arch,
+        &build_run.nvcc_flags,
+    )?;
     println!("Compilation successful: {}", executable);
     if run_after {
         run_executable(&executable)?;
@@ -169,16 +193,20 @@ fn main() {
     }
 
     if !command_exists("clang-format") {
-        eprintln!("Error: 'clang-format' is not installed. Please install clang-format to proceed.");
+        eprintln!(
+            "Error: 'clang-format' is not installed. Please install clang-format to proceed."
+        );
         exit(1);
     }
 
     let result = match cli.command {
         Commands::Emit { common } => handle_emit(common),
-        Commands::Build { common, build_run } =>
-            handle_build_run(common, build_run, false, cli.suppress_cuda_warning),
-        Commands::Run { common, build_run } =>
-            handle_build_run(common, build_run, true, cli.suppress_cuda_warning),
+        Commands::Build { common, build_run } => {
+            handle_build_run(common, build_run, false, cli.suppress_cuda_warning)
+        }
+        Commands::Run { common, build_run } => {
+            handle_build_run(common, build_run, true, cli.suppress_cuda_warning)
+        }
     };
 
     if let Err(e) = result {
