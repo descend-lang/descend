@@ -1,7 +1,9 @@
+use std::borrow::Borrow;
+
 use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
-use crate::ast::{BaseExec, DataTy, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind};
+use crate::ast::{BaseExec, DataTy, DataTyKind, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -60,6 +62,26 @@ pub enum TyError {
     UnsafeRequired,
     // TODO remove as soon as possible
     String(String),
+
+    // Newly added errors
+    IndexOutOfBounds,
+    TupleIndexOutOfBounds,
+    // The indexed expression is not an array
+    CannotIndex,
+    // The expression is not a reference
+    // TODO
+    NotAReference,
+    CannotDereference(DereferenceError),
+}
+
+#[derive(Debug)]
+pub enum DereferenceError {
+    // Trying to dereference a function (that is the only case).
+    InvalidTyKind(TyKind),
+    // Trying to dreference 
+    InvalidDataTyKind(DataTyKind),
+    // Trying to dereference a shrd reference
+    InvalidOwnership,
 }
 
 impl<'a> FromIterator<TyError> for TyError {
@@ -181,7 +203,8 @@ impl TyError {
                             eprintln!("{:?}", conflict)
                         }
                         BorrowingError::ConflictingOwnership => eprintln!("{:?}", conflict),
-                        BorrowingError::ConflictingAccess => eprintln!("{:?}", conflict),
+                        // TODO: better error message for conflicting access
+                        BorrowingError::ConflictingAccess(_, _) => eprintln!("{:?}", conflict),
                         BorrowingError::CtxError(ctx_err) => eprintln!("{:?}", ctx_err),
                         BorrowingError::WrongDevice(under, from) => {
                             eprintln!("error: wrong device\nunder:{:?}\nfrom:{:?}", under, from)
@@ -317,7 +340,7 @@ pub enum BorrowingError {
     //     loan with {} capability.",
     // checked_own, ref_own
     ConflictingOwnership,
-    ConflictingAccess,
+    ConflictingAccess(Ownership, Ownership),
     // The borrowing place is not in the reborrow list
     BorrowNotInReborrowList(Place),
     TemporaryConflictingBorrow(String),
