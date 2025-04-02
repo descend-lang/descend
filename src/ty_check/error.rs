@@ -3,7 +3,9 @@ use std::borrow::Borrow;
 use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
-use crate::ast::{BaseExec, DataTy, DataTyKind, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind};
+use crate::ast::{
+    BaseExec, DataTy, DataTyKind, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind,
+};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -69,16 +71,18 @@ pub enum TyError {
     // The indexed expression is not an array
     CannotIndex,
     // The expression is not a reference
-    // TODO
-    NotAReference,
     CannotDereference(DereferenceError),
+    // Struct does not have given field
+    FieldProjError(Ident),
+    // Select must be applied to an array or a view.
+    SelectError(PlaceExpr),
 }
 
 #[derive(Debug)]
 pub enum DereferenceError {
     // Trying to dereference a function (that is the only case).
     InvalidTyKind(TyKind),
-    // Trying to dreference 
+    // Trying to dereference something that is not a reference
     InvalidDataTyKind(DataTyKind),
     // Trying to dereference a shrd reference
     InvalidOwnership,

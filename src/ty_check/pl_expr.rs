@@ -293,9 +293,7 @@ fn ty_check_field_proj(
                     passed_prvs,
                 ))
             } else {
-                Err(TyError::String(
-                    "Trying to access non existing struct field.".to_string(),
-                ))
+                Err(TyError::FieldProjError(ident.clone()))
             }
         }
         dty_kind => Err(TyError::ExpectedTupleType(
@@ -324,10 +322,9 @@ fn ty_check_deref(
         DataTyKind::Ref(reff) => {
             if reff.own < ctx.own {
                 // if the expression dereferences a shared reference
-                return Err(
-                    TyError::CannotDereference(DereferenceError::InvalidOwnership), // TyError::String(
-                                                                                    // "Trying to dereference and mutably use a shrd reference.".to_string(),
-                );
+                return Err(TyError::CannotDereference(
+                    DereferenceError::InvalidOwnership,
+                ));
             }
             passed_prvs.push(reff.rgn.clone());
             inner_mem.push(reff.mem.clone());
@@ -388,7 +385,9 @@ fn ty_check_select(
             p_dty = *elem_dty;
         }
         _ => {
-            return Err(TyError::String("Expected an array or view.".to_string()));
+            // Select distributes ownership for an array or a view.
+            // return Err(TyError::String("Expected an array or view.".to_string()));
+            return Err(TyError::SelectError(p.clone()));
         }
     }
     Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
