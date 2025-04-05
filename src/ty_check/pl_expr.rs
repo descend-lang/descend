@@ -380,7 +380,7 @@ fn ty_check_select(
             // TODO check sizes
             // if n != distrib_exec.active_distrib_size() {
             //     return Err(TyError::String("There must be as many elements in the view
-            //  as there exist execution resources that select from it.".to_string()));
+            //  as there exist execution rces that select from it.".to_string()));
             // }
             p_dty = *elem_dty;
         }

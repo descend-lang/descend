@@ -1,6 +1,6 @@
 use super::{
-    BaseExec, BinOpNat, Dim, Dim1d, Dim2d, DimCompo, ExecExpr, ExecPathElem, ExecTy, ExecTyKind,
-    IdentExec, Nat, TyCtx, TyError, TyResult,
+    error::ExecError, BaseExec, BinOpNat, Dim, Dim1d, Dim2d, DimCompo, ExecExpr, ExecPathElem,
+    ExecTy, ExecTyKind, IdentExec, Nat, TyCtx, TyError, TyResult,
 };
 use crate::ast::{LeftOrRight, NatCtx};
 
@@ -71,10 +71,10 @@ fn ty_check_exec_to_threads(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecT
                 Box::new(b.0),
             )))),
             _ => {
-                return Err(TyError::String(format!(
-                    "Provided dimension {} does not exist",
-                    d
-                )))
+                return Err(TyError::ExecError(ExecError::DimensionNotFound(
+                    d,
+                    exec_ty.clone(),
+                )));
             }
         };
         match (rest_gdim, rest_bdim) {
@@ -85,19 +85,22 @@ fn ty_check_exec_to_threads(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecT
             _ => unimplemented!(),
         }
     } else {
-        Err(TyError::UnexpectedType)
+        Err(TyError::ExecError(ExecError::UnexpectedResourceType(
+            exec_ty.clone(),
+        )))
     }
 }
 
 fn ty_check_exec_to_warps(nat_ctx: &NatCtx, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+    use super::ExecToWarpError::*;
+    use ExecError::*;
     match exec_ty {
         ExecTyKind::GpuBlock(dim) => match dim.clone() {
             Dim::X(d) => {
                 if d.0.eval(nat_ctx)? % 32 != 0 {
-                    Err(TyError::String(format!(
-                        "Size of GpuBlock needs to be evenly divisible by 32 to create warps, instead got: {:?}",
-                        exec_ty
-                    )))
+                    Err(TyError::ExecError(ExecToWarpError(DimNotDivBy32(
+                        exec_ty.clone(),
+                    ))))
                 } else {
                     Ok(ExecTyKind::GpuWarpGrp(Nat::BinOp(
                         BinOpNat::Div,
@@ -106,15 +109,13 @@ fn ty_check_exec_to_warps(nat_ctx: &NatCtx, exec_ty: &ExecTyKind) -> TyResult<Ex
                     )))
                 }
             }
-            _ => Err(TyError::String(format!(
-                "GpuBlock needs to be one-dimensional to create warps, instead got: {:?}",
-                exec_ty
-            ))),
+            _ => Err(TyError::ExecError(ExecToWarpError(MultipleDimensions(
+                exec_ty.clone(),
+            )))),
         },
-        _ => Err(TyError::String(format!(
-            "Trying to create warps from {:?}",
-            exec_ty
-        ))),
+        _ => Err(TyError::ExecError(ExecToWarpError(InvalidResourceType(
+            exec_ty.clone(),
+        )))),
     }
 }
 
@@ -159,13 +160,17 @@ fn ty_check_exec_forall(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKin
             }
         }
         ex @ ExecTyKind::CpuThread | ex @ ExecTyKind::GpuThread | ex @ ExecTyKind::Any => {
-            return Err(TyError::String(format!("Cannot schedule over {:?}", ex)))
+            return Err(TyError::ExecError(ExecError::UnexpectedResourceType(
+                ex.clone(),
+            )))
         }
     };
     Ok(res_ty)
 }
 
 pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<(Option<Dim>, Dim)> {
+    // given (dimension, dimension component)
+    // return (left over dimension, dimension from removing the specific dimension component)
     match (dim, dim_compo) {
         (Dim::XYZ(dim3d), DimCompo::X) => Ok((
             Some(Dim::YZ(Box::new(Dim2d(
@@ -264,12 +269,7 @@ fn ty_check_exec_take_range(
                 panic!("GpuToThreads is not well-formed.")
             }
         }
-        ex => {
-            return Err(TyError::String(format!(
-                "Trying to split non-splittable execution resource: {:?}",
-                ex
-            )))
-        }
+        ex => return Err(TyError::ExecError(ExecError::InvalidSplit(ex.clone()))),
     };
     Ok(if proj == LeftOrRight::Left {
         lexec_ty

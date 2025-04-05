@@ -4,7 +4,8 @@ use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
 use crate::ast::{
-    BaseExec, DataTy, DataTyKind, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind,
+    BaseExec, DataTy, DataTyKind, DimCompo, ExecTyKind, Expr, Ident, NatEvalError, Ownership,
+    PlaceExpr, TyKind,
 };
 use crate::error;
 use crate::error::{default_format, ErrorReported};
@@ -76,6 +77,23 @@ pub enum TyError {
     FieldProjError(Ident),
     // Select must be applied to an array or a view.
     SelectError(PlaceExpr),
+    // Errors from exec.rs
+    ExecError(ExecError),
+}
+
+#[derive(Debug)]
+pub enum ExecError {
+    UnexpectedResourceType(ExecTyKind),
+    DimensionNotFound(DimCompo, ExecTyKind),
+    ExecToWarpError(ExecToWarpError),
+    InvalidSplit(ExecTyKind)
+}
+
+#[derive(Debug)]
+pub enum ExecToWarpError {
+    MultipleDimensions(ExecTyKind),
+    DimNotDivBy32(ExecTyKind),
+    InvalidResourceType(ExecTyKind),
 }
 
 #[derive(Debug)]
