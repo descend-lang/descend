@@ -265,7 +265,7 @@ fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
         for ep in &under.exec.path[synced.exec.path.len()..] {
             if matches!(ep, ExecPathElem::TakeRange(_)) {
                 return Err(TyError::String(
-                    "tyring to synchronize on split execution resource".to_string(),
+                    "trying to synchronize on split execution resource".to_string(),
                 ));
             }
         }
