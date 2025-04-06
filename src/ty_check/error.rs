@@ -4,8 +4,8 @@ use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
 use crate::ast::{
-    BaseExec, DataTy, DataTyKind, DimCompo, ExecTyKind, Expr, Ident, NatEvalError, Ownership,
-    PlaceExpr, TyKind,
+    BaseExec, DataTy, DataTyKind, DimCompo, ExecTy, ExecTyKind, Expr, FnTy, Ident, Memory,
+    NatEvalError, Ownership, PlaceExpr, RefDty, TyKind,
 };
 use crate::error;
 use crate::error::{default_format, ErrorReported};
@@ -68,17 +68,46 @@ pub enum TyError {
 
     // Newly added errors
     IndexOutOfBounds,
-    TupleIndexOutOfBounds,
+    // Index, Array Length
+    TupleIndexOutOfBounds(usize, usize),
     // The indexed expression is not an array
     CannotIndex,
+    // The projected expression is not a tuple
+    CannotTupleIndex,
     // The expression is not a reference
     CannotDereference(DereferenceError),
     // Struct does not have given field
     FieldProjError(Ident),
     // Select must be applied to an array or a view.
     SelectError(PlaceExpr),
-    // Errors from exec.rs
     ExecError(ExecError),
+    SyncError(SyncError),
+    InvalidIterable(InvalidIterable),
+    NotCopyable,
+    Moved(PlaceExpr, Moved),
+}
+
+#[derive(Debug)]
+pub enum Moved {
+    Partially,
+    Entirely,
+}
+
+#[derive(Debug)]
+pub enum InvalidIterable {
+    // Do I need to contain the Expr so that the span is known?
+    // Should I just return the span and the DataTyKind?
+    InvalidIterable(Expr, DataTyKind),
+    // It's obvious when it's a function.
+    UnexpectedFunction(Expr),
+    NotArrayRef(Expr, RefDty),
+}
+
+#[derive(Debug)]
+pub enum SyncError {
+    InvalidResourceType,
+    SplitResource,
+    NothingToSync,
 }
 
 #[derive(Debug)]
@@ -86,7 +115,7 @@ pub enum ExecError {
     UnexpectedResourceType(ExecTyKind),
     DimensionNotFound(DimCompo, ExecTyKind),
     ExecToWarpError(ExecToWarpError),
-    InvalidSplit(ExecTyKind)
+    InvalidSplit(ExecTyKind),
 }
 
 #[derive(Debug)]
@@ -104,6 +133,8 @@ pub enum DereferenceError {
     InvalidDataTyKind(DataTyKind),
     // Trying to dereference a shrd reference
     InvalidOwnership,
+    // Trying to dereference something that is not in the current resource
+    NotInExecRes(Memory, ExecTyKind),
 }
 
 impl<'a> FromIterator<TyError> for TyError {

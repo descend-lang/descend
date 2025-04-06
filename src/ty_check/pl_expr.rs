@@ -255,10 +255,7 @@ fn ty_check_proj(
                     passed_prvs,
                 ))
             } else {
-                // Err(TyError::String(
-                //     "Trying to access non existing tuple element.".to_string(),
-                // ))
-                Err(TyError::TupleIndexOutOfBounds)
+                Err(TyError::TupleIndexOutOfBounds(n, elem_dtys.len()))
             }
         }
         dty_kind => Err(TyError::ExpectedTupleType(

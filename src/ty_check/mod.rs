@@ -255,25 +255,25 @@ fn ty_check_sync(ctx: &mut ExprTyCtx, exec: &mut Option<ExecExpr>) -> TyResult<T
 }
 
 // assumes fully typed ExecExpr as input
+// T-Sync
 fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
+    // y : ε ⊢ e′ : ε′
     if !syncable_exec_ty(synced.ty.as_ref().unwrap()) {
-        return Err(TyError::String(
-            "trying to synchronize non-synchronizable execution resource".to_string(),
-        ));
+        // ε′∉{ gpu.Block d, gpu.Warp }
+        return Err(TyError::SyncError(SyncError::InvalidResourceType));
     }
     if under.is_sub_exec_of(synced) || under == synced {
         for ep in &under.exec.path[synced.exec.path.len()..] {
             if matches!(ep, ExecPathElem::TakeRange(_)) {
-                return Err(TyError::String(
-                    "trying to synchronize on split execution resource".to_string(),
-                ));
+                // return Err(TyError::String(
+                //     "trying to synchronize on split execution resource".to_string(),
+                // ));
+                return Err(TyError::SyncError(SyncError::SplitResource));
             }
         }
         Ok(())
     } else {
-        Err(TyError::String(
-            "cannot call sync from this execution resource".to_string(),
-        ))
+        Err(TyError::SyncError(SyncError::NothingToSync))
     }
 }
 
@@ -335,6 +335,7 @@ fn ty_check_for_nat(
     )))))
 }
 
+// TODO This doesn't exist in the type formalization.
 fn ty_check_for(
     ctx: &mut ExprTyCtx,
     ident: &Ident,
@@ -342,13 +343,13 @@ fn ty_check_for(
     body: &mut Expr,
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, collec)?;
-    let collec_dty = if let TyKind::Data(collec_dty) = &collec.ty.as_ref().unwrap().ty {
-        collec_dty.as_ref()
-    } else {
-        return Err(TyError::String(format!(
-            "Expected array data type or reference to array data type, but found {:?}",
-            collec.ty.as_ref().unwrap()
-        )));
+    let collec_dty = match &collec.ty.as_ref().unwrap().ty {
+        TyKind::Data(collec_dty) => collec_dty.as_ref(),
+        TyKind::FnTy(_) => {
+            return Err(TyError::InvalidIterable(
+                InvalidIterable::UnexpectedFunction(collec.clone()),
+            ))
+        }
     };
 
     let ident_dty = match &collec_dty.dty {
@@ -368,17 +369,17 @@ fn ty_check_for(
                 elem_dty.as_ref().clone(),
             ))),
             _ => {
-                return Err(TyError::String(format!(
-                    "Expected reference to array data type, but found {:?}",
-                    reff.dty.as_ref(),
+                return Err(TyError::InvalidIterable(InvalidIterable::NotArrayRef(
+                    collec.clone(),
+                    (**reff).clone(),
                 )))
             }
         },
         // DataTyKind::Range => DataTyKind::Scalar(ScalarTy::I32),
-        _ => {
-            return Err(TyError::String(format!(
-                "Expected array data type or reference to array data type, but found {:?}",
-                collec.ty.as_ref().unwrap()
+        dty => {
+            return Err(TyError::InvalidIterable(InvalidIterable::InvalidIterable(
+                collec.clone(),
+                dty.clone(),
             )));
         }
     };
@@ -1567,7 +1568,7 @@ fn ty_check_non_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<
     if pl_expr.ty.as_ref().unwrap().copyable() {
         Ok(pl_expr.ty.as_ref().unwrap().as_ref().clone())
     } else {
-        Err(TyError::String("Data type is not copyable.".to_string()))
+        Err(TyError::NotCopyable)
     }
 }
 
@@ -1576,10 +1577,7 @@ fn ty_check_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> 
     let place = pl_expr.clone().to_place().unwrap();
     let pl_ty = ctx.ty_ctx.place_dty(&place)?;
     if !pl_ty.is_fully_alive() {
-        return Err(TyError::String(format!(
-            "Part of Place {:?} was moved before.",
-            pl_expr
-        )));
+        return Err(TyError::Moved(pl_expr.clone(), Moved::Partially));
     }
     if pl_ty.copyable() {
         // TODO refactor
@@ -1626,13 +1624,11 @@ fn ty_check_borrow(
         .try_for_each(|mem| accessible_memory(ctx.exec.ty.as_ref().unwrap().as_ref(), mem))?;
     let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
     if !pl_expr_ty.is_fully_alive() {
-        return Err(TyError::String(
-            "The place was at least partially moved before.".to_string(),
-        ));
+        return Err(TyError::Moved(pl_expr.clone(), Moved::Partially));
     }
     let (reffed_ty, rmem) = match &pl_expr_ty.ty {
         TyKind::Data(dty) => match &dty.dty {
-            DataTyKind::Dead(_) => panic!("Cannot happen because of the alive check."),
+            DataTyKind::Dead(_) => return Err(TyError::DeadTy),
             DataTyKind::At(inner_ty, m) => (inner_ty.as_ref().clone(), m.clone()),
             _ => (
                 dty.as_ref().clone(),
@@ -1648,7 +1644,7 @@ fn ty_check_borrow(
                 },
             ),
         },
-        TyKind::FnTy(_) => return Err(TyError::String("Trying to borrow a function.".to_string())),
+        TyKind::FnTy(_) => return Err(TyError::UnexpectedType),
     };
     if rmem == Memory::GpuLocal {
         return Err(TyError::String(
@@ -1686,9 +1682,9 @@ pub fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
     if allowed_mem_for_exec(&exec_ty.ty).contains(mem) {
         Ok(())
     } else {
-        Err(TyError::String(format!(
-            "Trying to dereference pointer to `{:?}` from execution resource `{:?}`",
-            mem, &exec_ty.ty
+        Err(TyError::CannotDereference(DereferenceError::NotInExecRes(
+            mem.clone(),
+            exec_ty.ty.clone(),
         )))
     }
 }
@@ -1893,14 +1889,8 @@ pub fn proj_elem_dty(dty: &DataTy, i: usize) -> TyResult<DataTy> {
     match &dty.dty {
         DataTyKind::Tuple(dtys) => match dtys.get(i) {
             Some(dty) => Ok(dty.clone()),
-            None => Err(TyError::String(format!(
-                "Cannot project element `{}` from tuple with {} elements.",
-                i,
-                dtys.len()
-            ))),
+            None => Err(TyError::TupleIndexOutOfBounds(i, dtys.len())),
         },
-        _ => Err(TyError::String(
-            "Cannot project from non tuple type.".to_string(),
-        )),
+        _ => Err(TyError::CannotTupleIndex),
     }
 }
