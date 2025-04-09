@@ -274,7 +274,8 @@ fn ty_check_field_proj(
     let struct_dty = match &struct_expr.ty.as_ref().unwrap().ty {
         TyKind::Data(dty) => dty,
         ty_kind => {
-            return Err(TyError::ExpectedTupleType(
+            // FUCK
+            return Err(TyError::ExpectedStructType(
                 ty_kind.clone(),
                 struct_expr.clone(),
             ));

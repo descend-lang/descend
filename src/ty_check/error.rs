@@ -41,6 +41,7 @@ pub enum TyError {
     SplittingNonViewArray,
     // Expected a different type
     ExpectedTupleType(TyKind, PlaceExpr),
+    ExpectedStructType(TyKind, PlaceExpr),
     // Trying to borrow uniquely but place is not mutable
     ConstBorrow(PlaceExpr),
     // The borrowed view type is at least paritally dead
