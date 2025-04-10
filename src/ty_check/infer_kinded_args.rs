@@ -12,7 +12,7 @@ use std::collections::HashMap;
 //  instantiation of a bound identifier
 pub fn infer_kinded_args(poly_fn_ty: &FnTy, mono_fn_ty: &FnTy) -> TyResult<Vec<ArgKinded>> {
     if poly_fn_ty.param_sigs.len() != mono_fn_ty.param_sigs.len() {
-        panic!("Unexpected difference in amount of paramters.")
+        panic!("Unexpected difference in amount of parameters.")
     }
     let mut res_map = HashMap::new();
     for (subst_ty, mono_ty) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
