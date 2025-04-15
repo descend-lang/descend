@@ -1,9 +1,16 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use descend::{compile, error::ErrorReported};
-use log::{debug, error, info, warn};
+use env_logger::Env;
+use log::LevelFilter;
+use log::{debug, error, info};
+use std::env;
+use std::fs;
 use std::fs::write;
+use std::path::PathBuf;
+use std::process;
 use std::process::{exit, Command};
+use std::time::{SystemTime, UNIX_EPOCH};
 use which::which;
 
 #[derive(Parser, Debug)]
@@ -12,10 +19,6 @@ struct Cli {
     /// Enable debug mode.
     #[arg(short, long)]
     debug: bool,
-
-    /// Enable verbose output.
-    #[arg(short, long)]
-    verbose: bool,
 
     /// Suppress warning if nvcc (CUDA Toolkit) is not installed.
     #[arg(long)]
@@ -73,6 +76,40 @@ struct BuildRunArgs {
     /// Additional flags to pass directly to nvcc
     #[arg(long, default_value = "")]
     nvcc_flags: String,
+
+    /// Only save the generated CUDA file if explicitly requested.
+    #[arg(long)]
+    save_cuda: bool,
+}
+
+/// RAII wrapper for a temporary file.
+struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    fn new(path: PathBuf) -> Self {
+        TempFile { path }
+    }
+
+    /// Returns the file path as a string.
+    fn path_string(&self) -> String {
+        self.path.to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        // Attempt to delete the file; report error if it fails.
+        if let Err(e) = fs::remove_file(&self.path) {
+            error!(
+                "Warning: failed to remove temporary file {:?}: {}",
+                self.path, e
+            );
+        } else {
+            debug!("Temporary file {:?} deleted.", self.path);
+        }
+    }
 }
 
 /// Checks if a command exists using the which crate
@@ -124,11 +161,11 @@ fn run_executable(executable: &str) -> Result<()> {
     let output = Command::new(format!("./{}", executable))
         .output()
         .with_context(|| "Failed to run the executable")?;
-    println!(
+    info!(
         "Program output:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
-    eprintln!(
+    error!(
         "Program errors:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -139,9 +176,9 @@ fn handle_emit(common: CommonArgs) -> Result<()> {
     let cuda_code = generate_cuda(&common.input)?;
     if let Some(file) = common.output {
         write_cuda_file(&cuda_code, &file)?;
-        println!("CUDA code written to {}", file);
+        info!("CUDA code written to {}", file);
     } else {
-        println!("Generated CUDA Code:\n{}", cuda_code);
+        info!("Generated CUDA Code:\n{}", cuda_code);
     }
     Ok(())
 }
@@ -154,18 +191,37 @@ fn handle_build_run(
 ) -> Result<()> {
     if !command_exists("nvcc") {
         if suppress_cuda_warning {
-            eprintln!("Warning: 'nvcc' not found, but warnings are suppressed. Compilation will likely fail.");
+            info!("Warning: 'nvcc' not found, but warnings are suppressed. Compilation will likely fail.");
         } else {
             return Err(anyhow::anyhow!("Error: 'nvcc' is not installed. Please install the CUDA Toolkit to compile the code."));
         }
     }
     let cuda_code = generate_cuda(&common.input)?;
-    let cuda_file = common
-        .output
-        .unwrap_or_else(|| common.input.replace(".desc", ".cu"));
-    let executable = cuda_file.replace(".cu", "");
+
+    // Determine the file name based on the --save-cuda flag. If save_cuda is false, generate a temporary file path.
+    let (cuda_file, _temp_guard): (String, Option<TempFile>) = if build_run.save_cuda {
+        (
+            common
+                .output
+                .unwrap_or_else(|| common.input.replace(".desc", ".cu")),
+            None,
+        )
+    } else {
+        let temp_dir = env::temp_dir();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let temp_filename = format!("descendc-{}-{}.cu", process::id(), timestamp);
+        let temp_path = temp_dir.join(temp_filename);
+        let file_str = temp_path.to_string_lossy().into_owned();
+        (file_str, Some(TempFile::new(temp_path)))
+    };
+
     write_cuda_file(&cuda_code, &cuda_file)?;
-    println!("CUDA code written to {}", cuda_file);
+    debug!("CUDA code written to {}", cuda_file);
+
+    let executable = cuda_file.replace(".cu", "");
     build_cuda(
         &cuda_file,
         &executable,
@@ -173,28 +229,33 @@ fn handle_build_run(
         &build_run.arch,
         &build_run.nvcc_flags,
     )?;
-    println!("Compilation successful: {}", executable);
+    debug!("Compilation successful: {}", executable);
+
     if run_after {
         run_executable(&executable)?;
     }
+
     Ok(())
 }
 
 fn main() {
-    env_logger::init();
     let cli = Cli::parse();
 
+    let default_log_level = if cli.debug {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    };
+
+    env_logger::Builder::from_env(Env::default().default_filter_or(default_log_level.to_string()))
+        .init();
+
     if cli.debug {
-        println!("Debug mode enabled.");
-    }
-    if cli.verbose {
-        println!("Verbose output enabled.");
+        info!("Debug mode enabled.");
     }
 
     if !command_exists("clang-format") {
-        eprintln!(
-            "Error: 'clang-format' is not installed. Please install clang-format to proceed."
-        );
+        error!("Error: 'clang-format' is not installed. Please install clang-format to proceed.");
         exit(1);
     }
 
@@ -209,7 +270,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("{:#}", e);
+        error!("{:#}", e);
         exit(1);
     }
 }
