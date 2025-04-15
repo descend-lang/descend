@@ -81,8 +81,7 @@ fn command_exists(cmd: &str) -> bool {
 }
 
 fn generate_cuda(input: &str) -> Result<String> {
-    compile(input, None)
-        .map_err(|_| anyhow::anyhow!("Descend compilation failed for input '{}'", input))
+    compile(input).map_err(|_| anyhow::anyhow!("Descend compilation failed for input '{}'", input))
 }
 
 fn write_cuda_file(cuda_code: &str, filename: &str) -> Result<()> {
