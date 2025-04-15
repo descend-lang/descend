@@ -24,9 +24,6 @@ path = "./descend_derive"
 version = "4.3"
 features = ["derive"]
 
-[dependencies.anyhow]
-version = "1.0"
-
 [dependencies.which]
 version = "7.0.2"
 
