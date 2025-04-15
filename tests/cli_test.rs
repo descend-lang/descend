@@ -9,5 +9,5 @@ fn test_emit_cuda_on_transpose_desc() {
 
     cmd.assert()
         .success()
-        .stderr(predicate::str::contains("Generated CUDA Code"));
+        .stdout(predicate::str::contains("Generated CUDA Code"));
 }

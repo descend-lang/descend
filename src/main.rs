@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use descend::{compile, error::ErrorReported};
+use descend::error::NVCCError;
+use descend::{compile, error::ErrorReported, error::ExecutableError, error::FileIOError};
 use env_logger::Env;
 use log::LevelFilter;
 use log::{debug, error, info};
@@ -117,12 +117,12 @@ fn command_exists(cmd: &str) -> bool {
     which(cmd).is_ok()
 }
 
-fn generate_cuda(input: &str) -> Result<String> {
-    compile(input).map_err(|_| anyhow::anyhow!("Descend compilation failed for input '{}'", input))
+fn generate_cuda(input: &str) -> Result<String, ErrorReported> {
+    compile(input)
 }
 
-fn write_cuda_file(cuda_code: &str, filename: &str) -> Result<()> {
-    write(filename, cuda_code).with_context(|| format!("Error writing CUDA file {}", filename))
+fn write_cuda_file(cuda_code: &str, filename: &str) -> Result<(), ErrorReported> {
+    write(filename, cuda_code).map_err(|e| FileIOError::new(filename, e).emit())
 }
 
 fn build_cuda(
@@ -131,7 +131,7 @@ fn build_cuda(
     optimize: u8,
     arch: &str,
     nvcc_flags: &str,
-) -> Result<()> {
+) -> Result<(), ErrorReported> {
     let mut nvcc_cmd = Command::new("nvcc");
     nvcc_cmd
         .arg(cuda_file)
@@ -147,20 +147,22 @@ fn build_cuda(
     debug!("Running NVCC command: {:?}", nvcc_cmd);
     let output = nvcc_cmd
         .output()
-        .with_context(|| "Failed to run nvcc command")?;
+        .map_err(|_e| NVCCError::new("Failed to run nvcc command").emit())?;
     if !output.status.success() {
-        return Err(anyhow::anyhow!(
+        return Err(NVCCError::new(format!(
             "nvcc compilation failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
-        ));
+        ))
+        .emit());
     }
     Ok(())
 }
 
-fn run_executable(executable: &str) -> Result<()> {
+fn run_executable(executable: &str) -> Result<(), ErrorReported> {
     let output = Command::new(format!("./{}", executable))
         .output()
-        .with_context(|| "Failed to run the executable")?;
+        .map_err(|_e| ExecutableError::new("Failed to run the executable").emit())?;
+
     info!(
         "Program output:\n{}",
         String::from_utf8_lossy(&output.stdout)
@@ -172,7 +174,7 @@ fn run_executable(executable: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_emit(common: CommonArgs) -> Result<()> {
+fn handle_emit(common: CommonArgs) -> Result<(), ErrorReported> {
     let cuda_code = generate_cuda(&common.input)?;
     if let Some(file) = common.output {
         write_cuda_file(&cuda_code, &file)?;
@@ -188,12 +190,15 @@ fn handle_build_run(
     build_run: BuildRunArgs,
     run_after: bool,
     suppress_cuda_warning: bool,
-) -> Result<()> {
+) -> Result<(), ErrorReported> {
     if !command_exists("nvcc") {
         if suppress_cuda_warning {
             info!("Warning: 'nvcc' not found, but warnings are suppressed. Compilation will likely fail.");
         } else {
-            return Err(anyhow::anyhow!("Error: 'nvcc' is not installed. Please install the CUDA Toolkit to compile the code."));
+            return Err(
+                NVCCError::new("Error: 'nvcc' is not installed. Please install the CUDA Toolkit to compile the code.")
+                    .emit()
+            );
         }
     }
     let cuda_code = generate_cuda(&common.input)?;
