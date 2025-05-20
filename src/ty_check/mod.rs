@@ -508,9 +508,8 @@ fn ty_check_if_else(
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Expected condition in if case, instead got {:?}",
-            cond_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidConditionType(
+            (**cond_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -520,9 +519,8 @@ fn ty_check_if_else(
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of the true case is not of unit type, instead got {:?}",
-            case_true_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidIfBlockType(
+            (**case_true_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -532,9 +530,8 @@ fn ty_check_if_else(
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of the false case is not of unit type, instead got {:?}",
-            case_false_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidElseBlockType(
+            (**case_false_ty).clone(),
         )));
     }
 

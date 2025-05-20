@@ -87,6 +87,7 @@ pub enum TyError {
     NotCopyable,
     Moved(PlaceExpr, Moved),
     LoopError(LoopError),
+    IfElseError(IfElseError),
 }
 
 #[derive(Debug)]
@@ -144,6 +145,13 @@ pub enum LoopError {
     InvalidBlockType(DataTy),
     InvalidConditionType(Ty),
     ScopeError,
+}
+
+#[derive(Debug)]
+pub enum IfElseError {
+    InvalidConditionType(Ty),
+    InvalidIfBlockType(Ty),
+    InvalidElseBlockType(Ty),
 }
 
 impl<'a> FromIterator<TyError> for TyError {
