@@ -437,10 +437,6 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
             ..
         }
     ) {
-        // return Err(TyError::String(format!(
-        //     "Expected condition in while loop, instead got {:?}",
-        //     cond_ty
-        // )));
         return Err(TyError::LoopError(LoopError::InvalidConditionType(
             (**cond_ty).clone(),
         )));
@@ -452,10 +448,6 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
             ..
         }
     ) {
-        // return Err(TyError::String(format!(
-        //     "Body of while loop is not of unit type, instead got {:?}",
-        //     body_ty
-        // )));
         match &body_ty.ty {
             TyKind::Data(dty) => {
                 return Err(TyError::LoopError(LoopError::InvalidBlockType(
@@ -557,9 +549,8 @@ fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> Ty
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Expected condition in if case, instead got {:?}",
-            cond_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidConditionType(
+            (**cond_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -569,9 +560,8 @@ fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> Ty
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of the true case is not of unit type, instead got {:?}",
-            case_true_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidIfBlockType(
+            (**case_true_ty).clone(),
         )));
     }
 
