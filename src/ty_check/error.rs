@@ -86,7 +86,7 @@ pub enum TyError {
     InvalidIterable(InvalidIterable),
     NotCopyable,
     Moved(PlaceExpr, Moved),
-    ForLoopError(ForLoopError),
+    LoopError(LoopError),
 }
 
 #[derive(Debug)]
@@ -140,8 +140,9 @@ pub enum DereferenceError {
 }
 
 #[derive(Debug)]
-pub enum ForLoopError {
+pub enum LoopError {
     InvalidBlockType(DataTy),
+    InvalidConditionType(Ty),
     ScopeError,
 }
 

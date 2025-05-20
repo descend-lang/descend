@@ -330,13 +330,11 @@ fn ty_check_for_nat(
                 // At this point, the type context outside of the loop was mutated while type checking the for body.
                 // Using a data type in loop body that can only be used once.
                 // TODO: actually track exactly where it happens.
-                return Err(TyError::ForLoopError(ForLoopError::ScopeError));
+                return Err(TyError::LoopError(LoopError::ScopeError));
             }
         } else {
             let body_type = body.ty.as_ref().unwrap().dty().clone();
-            return Err(TyError::ForLoopError(ForLoopError::InvalidBlockType(
-                body_type,
-            )));
+            return Err(TyError::LoopError(LoopError::InvalidBlockType(body_type)));
         }
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
@@ -404,7 +402,7 @@ fn ty_check_for(
     ty_check_expr(ctx, body)?;
     ctx.ty_ctx.pop_frame();
     if ctx.ty_ctx != &compare_ty_ctx {
-        return Err(TyError::ForLoopError(ForLoopError::ScopeError));
+        return Err(TyError::LoopError(LoopError::ScopeError));
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
@@ -420,17 +418,13 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
     // Is it better/more correct to push and pop scope around this as well?
     ty_check_expr(ctx, cond)?;
     if ctx.ty_ctx != &compare_ty_ctx {
-        return Err(TyError::String(
-            "Context should have stayed the same".to_string(),
-        ));
+        return Err(TyError::LoopError(LoopError::ScopeError));
     }
     ctx.ty_ctx.push_empty_frame();
     ty_check_expr(ctx, body)?;
     ctx.ty_ctx.pop_frame();
     if ctx.ty_ctx != &compare_ty_ctx {
-        return Err(TyError::String(
-            "Context should have stayed the same".to_string(),
-        ));
+        return Err(TyError::LoopError(LoopError::ScopeError));
     }
 
     let cond_ty = cond.ty.as_ref().unwrap();
@@ -443,9 +437,12 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Expected condition in while loop, instead got {:?}",
-            cond_ty
+        // return Err(TyError::String(format!(
+        //     "Expected condition in while loop, instead got {:?}",
+        //     cond_ty
+        // )));
+        return Err(TyError::LoopError(LoopError::InvalidConditionType(
+            (**cond_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -455,10 +452,20 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of while loop is not of unit type, instead got {:?}",
-            body_ty
-        )));
+        // return Err(TyError::String(format!(
+        //     "Body of while loop is not of unit type, instead got {:?}",
+        //     body_ty
+        // )));
+        match &body_ty.ty {
+            TyKind::Data(dty) => {
+                return Err(TyError::LoopError(LoopError::InvalidBlockType(
+                    (**dty).clone(),
+                )))
+            }
+            TyKind::FnTy(_) => {
+                unreachable!("while body is a function")
+            }
+        }
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
