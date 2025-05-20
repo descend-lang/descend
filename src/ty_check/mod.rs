@@ -732,7 +732,7 @@ fn ty_check_assign_place(
     let e_dty = if let TyKind::Data(dty) = &mut e.ty.as_mut().unwrap().as_mut().ty {
         dty.as_mut()
     } else {
-        return Err(TyError::UnexpectedType);
+        return Err(TyError::UnexpectedType((**e.ty.as_ref().unwrap()).clone()));
     };
     let err = unify::sub_unify(ctx.kind_ctx, ctx.ty_ctx, e_dty, &mut place_ty);
     if let Err(err) = err {
@@ -1366,7 +1366,7 @@ fn ty_check_proj(ctx: &mut ExprTyCtx, e: &mut Expr, i: usize) -> TyResult<Ty> {
     let e_dty = if let TyKind::Data(dty) = &e.ty.as_ref().unwrap().ty {
         dty.as_ref()
     } else {
-        return Err(TyError::UnexpectedType);
+        return Err(TyError::UnexpectedType((**e.ty.as_ref().unwrap()).clone()));
     };
     let elem_ty = proj_elem_dty(e_dty, i);
     Ok(Ty::new(TyKind::Data(Box::new(elem_ty?))))
@@ -1424,7 +1424,7 @@ fn infer_pattern_ident_tys(
     let pattern_dty = if let TyKind::Data(dty) = &pattern_ty.ty {
         dty.as_ref()
     } else {
-        return Err(TyError::UnexpectedType);
+        return Err(TyError::UnexpectedType((*pattern_ty).clone()));
     };
     match (pattern, &pattern_dty.dty) {
         (Pattern::Ident(mutbl, ident), _) => {
@@ -1617,7 +1617,7 @@ fn ty_check_borrow(
                 },
             ),
         },
-        TyKind::FnTy(_) => return Err(TyError::UnexpectedType),
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
     if rmem == Memory::GpuLocal {
         return Err(TyError::String(

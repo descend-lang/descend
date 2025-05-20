@@ -54,7 +54,7 @@ pub enum TyError {
     CouldNotInferProvenance,
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
-    UnexpectedType,
+    UnexpectedType(Ty),
     UnexpectedFnTy(FnTy),
     UnexpectedDataType(DataTy),
     // The thread hierarchy dimension referred to does not exist
