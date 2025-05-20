@@ -90,6 +90,7 @@ pub enum TyError {
     Moved(PlaceExpr, Moved),
     LoopError(LoopError),
     IfElseError(IfElseError),
+    ArrayError(ArrayError),
 }
 
 #[derive(Debug)]
@@ -149,6 +150,11 @@ pub enum IfElseError {
     InvalidConditionType(Ty),
     InvalidIfBlockType(Ty),
     InvalidElseBlockType(Ty),
+}
+
+#[derive(Debug)]
+pub enum ArrayError {
+    DifferentTypes(Ty, Ty),
 }
 
 impl<'a> FromIterator<TyError> for TyError {

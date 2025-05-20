@@ -722,7 +722,7 @@ fn ty_check_assign_place(
     check_mutable(ctx.ty_ctx, &pl)?;
 
     // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
-    if !matches!(&place_ty.dty, DataTyKind::Dead(_),) {
+    if !matches!(&place_ty.dty, DataTyKind::Dead(_)) {
         borrow_check::borrow_check(&BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq), pl_expr)
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
@@ -1400,18 +1400,21 @@ fn ty_check_array(ctx: &mut ExprTyCtx, elems: &mut Vec<Expr>) -> TyResult<Ty> {
             "Array elements cannot be views.".to_string(),
         ));
     }
-    if elems.iter().any(|elem| ty != elem.ty.as_ref()) {
-        Err(TyError::String(
-            "Not all provided elements have the same type.".to_string(),
-        ))
-    } else {
-        Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Array(
-                Box::new(ty.as_ref().unwrap().dty().clone()),
-                Nat::Lit(elems.len()),
-            ),
-        )))))
+    for elem in elems.iter() {
+        if ty != elem.ty.as_ref() {
+            return Err(TyError::ArrayError(ArrayError::DifferentTypes(
+                (**ty.unwrap()).clone(),
+                *elem.ty.clone().unwrap(),
+            )));
+        }
     }
+
+    Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+        DataTyKind::Array(
+            Box::new(ty.as_ref().unwrap().dty().clone()),
+            Nat::Lit(elems.len()),
+        ),
+    )))))
 }
 
 fn ty_check_literal(l: &mut Lit) -> Ty {
