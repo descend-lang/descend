@@ -958,10 +958,9 @@ fn ty_check_binary_op(
 fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
     let e_ty = e.ty.as_ref().unwrap();
-    let e_dty = if let TyKind::Data(dty) = &e_ty.ty {
-        dty.as_ref()
-    } else {
-        return Err(TyError::String("expected data type, but found".to_string()));
+    let e_dty = match &e_ty.ty {
+        TyKind::Data(dty) => dty.as_ref(),
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
     match &e_dty.dty {
         DataTyKind::Scalar(ScalarTy::F32)
