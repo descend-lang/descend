@@ -4,7 +4,7 @@ use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
 use crate::ast::{
-    BaseExec, DataTy, DataTyKind, DimCompo, ExecTy, ExecTyKind, Expr, FnTy, Ident, Memory,
+    BaseExec, BinOp, DataTy, DataTyKind, DimCompo, ExecTy, ExecTyKind, Expr, FnTy, Ident, Memory,
     NatEvalError, Ownership, PlaceExpr, RefDty, TyKind,
 };
 use crate::error;
@@ -91,6 +91,7 @@ pub enum TyError {
     LoopError(LoopError),
     IfElseError(IfElseError),
     ArrayError(ArrayError),
+    BinOpError(BinOp, Ty, Ty),
 }
 
 #[derive(Debug)]

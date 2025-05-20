@@ -905,70 +905,53 @@ fn ty_check_binary_op(
     };
     match bin_op {
         // Shift operators only allow integer values (lhs_ty and rhs_ty can differ!)
-        BinOp::Shl
-        | BinOp::Shr => match (&lhs_ty.ty, &rhs_ty.ty) {
+        BinOp::Shl | BinOp::Shr => match (&lhs_ty.ty, &rhs_ty.ty) {
             (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
                 (
                     DataTyKind::Scalar(ScalarTy::U8)
                     | DataTyKind::Scalar(ScalarTy::U32)
                     | DataTyKind::Scalar(ScalarTy::U64)
-                    | DataTyKind::Scalar(ScalarTy::I32)
-                    ,
+                    | DataTyKind::Scalar(ScalarTy::I32),
                     DataTyKind::Scalar(ScalarTy::U8)
                     | DataTyKind::Scalar(ScalarTy::U32)
                     | DataTyKind::Scalar(ScalarTy::U64)
                     | DataTyKind::Scalar(ScalarTy::I32),
                 ) => Ok(ret_dty),
-                _ => Err(TyError::String(format!(
-                    "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                    bin_op, lhs, rhs
-                )))
-            }
-            _ => Err(TyError::String(format!(
-                "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                bin_op, lhs, rhs
-            ))),
-        }
+                _ => Err(TyError::BinOpError(
+                    *bin_op,
+                    (**lhs_ty).clone(),
+                    (**rhs_ty).clone(),
+                )),
+            },
+            _ => Err(TyError::BinOpError(
+                *bin_op,
+                (**lhs_ty).clone(),
+                (**rhs_ty).clone(),
+            )),
+        },
         _ => match (&lhs_ty.ty, &rhs_ty.ty) {
             (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
-                (
-                    DataTyKind::Scalar(ScalarTy::F32),
-                    DataTyKind::Scalar(ScalarTy::F32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U8),
-                    DataTyKind::Scalar(ScalarTy::U8),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U32),
-                    DataTyKind::Scalar(ScalarTy::U32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U64),
-                    DataTyKind::Scalar(ScalarTy::U64),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::F64),
-                    DataTyKind::Scalar(ScalarTy::F64)
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::I32),
-                    DataTyKind::Scalar(ScalarTy::I32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::Bool),
-                    DataTyKind::Scalar(ScalarTy::Bool),
-                ) => Ok(ret_dty),
-                _ => Err(TyError::String(format!(
-                    "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                    bin_op, dty1, dty2
-                )))
-            }
-            _ => Err(TyError::String(format!(
-                "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                bin_op, lhs, rhs
-            ))),
-        }
+                (DataTyKind::Scalar(ScalarTy::F32), DataTyKind::Scalar(ScalarTy::F32))
+                | (DataTyKind::Scalar(ScalarTy::U8), DataTyKind::Scalar(ScalarTy::U8))
+                | (DataTyKind::Scalar(ScalarTy::U32), DataTyKind::Scalar(ScalarTy::U32))
+                | (DataTyKind::Scalar(ScalarTy::U64), DataTyKind::Scalar(ScalarTy::U64))
+                | (DataTyKind::Scalar(ScalarTy::F64), DataTyKind::Scalar(ScalarTy::F64))
+                | (DataTyKind::Scalar(ScalarTy::I32), DataTyKind::Scalar(ScalarTy::I32))
+                | (DataTyKind::Scalar(ScalarTy::Bool), DataTyKind::Scalar(ScalarTy::Bool)) => {
+                    Ok(ret_dty)
+                }
+                _ => Err(TyError::BinOpError(
+                    *bin_op,
+                    (**lhs_ty).clone(),
+                    (**rhs_ty).clone(),
+                )),
+            },
+            _ => Err(TyError::BinOpError(
+                *bin_op,
+                (**lhs_ty).clone(),
+                (**rhs_ty).clone(),
+            )),
+        },
     }
 }
 
