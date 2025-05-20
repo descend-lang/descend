@@ -1,5 +1,3 @@
-use std::borrow::Borrow;
-
 use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
