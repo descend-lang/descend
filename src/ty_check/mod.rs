@@ -982,34 +982,29 @@ fn ty_check_cast(ctx: &mut ExprTyCtx, e: &mut Expr, dty: &DataTy) -> TyResult<Ty
         | DataTyKind::Scalar(ScalarTy::I32)
         | DataTyKind::Scalar(ScalarTy::U8)
         | DataTyKind::Scalar(ScalarTy::U32)
-        | DataTyKind::Scalar(ScalarTy::U64)
-        => match dty.dty {
+        | DataTyKind::Scalar(ScalarTy::U64) => match dty.dty {
             DataTyKind::Scalar(ScalarTy::I32)
             | DataTyKind::Scalar(ScalarTy::U8)
             | DataTyKind::Scalar(ScalarTy::U32)
             | DataTyKind::Scalar(ScalarTy::U64)
             | DataTyKind::Scalar(ScalarTy::F32)
             | DataTyKind::Scalar(ScalarTy::F64) => Ok(Ty::new(TyKind::Data(Box::new(dty.clone())))),
-            _ => Err(TyError::String(format!(
-                "Exected a number type (i.e. i32 or f32) to cast to from {:?}, but found {:?}",
-                e_ty, dty
+            _ => Err(TyError::CastError(CastError::FromTo(
+                (**e_ty).clone(),
+                (*dty).clone(),
             ))),
         },
-        DataTyKind::Scalar(ScalarTy::Bool)
-        => match dty.dty {
+        DataTyKind::Scalar(ScalarTy::Bool) => match dty.dty {
             DataTyKind::Scalar(ScalarTy::I32)
             | DataTyKind::Scalar(ScalarTy::U8)
             | DataTyKind::Scalar(ScalarTy::U32)
             | DataTyKind::Scalar(ScalarTy::U64) => Ok(Ty::new(TyKind::Data(Box::new(dty.clone())))),
-            _ => Err(TyError::String(format!(
-                "Exected an integer type (i.e. i32 or u32) to cast to from a bool, but found {:?}",
-                dty
+            _ => Err(TyError::CastError(CastError::FromTo(
+                (**e_ty).clone(),
+                (*dty).clone(),
             ))),
         },
-        _ => Err(TyError::String(format!(
-            "Exected a number type (i.e. f32 or i32) or bool as a type to cast from, but found {:?}",
-            e_ty
-        ))),
+        _ => Err(TyError::CastError(CastError::From((**e_ty).clone()))),
     }
 }
 

@@ -90,6 +90,8 @@ pub enum TyError {
     IfElseError(IfElseError),
     ArrayError(ArrayError),
     BinOpError(BinOp, Ty, Ty),
+    // Cannot cast from [0] to [1]
+    CastError(CastError),
 }
 
 #[derive(Debug)]
@@ -154,6 +156,12 @@ pub enum IfElseError {
 #[derive(Debug)]
 pub enum ArrayError {
     DifferentTypes(Ty, Ty),
+}
+
+#[derive(Debug)]
+pub enum CastError {
+    FromTo(Ty, DataTy),
+    From(Ty),
 }
 
 impl<'a> FromIterator<TyError> for TyError {
