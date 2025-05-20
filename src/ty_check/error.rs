@@ -86,6 +86,7 @@ pub enum TyError {
     InvalidIterable(InvalidIterable),
     NotCopyable,
     Moved(PlaceExpr, Moved),
+    ForLoopError(ForLoopError),
 }
 
 #[derive(Debug)]
@@ -136,6 +137,12 @@ pub enum DereferenceError {
     InvalidOwnership,
     // Trying to dereference something that is not in the current resource
     NotInExecRes(Memory, ExecTyKind),
+}
+
+#[derive(Debug)]
+pub enum ForLoopError {
+    InvalidBlockType(DataTy),
+    ScopeError,
 }
 
 impl<'a> FromIterator<TyError> for TyError {

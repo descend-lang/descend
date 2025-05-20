@@ -308,26 +308,35 @@ fn ty_check_for_nat(
     // TODO make this a block
     body: &mut Expr,
 ) -> TyResult<Ty> {
+    // We probably can remove this vec clone.
     let compare_ty_ctx = ctx.ty_ctx.clone();
     let lifted_range = range.lift(ctx.nat_ctx)?;
 
     for i in lifted_range {
+        // Attach a new context frame and add the loop variable for the type checking within the loop.
         ctx.ty_ctx.push_empty_frame();
         ctx.nat_ctx.push_empty_frame();
-        ctx.nat_ctx.append(&ident.name, i);
 
+        // Add the loop variable to the body context and typecheck
+        ctx.nat_ctx.append(&ident.name, i);
         ty_check_expr(ctx, body)?;
 
+        // Remove the context frames used within the body.
         ctx.nat_ctx.pop_frame();
         ctx.ty_ctx.pop_frame();
+
         if let DataTyKind::Scalar(ScalarTy::Unit) = &body.ty.as_ref().unwrap().dty().dty {
             if ctx.ty_ctx != &compare_ty_ctx {
-                return Err(TyError::String(
-                    "Using a data type in loop that can only be used once.".to_string(),
-                ));
+                // At this point, the type context outside of the loop was mutated while type checking the for body.
+                // Using a data type in loop body that can only be used once.
+                // TODO: actually track exactly where it happens.
+                return Err(TyError::ForLoopError(ForLoopError::ScopeError));
             }
         } else {
-            return Err(TyError::UnexpectedType);
+            let body_type = body.ty.as_ref().unwrap().dty().clone();
+            return Err(TyError::ForLoopError(ForLoopError::InvalidBlockType(
+                body_type,
+            )));
         }
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
@@ -395,9 +404,7 @@ fn ty_check_for(
     ty_check_expr(ctx, body)?;
     ctx.ty_ctx.pop_frame();
     if ctx.ty_ctx != &compare_ty_ctx {
-        return Err(TyError::String(
-            "Using a data type in loop that can only be used once.".to_string(),
-        ));
+        return Err(TyError::ForLoopError(ForLoopError::ScopeError));
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
