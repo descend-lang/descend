@@ -352,11 +352,7 @@ fn ty_check_for(
     ty_check_expr(ctx, collec)?;
     let collec_dty = match &collec.ty.as_ref().unwrap().ty {
         TyKind::Data(collec_dty) => collec_dty.as_ref(),
-        TyKind::FnTy(_) => {
-            return Err(TyError::InvalidIterable(
-                InvalidIterable::UnexpectedFunction(collec.clone()),
-            ))
-        }
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
 
     let ident_dty = match &collec_dty.dty {
@@ -377,17 +373,13 @@ fn ty_check_for(
             ))),
             _ => {
                 return Err(TyError::InvalidIterable(InvalidIterable::NotArrayRef(
-                    collec.clone(),
                     (**reff).clone(),
                 )))
             }
         },
         // DataTyKind::Range => DataTyKind::Scalar(ScalarTy::I32),
-        dty => {
-            return Err(TyError::InvalidIterable(InvalidIterable::InvalidIterable(
-                collec.clone(),
-                dty.clone(),
-            )));
+        _ => {
+            return Err(TyError::UnexpectedDataType((*collec_dty).clone()));
         }
     };
     let compare_ty_ctx = ctx.ty_ctx.clone();
@@ -810,12 +802,9 @@ fn ty_check_idx_assign(
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), pl_expr)?;
-    let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
-        dty
-    } else {
-        return Err(TyError::String(
-            "Trying to index into non array type.".to_string(),
-        ));
+    let pl_expr_dty = match &pl_expr.ty.as_ref().unwrap().ty {
+        TyKind::Data(dty) => dty,
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
     let (n, own, mem, dty) = match &pl_expr_dty.dty {
         DataTyKind::Array(elem_dty, n) => unimplemented!(), //(Ty::Data(*elem_ty), n),

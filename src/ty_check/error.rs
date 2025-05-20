@@ -57,6 +57,7 @@ pub enum TyError {
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
     UnexpectedType,
+    UnexpectedFnTy(FnTy),
     UnexpectedDataType(DataTy),
     // The thread hierarchy dimension referred to does not exist
     IllegalDimension,
@@ -99,12 +100,7 @@ pub enum Moved {
 
 #[derive(Debug)]
 pub enum InvalidIterable {
-    // Do I need to contain the Expr so that the span is known?
-    // Should I just return the span and the DataTyKind?
-    InvalidIterable(Expr, DataTyKind),
-    // It's obvious when it's a function.
-    UnexpectedFunction(Expr),
-    NotArrayRef(Expr, RefDty),
+    NotArrayRef(RefDty),
 }
 
 #[derive(Debug)]
