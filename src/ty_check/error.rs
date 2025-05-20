@@ -57,6 +57,7 @@ pub enum TyError {
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
     UnexpectedType,
+    UnexpectedDataType(DataTy),
     // The thread hierarchy dimension referred to does not exist
     IllegalDimension,
     UnifyError(UnifyError),

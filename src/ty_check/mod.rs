@@ -998,10 +998,7 @@ fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResul
         | DataTyKind::Scalar(ScalarTy::U8)
         | DataTyKind::Scalar(ScalarTy::U32)
         | DataTyKind::Scalar(ScalarTy::U64) => Ok(e_ty.as_ref().clone()),
-        _ => Err(TyError::String(format!(
-            "Exected a number type (i.e., f32 or i32), but found {:?}",
-            e_ty
-        ))),
+        _ => Err(TyError::UnexpectedDataType((*e_dty).clone())),
     }
 }
 
