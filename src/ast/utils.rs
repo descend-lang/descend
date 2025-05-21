@@ -27,8 +27,8 @@ pub(crate) fn fresh_name(name: &str) -> String {
     format!("{}_{}", prefix, i)
 }
 
-pub fn implicit_idents(f: &FunDef) -> Option<HashSet<Ident>> {
-    struct ImplicitIdents(HashSet<Ident>);
+pub fn implicit_idents(f: &FunDef) -> Option<HashSet<Ident<'a>>> {
+    struct ImplicitIdents(HashSet<Ident<'a>>);
     impl Visit for ImplicitIdents {
         fn visit_ident(&mut self, ident: &Ident) {
             if ident.is_implicit {

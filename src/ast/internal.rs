@@ -5,48 +5,58 @@
 
 use super::{Ident, Ownership, PlaceExpr, Ty};
 use crate::ast::{ExecExpr, Mutability, Nat, PlaceExprKind, View};
+use bumpalo::collections::Vec as BumpVec;
 use std::collections::HashSet;
 
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
-pub struct Frame {
-    pub bindings: Vec<FrameEntry>,
+// TODO: Removed the Default trait here, see what kind of consequences has this later
+// Otherwise implement the trait
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame<'a> {
+    pub bindings: BumpVec<'a, FrameEntry<'a>>,
 }
 
-impl Frame {
-    pub fn new() -> Self {
-        Self::default()
+impl<'a> Frame<'a> {
+    pub fn new_in(bump: &'a bumpalo::Bump) -> Self {
+        Self {
+            bindings: BumpVec::new_in(bump),
+        }
     }
 
-    pub fn append_idents_typed(&mut self, idents_typed: Vec<IdentTyped>) -> &mut Frame {
-        self.bindings.append(
-            &mut idents_typed
-                .into_iter()
-                .map(FrameEntry::Var)
-                .collect::<Vec<_>>(),
-        );
-        self
+    pub fn append_idents_typed<I>(&mut self, idents_typed: I)
+    where
+        I: IntoIterator<Item = IdentTyped<'a>>,
+    {
+        for ident in idents_typed {
+            self.bindings.push(FrameEntry::Var(ident));
+        }
     }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum FrameEntry {
-    Var(IdentTyped),
-    ExecMapping(ExecMapping),
-    PrvMapping(PrvMapping),
+pub enum FrameEntry<'a> {
+    Var(IdentTyped<'a>),
+    ExecMapping(ExecMapping<'a>),
+    PrvMapping(PrvMapping<'a>),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct IdentTyped {
-    pub ident: Ident,
-    pub ty: Ty,
+pub struct IdentTyped<'a> {
+    pub ident: Ident<'a>,
+    pub ty: Ty<'a>,
     pub mutbl: Mutability,
-    pub exec: ExecExpr,
+    pub exec: ExecExpr<'a>,
 }
 
-impl IdentTyped {
-    pub fn new(ident: Ident, ty: Ty, mutbl: Mutability, exec: ExecExpr) -> Self {
+impl<'a> IdentTyped<'a> {
+    pub fn new_in(
+        bump: &'a bumpalo::Bump,
+        ident: &str,
+        ty: Ty<'a>,
+        mutbl: Mutability,
+        exec: ExecExpr,
+    ) -> Self {
         IdentTyped {
-            ident,
+            ident: Ident::new(bump, ident),
             ty,
             mutbl,
             exec,
@@ -55,24 +65,25 @@ impl IdentTyped {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct ExecMapping {
-    pub ident: Ident,
-    pub exec_expr: ExecExpr,
+pub struct ExecMapping<'a> {
+    pub ident: Ident<'a>,
+    pub exec_expr: ExecExpr<'a>,
 }
 
-impl ExecMapping {
-    pub fn new(ident: Ident, exec_expr: ExecExpr) -> Self {
+impl<'a> ExecMapping<'a> {
+    pub fn new(ident: Ident<'a>, exec_expr: ExecExpr) -> Self {
         ExecMapping { ident, exec_expr }
     }
 }
 
+// TODO: Problems with HashSet and String in the Arena implementation --> Find a work
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct PrvMapping {
+pub struct PrvMapping<'a> {
     pub prv: String,
-    pub loans: HashSet<Loan>,
+    pub loans: HashSet<Loan<'a>>,
 }
 
-impl PrvMapping {
+impl<'a> PrvMapping<'a> {
     pub fn new(name: &str) -> Self {
         PrvMapping {
             prv: name.to_string(),
@@ -82,129 +93,127 @@ impl PrvMapping {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Loan {
-    pub place_expr: PlaceExpr,
+pub struct Loan<'a> {
+    pub place_expr: PlaceExpr<'a>,
     pub own: Ownership,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub enum PathElem {
+pub enum PathElem<'a> {
     Proj(usize),
-    FieldProj(Box<Ident>),
+    FieldProj(&'a Ident<'a>),
 }
-pub type Path = Vec<PathElem>;
+pub type Path<'a> = BumpVec<'a, PathElem<'a>>;
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct Place {
-    pub ident: Ident,
-    pub path: Path,
+pub struct Place<'a> {
+    pub ident: Ident<'a>,
+    pub path: Path<'a>,
 }
-impl Place {
-    pub fn new(ident: Ident, path: Path) -> Self {
+impl<'a> Place<'a> {
+    pub fn new(ident: Ident<'a>, path: Path<'a>) -> Self {
         Place { ident, path }
     }
 
-    pub fn to_place_expr(&self) -> PlaceExpr {
+    pub fn to_place_expr(&self, bump: &'a bumpalo::Bump) -> PlaceExpr {
         self.path.iter().fold(
             PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
             |pl_expr, path_entry| match path_entry {
-                PathElem::Proj(n) => PlaceExpr::new(PlaceExprKind::Proj(Box::new(pl_expr), *n)),
+                PathElem::Proj(n) => PlaceExpr::new(PlaceExprKind::Proj(bump.alloc(pl_expr), *n)),
                 PathElem::FieldProj(field) => {
-                    PlaceExpr::new(PlaceExprKind::FieldProj(Box::new(pl_expr), field.clone()))
+                    PlaceExpr::new(PlaceExprKind::FieldProj(bump.alloc(pl_expr), field))
                 }
             },
         )
     }
 
+    /**
     pub fn prefix_of(&self, other: &Self) -> bool {
         if self.path.len() > other.path.len() {
             return false;
         }
         self.ident == other.ident && &self.path == &other.path[..self.path.len()]
+    }*/
+
+    pub fn prefix_of(&self, other: &Self) -> bool {
+        if self.ident != other.ident || self.path.len() > other.path.len() {
+            return false;
+        }
+
+        other.path.iter().zip(&self.path).all(|(a, b)| a == b)
     }
 }
 
-pub enum PlaceCtx {
-    Proj(Box<PlaceCtx>, usize),
-    FieldProj(Box<PlaceCtx>, Box<Ident>),
-    Deref(Box<PlaceCtx>),
-    Select(Box<PlaceCtx>, Box<ExecExpr>),
-    View(Box<PlaceCtx>, Box<View>),
-    Idx(Box<PlaceCtx>, Box<Nat>),
+pub enum PlaceCtx<'a> {
+    Proj(&'a PlaceCtx<'a>, usize),
+    FieldProj(&'a PlaceCtx<'a>, Ident<'a>),
+    Deref(&'a PlaceCtx<'a>),
+    Select(&'a PlaceCtx<'a>, &'a ExecExpr<'a>),
+    View(&'a PlaceCtx<'a>, &'a View<'a>),
+    Idx(&'a PlaceCtx<'a>, &'a Nat<'a>),
     Hole,
 }
 
-impl PlaceCtx {
-    pub fn insert_pl_expr(&self, pl_expr: PlaceExpr) -> PlaceExpr {
+impl<'a> PlaceCtx<'a> {
+    pub fn insert_pl_expr(
+        &'a self,
+        bump: &'a bumpalo::Bump,
+        pl_expr: PlaceExpr<'a>,
+    ) -> PlaceExpr<'a> {
         match self {
             Self::Hole => pl_expr,
             Self::Proj(pl_ctx, n) => PlaceExpr::new(PlaceExprKind::Proj(
-                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
-                n.clone(),
+                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                *n,
             )),
-            Self::FieldProj(pl_ctx, field_name) => PlaceExpr::new(PlaceExprKind::FieldProj(
-                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
-                field_name.clone(),
+            Self::FieldProj(pl_ctx, field) => PlaceExpr::new(PlaceExprKind::FieldProj(
+                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                field,
             )),
-            Self::Deref(pl_ctx) => PlaceExpr::new(PlaceExprKind::Deref(Box::new(
-                pl_ctx.insert_pl_expr(pl_expr),
-            ))),
+            Self::Deref(pl_ctx) => PlaceExpr::new(PlaceExprKind::Deref(
+                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+            )),
             Self::Select(pl_ctx, exec) => PlaceExpr::new(PlaceExprKind::Select(
-                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
+                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
                 exec.clone(),
             )),
-            Self::Idx(pl_ctx, idx) => PlaceExpr::new(PlaceExprKind::Idx(
-                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
-                idx.clone(),
-            )),
             Self::View(pl_ctx, view) => PlaceExpr::new(PlaceExprKind::View(
-                Box::new(pl_ctx.insert_pl_expr(pl_expr)),
+                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
                 view.clone(),
+            )),
+            Self::Idx(pl_ctx, idx) => PlaceExpr::new(PlaceExprKind::Idx(
+                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                idx.clone(),
             )),
         }
     }
 
-    // Assumes the PlaceCtx HAS an innermost deref, meaning the Hole is wrapped by a Deref.
-    // This is always true for PlaceCtxs created by PlaceExpr.to_pl_ctx_and_most_specif_pl
-    pub fn without_innermost_deref(&self) -> Self {
+    pub fn without_innermost_deref(&'a self, bump: &'a bumpalo::Bump) -> &'a PlaceCtx<'a> {
         match self {
-            PlaceCtx::Hole => PlaceCtx::Hole,
-            PlaceCtx::Proj(pl_ctx, i) => {
-                if let PlaceCtx::Hole = **pl_ctx {
-                    panic!("There must be an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
-                } else {
-                    let inner_ctx = pl_ctx.without_innermost_deref();
-                    PlaceCtx::Proj(Box::new(inner_ctx), *i)
-                }
+            PlaceCtx::Hole => self,
+            PlaceCtx::Proj(pl_ctx, idx) => {
+                bump.alloc(PlaceCtx::Proj(pl_ctx.without_innermost_deref(bump), *idx))
             }
-            PlaceCtx::FieldProj(pl_ctx, field_name) => {
-                if let PlaceCtx::Hole = **pl_ctx {
-                    panic!("There must be an innermost deref context as created by PlaceExpr.to_pl_ctx_and_most_specif_pl.")
-                } else {
-                    let inner_ctx = pl_ctx.without_innermost_deref();
-                    PlaceCtx::FieldProj(Box::new(inner_ctx), field_name.clone())
-                }
-            }
-            PlaceCtx::Deref(pl_ctx) => {
-                if let PlaceCtx::Hole = **pl_ctx {
-                    PlaceCtx::Hole
-                } else {
-                    let inner_ctx = pl_ctx.without_innermost_deref();
-                    PlaceCtx::Deref(Box::new(inner_ctx))
-                }
-            }
-            PlaceCtx::Select(pl_ctx, exec_idents) => {
-                let inner_ctx = pl_ctx.without_innermost_deref();
-                PlaceCtx::Select(Box::new(inner_ctx), exec_idents.clone())
-            }
-            PlaceCtx::View(pl_ctx, view) => {
-                let inner_ctx = pl_ctx.without_innermost_deref();
-                PlaceCtx::View(Box::new(inner_ctx), view.clone())
-            }
-
-            PlaceCtx::Idx(pl_ctx, idx) => {
-                let inner_ctx = pl_ctx.without_innermost_deref();
-                PlaceCtx::Idx(Box::new(inner_ctx), idx.clone())
-            }
+            PlaceCtx::FieldProj(pl_ctx, ident) => bump.alloc(PlaceCtx::FieldProj(
+                pl_ctx.without_innermost_deref(bump),
+                ident.clone(),
+            )),
+            PlaceCtx::Deref(pl_ctx) => match **pl_ctx {
+                PlaceCtx::Hole => bump.alloc(PlaceCtx::Hole),
+                _ => bump.alloc(PlaceCtx::Deref(pl_ctx.without_innermost_deref(bump))),
+            },
+            PlaceCtx::Select(pl_ctx, exec) => bump.alloc(PlaceCtx::Select(
+                pl_ctx.without_innermost_deref(bump),
+                exec.clone(),
+            )),
+            PlaceCtx::View(pl_ctx, view) => bump.alloc(PlaceCtx::View(
+                pl_ctx.without_innermost_deref(bump),
+                view.clone(),
+            )),
+            PlaceCtx::Idx(pl_ctx, idx) => bump.alloc(PlaceCtx::Idx(
+                pl_ctx.without_innermost_deref(bump),
+                idx.clone(),
+            )),
         }
     }
 }
