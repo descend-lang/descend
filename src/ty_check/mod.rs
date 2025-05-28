@@ -816,9 +816,7 @@ fn ty_check_idx_assign(
             {
                 unimplemented!() //(Ty::Data(*elem_ty), n)
             } else {
-                return Err(TyError::String(
-                    "Trying to index into non array type.".to_string(),
-                ));
+                return Err(TyError::UnexpectedDataType((**arr_dty).clone()));
             }
         }
         // FIXME is this allowed? There is no reborrow but this leaks the lifetime and does not
@@ -834,11 +832,7 @@ fn ty_check_idx_assign(
                 ))
             }
         },
-        _ => {
-            return Err(TyError::String(
-                "Trying to index into non array type.".to_string(),
-            ))
-        }
+        _ => return Err(TyError::CannotIndex),
     };
     if !dty.is_fully_alive() {
         return Err(TyError::String(
@@ -851,10 +845,10 @@ fn ty_check_idx_assign(
             "Cannot assign through shared references.".to_string(),
         ));
     }
-    if n.eval(ctx.nat_ctx)? <= idx.eval(ctx.nat_ctx)? {
-        return Err(TyError::String(
-            "Trying to access array out-of-bounds.".to_string(),
-        ));
+    let n_val = n.eval(ctx.nat_ctx)?;
+    let idx_val = idx.eval(ctx.nat_ctx)?;
+    if n_val <= idx_val {
+        return Err(TyError::IndexOutOfBounds(idx_val, n_val));
     }
     let potential_accesses = borrow_check::access_safety_check(
         &BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq),

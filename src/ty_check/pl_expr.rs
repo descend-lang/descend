@@ -416,8 +416,10 @@ fn ty_check_index(
         }
     };
 
-    if n.eval(ctx.nat_ctx)? <= idx.eval(ctx.nat_ctx)? {
-        return Err(TyError::IndexOutOfBounds);
+    let n_val = n.eval(ctx.nat_ctx)?;
+    let idx_val = idx.eval(ctx.nat_ctx)?;
+    if n_val <= idx_val {
+        return Err(TyError::IndexOutOfBounds(idx_val, n_val));
     }
 
     Ok((Ty::new(TyKind::Data(Box::new(elem_dty))), mems, passed_prvs))
