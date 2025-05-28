@@ -1,7 +1,6 @@
-use std::collections::HashSet;
-
 use proc_macro::TokenStream;
 use quote::quote;
+use std::collections::HashSet;
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
