@@ -125,11 +125,11 @@ impl<'a> FunDef<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdentExec<'a> {
     pub ident: Ident<'a>,
-    pub ty: &'a ExecTy,
+    pub ty: &'a ExecTy<'a>,
 }
 
 impl<'a> IdentExec<'a> {
-    pub fn new_in(bump: &'a bumpalo::Bump, ident: Ident<'a>, exec_ty: ExecTy) -> Self {
+    pub fn new_in(bump: &'a bumpalo::Bump, ident: Ident<'a>, exec_ty: ExecTy<'a>) -> Self {
         IdentExec {
             ident,
             ty: bump.alloc(exec_ty),
@@ -276,7 +276,7 @@ impl<'a> Sched<'a> {
         bump: &'a bumpalo::Bump,
         dim: DimCompo,
         inner_exec_ident: Option<Ident<'a>>,
-        sched_exec: ExecExpr,
+        sched_exec: ExecExpr<'a>,
         body: Block<'a>,
     ) -> Self {
         Sched {
@@ -302,7 +302,7 @@ impl<'a> Split<'a> {
         bump: &'a bumpalo::Bump,
         dim_compo: DimCompo,
         pos: Nat<'a>,
-        split_exec: ExecExpr,
+        split_exec: ExecExpr<'a>,
         branch_idents: impl IntoIterator<Item = Ident<'a>>,
         branch_bodies: impl IntoIterator<Item = Expr<'a>>,
     ) -> Self {
@@ -436,7 +436,7 @@ pub struct Ident<'a> {
 }
 // TODO: Arena String Interna nachschauen
 impl<'a> Ident<'a> {
-    pub fn new(bump: &'a bumpalo::Bump, name: &str) -> Self {
+    pub fn new(bump: &'a bumpalo::Bump, name: &'a str) -> Self {
         Self {
             name: bump.alloc_str(name),
             span: None,
@@ -444,7 +444,7 @@ impl<'a> Ident<'a> {
         }
     }
 
-    pub fn new_impli(bump: &'a bumpalo::Bump, name: &str) -> Self {
+    pub fn new_impli(bump: &'a bumpalo::Bump, name: &'a str) -> Self {
         Self {
             name: bump.alloc_str(name),
             span: None,
@@ -452,7 +452,7 @@ impl<'a> Ident<'a> {
         }
     }
 
-    pub fn with_span(bump: &'a bumpalo::Bump, name: &str, span: Span) -> Self {
+    pub fn with_span(bump: &'a bumpalo::Bump, name: &'a str, span: Span) -> Self {
         Self {
             name: bump.alloc_str(name),
             span: Some(span),
@@ -715,12 +715,12 @@ pub enum PlaceExprKind<'a> {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum PlExprPathElem<'a> {
     View(View<'a>),
-    Select(Box<ExecExpr<'a>>),
+    Select(&'a ExecExpr<'a>),
     Proj(usize),
     FieldProj(Ident<'a>),
     Deref,
-    Idx(Box<Nat<'a>>),
-    RangeSelec(Box<Nat<'a>>, Box<Nat<'a>>),
+    Idx(&'a Nat<'a>),
+    RangeSelec(&'a Nat<'a>, &'a Nat<'a>),
 }
 
 impl<'a> PlaceExpr<'a> {
@@ -752,68 +752,77 @@ impl<'a> PlaceExpr<'a> {
     }
 
     // TODO refactor. Places are only needed during typechecking and codegen
-    pub fn to_place(&self) -> Option<internal::Place> {
+    pub fn to_place(&self, arena: &'a bumpalo::Bump) -> Option<internal::Place> {
         if self.is_place() {
-            Some(self.to_pl_ctx_and_most_specif_pl().1)
+            Some(self.to_pl_ctx_and_most_specif_pl(arena).1)
         } else {
             None
         }
     }
 
     // TODO refactor see to_place
-    pub fn to_pl_ctx_and_most_specif_pl(&self) -> (internal::PlaceCtx, internal::Place) {
+    pub fn to_pl_ctx_and_most_specif_pl(
+        &'a self,
+        arena: &'a bumpalo::Bump,
+    ) -> (internal::PlaceCtx<'a>, internal::Place<'a>) {
         match &self.pl_expr {
             PlaceExprKind::Select(inner_ple, exec_idents) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl(arena);
                 (
-                    internal::PlaceCtx::Select(Box::new(pl_ctx), exec_idents.clone()),
+                    internal::PlaceCtx::Select(arena.alloc(pl_ctx), exec_idents.clone()),
                     pl,
                 )
             }
             PlaceExprKind::Deref(inner_ple) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                (internal::PlaceCtx::Deref(Box::new(pl_ctx)), pl)
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl(arena);
+                (internal::PlaceCtx::Deref(arena.alloc(pl_ctx)), pl)
             }
             PlaceExprKind::View(inner_ple, view) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                (internal::PlaceCtx::View(Box::new(pl_ctx), view.clone()), pl)
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl(arena);
+                (
+                    internal::PlaceCtx::View(arena.alloc(pl_ctx), view.clone()),
+                    pl,
+                )
             }
             PlaceExprKind::Proj(inner_ple, n) => {
-                let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl(arena);
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
                         pl.path.push(PathElem::Proj(*n));
                         (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
-                    _ => (internal::PlaceCtx::Proj(Box::new(pl_ctx), *n), pl),
+                    _ => (internal::PlaceCtx::Proj(arena.alloc(pl_ctx), *n), pl),
                 }
             }
             PlaceExprKind::FieldProj(inner_ple, field_name) => {
-                let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
+                let (pl_ctx, mut pl) = inner_ple.to_pl_ctx_and_most_specif_pl(arena);
                 match pl_ctx {
                     internal::PlaceCtx::Hole => {
                         pl.path.push(PathElem::FieldProj(field_name.clone()));
                         (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
                     _ => (
-                        internal::PlaceCtx::FieldProj(Box::new(pl_ctx), field_name.clone()),
+                        internal::PlaceCtx::FieldProj(arena.alloc(pl_ctx), **field_name),
                         pl,
                     ),
                 }
             }
             PlaceExprKind::Idx(inner_ple, idx) => {
-                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl();
-                (internal::PlaceCtx::Idx(Box::new(pl_ctx), idx.clone()), pl)
+                let (pl_ctx, pl) = inner_ple.to_pl_ctx_and_most_specif_pl(arena);
+                (
+                    internal::PlaceCtx::Idx(arena.alloc(pl_ctx), idx.clone()),
+                    pl,
+                )
             }
             PlaceExprKind::Ident(ident) => (
                 internal::PlaceCtx::Hole,
-                internal::Place::new(ident.clone(), vec![]),
+                internal::Place::new(ident.clone(), vec![]), // create a BumpVec here
             ),
         }
     }
 
-    pub fn equiv(&'_ self, place: &'_ internal::Place) -> bool {
-        if let (internal::PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl() {
+    pub fn equiv(&'_ self, arena: &'a bumpalo::Bump, place: &'_ internal::Place) -> bool {
+        if let (internal::PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl(arena) {
             &pl == place
         } else {
             false
@@ -823,8 +832,8 @@ impl<'a> PlaceExpr<'a> {
     pub fn as_ident_and_path(&self) -> (Ident<'a>, Vec<PlExprPathElem<'a>>) {
         fn as_ident_and_path_rec(
             pl_expr: &PlaceExpr,
-            mut path: Vec<PlExprPathElem>,
-        ) -> (Ident<'a>, Vec<PlExprPathElem<'a>>) {
+            mut path: BumpVec<PlExprPathElem<'a>>,
+        ) -> (Ident<'a>, BumpVec<PlExprPathElem<'a>>) {
             match &pl_expr.pl_expr {
                 PlaceExprKind::Ident(i) => {
                     path.reverse();
@@ -839,7 +848,7 @@ impl<'a> PlaceExpr<'a> {
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::View(inner_ple, view) => {
-                    path.push(PlExprPathElem::View(view.as_ref().clone()));
+                    path.push(PlExprPathElem::View(**view)); // formerly as_ref().clone() ? Can that just work with double dereferencing?
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::Proj(inner_ple, n) => {
@@ -847,7 +856,7 @@ impl<'a> PlaceExpr<'a> {
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::FieldProj(inner_ple, ident) => {
-                    path.push(PlExprPathElem::FieldProj(ident.as_ref().clone()));
+                    path.push(PlExprPathElem::FieldProj(**ident));  // formerly as_ref().clone() ? Can that just work with double dereferencing?
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::Idx(inner_ple, idx) => {
@@ -863,18 +872,16 @@ impl<'a> PlaceExpr<'a> {
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct ExecExpr<'a> {
-    pub exec: Box<ExecExprKind<'a>>,
-    // FIXME misusing span_derive_ignore to ignore type on equality checks
+    pub exec: &'a ExecExprKind<'a>,
     #[span_derive_ignore]
-    pub ty: Option<Box<ExecTy>>,
+    pub ty: Option<&'a ExecTy<'a>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
-
 impl<'a> ExecExpr<'a> {
-    pub fn new(exec: ExecExprKind) -> Self {
-        ExecExpr {
-            exec: Box::new(exec),
+    pub fn new(arena: &'a bumpalo::Bump, exec: ExecExprKind<'a>) -> Self {
+        Self {
+            exec: arena.alloc(exec),
             ty: None,
             span: None,
         }
@@ -883,27 +890,54 @@ impl<'a> ExecExpr<'a> {
     // TODO how does this relate to is_prefix_of. Refactor.
     pub fn is_sub_exec_of(&self, exec: &ExecExpr) -> bool {
         if self.exec.path.len() > exec.exec.path.len() {
-            return self.exec.path[..exec.exec.path.len()] == exec.exec.path;
+            return self.exec.path[..exec.exec.path.len()] == exec.exec.path[..];
         }
         false
     }
 
-    pub fn remove_last_distrib(&self) -> ExecExpr {
+    pub fn remove_last_distrib(&self, arena: &'a bumpalo::Bump) -> ExecExpr {
         let last_distrib_pos = self
             .exec
             .path
             .iter()
             .rposition(|e| matches!(e, ExecPathElem::ForAll(_)));
+        
+        // What did i do here?
         let removed_distrib_path = if let Some(ldp) = last_distrib_pos {
-            self.exec.path[..ldp].to_vec()
+            let mut vec = BumpVec::new_in(arena);
+            // self.exec.path[..ldp].to_vec() --> changed this to BumpVec
+            vec.extend_from_slice(&self.exec.path[..ldp]);
+            vec
         } else {
-            vec![]
+            //vec![] --> changed this to BumpVec
+            BumpVec::new_in(arena)
         };
-        ExecExpr::new(ExecExprKind::with_path(
-            self.exec.base.clone(),
-            removed_distrib_path,
-        ))
+        
+        ExecExpr::new(arena, 
+            ExecExprKind::with_path(
+                self.exec.base.clone(),
+                removed_distrib_path,
+            )
+        )
     }
+
+    /** Kind of idea how to do it 
+    pub fn remove_last_distrib(&self, arena: &'a Bump) -> ExecExpr<'a> {
+        let last_distrib_pos = self
+            .exec
+            .path
+            .iter()
+            .rposition(|e| matches!(e, ExecPathElem::ForAll(_)));
+
+        let removed_path = match last_distrib_pos {
+            Some(pos) => &self.exec.path[..pos],
+            None => &[],
+        };
+
+        let exec_kind = ExecExprKind::with_path(self.exec.base.clone(), removed_path.iter().cloned(), arena);
+        ExecExpr::new(arena, exec_kind)
+    }
+    */
 
     pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
         match (&self.exec.base, &other.exec.base) {
@@ -953,17 +987,31 @@ impl<'a> ExecExpr<'a> {
 
 #[test]
 fn equal_exec_exprs() {
-    let exec1 = ExecExpr::new(ExecExprKind::with_path(
-        BaseExec::Ident(Ident::new("grid")),
-        vec![ExecPathElem::ForAll(DimCompo::X)],
-    ));
-    let exec2 = ExecExpr::new(ExecExprKind::with_path(
-        BaseExec::Ident(Ident::new("grid")),
-        vec![ExecPathElem::ForAll(DimCompo::X)],
-    ));
-    if exec1 != exec2 {
-        panic!("Unequal execs, that should be equal")
-    }
+    let arena = Bump::new();
+
+    let exec1 = ExecExpr::new(
+        &arena,
+        ExecExprKind::with_path(
+            BaseExec::Ident(Ident::new(&arena, "grid")),
+            bumpalo::collections::Vec::from_iter_in(
+                [ExecPathElem::ForAll(DimCompo::X)],
+                &arena
+            )
+        )
+    );
+
+    let exec2 = ExecExpr::new(
+        &arena,
+        ExecExprKind::with_path(
+            BaseExec::Ident(Ident::new(&arena, "grid")),
+            bumpalo::collections::Vec::from_iter_in(
+                [ExecPathElem::ForAll(DimCompo::X)],
+                &arena
+            )
+        )
+    );
+
+    assert_eq!(exec1, exec2, "Unequal execs that should be equal");
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -1001,23 +1049,39 @@ impl<'a> TakeRange<'a> {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct ExecExprKind<'a> {
     pub base: BaseExec<'a>,
-    pub path: Vec<ExecPathElem<'a>>,
+    pub path: BumpVec<'a, ExecPathElem<'a>>,
 }
 
-impl ExecExprKind {
-    pub fn new(base: BaseExec) -> Self {
-        ExecExprKind { base, path: vec![] }
+impl<'a> ExecExprKind<'a> {
+    pub fn new(arena: &'a bumpalo::Bump, base: BaseExec<'a>) -> Self {
+        ExecExprKind {
+            base,
+            path: BumpVec::new_in(arena),
+        }
     }
 
-    pub fn with_path(base: BaseExec, path: Vec<ExecPathElem>) -> Self {
+    pub fn with_path(base: BaseExec<'a>, path: BumpVec<'a, ExecPathElem<'a>>) -> Self {
         ExecExprKind { base, path }
     }
 
-    pub fn split_proj(mut self, dim_compo: DimCompo, pos: Nat, proj: LeftOrRight) -> Self {
-        self.path
-            .push(ExecPathElem::TakeRange(Box::new(TakeRange::new(
-                dim_compo, pos, proj,
-            ))));
+    /** 
+    pub fn with_path(base: BaseExec, path: impl IntoIterator<Item = ExecPathElem<'a>>, arena: &'a Bump) -> Self {
+        let mut bump_vec = BumpVec::new_in(arena);
+        bump_vec.extend(path);
+        Self { base, path: bump_vec }
+    }*/
+
+
+    pub fn split_proj(
+        mut self,
+        arena: &'a bumpalo::Bump,
+        dim_compo: DimCompo,
+        pos: Nat,
+        proj: LeftOrRight,
+    ) -> Self {
+        self.path.push(ExecPathElem::TakeRange(
+            arena.alloc(TakeRange::new(dim_compo, pos<'a>, proj)),
+        ));
         self
     }
 
@@ -1045,7 +1109,7 @@ pub enum BaseExec<'a> {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ExecPathElem<'a> {
-    TakeRange(Box<TakeRange<'a>>),
+    TakeRange(&'a TakeRange<'a>),
     ForAll(DimCompo),
     ToWarps,
     ToThreads(DimCompo),
@@ -1057,14 +1121,14 @@ pub enum ExecPathElem<'a> {
 // fn elem_type(DimCompo) -> ExecTy
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
-pub struct ExecTy {
-    pub ty: ExecTyKind,
+pub struct ExecTy<'a> {
+    pub ty: ExecTyKind<'a>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
 
-impl ExecTy {
-    pub fn new(exec: ExecTyKind) -> Self {
+impl<'a> ExecTy<'a> {
+    pub fn new(exec: ExecTyKind<'a>) -> Self {
         ExecTy {
             ty: exec,
             span: None,
@@ -1079,7 +1143,7 @@ pub enum ExecTyKind<'a> {
     GpuWarp,
     GpuBlock(Dim<'a>),
     GpuGrid(Dim<'a>, Dim<'a>),
-    GpuToThreads(Dim<'a>, Box<ExecTy<'a>>),
+    GpuToThreads(Dim<'a>, &'a ExecTy<'a>),
     GpuThreadGrp(Dim<'a>),
     GpuWarpGrp(Nat<'a>),
     GpuBlockGrp(Dim<'a>, Dim<'a>),
@@ -1096,12 +1160,12 @@ pub struct Ty<'a> {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct ParamSig<'a> {
-    pub exec_expr: ExecExpr,
+    pub exec_expr: ExecExpr<'a>,
     pub ty: &'a Ty<'a>,
 }
 
 impl<'a> ParamSig<'a> {
-    pub fn new(exec_expr: ExecExpr, ty: &'a Ty<'a>) -> Self {
+    pub fn new(exec_expr: ExecExpr<'a>, ty: &'a Ty<'a>) -> Self {
         ParamSig { exec_expr, ty }
     }
 }
@@ -1111,28 +1175,28 @@ pub struct FnTy<'a> {
     pub generics: BumpVec<'a, IdentKinded<'a>>,
     pub generic_exec: Option<IdentExec<'a>>,
     pub param_sigs: BumpVec<'a, ParamSig<'a>>,
-    pub exec: ExecExpr,
+    pub exec: ExecExpr<'a>,
     pub ret_ty: &'a Ty<'a>,
     pub nat_constrs: BumpVec<'a, NatConstr<'a>>,
 }
 
 impl<'a> FnTy<'a> {
     pub fn new(
-        bump: &'a Bump,
+        arena: &'a Bump,
         generics: impl IntoIterator<Item = IdentKinded<'a>>,
-        generic_exec: Option<IdentExec>,
+        generic_exec: Option<IdentExec<'a>>,
         param_sigs: impl IntoIterator<Item = ParamSig<'a>>,
-        exec: ExecExpr,
+        exec: ExecExpr<'a>,
         ret_ty: &'a Ty<'a>,
         nat_constrs: impl IntoIterator<Item = NatConstr<'a>>,
     ) -> Self {
-        let mut generics_vec = BumpVec::new_in(bump);
+        let mut generics_vec = BumpVec::new_in(arena);
         generics_vec.extend(generics);
 
-        let mut param_vec = BumpVec::new_in(bump);
+        let mut param_vec = BumpVec::new_in(arena);
         param_vec.extend(param_sigs);
 
-        let mut nat_vec = BumpVec::new_in(bump);
+        let mut nat_vec = BumpVec::new_in(arena);
         nat_vec.extend(nat_constrs);
 
         FnTy {
@@ -1140,7 +1204,7 @@ impl<'a> FnTy<'a> {
             generic_exec,
             param_sigs: param_vec,
             exec,
-            ret_ty: bump.alloc(ret_ty),
+            ret_ty: arena.alloc(ret_ty),
             nat_constrs: nat_vec,
         }
     }
@@ -1223,25 +1287,26 @@ pub struct Dim2d<'a>(pub Nat<'a>, pub Nat<'a>);
 pub struct Dim3d<'a>(pub Nat<'a>, pub Nat<'a>, pub Nat<'a>);
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Dim<'a> {
-    XYZ(Box<Dim3d<'a>>),
-    XY(Box<Dim2d<'a>>),
-    XZ(Box<Dim2d<'a>>),
-    YZ(Box<Dim2d<'a>>),
-    X(Box<Dim1d<'a>>),
-    Y(Box<Dim1d<'a>>),
-    Z(Box<Dim1d<'a>>),
+    XYZ(&'a Dim3d<'a>),
+    XY(&'a Dim2d<'a>),
+    XZ(&'a Dim2d<'a>),
+    YZ(&'a Dim2d<'a>),
+    X(&'a Dim1d<'a>),
+    Y(&'a Dim1d<'a>),
+    Z(&'a Dim1d<'a>),
 }
 
 impl<'a> Dim<'a> {
-    pub fn new_3d(n1: Nat, n2: Nat, n3: Nat) -> Self {
-        Dim::XYZ(Box::new(Dim3d(n1, n2, n3)))
+    pub fn new_3d(arena: &'a Bump, n1: Nat<'a>, n2:  Nat<'a>, n3:  Nat<'a>) -> Self {
+        Dim::XYZ(arena.alloc(Dim3d(n1, n2, n3)))
     }
 
-    pub fn new_2d<F: Fn(Box<Dim2d>) -> Self>(constr: F, n1: Nat, n2: Nat) -> Self {
-        constr(Box::new(Dim2d(n1, n2)))
+    pub fn new_2d<F: Fn(&'a Dim2d) -> Self>(arena: &'a Bump, constr: F, n1:  Nat<'a>, n2: Nat<'a>) -> Self {
+        constr(arena.alloc(Dim2d(n1, n2)))
     }
-    pub fn new_1d<F: Fn(Box<Dim1d>) -> Self>(constr: F, n: Nat) -> Self {
-        constr(Box::new(Dim1d(n)))
+    
+    pub fn new_1d<F: Fn(&'a Dim1d) -> Self>(arena: &'a Bump, constr: F, n:  Nat<'a>) -> Self {
+        constr(arena.alloc(Dim1d(n)))
     }
 
     pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
@@ -1456,9 +1521,9 @@ pub struct RefDty<'a> {
 impl<'a> RefDty<'a> {
     pub fn new(
         bump: &'a Bump,
-        rgn: Provenance,
+        rgn: Provenance<'a>,
         own: Ownership,
-        mem: Memory,
+        mem: Memory<'a>,
         dty: DataTy<'a>,
     ) -> Self {
         RefDty {
@@ -1536,7 +1601,7 @@ pub struct IdentKinded<'a> {
 }
 
 impl<'a> IdentKinded<'a> {
-    pub fn new(ident: &Ident, kind: Kind) -> Self {
+    pub fn new(ident: &Ident<'a>, kind: Kind) -> Self {
         IdentKinded {
             ident: ident.clone(),
             kind,
@@ -1552,39 +1617,43 @@ pub enum NatRange<'a> {
 }
 
 impl<'a> NatRange<'a> {
-    pub fn lift(&self, nat_ctx: &NatCtx) -> NatEvalResult<NatRangeIter> {
+    pub fn lift(&self, arena: &'a Bump, nat_ctx: &NatCtx) -> NatEvalResult<NatRangeIter> {
         let range_iter = match self {
             NatRange::Simple { lower, upper } => {
                 let lower = lower.eval(nat_ctx)?;
                 let upper = upper.eval(nat_ctx)?;
-                NatRangeIter::new(lower, Box::new(|x| x + 1), Box::new(move |c| c >= upper))
+                NatRangeIter::new(
+                    lower,
+                    arena.alloc(|x| x + 1),
+                    arena.alloc(move |c| c >= upper),
+                )
             }
             NatRange::Halved { upper } => {
                 let upper = upper.eval(nat_ctx)?;
-                NatRangeIter::new(upper, Box::new(|x| x / 2), Box::new(|c| c == 0))
+                NatRangeIter::new(upper, arena.alloc(|x| x / 2), arena.alloc(|c| c == 0))
             }
             NatRange::Doubled { upper } => {
                 let upper = upper.eval(nat_ctx)?;
-                NatRangeIter::new(1, Box::new(|x| x * 2), Box::new(move |c| c >= upper))
+                NatRangeIter::new(1, arena.alloc(|x| x * 2), arena.alloc(move |c| c >= upper))
             }
         };
         Ok(range_iter)
     }
 }
 
-pub struct NatRangeIter {
+pub struct NatRangeIter<'a> {
     current: usize,
     // go from current to next value
-    step_fun: Box<dyn Fn(usize) -> usize>,
+    step_fun: &'a dyn Fn(usize) -> usize,
     // determine whether the current value is still within range
-    end_cond: Box<dyn Fn(usize) -> bool>,
+    end_cond: &'a dyn Fn(usize) -> bool,
 }
 
-impl NatRangeIter {
+impl<'a> NatRangeIter<'a> {
     fn new(
         start: usize,
-        step_fun: Box<dyn Fn(usize) -> usize>,
-        end_cond: Box<dyn Fn(usize) -> bool>,
+        step_fun: &'a dyn Fn(usize) -> usize,
+        end_cond: &'a dyn Fn(usize) -> bool,
     ) -> Self {
         NatRangeIter {
             current: start,
@@ -1594,7 +1663,7 @@ impl NatRangeIter {
     }
 }
 
-impl Iterator for NatRangeIter {
+impl<'a> Iterator for NatRangeIter<'a> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {

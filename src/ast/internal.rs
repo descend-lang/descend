@@ -49,14 +49,14 @@ pub struct IdentTyped<'a> {
 
 impl<'a> IdentTyped<'a> {
     pub fn new_in(
-        bump: &'a bumpalo::Bump,
-        ident: &str,
+        arena: &'a bumpalo::Bump,
+        ident: &'a str,
         ty: Ty<'a>,
         mutbl: Mutability,
-        exec: ExecExpr,
+        exec: ExecExpr<'a>,
     ) -> Self {
         IdentTyped {
-            ident: Ident::new(bump, ident),
+            ident: Ident::new(arena, ident),
             ty,
             mutbl,
             exec,
@@ -71,7 +71,7 @@ pub struct ExecMapping<'a> {
 }
 
 impl<'a> ExecMapping<'a> {
-    pub fn new(ident: Ident<'a>, exec_expr: ExecExpr) -> Self {
+    pub fn new(ident: Ident<'a>, exec_expr: ExecExpr<'a>) -> Self {
         ExecMapping { ident, exec_expr }
     }
 }
@@ -115,13 +115,13 @@ impl<'a> Place<'a> {
         Place { ident, path }
     }
 
-    pub fn to_place_expr(&self, bump: &'a bumpalo::Bump) -> PlaceExpr {
+    pub fn to_place_expr(&self, arena: &'a bumpalo::Bump) -> PlaceExpr {
         self.path.iter().fold(
             PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
             |pl_expr, path_entry| match path_entry {
-                PathElem::Proj(n) => PlaceExpr::new(PlaceExprKind::Proj(bump.alloc(pl_expr), *n)),
+                PathElem::Proj(n) => PlaceExpr::new(PlaceExprKind::Proj(arena.alloc(pl_expr), *n)),
                 PathElem::FieldProj(field) => {
-                    PlaceExpr::new(PlaceExprKind::FieldProj(bump.alloc(pl_expr), field))
+                    PlaceExpr::new(PlaceExprKind::FieldProj(arena.alloc(pl_expr), field))
                 }
             },
         )
@@ -157,61 +157,61 @@ pub enum PlaceCtx<'a> {
 impl<'a> PlaceCtx<'a> {
     pub fn insert_pl_expr(
         &'a self,
-        bump: &'a bumpalo::Bump,
+        arena: &'a bumpalo::Bump,
         pl_expr: PlaceExpr<'a>,
     ) -> PlaceExpr<'a> {
         match self {
             Self::Hole => pl_expr,
             Self::Proj(pl_ctx, n) => PlaceExpr::new(PlaceExprKind::Proj(
-                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                arena.alloc(pl_ctx.insert_pl_expr(arena, pl_expr)),
                 *n,
             )),
             Self::FieldProj(pl_ctx, field) => PlaceExpr::new(PlaceExprKind::FieldProj(
-                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                arena.alloc(pl_ctx.insert_pl_expr(arena, pl_expr)),
                 field,
             )),
             Self::Deref(pl_ctx) => PlaceExpr::new(PlaceExprKind::Deref(
-                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                arena.alloc(pl_ctx.insert_pl_expr(arena, pl_expr)),
             )),
             Self::Select(pl_ctx, exec) => PlaceExpr::new(PlaceExprKind::Select(
-                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                arena.alloc(pl_ctx.insert_pl_expr(arena, pl_expr)),
                 exec.clone(),
             )),
             Self::View(pl_ctx, view) => PlaceExpr::new(PlaceExprKind::View(
-                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                arena.alloc(pl_ctx.insert_pl_expr(arena, pl_expr)),
                 view.clone(),
             )),
             Self::Idx(pl_ctx, idx) => PlaceExpr::new(PlaceExprKind::Idx(
-                bump.alloc(pl_ctx.insert_pl_expr(bump, pl_expr)),
+                arena.alloc(pl_ctx.insert_pl_expr(arena, pl_expr)),
                 idx.clone(),
             )),
         }
     }
 
-    pub fn without_innermost_deref(&'a self, bump: &'a bumpalo::Bump) -> &'a PlaceCtx<'a> {
+    pub fn without_innermost_deref(&'a self, arena: &'a bumpalo::Bump) -> &'a PlaceCtx<'a> {
         match self {
             PlaceCtx::Hole => self,
             PlaceCtx::Proj(pl_ctx, idx) => {
-                bump.alloc(PlaceCtx::Proj(pl_ctx.without_innermost_deref(bump), *idx))
+                arena.alloc(PlaceCtx::Proj(pl_ctx.without_innermost_deref(arena), *idx))
             }
-            PlaceCtx::FieldProj(pl_ctx, ident) => bump.alloc(PlaceCtx::FieldProj(
-                pl_ctx.without_innermost_deref(bump),
+            PlaceCtx::FieldProj(pl_ctx, ident) => arena.alloc(PlaceCtx::FieldProj(
+                pl_ctx.without_innermost_deref(arena),
                 ident.clone(),
             )),
             PlaceCtx::Deref(pl_ctx) => match **pl_ctx {
-                PlaceCtx::Hole => bump.alloc(PlaceCtx::Hole),
-                _ => bump.alloc(PlaceCtx::Deref(pl_ctx.without_innermost_deref(bump))),
+                PlaceCtx::Hole => arena.alloc(PlaceCtx::Hole),
+                _ => arena.alloc(PlaceCtx::Deref(pl_ctx.without_innermost_deref(arena))),
             },
-            PlaceCtx::Select(pl_ctx, exec) => bump.alloc(PlaceCtx::Select(
-                pl_ctx.without_innermost_deref(bump),
+            PlaceCtx::Select(pl_ctx, exec) => arena.alloc(PlaceCtx::Select(
+                pl_ctx.without_innermost_deref(arena),
                 exec.clone(),
             )),
-            PlaceCtx::View(pl_ctx, view) => bump.alloc(PlaceCtx::View(
-                pl_ctx.without_innermost_deref(bump),
+            PlaceCtx::View(pl_ctx, view) => arena.alloc(PlaceCtx::View(
+                pl_ctx.without_innermost_deref(arena),
                 view.clone(),
             )),
-            PlaceCtx::Idx(pl_ctx, idx) => bump.alloc(PlaceCtx::Idx(
-                pl_ctx.without_innermost_deref(bump),
+            PlaceCtx::Idx(pl_ctx, idx) => arena.alloc(PlaceCtx::Idx(
+                pl_ctx.without_innermost_deref(arena),
                 idx.clone(),
             )),
         }
