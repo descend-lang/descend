@@ -621,7 +621,7 @@ impl<'a> ArgKinded<'a> {
         }
     }
 
-    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+    pub fn equal(&'a self, nat_ctx: &'a NatCtx, other: &'a Self) -> NatEvalResult<'a, bool> {
         match (self, other) {
             (ArgKinded::Ident(i), ArgKinded::Ident(o)) => Ok(i == o),
             (ArgKinded::Nat(n), ArgKinded::Nat(no)) => Ok(n.eval(nat_ctx)? == no.eval(nat_ctx)?),
@@ -652,7 +652,7 @@ pub struct View<'a> {
 }
 
 impl<'a> View<'a> {
-    pub fn equal(&self, nat_ctx: &NatCtx, other: &View<'a>) -> NatEvalResult<bool> {
+    pub fn equal(&'a self, nat_ctx: &'a NatCtx, other: &'a View<'a>) -> NatEvalResult<'a, bool> {
         if self.name.name != other.name.name {
             return Ok(false);
         }
@@ -801,7 +801,10 @@ impl<'a> PlaceExpr<'a> {
                         (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
                     _ => (
-                        internal::PlaceCtx::FieldProj(arena.alloc(pl_ctx), field_name),
+                        internal::PlaceCtx::FieldProj(
+                            arena.alloc(pl_ctx),
+                            field_name.clone().clone(),
+                        ),
                         pl,
                     ),
                 }
@@ -820,7 +823,7 @@ impl<'a> PlaceExpr<'a> {
         }
     }
 
-    pub fn equiv(&'_ self, arena: &'a bumpalo::Bump, place: &'_ internal::Place) -> bool {
+    pub fn equiv(&'a self, arena: &'a bumpalo::Bump, place: &'a internal::Place) -> bool {
         if let (internal::PlaceCtx::Hole, pl) = self.to_pl_ctx_and_most_specif_pl(arena) {
             &pl == place
         } else {
@@ -828,11 +831,14 @@ impl<'a> PlaceExpr<'a> {
         }
     }
 
-    pub fn as_ident_and_path(&self) -> (Ident<'a>, Vec<PlExprPathElem<'a>>) {
-        fn as_ident_and_path_rec(
-            pl_expr: &PlaceExpr,
-            mut path: BumpVec<PlExprPathElem<'a>>,
-        ) -> (Ident<'a>, BumpVec<PlExprPathElem<'a>>) {
+    pub fn as_ident_and_path(
+        &'a self,
+        arena: &'a bumpalo::Bump,
+    ) -> (Ident<'a>, BumpVec<'a, PlExprPathElem<'a>>) {
+        fn as_ident_and_path_rec<'a>(
+            pl_expr: &'a PlaceExpr,
+            mut path: BumpVec<'a, PlExprPathElem<'a>>,
+        ) -> (Ident<'a>, BumpVec<'a, PlExprPathElem<'a>>) {
             match &pl_expr.pl_expr {
                 PlaceExprKind::Ident(i) => {
                     path.reverse();
@@ -847,7 +853,7 @@ impl<'a> PlaceExpr<'a> {
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::View(inner_ple, view) => {
-                    path.push(PlExprPathElem::View(**view)); // formerly as_ref().clone() ? Can that just work with double dereferencing?
+                    path.push(PlExprPathElem::View(view.clone().clone())); // formerly as_ref().clone() ? Can that just work with double cloning?
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::Proj(inner_ple, n) => {
@@ -855,7 +861,7 @@ impl<'a> PlaceExpr<'a> {
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::FieldProj(inner_ple, ident) => {
-                    path.push(PlExprPathElem::FieldProj(**ident));  // formerly as_ref().clone() ? Can that just work with double dereferencing?
+                    path.push(PlExprPathElem::FieldProj(ident.clone().clone())); // formerly as_ref().clone() ? Can that just work with double cloning?
                     as_ident_and_path_rec(inner_ple, path)
                 }
                 PlaceExprKind::Idx(inner_ple, idx) => {
@@ -864,7 +870,7 @@ impl<'a> PlaceExpr<'a> {
                 }
             }
         }
-        as_ident_and_path_rec(self, vec![])
+        as_ident_and_path_rec(self, BumpVec::new_in(arena)) // BumpVec Stuff into it
     }
 }
 
@@ -900,7 +906,7 @@ impl<'a> ExecExpr<'a> {
             .path
             .iter()
             .rposition(|e| matches!(e, ExecPathElem::ForAll(_)));
-        
+
         // What did i do here?
         let removed_distrib_path = if let Some(ldp) = last_distrib_pos {
             let mut vec = BumpVec::new_in(arena);
@@ -911,16 +917,14 @@ impl<'a> ExecExpr<'a> {
             //vec![] --> changed this to BumpVec
             BumpVec::new_in(arena)
         };
-        
-        ExecExpr::new(arena, 
-            ExecExprKind::with_path(
-                self.exec.base.clone(),
-                removed_distrib_path,
-            )
+
+        ExecExpr::new(
+            arena,
+            ExecExprKind::with_path(self.exec.base.clone(), removed_distrib_path),
         )
     }
 
-    /** Kind of idea how to do it 
+    /** Kind of idea how to do it
     pub fn remove_last_distrib(&self, arena: &'a Bump) -> ExecExpr<'a> {
         let last_distrib_pos = self
             .exec
@@ -992,22 +996,16 @@ fn equal_exec_exprs() {
         &arena,
         ExecExprKind::with_path(
             BaseExec::Ident(Ident::new(&arena, "grid")),
-            bumpalo::collections::Vec::from_iter_in(
-                [ExecPathElem::ForAll(DimCompo::X)],
-                &arena
-            )
-        )
+            bumpalo::collections::Vec::from_iter_in([ExecPathElem::ForAll(DimCompo::X)], &arena),
+        ),
     );
 
     let exec2 = ExecExpr::new(
         &arena,
         ExecExprKind::with_path(
             BaseExec::Ident(Ident::new(&arena, "grid")),
-            bumpalo::collections::Vec::from_iter_in(
-                [ExecPathElem::ForAll(DimCompo::X)],
-                &arena
-            )
-        )
+            bumpalo::collections::Vec::from_iter_in([ExecPathElem::ForAll(DimCompo::X)], &arena),
+        ),
     );
 
     assert_eq!(exec1, exec2, "Unequal execs that should be equal");
@@ -1063,23 +1061,22 @@ impl<'a> ExecExprKind<'a> {
         ExecExprKind { base, path }
     }
 
-    /** 
+    /**
     pub fn with_path(base: BaseExec, path: impl IntoIterator<Item = ExecPathElem<'a>>, arena: &'a Bump) -> Self {
         let mut bump_vec = BumpVec::new_in(arena);
         bump_vec.extend(path);
         Self { base, path: bump_vec }
     }*/
 
-
     pub fn split_proj(
         mut self,
         arena: &'a bumpalo::Bump,
         dim_compo: DimCompo,
-        pos: Nat,
+        pos: Nat<'a>,
         proj: LeftOrRight,
     ) -> Self {
         self.path.push(ExecPathElem::TakeRange(
-            arena.alloc(TakeRange::new(dim_compo, pos<'a>, proj)),
+            arena.alloc(TakeRange::new(dim_compo, pos, proj)),
         ));
         self
     }
@@ -1296,15 +1293,20 @@ pub enum Dim<'a> {
 }
 
 impl<'a> Dim<'a> {
-    pub fn new_3d(arena: &'a Bump, n1: Nat<'a>, n2:  Nat<'a>, n3:  Nat<'a>) -> Self {
+    pub fn new_3d(arena: &'a Bump, n1: Nat<'a>, n2: Nat<'a>, n3: Nat<'a>) -> Self {
         Dim::XYZ(arena.alloc(Dim3d(n1, n2, n3)))
     }
 
-    pub fn new_2d<F: Fn(&'a Dim2d) -> Self>(arena: &'a Bump, constr: F, n1:  Nat<'a>, n2: Nat<'a>) -> Self {
+    pub fn new_2d<F: Fn(&'a Dim2d) -> Self>(
+        arena: &'a Bump,
+        constr: F,
+        n1: Nat<'a>,
+        n2: Nat<'a>,
+    ) -> Self {
         constr(arena.alloc(Dim2d(n1, n2)))
     }
-    
-    pub fn new_1d<F: Fn(&'a Dim1d) -> Self>(arena: &'a Bump, constr: F, n:  Nat<'a>) -> Self {
+
+    pub fn new_1d<F: Fn(&'a Dim1d) -> Self>(arena: &'a Bump, constr: F, n: Nat<'a>) -> Self {
         constr(arena.alloc(Dim1d(n)))
     }
 
@@ -1373,7 +1375,7 @@ impl<'a> DataTy<'a> {
         }
     }
 
-    pub fn non_copyable(&self) -> bool {
+    pub fn non_copyable(&'a self) -> bool {
         use DataTyKind::*;
 
         match &self.dty {
@@ -1389,16 +1391,16 @@ impl<'a> DataTy<'a> {
             Range => true,
             Dead(_) => panic!(
                 "This case is not expected to mean anything.\
-                The type is dead. There is nothign we can do with it."
+                The type is dead. There is nothing we can do with it."
             ),
         }
     }
 
-    pub fn copyable(&self) -> bool {
+    pub fn copyable(&'a self) -> bool {
         !self.non_copyable()
     }
 
-    pub fn is_fully_alive(&self) -> bool {
+    pub fn is_fully_alive(&'a self) -> bool {
         use DataTyKind::*;
         match &self.dty {
             Scalar(_)
@@ -1420,7 +1422,7 @@ impl<'a> DataTy<'a> {
         }
     }
 
-    pub fn occurs_in(&self, dty: &DataTy) -> bool {
+    pub fn occurs_in(&'a self, dty: &DataTy) -> bool {
         if self == dty {
             return true;
         }
@@ -1450,7 +1452,7 @@ impl<'a> DataTy<'a> {
         }
     }
 
-    pub fn contains_ref_to_prv(&self, prv_val_name: &str) -> bool {
+    pub fn contains_ref_to_prv(&'a self, prv_val_name: &str) -> bool {
         use DataTyKind::*;
         match &self.dty {
             Scalar(_) | Atomic(_) | Ident(_) | Dead(_) => false,
@@ -1476,7 +1478,7 @@ impl<'a> DataTy<'a> {
         }
     }
 
-    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+    pub fn equal(&'a self, nat_ctx: &'a NatCtx, other: &'a Self) -> NatEvalResult<'a, bool> {
         match (&self.dty, &other.dty) {
             (DataTyKind::Ident(i), DataTyKind::Ident(o)) => Ok(i == o),
             (DataTyKind::Tuple(dtys), DataTyKind::Tuple(dtyos)) => {
