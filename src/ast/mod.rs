@@ -424,8 +424,8 @@ pub enum ExprKind<'a> {
     Range(&'a Expr<'a>, &'a Expr<'a>),
 }
 
-#[span_derive(PartialEq, Eq, Hash)]
 #[derive(Clone, Debug)]
+#[span_derive(PartialEq, Eq, Hash)]
 pub struct Ident<'a> {
     // Identifier names never change. Instead a new identifier is created. Therefore it is not
     // necessary to keep the capacity that is stored in a String for efficient appending.
@@ -434,7 +434,6 @@ pub struct Ident<'a> {
     pub span: Option<Span>,
     pub is_implicit: bool,
 }
-// TODO: Arena String Interna nachschauen
 impl<'a> Ident<'a> {
     pub fn new(bump: &'a bumpalo::Bump, name: &'a str) -> Self {
         Self {
@@ -802,7 +801,7 @@ impl<'a> PlaceExpr<'a> {
                         (pl_ctx, internal::Place::new(pl.ident, pl.path))
                     }
                     _ => (
-                        internal::PlaceCtx::FieldProj(arena.alloc(pl_ctx), **field_name),
+                        internal::PlaceCtx::FieldProj(arena.alloc(pl_ctx), field_name),
                         pl,
                     ),
                 }
@@ -816,7 +815,7 @@ impl<'a> PlaceExpr<'a> {
             }
             PlaceExprKind::Ident(ident) => (
                 internal::PlaceCtx::Hole,
-                internal::Place::new(ident.clone(), vec![]), // create a BumpVec here
+                internal::Place::new(ident.clone(), BumpVec::new_in(arena)),
             ),
         }
     }
@@ -1809,22 +1808,22 @@ mod size_asserts {
         };
     }
     static_assert_size!(Dim, 16);
-    static_assert_size!(DataTy, 104);
+    static_assert_size!(DataTy, 112);
     static_assert_size!(DataTyKind, 64);
     static_assert_size!(ExecExpr, 32);
-    static_assert_size!(ExecExprKind, 64);
+    static_assert_size!(ExecExprKind, 72);
     static_assert_size!(ExecPathElem, 16);
     static_assert_size!(ExecTy, 64);
     static_assert_size!(ExecTyKind, 48);
-    static_assert_size!(Expr, 96);
-    static_assert_size!(ExprKind, 72);
-    static_assert_size!(FunDef, 192);
+    static_assert_size!(Expr, 104);
+    static_assert_size!(ExprKind, 80);
+    static_assert_size!(FunDef, 216);
     static_assert_size!(Ident, 32); // maybe too large?
     static_assert_size!(IdentExec, 40);
     static_assert_size!(Lit, 16);
     static_assert_size!(Memory, 32);
     static_assert_size!(Nat, 48);
-    static_assert_size!(ParamDecl, 104);
+    static_assert_size!(ParamDecl, 80);
     static_assert_size!(Pattern, 40);
     static_assert_size!(PlaceExpr, 56);
     static_assert_size!(PlaceExprKind, 32);
