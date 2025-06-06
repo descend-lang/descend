@@ -165,11 +165,12 @@ pub enum CastError {
     From(Ty),
 }
 
-impl<'a> FromIterator<TyError> for TyError {
-    fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
-        TyError::MultiError(iter.into_iter().collect())
-    }
-}
+// TODO: use this
+// impl<'a> FromIterator<TyError> for TyError {
+//     fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
+//         TyError::MultiError(iter.into_iter().collect())
+//     }
+// }
 
 impl TyError {
     pub fn emit(&self, source: &SourceCode) -> ErrorReported {
