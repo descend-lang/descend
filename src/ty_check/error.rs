@@ -80,7 +80,7 @@ pub enum TyError {
     SelectError(PlaceExpr),
     ExecError(ExecError),
     SyncError(SyncError),
-    InvalidIterable(InvalidIterable),
+    InvalidIterable(RefDty),
     NotCopyable,
     Moved(PlaceExpr, Moved),
     LoopError(LoopError),
@@ -95,11 +95,6 @@ pub enum TyError {
 pub enum Moved {
     Partially,
     Entirely,
-}
-
-#[derive(Debug)]
-pub enum InvalidIterable {
-    NotArrayRef(RefDty),
 }
 
 #[derive(Debug)]

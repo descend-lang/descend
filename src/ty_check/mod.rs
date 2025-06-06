@@ -372,9 +372,7 @@ fn ty_check_for(
                 elem_dty.as_ref().clone(),
             ))),
             _ => {
-                return Err(TyError::InvalidIterable(InvalidIterable::NotArrayRef(
-                    (**reff).clone(),
-                )))
+                return Err(TyError::InvalidIterable((**reff).clone()));
             }
         },
         // DataTyKind::Range => DataTyKind::Scalar(ScalarTy::I32),
