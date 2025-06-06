@@ -68,10 +68,8 @@ pub enum TyError {
     String(String),
 
     // Newly added errors
-    // Index, Array Length
+    // Index, Array/Tuple Length
     IndexOutOfBounds(usize, usize),
-    // Index, Tuple Length
-    TupleIndexOutOfBounds(usize, usize),
     // The indexed expression is not an array
     CannotIndex,
     // The projected expression is not a tuple

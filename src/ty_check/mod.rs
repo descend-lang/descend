@@ -1850,7 +1850,7 @@ pub fn proj_elem_dty(dty: &DataTy, i: usize) -> TyResult<DataTy> {
     match &dty.dty {
         DataTyKind::Tuple(dtys) => match dtys.get(i) {
             Some(dty) => Ok(dty.clone()),
-            None => Err(TyError::TupleIndexOutOfBounds(i, dtys.len())),
+            None => Err(TyError::IndexOutOfBounds(i, dtys.len())),
         },
         _ => Err(TyError::CannotTupleIndex),
     }

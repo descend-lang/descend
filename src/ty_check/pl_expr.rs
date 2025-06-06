@@ -255,7 +255,7 @@ fn ty_check_proj(
                     passed_prvs,
                 ))
             } else {
-                Err(TyError::TupleIndexOutOfBounds(n, elem_dtys.len()))
+                Err(TyError::IndexOutOfBounds(n, elem_dtys.len()))
             }
         }
         dty_kind => Err(TyError::ExpectedTupleType(
