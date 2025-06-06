@@ -68,12 +68,10 @@ pub enum TyError {
     String(String),
 
     // Newly added errors
-    // Index, Array/Tuple Length
+    // Index, Array/Tuplegit Length
     IndexOutOfBounds(usize, usize),
-    // The indexed expression is not an array
+    // The indexed expression is not an array or a tuple
     CannotIndex,
-    // The projected expression is not a tuple
-    CannotTupleIndex,
     // The expression is not a reference
     CannotDereference(DereferenceError),
     // Struct does not have given field

@@ -1852,6 +1852,6 @@ pub fn proj_elem_dty(dty: &DataTy, i: usize) -> TyResult<DataTy> {
             Some(dty) => Ok(dty.clone()),
             None => Err(TyError::IndexOutOfBounds(i, dtys.len())),
         },
-        _ => Err(TyError::CannotTupleIndex),
+        _ => Err(TyError::CannotIndex),
     }
 }
