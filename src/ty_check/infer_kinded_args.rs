@@ -1,5 +1,5 @@
 use super::{TyError, TyResult};
-use crate::ast::{
+use crate::arena_ast::{
     ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident,
     Memory, Nat, ParamSig, Provenance, Ty, TyKind,
 };

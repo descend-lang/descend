@@ -2,6 +2,7 @@ extern crate core;
 
 use crate::error::ErrorReported;
 
+mod arena_ast;
 mod ast;
 mod codegen;
 pub mod error;

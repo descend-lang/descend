@@ -2,7 +2,7 @@ use super::{
     BaseExec, BinOpNat, Dim, Dim1d, Dim2d, DimCompo, ExecExpr, ExecPathElem, ExecTy, ExecTyKind,
     IdentExec, Nat, TyCtx, TyError, TyResult,
 };
-use crate::ast::{LeftOrRight, NatCtx};
+use crate::arena_ast::{LeftOrRight, NatCtx};
 
 pub(super) fn ty_check(
     nat_ctx: &NatCtx,

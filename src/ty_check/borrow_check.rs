@@ -1,6 +1,7 @@
 use super::ctxs::TyCtx;
-use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
-use crate::ast::*;
+use crate::arena_ast::internal::{Loan, PlaceCtx, PrvMapping};
+use crate::arena_ast::*;
+use crate::parser::descend::nat;
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::exec::normalize;
@@ -50,12 +51,12 @@ impl<'gl, 'src, 'ctxt> BorrowCheckCtx<'gl, 'src, 'ctxt> {
         let mut extended_reborrows = self.reborrows.clone();
         extended_reborrows.extend(iter);
         BorrowCheckCtx {
-            gl_ctx: self.gl_ctx,
-            nat_ctx: self.nat_ctx,
-            kind_ctx: self.kind_ctx,
+            gl_ctx: &*self.gl_ctx,
+            nat_ctx: &*self.nat_ctx,
+            kind_ctx: &*self.kind_ctx,
             ident_exec: self.ident_exec,
-            ty_ctx: self.ty_ctx,
-            access_ctx: self.access_ctx,
+            ty_ctx: &*self.ty_ctx,
+            access_ctx: &*self.access_ctx,
             exec: self.exec.clone(),
             reborrows: extended_reborrows,
             own: self.own,
@@ -73,12 +74,7 @@ pub(super) fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnRes
         narrowing_check(ctx, p, &ctx.exec)?;
         access_conflict_check(ctx, p)?;
     }
-    let loans = borrow_check(ctx, p)?;
-    let mut evaled_loans = HashSet::new();
-    for l in loans {
-        evaled_loans.insert(Loan { place_expr: l.place_expr.eval_nat(ctx.nat_ctx)?, own: l.own});
-    }
-    Ok(evaled_loans)
+    borrow_check(ctx, p)
 }
 
 pub(super) fn borrow_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
@@ -103,7 +99,7 @@ pub(super) fn borrow_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<Has
             },
             DataTyKind::RawPtr(_) => ownership_safe_deref_raw(ctx, &pl_ctx_no_deref, &most_spec_pl),
             // TODO improve error message
-            _ => ownership_safe_place(ctx, p), //panic!("Is the type dead? `{:?}`\n {:?}", t, p),
+            t => ownership_safe_place(ctx, p), //panic!("Is the type dead? `{:?}`\n {:?}", t, p),
         }
     }
 }
@@ -266,7 +262,7 @@ fn exec_is_prefix_of(prefix: &ExecExpr, of: &ExecExpr) -> OwnResult<()> {
 fn access_conflict_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
     for loan in ctx.access_ctx.hash_set() {
         if possible_conflict_with_previous_access(ctx.nat_ctx, ctx.own, p, loan)? {
-            return Err(BorrowingError::ConflictPrevAccess {
+            return Err(BorrowingError::Conflict {
                 checked: p.clone(),
                 existing: loan.place_expr.clone(),
             });
@@ -307,45 +303,17 @@ fn possible_conflict_with_previous_access(
                     return Ok(false);
                 }
             }
-            // TODO these are not even used. Currently the range selection is a view and as such
-            // expressed as a view function type
             (
                 PlExprPathElem::RangeSelec(plower, pupper),
                 PlExprPathElem::RangeSelec(llower, lupper),
             ) => {
-                if !range_not_intersects(nat_ctx, plower, pupper, llower, lupper)? {
+                if range_intersects(nat_ctx, plower, pupper, llower, lupper)? {
                     return Ok(true);
                 }
-                // TODO what does this do?
                 if !(plower.eval(nat_ctx)? == llower.eval(nat_ctx)?
                     && pupper.eval(nat_ctx)? == lupper.eval(nat_ctx)?)
                 {
                     return Ok(false);
-                }
-            }
-            (PlExprPathElem::View(ivl), PlExprPathElem::View(ivr)) 
-                // TODO this duplicates code from `conflicting_path`
-                if ivl != ivr
-                    && ivl.name.name.as_ref() == pre_decl::SELECT_RANGE
-                    && ivr.name.name.as_ref() == pre_decl::SELECT_RANGE =>
-            {
-                match (
-                    &ivl.gen_args[0],
-                    &ivl.gen_args[1],
-                    &ivr.gen_args[0],
-                    &ivr.gen_args[1],
-                ) {
-                    (
-                        ArgKinded::Nat(lower_left),
-                        ArgKinded::Nat(upper_left),
-                        ArgKinded::Nat(lower_right),
-                        ArgKinded::Nat(upper_right),
-                    ) => {
-                        if range_not_intersects(nat_ctx, lower_left, upper_left, lower_right, upper_right)? {
-                            return Ok(false)
-                        };
-                    }
-                    _ => panic!("expected nats"),
                 }
             }
             (PlExprPathElem::View(p_view), PlExprPathElem::View(l_view))
@@ -367,7 +335,7 @@ fn possible_conflict_with_previous_access(
     Ok(false)
 }
 
-fn range_not_intersects(
+fn range_intersects(
     nat_ctx: &NatCtx,
     lower_left: &Nat,
     upper_left: &Nat,
@@ -416,7 +384,7 @@ fn ownership_safe_under_existing_borrows(
     if !ctx.unsafe_flag {
         for prv_mapping in ctx.ty_ctx.prv_mappings() {
             let PrvMapping { prv, loans } = prv_mapping;
-            let no_uniq_overlap = no_uniq_loan_overlap(ctx.nat_ctx, ctx.own, pl_expr, loans)?.is_none();
+            let no_uniq_overlap = no_uniq_loan_overlap(ctx.own, pl_expr, loans).is_none();
             if !no_uniq_overlap {
                 return at_least_one_borrowing_place_and_all_in_reborrow(
                     ctx.ty_ctx,
@@ -431,17 +399,16 @@ fn ownership_safe_under_existing_borrows(
 
 // returns None if there is no unique loan overlap or Some with the existing overlapping loan
 fn no_uniq_loan_overlap(
-    nat_ctx: &NatCtx,
     own: Ownership,
     pl_expr: &PlaceExpr,
     loans: &HashSet<Loan>,
-) -> NatEvalResult<Option<Loan>> {
+) -> Option<Loan> {
     for l in loans {
-        if (own == Ownership::Uniq || l.own == Ownership::Uniq) && overlap(nat_ctx, &l.place_expr, pl_expr)? {
-            return Ok(Some(l.clone()));
+        if (own == Ownership::Uniq || l.own == Ownership::Uniq) && overlap(&l.place_expr, pl_expr) {
+            return Some(l.clone());
         }
     }
-    Ok(None)
+    None
 }
 
 fn at_least_one_borrowing_place_and_all_in_reborrow(
@@ -472,14 +439,14 @@ fn at_least_one_borrowing_place_and_all_in_reborrow(
     Ok(())
 }
 
-fn conflicting_path(nat_ctx: &NatCtx, pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> NatEvalResult<bool> {
+fn conflicting_path(pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> bool {
     for lr in pathl.iter().zip(pathr) {
         match lr {
-            (PlExprPathElem::Idx(_), _) => return Ok(true),
+            (PlExprPathElem::Idx(_), _) => return true,
             (v @ PlExprPathElem::View(iv), path_elem)
                 if v != path_elem && iv.name.name.as_ref() != pre_decl::SELECT_RANGE =>
             {
-                return Ok(true)
+                return true
             }
             (PlExprPathElem::View(ivl), PlExprPathElem::View(ivr))
                 if ivl != ivr
@@ -487,9 +454,9 @@ fn conflicting_path(nat_ctx: &NatCtx, pathl: &[PlExprPathElem], pathr: &[PlExprP
                     && ivr.name.name.as_ref() == pre_decl::SELECT_RANGE =>
             {
                 match (
-                    &ivl.gen_args[0],
-                    &ivl.gen_args[1],
                     &ivr.gen_args[0],
+                    &ivl.gen_args[1],
+                    &ivl.gen_args[0],
                     &ivr.gen_args[1],
                 ) {
                     (
@@ -498,27 +465,30 @@ fn conflicting_path(nat_ctx: &NatCtx, pathl: &[PlExprPathElem], pathr: &[PlExprP
                         ArgKinded::Nat(lower_right),
                         ArgKinded::Nat(upper_right),
                     ) => {
-                        if range_not_intersects(nat_ctx, lower_left, upper_left, lower_right, upper_right)? {
-                            return Ok(false)
-                        };
+                        // intersecting ranges
+                        // TAKE CARE: the comparisons are partial and return false in case the
+                        //  the values are not comparable
+                        // return !((lower_left < lower_right && upper_left <= lower_right)
+                        //     || (lower_left >= upper_right && upper_left > upper_right));
+                        return false;
                     }
                     _ => panic!("expected nats"),
                 }
             }
-            (PlExprPathElem::Proj(i), PlExprPathElem::Proj(j)) if i != j => return Ok(false),
+            (PlExprPathElem::Proj(i), PlExprPathElem::Proj(j)) if i != j => return false,
             (path_eleml, path_elemr) if path_eleml == path_elemr => {}
             _ => panic!("unexpected"),
         }
     }
-    Ok(true)
+    true
 }
 
-fn overlap(nat_ctx: &NatCtx, pll: &PlaceExpr, plr: &PlaceExpr) -> NatEvalResult<bool> {
+fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {
     let (pl_ident, pl_path) = pll.as_ident_and_path();
     let (pr_ident, pr_path) = plr.as_ident_and_path();
     if pl_ident == pr_ident {
-        Ok(conflicting_path(nat_ctx, &pl_path, &pr_path)? || conflicting_path(nat_ctx, &pr_path, &pl_path)?)
+        conflicting_path(&pl_path, &pr_path) || conflicting_path(&pr_path, &pl_path)
     } else {
-        Ok(false)
+        false
     }
 }

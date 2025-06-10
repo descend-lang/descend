@@ -1,12 +1,12 @@
 use super::ctxs::{KindCtx, TyCtx};
-use crate::ast::internal::Loan;
+use crate::arena_ast::internal::Loan;
 
 //
 // Subtyping and Provenance Subtyping from Oxide
 //
 
 use super::error::{CtxError, SubTyError};
-use crate::ast::*;
+use crate::arena_ast::*;
 use std::collections::HashSet;
 
 type SubTyResult<T> = Result<T, SubTyError>;

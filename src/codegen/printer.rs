@@ -2,7 +2,7 @@ use super::cu_ast::{
     BinOp, BufferKind, ExecKind, Expr, FnDef, FnSig, GpuAddrSpace, Item, Lit, ParamDecl, ScalarTy,
     Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::ast::{BinOpNat, DimCompo, Ident, Nat};
+use crate::arena_ast::{BinOpNat, DimCompo, Ident, Nat};
 use std::env;
 use std::fmt::Formatter;
 

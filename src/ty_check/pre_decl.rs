@@ -1,4 +1,4 @@
-use crate::ast::{
+use crate::arena_ast::{
     AtomicTy, BaseExec, BinOpNat, DataTy, DataTyKind, DimCompo, ExecExpr, ExecExprKind, ExecTy,
     ExecTyKind, FnTy, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, NatConstr, Ownership,
     ParamSig, Provenance, RefDty, ScalarTy, Ty, TyKind,
