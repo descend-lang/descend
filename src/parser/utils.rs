@@ -1,6 +1,6 @@
 //! Helper functions for parsing
-
 use crate::ast::{BinOp, BinOpNat, DataTy, DataTyKind, Expr, ExprKind, Lit, Nat, ScalarTy, UnOp};
+use bumpalo::{boxed::Box as BumpBox, Bump};
 
 pub fn type_from_lit(lit: &Lit) -> DataTy {
     DataTy::new(DataTyKind::Scalar(match lit {
@@ -15,7 +15,7 @@ pub fn type_from_lit(lit: &Lit) -> DataTy {
     }))
 }
 
-pub fn make_binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
+pub fn make_binary<'a>(bump: &'a Bump, op: BinOp, lhs: Expr<'a>, rhs: Expr<'a>) -> Expr<'a> {
     // TODO make operators functions? How do we deal with execution resources?
     // Expr::new(ExprKind::App(
     //     Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
@@ -25,17 +25,17 @@ pub fn make_binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
     //     vec![lhs, rhs],
     // ))
     Expr {
-        expr: ExprKind::BinOp(op, Box::new(lhs), Box::new(rhs)),
+        expr: ExprKind::BinOp(op, BumpBox::new_in(lhs, bump), BumpBox::new_in(rhs, bump)),
         ty: None,
         span: None,
     }
 }
 
-pub fn make_binary_nat(op: BinOpNat, lhs: Nat, rhs: Nat) -> Nat {
+pub fn make_binary_nat<'a>(op: BinOpNat, lhs: Nat<'a>, rhs: Nat<'a>) -> Nat<'a> {
     Nat::BinOp(op, Box::new(lhs), Box::new(rhs))
 }
 
-pub fn make_unary(op: UnOp, rhs: Expr) -> Expr {
+pub fn make_unary<'a>(bump: &'a Bump, op: UnOp, rhs: Expr<'a>) -> Expr<'a> {
     // TODO see above
     // Expr::new(ExprKind::App(
     //     Box::new(Expr::new(ExprKind::PlaceExpr(PlaceExpr::new(
@@ -45,7 +45,7 @@ pub fn make_unary(op: UnOp, rhs: Expr) -> Expr {
     //     vec![rhs],
     // ))
     Expr {
-        expr: ExprKind::UnOp(op, Box::new(rhs)),
+        expr: ExprKind::UnOp(op, BumpBox::new_in(rhs, bump)),
         ty: None,
         span: None,
     }

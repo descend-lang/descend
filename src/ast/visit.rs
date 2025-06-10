@@ -1,64 +1,64 @@
 use crate::ast::*;
 
 #[rustfmt::skip]
-pub trait Visit: Sized {
+pub trait Visit<'a>: Sized {
     fn visit_binary_op_nat(&mut self, _op: &BinOpNat) {}
-    fn visit_nat(&mut self, n: &Nat) { walk_nat(self, n) }
-    fn visit_nat_range(&mut self, nr: &NatRange) { walk_nat_range(self, nr) }
-    fn visit_ident_kinded(&mut self, id_kind: &IdentKinded) { walk_ident_kinded(self, id_kind) }
-    fn visit_ident_exec(&mut self, ident_exec: &IdentExec) { walk_ident_exec(self, ident_exec) }
-    fn visit_prv_rel(&mut self, prv_rel: &PrvRel) { walk_prv_rel(self, prv_rel) }
-    fn visit_exec_ty(&mut self, _exec: &ExecTy) {}
-    fn visit_mem(&mut self, mem: &Memory) { walk_mem(self, mem) }
-    fn visit_prv(&mut self, prv: &Provenance) { walk_prv(self, prv) }
+    fn visit_nat(&mut self, n: &Nat<'a>) { walk_nat(self, n) }
+    fn visit_nat_range(&mut self, nr: &NatRange<'a>) { walk_nat_range(self, nr) }
+    fn visit_ident_kinded(&mut self, id_kind: &IdentKinded<'a>) { walk_ident_kinded(self, id_kind) }
+    fn visit_ident_exec(&mut self, ident_exec: &IdentExec<'a>) { walk_ident_exec(self, ident_exec) }
+    fn visit_prv_rel(&mut self, prv_rel: &PrvRel<'a>) { walk_prv_rel(self, prv_rel) }
+    fn visit_exec_ty(&mut self, _exec: &ExecTy<'a>) {}
+    fn visit_mem(&mut self, mem: &Memory<'a>) { walk_mem(self, mem) }
+    fn visit_prv(&mut self, prv: &Provenance<'a>) { walk_prv(self, prv) }
     fn visit_scalar_ty(&mut self, _sty: &ScalarTy) {}
     fn visit_atomic_ty(&mut self, _aty: &AtomicTy) {}
     fn visit_dim_compo(&mut self, _dim_compo: &DimCompo) { }
-    fn visit_dim(&mut self, dim: &Dim) { walk_dim(self, dim) }
-    fn visit_dim3d(&mut self, dim3d: &Dim3d) { walk_dim3d(self, dim3d) }
-    fn visit_dim2d(&mut self, dim2d: &Dim2d) { walk_dim2d(self, dim2d) }
-    fn visit_dim1d(&mut self, dim1d: &Dim1d) { walk_dim1d(self, dim1d) }
-    fn visit_ref(&mut self, reff: &RefDty) { walk_ref(self, reff) }
-    fn visit_dty(&mut self, dty: &DataTy) { walk_dty(self, dty) }
-    fn visit_fn_ty(&mut self, fn_ty: &FnTy) { walk_fn_ty(self, fn_ty) }
-    fn visit_nat_constr(&mut self, nat_constr: &NatConstr) { walk_nat_constr(self, nat_constr) }
-    fn visit_ty(&mut self, ty: &Ty) { walk_ty(self, ty) }
-    fn visit_view(&mut self, view: &View) { walk_view(self, view) }
-    fn visit_pl_expr(&mut self, pl_expr: &PlaceExpr) { walk_pl_expr(self, pl_expr) }
-    fn visit_arg_kinded(&mut self, arg_kinded: &ArgKinded) { walk_arg_kinded(self, arg_kinded) }
+    fn visit_dim(&mut self, dim: &Dim<'a>) { walk_dim(self, dim) }
+    fn visit_dim3d(&mut self, dim3d: &Dim3d<'a>) { walk_dim3d(self, dim3d) }
+    fn visit_dim2d(&mut self, dim2d: &Dim2d<'a>) { walk_dim2d(self, dim2d) }
+    fn visit_dim1d(&mut self, dim1d: &Dim1d<'a>) { walk_dim1d(self, dim1d) }
+    fn visit_ref(&mut self, reff: &RefDty<'a>) { walk_ref(self, reff) }
+    fn visit_dty(&mut self, dty: &DataTy<'a>) { walk_dty(self, dty) }
+    fn visit_fn_ty(&mut self, fn_ty: &FnTy<'a>) { walk_fn_ty(self, fn_ty) }
+    fn visit_nat_constr(&mut self, nat_constr: &NatConstr<'a>) { walk_nat_constr(self, nat_constr) }
+    fn visit_ty(&mut self, ty: &Ty<'a>) { walk_ty(self, ty) }
+    fn visit_view(&mut self, view: &View<'a>) { walk_view(self, view) }
+    fn visit_pl_expr(&mut self, pl_expr: &PlaceExpr<'a>) { walk_pl_expr(self, pl_expr) }
+    fn visit_arg_kinded(&mut self, arg_kinded: &ArgKinded<'a>) { walk_arg_kinded(self, arg_kinded) }
     fn visit_kind(&mut self, _kind: &Kind) {}
     fn visit_binary_op(&mut self, _op: &BinOp) {}
     fn visit_unary_op(&mut self, _op: &UnOp) {}
     fn visit_own(&mut self, _own: &Ownership) {}
     fn visit_mutability(&mut self, _mutbl: &Mutability) {}
     fn visit_lit(&mut self, _lit: &Lit) {}
-    fn visit_ident(&mut self, _ident: &Ident) {}
-    fn visit_pattern(&mut self, pattern: &Pattern) { walk_pattern(self, pattern) }
-    fn visit_split(&mut self, split: &Split) { walk_split(self, split) }
-    fn visit_sched(&mut self, par_for: &Sched) { walk_sched(self, par_for) }
-    fn visit_expr(&mut self, expr: &Expr) { walk_expr(self, expr) }
-    fn visit_app_kernel(&mut self, app_kernel: &AppKernel) { walk_app_kernel(self, app_kernel) }
-    fn visit_block(&mut self, block: &Block) { walk_block(self, block) }
-    fn visit_split_proj(&mut self, exec_split: &TakeRange) { walk_split_proj(self, exec_split) }
-    fn visit_exec_expr(&mut self, exec_expr: &ExecExpr) { walk_exec_expr(self, exec_expr) }
-    fn visit_exec(&mut self, exec: &ExecExprKind) { walk_exec(self, exec) }
-    fn visit_param_decl(&mut self, param_decl: &ParamDecl) { walk_param_decl(self, param_decl) }
-    fn visit_fun_def(&mut self, fun_def: &FunDef) { walk_fun_def(self, fun_def) }
-    fn visit_fun_decl(&mut self, fun_decl: &FunDecl) { walk_fun_decl(self, fun_decl) }
-    fn visit_param_sig(&mut self, param_sig: &ParamSig) { walk_param_sig(self, param_sig) }
-    fn visit_field(&mut self, field: &(Ident, DataTy)) { walk_field(self, field) }
+    fn visit_ident(&mut self, _ident: &Ident<'a>) {}
+    fn visit_pattern(&mut self, pattern: &Pattern<'a>) { walk_pattern(self, pattern) }
+    fn visit_split(&mut self, split: &Split<'a>) { walk_split(self, split) }
+    fn visit_sched(&mut self, par_for: &Sched<'a>) { walk_sched(self, par_for) }
+    fn visit_expr(&mut self, expr: &Expr<'a>) { walk_expr(self, expr) }
+    fn visit_app_kernel(&mut self, app_kernel: &AppKernel<'a>) { walk_app_kernel(self, app_kernel) }
+    fn visit_block(&mut self, block: &Block<'a>) { walk_block(self, block) }
+    fn visit_split_proj(&mut self, exec_split: &TakeRange<'a>) { walk_split_proj(self, exec_split) }
+    fn visit_exec_expr(&mut self, exec_expr: &ExecExpr<'a>) { walk_exec_expr(self, exec_expr) }
+    fn visit_exec(&mut self, exec: &ExecExprKind<'a>) { walk_exec(self, exec) }
+    fn visit_param_decl(&mut self, param_decl: &ParamDecl<'a>) { walk_param_decl(self, param_decl) }
+    fn visit_fun_def(&mut self, fun_def: &FunDef<'a>) { walk_fun_def(self, fun_def) }
+    fn visit_fun_decl(&mut self, fun_decl: &FunDecl<'a>) { walk_fun_decl(self, fun_decl) }
+    fn visit_param_sig(&mut self, param_sig: &ParamSig<'a>) { walk_param_sig(self, param_sig) }
+    fn visit_field(&mut self, field: &(Ident<'a>, DataTy<'a>)) { walk_field(self, field) }
 }
 
 macro_rules! walk_list {
     ($visitor: expr, $method: ident, $list: expr) => {
-        for elem in $list {
+        for elem in $list.iter_mut() {
             $visitor.$method(elem)
         }
     };
 }
 pub(crate) use walk_list;
 
-pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
+pub fn walk_nat<'a, V: Visit<'a>>(visitor: &mut V, n: &Nat<'a>) {
     match n {
         Nat::Ident(ident) => visitor.visit_ident(ident),
         Nat::BinOp(op, l, r) => {
@@ -81,7 +81,7 @@ pub fn walk_nat<V: Visit>(visitor: &mut V, n: &Nat) {
     }
 }
 
-pub fn walk_nat_range<V: Visit>(visitor: &mut V, nr: &NatRange) {
+pub fn walk_nat_range<'a, V: Visit<'a>>(visitor: &mut V, nr: &NatRange<'a>) {
     match nr {
         NatRange::Simple { lower, upper } => {
             visitor.visit_nat(lower);
@@ -91,56 +91,56 @@ pub fn walk_nat_range<V: Visit>(visitor: &mut V, nr: &NatRange) {
     }
 }
 
-pub fn walk_ident_kinded<V: Visit>(visitor: &mut V, id_kind: &IdentKinded) {
+pub fn walk_ident_kinded<'a, V: Visit<'a>>(visitor: &mut V, id_kind: &IdentKinded<'a>) {
     let IdentKinded { ident, kind } = id_kind;
     visitor.visit_ident(ident);
     visitor.visit_kind(kind)
 }
 
-pub fn walk_ident_exec<V: Visit>(visitor: &mut V, id_exec: &IdentExec) {
+pub fn walk_ident_exec<'a, V: Visit<'a>>(visitor: &mut V, id_exec: &IdentExec<'a>) {
     let IdentExec { ident, ty } = id_exec;
     visitor.visit_ident(ident);
     visitor.visit_exec_ty(ty)
 }
 
-pub fn walk_prv_rel<V: Visit>(visitor: &mut V, prv_rel: &PrvRel) {
+pub fn walk_prv_rel<'a, V: Visit<'a>>(visitor: &mut V, prv_rel: &PrvRel<'a>) {
     let PrvRel { longer, shorter } = prv_rel;
     visitor.visit_ident(longer);
     visitor.visit_ident(shorter)
 }
 
-pub fn walk_mem<V: Visit>(visitor: &mut V, mem: &Memory) {
+pub fn walk_mem<'a, V: Visit<'a>>(visitor: &mut V, mem: &Memory<'a>) {
     if let Memory::Ident(ident) = mem {
         visitor.visit_ident(ident)
     }
 }
 
-pub fn walk_prv<V: Visit>(visitor: &mut V, prv: &Provenance) {
+pub fn walk_prv<'a, V: Visit<'a>>(visitor: &mut V, prv: &Provenance<'a>) {
     match prv {
         Provenance::Ident(ident) => visitor.visit_ident(ident),
         Provenance::Value(_) => {}
     }
 }
 
-pub fn walk_dim3d<V: Visit>(visitor: &mut V, dim3d: &Dim3d) {
+pub fn walk_dim3d<'a, V: Visit<'a>>(visitor: &mut V, dim3d: &Dim3d<'a>) {
     let Dim3d(n1, n2, n3) = dim3d;
     visitor.visit_nat(n1);
     visitor.visit_nat(n2);
     visitor.visit_nat(n3);
 }
 
-pub fn walk_dim2d<V: Visit>(visitor: &mut V, dim2d: &Dim2d) {
+pub fn walk_dim2d<'a, V: Visit<'a>>(visitor: &mut V, dim2d: &Dim2d<'a>) {
     let Dim2d(n1, n2) = dim2d;
     visitor.visit_nat(n1);
     visitor.visit_nat(n2);
 }
 
-pub fn walk_dim1d<V: Visit>(visitor: &mut V, dim1d: &Dim1d) {
+pub fn walk_dim1d<'a, V: Visit<'a>>(visitor: &mut V, dim1d: &Dim1d<'a>) {
     let Dim1d(n) = dim1d;
     visitor.visit_nat(n);
 }
 
-pub fn walk_dim<V: Visit>(visitor: &mut V, dim: &Dim) {
+pub fn walk_dim<'a, V: Visit<'a>>(visitor: &mut V, dim: &Dim<'a>) {
     match dim {
         Dim::XYZ(dim3d) => {
             visitor.visit_dim3d(dim3d);
@@ -152,7 +152,7 @@ pub fn walk_dim<V: Visit>(visitor: &mut V, dim: &Dim) {
     }
 }
 
-pub fn walk_ref<V: Visit>(visitor: &mut V, reff: &RefDty) {
+pub fn walk_ref<'a, V: Visit<'a>>(visitor: &mut V, reff: &RefDty<'a>) {
     let RefDty { rgn, own, mem, dty } = reff;
     visitor.visit_prv(rgn);
     visitor.visit_own(own);
@@ -160,7 +160,7 @@ pub fn walk_ref<V: Visit>(visitor: &mut V, reff: &RefDty) {
     visitor.visit_dty(dty);
 }
 
-pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
+pub fn walk_dty<'a, V: Visit<'a>>(visitor: &mut V, dty: &DataTy<'a>) {
     match &dty.dty {
         DataTyKind::Ident(ident) => visitor.visit_ident(ident),
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
@@ -190,7 +190,7 @@ pub fn walk_dty<V: Visit>(visitor: &mut V, dty: &DataTy) {
     }
 }
 
-pub fn walk_fn_ty<V: Visit>(visitor: &mut V, fn_ty: &FnTy) {
+pub fn walk_fn_ty<'a, V: Visit<'a>>(visitor: &mut V, fn_ty: &FnTy<'a>) {
     let FnTy {
         generics,
         generic_exec,
@@ -209,7 +209,7 @@ pub fn walk_fn_ty<V: Visit>(visitor: &mut V, fn_ty: &FnTy) {
     walk_list!(visitor, visit_nat_constr, nat_constrs);
 }
 
-pub fn walk_nat_constr<V: Visit>(visitor: &mut V, nat_constr: &NatConstr) {
+pub fn walk_nat_constr<'a, V: Visit<'a>>(visitor: &mut V, nat_constr: &NatConstr<'a>) {
     match nat_constr {
         NatConstr::True => {}
         NatConstr::Eq(l, r) => {
@@ -231,7 +231,7 @@ pub fn walk_nat_constr<V: Visit>(visitor: &mut V, nat_constr: &NatConstr) {
     }
 }
 
-pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
+pub fn walk_ty<'a, V: Visit<'a>>(visitor: &mut V, ty: &Ty<'a>) {
     match &ty.ty {
         TyKind::Data(dty) => visitor.visit_dty(dty),
         TyKind::FnTy(fn_ty) => {
@@ -240,7 +240,7 @@ pub fn walk_ty<V: Visit>(visitor: &mut V, ty: &Ty) {
     }
 }
 
-pub fn walk_view<V: Visit>(visitor: &mut V, view: &View) {
+pub fn walk_view<'a, V: Visit<'a>>(visitor: &mut V, view: &View<'a>) {
     visitor.visit_ident(&view.name);
     walk_list!(visitor, visit_arg_kinded, &view.gen_args);
     for v in &view.args {
@@ -248,7 +248,7 @@ pub fn walk_view<V: Visit>(visitor: &mut V, view: &View) {
     }
 }
 
-pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
+pub fn walk_pl_expr<'a, V: Visit<'a>>(visitor: &mut V, pl_expr: &PlaceExpr<'a>) {
     match &pl_expr.pl_expr {
         PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
         PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
@@ -274,7 +274,7 @@ pub fn walk_pl_expr<V: Visit>(visitor: &mut V, pl_expr: &PlaceExpr) {
     }
 }
 
-pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
+pub fn walk_arg_kinded<'a, V: Visit<'a>>(visitor: &mut V, arg_kinded: &ArgKinded<'a>) {
     match arg_kinded {
         ArgKinded::Ident(ident) => visitor.visit_ident(ident),
         ArgKinded::Nat(n) => visitor.visit_nat(n),
@@ -284,7 +284,7 @@ pub fn walk_arg_kinded<V: Visit>(visitor: &mut V, arg_kinded: &ArgKinded) {
     }
 }
 
-pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
+pub fn walk_pattern<'a, V: Visit<'a>>(visitor: &mut V, pattern: &Pattern<'a>) {
     match pattern {
         Pattern::Ident(mutab, ident) => {
             visitor.visit_mutability(mutab);
@@ -297,7 +297,7 @@ pub fn walk_pattern<V: Visit>(visitor: &mut V, pattern: &Pattern) {
     }
 }
 
-pub fn walk_split<V: Visit>(visitor: &mut V, indep: &Split) {
+pub fn walk_split<'a, V: Visit<'a>>(visitor: &mut V, indep: &Split<'a>) {
     let Split {
         dim_compo,
         pos,
@@ -312,7 +312,7 @@ pub fn walk_split<V: Visit>(visitor: &mut V, indep: &Split) {
     walk_list!(visitor, visit_expr, branch_bodies);
 }
 
-pub fn walk_sched<V: Visit>(visitor: &mut V, sched: &Sched) {
+pub fn walk_sched<'a, V: Visit<'a>>(visitor: &mut V, sched: &Sched<'a>) {
     let Sched {
         dim,
         inner_exec_ident,
@@ -327,7 +327,7 @@ pub fn walk_sched<V: Visit>(visitor: &mut V, sched: &Sched) {
     visitor.visit_block(body);
 }
 
-pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
+pub fn walk_expr<'a, V: Visit<'a>>(visitor: &mut V, expr: &Expr<'a>) {
     // For now, only visit ExprKind
     match &expr.expr {
         ExprKind::Lit(l) => visitor.visit_lit(l),
@@ -442,7 +442,7 @@ pub fn walk_expr<V: Visit>(visitor: &mut V, expr: &Expr) {
     }
 }
 
-pub fn walk_app_kernel<V: Visit>(visitor: &mut V, app_kernel: &AppKernel) {
+pub fn walk_app_kernel<'a, V: Visit<'a>>(visitor: &mut V, app_kernel: &AppKernel<'a>) {
     let AppKernel {
         grid_dim,
         block_dim,
@@ -466,12 +466,12 @@ pub fn walk_app_kernel<V: Visit>(visitor: &mut V, app_kernel: &AppKernel) {
     }
 }
 
-pub fn walk_block<V: Visit>(visitor: &mut V, block: &Block) {
+pub fn walk_block<'a, V: Visit<'a>>(visitor: &mut V, block: &Block<'a>) {
     let Block { body, .. } = block;
     visitor.visit_expr(body);
 }
 
-pub fn walk_split_proj<V: Visit>(visitor: &mut V, split_proj: &TakeRange) {
+pub fn walk_split_proj<'a, V: Visit<'a>>(visitor: &mut V, split_proj: &TakeRange<'a>) {
     let TakeRange {
         split_dim,
         pos,
@@ -481,14 +481,14 @@ pub fn walk_split_proj<V: Visit>(visitor: &mut V, split_proj: &TakeRange) {
     visitor.visit_nat(pos);
 }
 
-pub fn walk_exec_expr<V: Visit>(visitor: &mut V, exec_expr: &ExecExpr) {
+pub fn walk_exec_expr<'a, V: Visit<'a>>(visitor: &mut V, exec_expr: &ExecExpr<'a>) {
     visitor.visit_exec(&exec_expr.exec);
     for t in &exec_expr.ty {
         visitor.visit_exec_ty(t);
     }
 }
 
-pub fn walk_exec<V: Visit>(visitor: &mut V, exec: &ExecExprKind) {
+pub fn walk_exec<'a, V: Visit<'a>>(visitor: &mut V, exec: &ExecExprKind<'a>) {
     let ExecExprKind { base, path } = exec;
     match base {
         BaseExec::CpuThread => (),
@@ -508,7 +508,7 @@ pub fn walk_exec<V: Visit>(visitor: &mut V, exec: &ExecExprKind) {
     }
 }
 
-pub fn walk_param_decl<V: Visit>(visitor: &mut V, param_decl: &ParamDecl) {
+pub fn walk_param_decl<'a, V: Visit<'a>>(visitor: &mut V, param_decl: &ParamDecl<'a>) {
     let ParamDecl {
         ident,
         ty,
@@ -525,7 +525,7 @@ pub fn walk_param_decl<V: Visit>(visitor: &mut V, param_decl: &ParamDecl) {
     }
 }
 
-pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
+pub fn walk_fun_def<'a, V: Visit<'a>>(visitor: &mut V, fun_def: &FunDef<'a>) {
     let FunDef {
         ident: _,
         generic_params,
@@ -547,7 +547,7 @@ pub fn walk_fun_def<V: Visit>(visitor: &mut V, fun_def: &FunDef) {
     visitor.visit_block(body)
 }
 
-pub fn walk_fun_decl<V: Visit>(visitor: &mut V, fun_decl: &FunDecl) {
+pub fn walk_fun_decl<'a, V: Visit<'a>>(visitor: &mut V, fun_decl: &FunDecl<'a>) {
     let FunDecl {
         ident: _,
         generic_params,
@@ -567,13 +567,13 @@ pub fn walk_fun_decl<V: Visit>(visitor: &mut V, fun_decl: &FunDecl) {
     walk_list!(visitor, visit_prv_rel, prv_rels);
 }
 
-pub fn walk_param_sig<V: Visit>(visitor: &mut V, param_sig: &ParamSig) {
+pub fn walk_param_sig<'a, V: Visit<'a>>(visitor: &mut V, param_sig: &ParamSig<'a>) {
     let ParamSig { exec_expr, ty } = param_sig;
     visitor.visit_exec_expr(exec_expr);
     visitor.visit_ty(ty);
 }
 
-pub fn walk_field<V: Visit>(visitor: &mut V, field: &(Ident, DataTy)) {
+pub fn walk_field<'a, V: Visit<'a>>(visitor: &mut V, field: &(Ident<'a>, DataTy<'a>)) {
     let (ident, dty) = field;
     visitor.visit_ident(ident);
     visitor.visit_dty(dty);
