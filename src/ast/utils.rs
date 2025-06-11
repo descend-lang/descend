@@ -102,12 +102,12 @@ pub fn subst_ident_exec<'a, T: VisitableMut<'a>>(
  * identifiers must be removed from the list, first.
  */
 struct SubstIdentsKinded<'a> {
-    pub subst_map: &'a HashMap<&'a str, &'a ArgKinded<'a>>,
+    pub subst_map: HashMap<&'a str, &'a ArgKinded<'a>>,
     pub bound_idents: HashSet<IdentKinded<'a>>,
 }
 
 impl<'a> SubstIdentsKinded<'a> {
-    fn new(subst_map: &'a HashMap<&'a str, &'a ArgKinded<'a>>) -> Self {
+    fn new(subst_map: HashMap<&'a str, &'a ArgKinded<'a>>) -> Self {
         SubstIdentsKinded {
             subst_map,
             bound_idents: HashSet::new(),
@@ -115,7 +115,7 @@ impl<'a> SubstIdentsKinded<'a> {
     }
 
     fn with_bound_idents(
-        subst_map: &'a HashMap<&'a str, &'a ArgKinded<'a>>,
+        subst_map: HashMap<&'a str, &'a ArgKinded<'a>>,
         bound_idents: HashSet<IdentKinded<'a>>,
     ) -> Self {
         SubstIdentsKinded {
