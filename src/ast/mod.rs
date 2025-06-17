@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::ast::internal::PathElem;
-use bumpalo::{collections::Vec as BumpVec, Bump};
+use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
 use descend_derive::span_derive;
 pub use span::*;
 
@@ -15,23 +15,23 @@ pub mod utils;
 pub mod visit;
 pub mod visit_mut;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CompilUnit<'a> {
-    pub items: Vec<Item<'a>>,
+    pub items: BumpVec<'a, Item<'a>>,
     pub source: &'a SourceCode<'a>,
 }
 
 impl<'a> CompilUnit<'a> {
-    pub fn new(items: Vec<Item<'a>>, source: &'a SourceCode<'a>) -> Self {
+    pub fn new(items: BumpVec<'a, Item<'a>>, source: &'a SourceCode<'a>) -> Self {
         CompilUnit { items, source }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Item<'a> {
-    FunDef(&'a FunDef<'a>),
-    FunDecl(&'a FunDecl<'a>),
-    StructDecl(&'a StructDecl<'a>),
+    FunDef(BumpBox<'a, FunDef<'a>>),
+    FunDecl(BumpBox<'a, FunDecl<'a>>),
+    StructDecl(BumpBox<'a, StructDecl<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -146,7 +146,7 @@ pub struct ParamDecl<'a> {
 }
 
 #[span_derive(PartialEq)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Expr<'a> {
     pub expr: ExprKind<'a>,
     // FIXME misusing span_derive_ignore to ignore type on equality checks
@@ -288,7 +288,7 @@ impl<'a> Sched<'a> {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug)]
 pub struct Split<'a> {
     pub dim_compo: DimCompo,
     pub pos: Nat<'a>,
@@ -352,18 +352,18 @@ impl<'a> Block<'a> {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug)]
 pub struct AppKernel<'a> {
     pub grid_dim: Dim<'a>,
     pub block_dim: Dim<'a>,
     pub shared_mem_dtys: BumpVec<'a, DataTy<'a>>,
     pub shared_mem_prvs: BumpVec<'a, String>,
-    pub fun_ident: &'a Ident<'a>,
+    pub fun_ident: BumpBox<'a, Ident<'a>>,
     pub gen_args: BumpVec<'a, ArgKinded<'a>>,
     pub args: BumpVec<'a, Expr<'a>>,
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug)]
 pub enum ExprKind<'a> {
     Hole,
     Lit(Lit),
@@ -398,7 +398,8 @@ pub enum ExprKind<'a> {
         BumpVec<'a, Expr<'a>>,
     ),
     DepApp(Ident<'a>, BumpVec<'a, ArgKinded<'a>>),
-    AppKernel(&'a AppKernel<'a>),
+    //AppKernel(&'a AppKernel<'a>),
+    AppKernel(BumpBox<'a, AppKernel<'a>>),
     // TODO branches must be blocks
     IfElse(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
     // TODO branch must be block
@@ -1345,7 +1346,7 @@ pub struct DataTy<'a> {
 }
 
 impl<'a> DataTy<'a> {
-    pub fn new_in(bump: &'a bumpalo::Bump, dty: DataTyKind<'a>) -> Self {
+    pub fn new(bump: &'a bumpalo::Bump, dty: DataTyKind<'a>) -> Self {
         DataTy {
             dty,
             constraints: BumpVec::new_in(bump),
