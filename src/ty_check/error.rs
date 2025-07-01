@@ -1,7 +1,7 @@
 use super::Ty;
-use crate::ast::internal::Place;
-use crate::ast::printer::PrintState;
-use crate::ast::{BaseExec, DataTy, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind};
+use crate::arena_ast::internal::Place;
+use crate::arena_ast::printer::PrintState;
+use crate::arena_ast::{BaseExec, DataTy, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;

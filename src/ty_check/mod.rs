@@ -9,9 +9,9 @@ mod subty;
 mod unify;
 
 use self::pl_expr::PlExprTyCtx;
-use crate::ast::internal::{Frame, IdentTyped, Loan, Place, PrvMapping};
-use crate::ast::utils;
-use crate::ast::*;
+use crate::arena_ast::internal::{Frame, IdentTyped, Loan, Place, PrvMapping};
+use crate::arena_ast::utils;
+use crate::arena_ast::*;
 use crate::error::ErrorReported;
 use bumpalo::Bump;
 use ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
@@ -29,7 +29,7 @@ macro_rules! matches_dty {
         }
     };
 }
-use crate::ast::printer::PrintState;
+use crate::arena_ast::printer::PrintState;
 use crate::ty_check::borrow_check::BorrowCheckCtx;
 use crate::ty_check::ctxs::GlobalDecl;
 pub(crate) use matches_dty;

@@ -1,21 +1,21 @@
-use crate::ast::visit::walk_list;
-use crate::ast::visit::Visit;
-use crate::ast::visit_mut::VisitMut;
-use crate::ast::{
-    visit, visit_mut, ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecTy, Expr,
-    ExprKind, FnTy, FunDef, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, ParamSig, Provenance,
-    Ty, TyKind,
+use crate::arena_ast::visit::walk_list;
+use crate::arena_ast::visit::Visit;
+use crate::arena_ast::visit_mut::VisitMut;
+use crate::arena_ast::{
+    visit, visit_mut, ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecExprKind, ExecTy,
+    Expr, ExprKind, FnTy, FunDef, Ident, IdentExec, IdentKinded, Kind, Memory, Nat, ParamSig,
+    Provenance, Ty, TyKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 static mut COUNTER: AtomicI32 = AtomicI32::new(0);
 
-pub(crate) fn fresh_ident<F, R>(name: &str, ident_constr: F) -> R
+pub(crate) fn fresh_ident<'a, F, R>(arena: &'a bumpalo::Bump, name: &str, ident_constr: F) -> R
 where
     F: Fn(Ident) -> R,
 {
-    ident_constr(Ident::new_impli(&fresh_name(name)))
+    ident_constr(Ident::new_impli(&arena, &fresh_name(name)))
 }
 
 pub(crate) fn fresh_name(name: &str) -> String {
@@ -27,10 +27,10 @@ pub(crate) fn fresh_name(name: &str) -> String {
     format!("{}_{}", prefix, i)
 }
 
-pub fn implicit_idents(f: &FunDef) -> Option<HashSet<Ident>> {
-    struct ImplicitIdents(HashSet<Ident>);
-    impl Visit for ImplicitIdents {
-        fn visit_ident(&mut self, ident: &Ident) {
+pub fn implicit_idents<'a>(f: &FunDef<'a>) -> Option<HashSet<Ident<'a>>> {
+    struct ImplicitIdents<'b>(HashSet<Ident<'b>>);
+    impl<'b> Visit<'b> for ImplicitIdents<'b> {
+        fn visit_ident(&mut self, ident: &Ident<'b>) {
             if ident.is_implicit {
                 self.0.insert(ident.clone());
             }
@@ -46,13 +46,13 @@ pub fn implicit_idents(f: &FunDef) -> Option<HashSet<Ident>> {
     }
 }
 
-pub trait VisitableMut {
-    fn visit_mut<V: VisitMut>(&mut self, visitor: &mut V);
+pub trait VisitableMut<'a> {
+    fn visit_mut<V: VisitMut<'a>>(&mut self, visitor: &mut V);
 }
 macro_rules! visitable_mut {
     ($t:ident, $f:ident) => {
-        impl VisitableMut for $t {
-            fn visit_mut<V: VisitMut>(&mut self, visitor: &mut V) {
+        impl<'a> VisitableMut<'a> for $t<'a> {
+            fn visit_mut<V: VisitMut<'a>>(&mut self, visitor: &mut V) {
                 visitor.$f(self);
             }
         }
@@ -71,10 +71,10 @@ visitable_mut!(FnTy, visit_fn_ty);
  * gen_args: the kinded expressions that are substituting the generic identifiers
  * t: the term to substitute in
  */
-pub fn subst_idents_kinded<'a, I, J, T: VisitableMut>(gen_idents: I, gen_args: J, t: &mut T)
+pub fn subst_idents_kinded<'a, I, J, T: VisitableMut<'a>>(gen_idents: I, gen_args: J, t: &mut T)
 where
-    I: IntoIterator<Item = &'a IdentKinded>,
-    J: IntoIterator<Item = &'a ArgKinded>,
+    I: IntoIterator<Item = &'a IdentKinded<'a>>,
+    J: IntoIterator<Item = &'a ArgKinded<'a>>,
 {
     let subst_map = HashMap::from_iter(
         gen_idents
@@ -82,15 +82,18 @@ where
             .map(|p| p.ident.name.as_ref())
             .zip(gen_args),
     );
-    let mut subst_idents_kinded = SubstIdentsKinded::new(&subst_map);
+    let mut subst_idents_kinded = SubstIdentsKinded::new(subst_map);
     t.visit_mut(&mut subst_idents_kinded);
 }
 
-pub fn subst_ident_exec<'a, T: VisitableMut>(ident: &Ident, exec: &ExecExpr, t: &mut T) {
+pub fn subst_ident_exec<'a, T: VisitableMut<'a>>(
+    ident: &'a Ident<'a>,
+    exec: &'a ExecExpr<'a>,
+    t: &mut T,
+) {
     let mut subst_ident_exec = SubstIdentExec::new(ident, exec);
     t.visit_mut(&mut subst_ident_exec);
 }
-
 /*
  * substitute kinded arguments for free identifiers
  *
@@ -99,12 +102,12 @@ pub fn subst_ident_exec<'a, T: VisitableMut>(ident: &Ident, exec: &ExecExpr, t: 
  * identifiers must be removed from the list, first.
  */
 struct SubstIdentsKinded<'a> {
-    pub subst_map: &'a HashMap<&'a str, &'a ArgKinded>,
-    pub bound_idents: HashSet<IdentKinded>,
+    pub subst_map: HashMap<&'a str, &'a ArgKinded<'a>>,
+    pub bound_idents: HashSet<IdentKinded<'a>>,
 }
 
 impl<'a> SubstIdentsKinded<'a> {
-    fn new(subst_map: &'a HashMap<&'a str, &'a ArgKinded>) -> Self {
+    fn new(subst_map: HashMap<&'a str, &'a ArgKinded<'a>>) -> Self {
         SubstIdentsKinded {
             subst_map,
             bound_idents: HashSet::new(),
@@ -112,8 +115,8 @@ impl<'a> SubstIdentsKinded<'a> {
     }
 
     fn with_bound_idents(
-        subst_map: &'a HashMap<&'a str, &'a ArgKinded>,
-        bound_idents: HashSet<IdentKinded>,
+        subst_map: HashMap<&'a str, &'a ArgKinded<'a>>,
+        bound_idents: HashSet<IdentKinded<'a>>,
     ) -> Self {
         SubstIdentsKinded {
             subst_map,
@@ -122,8 +125,8 @@ impl<'a> SubstIdentsKinded<'a> {
     }
 }
 
-impl VisitMut for SubstIdentsKinded<'_> {
-    fn visit_nat(&mut self, nat: &mut Nat) {
+impl<'a> VisitMut<'a> for SubstIdentsKinded<'a> {
+    fn visit_nat(&mut self, nat: &mut Nat<'a>) {
         match nat {
             Nat::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Nat);
@@ -139,7 +142,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
         }
     }
 
-    fn visit_mem(&mut self, mem: &mut Memory) {
+    fn visit_mem(&mut self, mem: &mut Memory<'a>) {
         match mem {
             Memory::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Memory);
@@ -155,7 +158,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
         }
     }
 
-    fn visit_prv(&mut self, prv: &mut Provenance) {
+    fn visit_prv(&mut self, prv: &mut Provenance<'a>) {
         match prv {
             Provenance::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Provenance);
@@ -171,7 +174,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
         }
     }
 
-    fn visit_dty(&mut self, dty: &mut DataTy) {
+    fn visit_dty(&mut self, dty: &mut DataTy<'a>) {
         match &mut dty.dty {
             DataTyKind::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::DataTy);
@@ -188,7 +191,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
     }
 
     // add generic paramters to list of bound identifiers
-    fn visit_fn_ty(&mut self, fn_ty: &mut FnTy) {
+    fn visit_fn_ty(&mut self, fn_ty: &mut FnTy<'a>) {
         let fun_bound_idents = fn_ty.generics.clone();
         let mut all_bound_idents = self.bound_idents.clone();
         all_bound_idents.extend(fun_bound_idents);
@@ -207,7 +210,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
     }
 
     // only required to introduce a new scope of bound identifiers
-    fn visit_expr(&mut self, expr: &mut Expr) {
+    fn visit_expr(&mut self, expr: &mut Expr<'a>) {
         match &mut expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
                 self.visit_nat_range(collec);
@@ -222,7 +225,7 @@ impl VisitMut for SubstIdentsKinded<'_> {
     }
 
     // add generic paramters to list of bound identifiers
-    fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
+    fn visit_fun_def(&mut self, fun_def: &mut FunDef<'a>) {
         let fun_bound_idents = fun_def.generic_params.clone();
         let mut all_bound_idents = self.bound_idents.clone();
         all_bound_idents.extend(fun_bound_idents);
@@ -252,22 +255,23 @@ impl VisitMut for SubstIdentsKinded<'_> {
  * This substitution ignores whehter an execution identifier is bound by a function type.
  */
 struct SubstIdentExec<'a> {
-    pub ident: &'a Ident,
-    pub exec: &'a ExecExpr,
+    pub ident: &'a Ident<'a>,
+    pub exec: &'a ExecExpr<'a>,
 }
 
 impl<'a> SubstIdentExec<'a> {
-    fn new(ident: &'a Ident, exec: &'a ExecExpr) -> Self {
+    fn new(ident: &'a Ident<'a>, exec: &'a ExecExpr<'a>) -> Self {
         SubstIdentExec { ident, exec }
     }
 }
-impl VisitMut for SubstIdentExec<'_> {
-    fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) {
-        insert_for_ident(self.exec, &self.ident, exec_expr)
+impl<'a> VisitMut<'a> for SubstIdentExec<'a> {
+    fn visit_exec_expr(&mut self, bump: &'a bumpalo::Bump, exec_expr: &mut ExecExpr<'a>) {
+        insert_for_ident(bump, self.exec, &self.ident, exec_expr)
     }
 }
 
-fn insert_for_ident(exec: &ExecExpr, ident: &Ident, in_exec: &mut ExecExpr) {
+/**
+fn insert_for_ident<'a>(exec: &ExecExpr<'a>, ident: &Ident<'a>, in_exec: &mut ExecExpr<'a>) {
     if let BaseExec::Ident(i) = &mut in_exec.exec.base {
         if i == ident {
             let mut subst_exec = exec.clone();
@@ -276,14 +280,42 @@ fn insert_for_ident(exec: &ExecExpr, ident: &Ident, in_exec: &mut ExecExpr) {
         }
     }
 }
+*/
 
-pub trait Visitable {
-    fn visit<V: Visit>(&self, visitor: &mut V);
+fn insert_for_ident<'a>(
+    bump: &'a bumpalo::Bump,
+    exec: &ExecExpr<'a>,
+    ident: &Ident<'a>,
+    in_exec: &mut ExecExpr<'a>,
+) {
+    if let BaseExec::Ident(i) = &in_exec.exec.base {
+        if i == ident {
+            let mut merged_path = exec.exec.path.clone();
+            merged_path.extend(in_exec.exec.path.iter().cloned());
+
+            let new_exec = bump.alloc(ExecExprKind {
+                base: exec.exec.base.clone(),
+                path: merged_path,
+            });
+
+            let new_exec_expr = ExecExpr {
+                exec: new_exec,
+                ty: in_exec.ty,
+                span: in_exec.span,
+            };
+
+            *in_exec = new_exec_expr;
+        }
+    }
+}
+
+pub trait Visitable<'a> {
+    fn visit<V: Visit<'a>>(&self, visitor: &mut V);
 }
 macro_rules! visitable {
     ($t:ident, $f:ident) => {
-        impl Visitable for $t {
-            fn visit<V: Visit>(&self, visitor: &mut V) {
+        impl<'a> Visitable<'a> for $t<'a> {
+            fn visit<V: Visit<'a>>(&self, visitor: &mut V) {
                 visitor.$f(self);
             }
         }
@@ -301,18 +333,18 @@ visitable!(Dim, visit_dim);
 visitable!(Expr, visit_expr);
 visitable!(Nat, visit_nat);
 
-pub fn free_kinded_idents<T: Visitable>(t: &T) -> HashSet<IdentKinded> {
+pub fn free_kinded_idents<'a, T: Visitable<'a>>(t: &T) -> HashSet<IdentKinded<'a>> {
     let mut free_kinded_idents = FreeKindedIdents::new();
     t.visit(&mut free_kinded_idents);
     free_kinded_idents.set
 }
 
-pub struct FreeKindedIdents {
-    pub set: HashSet<IdentKinded>,
-    pub bound_idents: HashSet<IdentKinded>,
+pub struct FreeKindedIdents<'a> {
+    pub set: HashSet<IdentKinded<'a>>,
+    pub bound_idents: HashSet<IdentKinded<'a>>,
 }
 
-impl FreeKindedIdents {
+impl<'a> FreeKindedIdents<'a> {
     fn new() -> Self {
         FreeKindedIdents {
             set: HashSet::new(),
@@ -320,7 +352,7 @@ impl FreeKindedIdents {
         }
     }
 
-    fn with_bound_idents(idents: HashSet<IdentKinded>) -> Self {
+    fn with_bound_idents(idents: HashSet<IdentKinded<'a>>) -> Self {
         FreeKindedIdents {
             set: HashSet::new(),
             bound_idents: idents,
@@ -328,8 +360,8 @@ impl FreeKindedIdents {
     }
 }
 
-impl Visit for FreeKindedIdents {
-    fn visit_nat(&mut self, nat: &Nat) {
+impl<'a> Visit<'a> for FreeKindedIdents<'a> {
+    fn visit_nat(&mut self, nat: &Nat<'a>) {
         match nat {
             Nat::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Nat);
@@ -341,7 +373,7 @@ impl Visit for FreeKindedIdents {
         }
     }
 
-    fn visit_mem(&mut self, mem: &Memory) {
+    fn visit_mem(&mut self, mem: &Memory<'a>) {
         match mem {
             Memory::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Memory);
@@ -353,7 +385,7 @@ impl Visit for FreeKindedIdents {
         }
     }
 
-    fn visit_prv(&mut self, prv: &Provenance) {
+    fn visit_prv(&mut self, prv: &Provenance<'a>) {
         match prv {
             Provenance::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::Provenance);
@@ -365,7 +397,7 @@ impl Visit for FreeKindedIdents {
         }
     }
 
-    fn visit_dty(&mut self, dty: &DataTy) {
+    fn visit_dty(&mut self, dty: &DataTy<'a>) {
         match &dty.dty {
             DataTyKind::Ident(ident) => {
                 let ident_kinded = IdentKinded::new(ident, Kind::DataTy);
@@ -377,7 +409,7 @@ impl Visit for FreeKindedIdents {
         }
     }
 
-    fn visit_ty(&mut self, ty: &Ty) {
+    fn visit_ty(&mut self, ty: &Ty<'a>) {
         match &ty.ty {
             TyKind::FnTy(fn_ty) => {
                 if !fn_ty.generics.is_empty() {
@@ -388,13 +420,13 @@ impl Visit for FreeKindedIdents {
                 }
 
                 walk_list!(self, visit_param_sig, &fn_ty.param_sigs);
-                self.visit_ty(fn_ty.ret_ty.as_ref())
+                self.visit_ty(fn_ty.ret_ty)
             }
             _ => visit::walk_ty(self, ty),
         }
     }
 
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, expr: &Expr<'a>) {
         match &expr.expr {
             ExprKind::ForNat(ident, collec, body) => {
                 self.visit_nat_range(collec);

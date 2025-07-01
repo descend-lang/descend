@@ -1,7 +1,7 @@
-use crate::ast::internal::{
+use crate::arena_ast::internal::{
     ExecMapping, Frame, FrameEntry, IdentTyped, Loan, PathElem, PrvMapping,
 };
-use crate::ast::*;
+use crate::arena_ast::*;
 use crate::ty_check::error::CtxError;
 use std::collections::HashSet;
 

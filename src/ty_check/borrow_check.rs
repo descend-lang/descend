@@ -1,6 +1,6 @@
 use super::ctxs::TyCtx;
-use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
-use crate::ast::*;
+use crate::arena_ast::internal::{Loan, PlaceCtx, PrvMapping};
+use crate::arena_ast::*;
 use crate::parser::descend::nat;
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;

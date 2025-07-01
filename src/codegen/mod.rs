@@ -1,9 +1,9 @@
 mod cu_ast;
 mod printer;
 
-use crate::ast as desc;
-use crate::ast::visit::Visit;
-use crate::ast::visit_mut::VisitMut;
+use crate::arena_ast as desc;
+use crate::arena_ast::visit::Visit;
+use crate::arena_ast::visit_mut::VisitMut;
 use crate::ty_check;
 use cu_ast as cu;
 use std::collections::HashMap;
@@ -645,7 +645,7 @@ fn gen_for_each(
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
     todo!();
-    let i_name = crate::ast::utils::fresh_name("i__");
+    let i_name = crate::arena_ast::utils::fresh_name("i__");
     let i_decl = cu::Stmt::VarDecl {
         name: i_name.clone(),
         ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),

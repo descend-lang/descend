@@ -2,103 +2,132 @@
 pub mod source;
 mod utils;
 
+use crate::arena_ast::visit_mut as arena_visit_mut;
+use crate::arena_ast::visit_mut::VisitMut as ArenaVisitMut;
+use crate::arena_ast::AppKernel as ArenaAppKernel;
+use crate::arena_ast::ArgKinded as ArenaArgKinded;
+use crate::arena_ast::BaseExec as ArenaBaseExec;
+use crate::arena_ast::CompilUnit as ArenaCompilUnit;
+use crate::arena_ast::DataTy as ArenaDataTy;
+use crate::arena_ast::DataTyKind as ArenaDataTyKind;
+use crate::arena_ast::ExecExpr as ArenaExecExpr;
+use crate::arena_ast::ExecExprKind as ArenaExecExprKind;
+use crate::arena_ast::ExecTyKind as ArenaExecTyKind;
+use crate::arena_ast::Expr as ArenaExpr;
+use crate::arena_ast::ExprKind as ArenaExprKind;
+use crate::arena_ast::FunDef as ArenaFunDef;
+use crate::arena_ast::Ident as ArenaIdent;
+use crate::arena_ast::IdentKinded as ArenaIdentKinded;
+use crate::arena_ast::Item as ArenaItem;
+use crate::arena_ast::Kind as ArenaKind;
+use crate::arena_ast::LeftOrRight as ArenaLeftOrRight;
+use crate::arena_ast::Memory as ArenaMemory;
+use crate::arena_ast::Nat as ArenaNat;
+use crate::arena_ast::Provenance as ArenaProvenance;
+use crate::arena_ast::Sched as ArenaSched;
+use crate::arena_ast::Split as ArenaSplit;
+use crate::arena_ast::StructDecl as ArenaStructDecl;
+use crate::arena_ast::View as ArenaView;
 use crate::ast::*;
+
 use core::iter;
 use error::ParseError;
 use std::collections::HashMap;
 
-use crate::ast::visit_mut::VisitMut;
 use crate::error::ErrorReported;
 use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
 pub use source::*;
 
-impl<'s> Item<'s> {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> Item<'a> {
-        match self {
-            Item::FunDef(boxed) => Item::FunDef(BumpBox::new_in(*boxed, arena)),
-            Item::FunDecl(boxed) => Item::FunDecl(BumpBox::new_in(*boxed, arena)),
-            Item::StructDecl(boxed) => Item::StructDecl(BumpBox::new_in(*boxed, arena)),
-        }
-    }
-}
-
 pub fn parse<'a>(
     arena: &'a bumpalo::Bump,
     source: &'a SourceCode<'a>,
-) -> Result<CompilUnit<'a>, ErrorReported> {
-    let parser = Parser::new(arena, source);
-    let parsed_items = parser.parse().map_err(|err| err.emit())?;
+) -> Result<ArenaCompilUnit<'a>, ErrorReported> {
+    let parser = Parser::new(source);
+    let heap_items = parser.parse().map_err(|err| err.emit())?;
 
-    // Allocate Items into arena
-    let mut items = BumpVec::new_in(arena);
-    for item in parsed_items {
-        items.push(item.into_arena(arena));
+    // Step 1: Convert heap AST -> arena AST
+    let mut arena_items = BumpVec::new_in(arena);
+    for heap_item in heap_items {
+        arena_items.push(heap_item.into_arena(arena)) // into arena will be the converter
     }
 
-    // Collect StructDecls
-    let struct_copies: Vec<&'a StructDecl<'a>> = items
+    // Step 2: Postprocess
+    // TODO refactor to not require unnecessary copying out of items
+    let struct_copies: Vec<&ArenaStructDecl<'_>> = arena_items
         .iter()
-        .filter_map(|item| match item {
-            Item::StructDecl(decl_box) => Some(&**decl_box),
-            _ => None,
+        .filter_map(|i| {
+            if let ArenaItem::StructDecl(struct_dty) = i {
+                //Some(struct_dty.as_ref())
+                Some(struct_dty.as_ref())
+            } else {
+                None
+            }
         })
+        //.cloned()
+        //.collect::<Vec<_>>();
         .collect();
 
-    // Mutate FunDefs
-    for item in items.iter_mut() {
-        if let Item::FunDef(fun_def) = item {
-            replace_arg_kinded_idents(fun_def.as_mut());
-            replace_exec_idents_with_specific_execs(arena, fun_def.as_mut());
+    for fun_def in arena_items.iter_mut().filter_map(|i| {
+        if let ArenaItem::FunDef(fun_def) = i {
+            Some(fun_def)
+        } else {
+            None
         }
+    }) {
+        replace_arg_kinded_idents(fun_def);
+        replace_exec_idents_with_specific_execs(arena, fun_def);
     }
 
-    // Apply struct replacements
-    for item in &mut items {
-        replace_struct_idents_with_specific_struct_dtys(&struct_copies, item);
+    for i in &mut arena_items.iter_mut() {
+        replace_struct_idents_with_specific_struct_dtys(&struct_copies, i);
     }
 
-    Ok(CompilUnit::new(items, source))
+    Ok(ArenaCompilUnit::new(arena_items, source))
 }
 
 #[derive(Debug)]
 struct Parser<'a> {
-    arena: &'a Bump,
     source: &'a SourceCode<'a>,
 }
 
 impl<'a> Parser<'a> {
-    fn new(arena: &'a Bump, source: &'a SourceCode<'a>) -> Self {
-        Parser { arena, source }
+    fn new(source: &'a SourceCode<'a>) -> Self {
+        Parser { source }
     }
 
-    fn parse(&self) -> Result<Vec<Item<'static>>, ParseError<'_>> {
+    fn parse(&self) -> Result<Vec<Item>, ParseError<'_>> {
         descend::compil_unit(self.source.str()).map_err(|peg_err| ParseError::new(self, peg_err))
     }
 }
 
-fn replace_arg_kinded_idents<'a>(fun_def: &mut FunDef) {
+fn replace_arg_kinded_idents<'a>(fun_def: &mut ArenaFunDef) {
     struct ReplaceArgKindedIdents {
-        ident_names_to_kinds: HashMap<Box<str>, Kind>,
+        ident_names_to_kinds: HashMap<Box<str>, ArenaKind>,
     }
     impl<'a> ReplaceArgKindedIdents {
-        fn subst_in_gen_args(&self, arena: &'a Bump, gen_args: &mut [ArgKinded<'a>]) {
+        fn subst_in_gen_args(&self, arena: &'a Bump, gen_args: &mut [ArenaArgKinded<'a>]) {
             for gen_arg in gen_args {
-                if let ArgKinded::Ident(ident) = gen_arg {
+                if let ArenaArgKinded::Ident(ident) = gen_arg {
                     let to_be_kinded = ident.clone();
                     match self
                         .ident_names_to_kinds
                         .get::<str>(ident.name.as_ref())
                         .unwrap()
                     {
-                        Kind::Provenance => {
-                            *gen_arg = ArgKinded::Provenance(Provenance::Ident(to_be_kinded))
+                        ArenaKind::Provenance => {
+                            *gen_arg =
+                                ArenaArgKinded::Provenance(ArenaProvenance::Ident(to_be_kinded))
                         }
-                        Kind::Memory => *gen_arg = ArgKinded::Memory(Memory::Ident(to_be_kinded)),
-                        Kind::Nat => *gen_arg = ArgKinded::Nat(Nat::Ident(to_be_kinded)),
-                        Kind::DataTy => {
-                            *gen_arg = ArgKinded::DataTy(DataTy::new(
+                        ArenaKind::Memory => {
+                            *gen_arg = ArenaArgKinded::Memory(ArenaMemory::Ident(to_be_kinded))
+                        }
+                        ArenaKind::Nat => {
+                            *gen_arg = ArenaArgKinded::Nat(ArenaNat::Ident(to_be_kinded))
+                        }
+                        ArenaKind::DataTy => {
+                            *gen_arg = ArenaArgKinded::DataTy(ArenaDataTy::new(
                                 arena,
-                                DataTyKind::Ident(to_be_kinded),
+                                ArenaDataTyKind::Ident(to_be_kinded),
                             ))
                         }
                     }
@@ -107,24 +136,24 @@ fn replace_arg_kinded_idents<'a>(fun_def: &mut FunDef) {
         }
     }
 
-    impl<'a> VisitMut<'a> for ReplaceArgKindedIdents {
-        fn visit_expr(&mut self, arena: &'a Bump, expr: &mut Expr) {
+    impl<'a> ArenaVisitMut<'a> for ReplaceArgKindedIdents {
+        fn visit_expr(&mut self, arena: &'a Bump, expr: &mut ArenaExpr) {
             match &mut expr.expr {
-                ExprKind::Block(block) => {
+                ArenaExprKind::Block(block) => {
                     self.ident_names_to_kinds.extend(
                         block
                             .prvs
                             .iter()
-                            .map(|prv| (prv.clone().into_boxed_str(), Kind::Provenance)),
+                            .map(|prv| (prv.clone().into_boxed_str(), ArenaKind::Provenance)),
                     );
                     self.visit_expr(&mut block.body)
                 }
-                ExprKind::DepApp(fun_ident, gen_args) => {
+                ArenaExprKind::DepApp(fun_ident, gen_args) => {
                     self.visit_ident(fun_ident);
                     self.subst_in_gen_args(arena, gen_args);
                 }
-                ExprKind::AppKernel(app_kernel) => {
-                    let AppKernel {
+                ArenaExprKind::AppKernel(app_kernel) => {
+                    let ArenaAppKernel {
                         fun_ident,
                         gen_args,
                         args,
@@ -132,38 +161,40 @@ fn replace_arg_kinded_idents<'a>(fun_def: &mut FunDef) {
                     } = app_kernel.as_mut();
                     self.visit_ident(fun_ident);
                     self.subst_in_gen_args(arena, gen_args);
-                    visit_mut::walk_list!(self, visit_expr, args)
+                    arena_visit_mut::walk_list!(self, visit_expr, args)
                 }
-                ExprKind::App(fun_ident, gen_args, args) => {
+                ArenaExprKind::App(fun_ident, gen_args, args) => {
                     self.visit_ident(fun_ident);
                     self.subst_in_gen_args(arena, gen_args);
-                    visit_mut::walk_list!(self, visit_expr, args)
+                    arena_visit_mut::walk_list!(self, visit_expr, args)
                 }
-                ExprKind::ForNat(ident, _, body) => {
+                ArenaExprKind::ForNat(ident, _, body) => {
                     self.ident_names_to_kinds.extend(iter::once((
                         ident.name.to_owned().into_boxed_str(),
-                        Kind::Nat,
+                        ArenaKind::Nat,
                     )));
                     self.visit_expr(body)
                 }
-                _ => visit_mut::walk_expr(self, expr),
+                _ => arena_visit_mut::walk_expr(self, expr),
             }
         }
 
-        fn visit_view(&mut self, arena: &'a Bump, view: &mut View) {
+        fn visit_view(&mut self, arena: &'a Bump, view: &mut ArenaView) {
             self.subst_in_gen_args(arena, &mut view.gen_args);
             for v in &mut view.args {
                 self.visit_view(v)
             }
         }
 
-        fn visit_fun_def(&mut self, fun_def: &mut FunDef) {
+        fn visit_fun_def(&mut self, fun_def: &mut ArenaFunDef) {
             self.ident_names_to_kinds = fun_def
                 .generic_params
                 .iter()
-                .map(|IdentKinded { ident, kind }| (ident.name.to_owned().into_boxed_str(), *kind))
+                .map(|ArenaIdentKinded { ident, kind }| {
+                    (ident.name.to_owned().into_boxed_str(), *kind)
+                })
                 .collect();
-            visit_mut::walk_fun_def(self, fun_def)
+            arena_visit_mut::walk_fun_def(self, fun_def)
         }
     }
     let mut replace = ReplaceArgKindedIdents {
@@ -172,30 +203,31 @@ fn replace_arg_kinded_idents<'a>(fun_def: &mut FunDef) {
     replace.visit_fun_def(fun_def);
 }
 
-fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut FunDef) {
+fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut ArenaFunDef) {
     struct ReplaceExecIdents<'a> {
-        ident_names_to_exec_expr: Vec<(Box<str>, ExecExpr<'a>)>,
+        ident_names_to_exec_expr: Vec<(Box<str>, ArenaExecExpr<'a>)>,
     }
-    impl<'a> VisitMut<'a> for ReplaceExecIdents<'a> {
-        fn visit_split(&mut self, arena: &'a Bump, indep: &mut Split) {
+
+    impl<'a> ArenaVisitMut<'a> for ReplaceExecIdents<'a> {
+        fn visit_split(&mut self, arena: &'a Bump, indep: &mut ArenaSplit<'a>) {
             // manually expand to keep scopes for different branches of split
-            expand_exec_expr(&self.ident_names_to_exec_expr, &mut indep.split_exec);
+            expand_exec_expr(arena, &self.ident_names_to_exec_expr, &mut indep.split_exec);
             for (i, (ident, branch)) in indep
                 .branch_idents
                 .iter()
                 .zip(&mut indep.branch_bodies)
                 .enumerate()
             {
-                let branch_exec_expr = ExecExpr::new(
+                let branch_exec_expr = ArenaExecExpr::new(
                     arena,
                     indep.split_exec.exec.clone().split_proj(
                         arena,
                         indep.dim_compo,
                         indep.pos.clone(),
                         if i == 0 {
-                            LeftOrRight::Left
+                            ArenaLeftOrRight::Left
                         } else if i == 1 {
-                            LeftOrRight::Right
+                            ArenaLeftOrRight::Right
                         } else {
                             panic!("Unexpected projection.")
                         },
@@ -208,52 +240,45 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Fu
             }
         }
 
-        fn visit_sched(&mut self, arena: &'a Bump, sched: &mut Sched) {
+        fn visit_sched(&mut self, arena: &'a Bump, sched: &mut ArenaSched<'a>) {
             // manually expand to map inner_exec_ident to expanded exec
-            expand_exec_expr(&self.ident_names_to_exec_expr, &mut sched.sched_exec);
-            let body_exec = ExecExpr::new(arena, sched.sched_exec.exec.clone().forall(sched.dim));
+            expand_exec_expr(arena, &self.ident_names_to_exec_expr, &mut sched.sched_exec);
+            let body_exec =
+                ArenaExecExpr::new(arena, sched.sched_exec.exec.clone().forall(sched.dim));
             if let Some(ident) = &sched.inner_exec_ident {
                 self.ident_names_to_exec_expr
                     .push((ident.name.to_owned().into_boxed_str(), body_exec));
             }
-            visit_mut::walk_sched(self, sched);
+            arena_visit_mut::walk_sched(self, sched);
             self.ident_names_to_exec_expr.pop();
             // self.visit_block(&mut sched.body);
         }
 
-        fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr) {
-            expand_exec_expr(&self.ident_names_to_exec_expr, exec_expr)
+        fn visit_exec_expr(&mut self, arena: &'a Bump, exec_expr: &mut ArenaExecExpr<'a>) {
+            expand_exec_expr(arena, &self.ident_names_to_exec_expr, exec_expr);
         }
 
-        // fn visit_expr(&mut self, expr: &mut Expr) {
-        //     match &mut expr.expr {
-        //         ExprKind::Sync(exec) => {
-        //             for exec in exec {
-        //                 expand_exec_expr(&self.ident_names_to_exec_expr, exec);
-        //             }
-        //         }
-        //         _ => visit_mut::walk_expr(self, expr),
-        //     }
-        // }
-
-        fn visit_fun_def(&mut self, arena: &'a Bump, fun_def: &mut FunDef) {
+        fn visit_fun_def(&mut self, arena: &'a Bump, fun_def: &mut ArenaFunDef) {
             if let Some(ident_exec) = fun_def.generic_exec.as_ref() {
                 match &ident_exec.ty.ty {
-                    ExecTyKind::CpuThread => {
+                    ArenaExecTyKind::CpuThread => {
                         self.ident_names_to_exec_expr.push((
                             ident_exec.ident.name.to_owned().into_boxed_str(),
-                            ExecExpr::new(arena, ExecExprKind::new(arena, BaseExec::CpuThread)),
+                            ArenaExecExpr::new(
+                                arena,
+                                ArenaExecExprKind::new(arena, ArenaBaseExec::CpuThread),
+                            ),
                         ));
                         fun_def.generic_exec = None;
                     }
-                    ExecTyKind::GpuGrid(gdim, bdim) => {
+                    ArenaExecTyKind::GpuGrid(gdim, bdim) => {
                         self.ident_names_to_exec_expr.push((
                             ident_exec.ident.name.to_owned().into_boxed_str(),
-                            ExecExpr::new(
+                            ArenaExecExpr::new(
                                 arena,
-                                ExecExprKind::new(
+                                ArenaExecExprKind::new(
                                     arena,
-                                    BaseExec::GpuGrid(gdim.clone(), bdim.clone()),
+                                    ArenaBaseExec::GpuGrid(gdim.clone(), bdim.clone()),
                                 ),
                             ),
                         ));
@@ -262,14 +287,18 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Fu
                     _ => {}
                 }
             }
-            visit_mut::walk_fun_def(self, fun_def)
+            arena_visit_mut::walk_fun_def(self, fun_def)
         }
     }
 
-    fn expand_exec_expr<'a>(exec_mapping: &[(Box<str>, ExecExpr)], exec_expr: &mut ExecExpr<'a>) {
+    /**
+    fn expand_exec_expr<'a>(
+        exec_mapping: &'a [(Box<str>, ArenaExecExpr)],
+        exec_expr: &mut ArenaExecExpr<'a>,
+    ) {
         match &exec_expr.exec.base {
-            BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => {}
-            BaseExec::Ident(ident) => {
+            ArenaBaseExec::CpuThread | ArenaBaseExec::GpuGrid(_, _) => {}
+            ArenaBaseExec::Ident(ident) => {
                 if let Some(exec) = get_exec_expr(exec_mapping, ident) {
                     let new_base = exec.exec.base.clone();
                     let mut new_exec_path = exec.exec.path.clone();
@@ -279,12 +308,34 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Fu
                 };
             }
         }
+    }*/
+
+    fn expand_exec_expr<'a>(
+        arena: &'a bumpalo::Bump,
+        exec_mapping: &'a [(Box<str>, ArenaExecExpr<'a>)],
+        exec_expr: &ArenaExecExpr<'a>,
+    ) -> ArenaExecExpr<'a> {
+        match &exec_expr.exec.base {
+            ArenaBaseExec::CpuThread | ArenaBaseExec::GpuGrid(_, _) => exec_expr.clone_in(arena),
+            ArenaBaseExec::Ident(ident) => {
+                if let Some(mapped_exec) = get_exec_expr(exec_mapping, ident) {
+                    let new_base = mapped_exec.exec.base.clone();
+                    let mut new_path = BumpVec::new_in(arena);
+                    new_path.extend(mapped_exec.exec.path.iter().cloned());
+                    new_path.extend(exec_expr.exec.path.iter().cloned());
+
+                    ArenaExecExpr::new(arena, ArenaExecExprKind::with_path(new_base, new_path))
+                } else {
+                    exec_expr.clone_in(arena)
+                }
+            }
+        }
     }
 
     fn get_exec_expr<'a>(
-        exec_mapping: &[(Box<str>, ExecExpr)],
-        ident: &Ident,
-    ) -> Option<ExecExpr<'a>> {
+        exec_mapping: &'a [(Box<str>, ArenaExecExpr)],
+        ident: &'a ArenaIdent<'a>,
+    ) -> Option<ArenaExecExpr<'a>> {
         for (i, exec) in exec_mapping.iter().rev() {
             if i.as_ref() == ident.name {
                 return Some(exec.clone());
@@ -300,31 +351,33 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Fu
 }
 
 fn replace_struct_idents_with_specific_struct_dtys<'a>(
-    struct_dtys: &[&'a StructDecl<'a>],
-    item: &mut Item,
+    struct_dtys: &[&'a ArenaStructDecl<'a>],
+    item: &mut ArenaItem,
 ) {
     struct ReplaceStructIdents<'a> {
-        struct_dtys: &'a [&'a StructDecl<'a>],
+        struct_dtys: &'a [&'a ArenaStructDecl<'a>],
     }
-    impl<'a> VisitMut<'a> for ReplaceStructIdents<'a> {
-        fn visit_dty(&mut self, dty: &mut DataTy) {
-            if let DataTyKind::Ident(ident) = &mut dty.dty {
+    impl<'a> ArenaVisitMut<'a> for ReplaceStructIdents<'a> {
+        fn visit_dty(&mut self, dty: &mut ArenaDataTy) {
+            if let ArenaDataTyKind::Ident(ident) = &mut dty.dty {
                 if let Some(struct_decl) = self.struct_dtys.iter().find(|s| &s.ident == ident) {
-                    dty.dty = DataTyKind::Struct(struct_decl)
+                    dty.dty = ArenaDataTyKind::Struct(struct_decl)
                 }
             } else {
-                visit_mut::walk_dty(self, dty)
+                arena_visit_mut::walk_dty(self, dty)
             }
         }
     }
 
     let mut replace_struct_idents = ReplaceStructIdents { struct_dtys };
     match item {
-        Item::FunDef(fun_def) => replace_struct_idents.visit_fun_def(fun_def),
-        Item::FunDecl(fun_decl) => replace_struct_idents.visit_fun_decl(fun_decl),
+        ArenaItem::FunDef(fun_def) => replace_struct_idents.visit_fun_def(fun_def),
+        ArenaItem::FunDecl(fun_decl) => replace_struct_idents.visit_fun_decl(fun_decl),
         _ => {}
     }
 }
+
+//
 
 pub mod error {
     use crate::error::ErrorReported;

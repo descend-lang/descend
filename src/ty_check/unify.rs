@@ -1,7 +1,7 @@
-use crate::ast::utils;
-use crate::ast::utils::Visitable;
-use crate::ast::visit_mut::VisitMut;
-use crate::ast::*;
+use crate::arena_ast::utils;
+use crate::arena_ast::utils::Visitable;
+use crate::arena_ast::visit_mut::VisitMut;
+use crate::arena_ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::UnifyError;
 use crate::ty_check::subty;

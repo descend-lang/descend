@@ -1,7 +1,7 @@
 use super::borrow_check::BorrowCheckCtx;
 use super::error::TyError;
 use super::TyResult;
-use crate::ast::{
+use crate::arena_ast::{
     utils, DataTy, DataTyKind, ExecExpr, ExecTyKind, FnTy, Ident, IdentExec, Memory, Nat, NatCtx,
     Ownership, ParamSig, PlaceExpr, PlaceExprKind, Provenance, Ty, TyKind, View,
 };

@@ -1,4 +1,4 @@
-use crate::ast::Nat;
+use crate::arena_ast::Nat;
 
 pub(super) enum Item<'a> {
     Include(String),
@@ -115,7 +115,7 @@ pub(super) enum Expr {
         rhs: Box<Expr>,
     },
     Lambda {
-        captures: Vec<crate::ast::Ident>,
+        captures: Vec<crate::arena_ast::Ident>,
         params: Vec<ParamDecl>,
         body: Box<Stmt>,
         ret_ty: Ty,
