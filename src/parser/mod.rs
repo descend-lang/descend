@@ -35,7 +35,7 @@ use error::ParseError;
 use std::collections::HashMap;
 
 use crate::error::ErrorReported;
-use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
+use bumpalo::{collections::Vec as BumpVec, Bump};
 pub use source::*;
 
 pub fn parse<'a>(
@@ -2562,8 +2562,9 @@ mod tests {
     #[test]
     fn empty_annotate_snippet() {
         let source = SourceCode::new("fn\n".to_string());
+        let bump: Bump = Bump::new();
         assert!(
-            parse(&source).is_err(),
+            parse(&bump, &source).is_err(),
             "Expected a parsing error and specifically not a panic!"
         );
     }
@@ -2571,8 +2572,9 @@ mod tests {
     #[test]
     fn empty_annotate_snippet2() {
         let source = SourceCode::new("fn ".to_string());
+        let bump: Bump = Bump::new();
         assert!(
-            parse(&source).is_err(),
+            parse(&bump, &source).is_err(),
             "Expected a parsing error and specifically not a panic!"
         );
     }
