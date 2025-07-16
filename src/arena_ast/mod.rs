@@ -3,14 +3,12 @@ use std::fmt;
 use crate::arena_ast::internal::PathElem;
 use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
 use descend_derive::span_derive;
-pub use span::*;
 
+use crate::ast::Span;
 use crate::parser::SourceCode;
-
 pub mod internal;
 
 pub mod printer;
-mod span;
 pub mod utils;
 pub mod visit;
 pub mod visit_mut;
@@ -752,7 +750,7 @@ impl<'a> PlaceExpr<'a> {
     }
 
     // TODO refactor. Places are only needed during typechecking and codegen
-    pub fn to_place(&self, arena: &'a bumpalo::Bump) -> Option<internal::Place> {
+    pub fn to_place(&'a self, arena: &'a bumpalo::Bump) -> Option<internal::Place<'a>> {
         if self.is_place() {
             Some(self.to_pl_ctx_and_most_specif_pl(arena).1)
         } else {
@@ -875,7 +873,6 @@ impl<'a> PlaceExpr<'a> {
     }
 }
 
-// Problem with not beeing boxed
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct ExecExpr<'a> {
@@ -1179,7 +1176,7 @@ impl<'a> ParamSig<'a> {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct FnTy<'a> {
     pub generics: BumpVec<'a, IdentKinded<'a>>,
     pub generic_exec: Option<IdentExec<'a>>,
@@ -1219,13 +1216,13 @@ impl<'a> FnTy<'a> {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub enum NatConstr<'a> {
     True,
-    Eq(Box<Nat<'a>>, Box<Nat<'a>>),
-    Lt(Box<Nat<'a>>, Box<Nat<'a>>),
-    And(Box<NatConstr<'a>>, Box<NatConstr<'a>>),
-    Or(Box<NatConstr<'a>>, Box<NatConstr<'a>>),
+    Eq(BumpBox<'a, Nat<'a>>, BumpBox<'a, Nat<'a>>),
+    Lt(BumpBox<'a, Nat<'a>>, BumpBox<'a, Nat<'a>>),
+    And(BumpBox<'a, NatConstr<'a>>, BumpBox<'a, NatConstr<'a>>),
+    Or(BumpBox<'a, NatConstr<'a>>, BumpBox<'a, NatConstr<'a>>),
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1471,7 +1468,7 @@ impl<'a> DataTy<'a> {
             Scalar(_) | Atomic(_) | Ident(_) | Dead(_) => false,
             Ref(reff) => {
                 let found_reference = if let Provenance::Value(prv_val_n) = &reff.rgn {
-                    prv_val_name == prv_val_n
+                    prv_val_name == *prv_val_n
                 } else {
                     false
                 };
@@ -1589,7 +1586,7 @@ pub enum AtomicTy {
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Provenance<'a> {
-    Value(String),
+    Value(&'a str),
     Ident(Ident<'a>),
 }
 
@@ -1760,7 +1757,7 @@ impl NatCtx {
 
 #[derive(Debug)]
 pub struct NatEvalError<'a> {
-    unevaluable: Nat<'a>,
+    pub unevaluable: Nat<'a>,
 }
 
 pub type NatEvalResult<'a, T> = Result<T, NatEvalError<'a>>;
