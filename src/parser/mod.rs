@@ -203,7 +203,7 @@ fn replace_arg_kinded_idents<'a>(fun_def: &mut ArenaFunDef) {
     replace.visit_fun_def(fun_def);
 }
 
-fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut ArenaFunDef) {
+fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut ArenaFunDef<'a>) {
     struct ReplaceExecIdents<'a> {
         ident_names_to_exec_expr: Vec<(Box<str>, ArenaExecExpr<'a>)>,
     }
@@ -258,7 +258,7 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
             expand_exec_expr(arena, &self.ident_names_to_exec_expr, exec_expr);
         }
 
-        fn visit_fun_def(&mut self, arena: &'a Bump, fun_def: &mut ArenaFunDef) {
+        fn visit_fun_def(&mut self, arena: &'a Bump, fun_def: &mut ArenaFunDef<'a>) {
             if let Some(ident_exec) = fun_def.generic_exec.as_ref() {
                 match &ident_exec.ty.ty {
                     ArenaExecTyKind::CpuThread => {
@@ -358,7 +358,7 @@ fn replace_struct_idents_with_specific_struct_dtys<'a>(
         struct_dtys: &'a [&'a ArenaStructDecl<'a>],
     }
     impl<'a> ArenaVisitMut<'a> for ReplaceStructIdents<'a> {
-        fn visit_dty(&mut self, dty: &mut ArenaDataTy) {
+        fn visit_dty(&mut self, dty: &mut ArenaDataTy<'a>) {
             if let ArenaDataTyKind::Ident(ident) = &mut dty.dty {
                 if let Some(struct_decl) = self.struct_dtys.iter().find(|s| &s.ident == ident) {
                     dty.dty = ArenaDataTyKind::Struct(struct_decl)

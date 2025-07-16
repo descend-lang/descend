@@ -611,7 +611,7 @@ impl ExprKind {
         use ExprKind::*;
         match self {
             Hole => arena_ast::ExprKind::Hole,
-            Lit(l) => arena_ast::ExprKind::Lit(l), // assuming `Lit` is Copy or doesn't need arena
+            Lit(l) => arena_ast::ExprKind::Lit(l.into_arena(arena)), // assuming `Lit` is Copy or doesn't need arena
             PlaceExpr(p) => arena_ast::ExprKind::PlaceExpr(arena.alloc(p.into_arena(arena))),
             Array(exprs) => {
                 let mut bump_vec = bumpalo::collections::Vec::new_in(arena);
@@ -630,15 +630,18 @@ impl ExprKind {
             Ref(ann, own, pl) => {
                 arena_ast::ExprKind::Ref(ann, own.into_arena(), arena.alloc(pl.into_arena(arena)))
             }
-            Block(b) => arena_ast::ExprKind::Block(&b.into_arena(arena)),
+            Block(b) => {
+                let b_ref = arena.alloc(b.into_arena(arena));
+                arena_ast::ExprKind::Block(b_ref)
+            }
             LetUninit(exec, ident, ty) => arena_ast::ExprKind::LetUninit(
-                exec.map(|e| arena.alloc(e.into_arena(arena))).as_deref(),
+                exec.map(|e| &*arena.alloc(e.into_arena(arena))),
                 ident.into_arena(arena),
                 arena.alloc(ty.into_arena(arena)),
             ),
             Let(pat, ty, expr) => arena_ast::ExprKind::Let(
                 pat.into_arena(arena),
-                ty.map(|t| arena.alloc(t.into_arena(arena))).as_deref(),
+                ty.map(|t| &*arena.alloc(t.into_arena(arena))),
                 arena.alloc(expr.into_arena(arena)),
             ),
             Assign(pl, val) => arena_ast::ExprKind::Assign(
