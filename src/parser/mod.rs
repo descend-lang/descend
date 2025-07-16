@@ -53,19 +53,17 @@ pub fn parse<'a>(
 
     // Step 2: Postprocess
     // TODO refactor to not require unnecessary copying out of items
-    let struct_copies: Vec<&ArenaStructDecl<'_>> = arena_items
+    let struct_copies = arena_items
         .iter()
         .filter_map(|i| {
             if let ArenaItem::StructDecl(struct_dty) = i {
-                //Some(struct_dty.as_ref())
                 Some(struct_dty.as_ref())
             } else {
                 None
             }
         })
-        //.cloned()
-        //.collect::<Vec<_>>();
-        .collect();
+        .cloned()
+        .collect::<Vec<_>>();
 
     for fun_def in arena_items.iter_mut().filter_map(|i| {
         if let ArenaItem::FunDef(fun_def) = i {
@@ -351,11 +349,11 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
 }
 
 fn replace_struct_idents_with_specific_struct_dtys<'a>(
-    struct_dtys: &[&'a ArenaStructDecl<'a>],
+    struct_dtys: &[ArenaStructDecl<'a>],
     item: &mut ArenaItem,
 ) {
     struct ReplaceStructIdents<'a> {
-        struct_dtys: &'a [&'a ArenaStructDecl<'a>],
+        struct_dtys: &'a [ArenaStructDecl<'a>],
     }
     impl<'a> ArenaVisitMut<'a> for ReplaceStructIdents<'a> {
         fn visit_dty(&mut self, dty: &mut ArenaDataTy<'a>) {
