@@ -18,11 +18,11 @@ use ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
 
-type TyResult<T> = Result<T, TyError>;
+type TyResult<'a, T> = Result<T, TyError<'a>>;
 
 macro_rules! matches_dty {
     ($ty: expr, $dty_pat: pat_param) => {
-        if let crate::ast::TyKind::Data(d) = &$ty.ty {
+        if let crate::arena_ast::TyKind::Data(d) = &$ty.ty {
             matches!(d.as_ref(), $dty_pat)
         } else {
             false
@@ -37,14 +37,12 @@ pub(crate) use matches_dty;
 // ∀ε ∈ Σ. Σ ⊢ ε
 // --------------
 //      ⊢ Σ
-pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
-    let ty_arena = Bump::new();
-
+pub fn ty_check<'a>(compil_unit: &mut CompilUnit, arena: &'a Bump) -> Result<(), ErrorReported> {
     let mut gl_ctx = GlobalCtx::new(
         compil_unit,
         pre_decl::fun_decls()
             .into_iter()
-            .map(|(fname, fty)| GlobalDecl::FnDecl(Box::from(fname), ty_arena.alloc(fty)))
+            .map(|(fname, fty)| GlobalDecl::FnDecl(Box::from(fname), arena.alloc(fty)))
             .collect(),
     );
     let mut nat_ctx = NatCtx::new();
@@ -63,24 +61,24 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
     }
 }
 
-struct ExprTyCtx<'src, 'compil, 'ctxt> {
+struct ExprTyCtx<'a, 'src, 'compil, 'ctxt> {
     gl_ctx: &'ctxt mut GlobalCtx<'src, 'compil>,
     nat_ctx: &'ctxt mut NatCtx,
-    ident_exec: Option<&'ctxt IdentExec>,
-    kind_ctx: &'ctxt mut KindCtx,
-    exec: ExecExpr,
-    ty_ctx: &'ctxt mut TyCtx,
+    ident_exec: Option<&'ctxt IdentExec<'a>>,
+    kind_ctx: &'ctxt mut KindCtx<'a>,
+    exec: ExecExpr<'a>,
+    ty_ctx: &'ctxt mut TyCtx<'a>,
     access_ctx: &'ctxt mut AccessCtx,
     unsafe_flag: bool,
 }
 
 // Σ ⊢ fn f <List[φ], List[ρ], List[α]> (x1: τ1, ..., xn: τn) → τr where List[ρ1:ρ2] { e }
 fn ty_check_global_fun_def<'a>(
-    gl_ctx: &mut GlobalCtx<'a>,
+    gl_ctx: &mut GlobalCtx,
     nat_ctx: &mut NatCtx,
     gf: &mut FunDef<'a>,
     arena: &'a Bump,
-) -> TyResult<()> {
+) -> TyResult<'a, ()> {
     // TODO check that every prv_rel only uses provenance variables bound in generic_params
     let mut kind_ctx = KindCtx::gl_fun_kind_ctx(gf.generic_params.clone(), gf.prv_rels.clone())?;
     let mut ty_ctx = TyCtx::new();
@@ -167,7 +165,11 @@ fn ty_check_global_fun_def<'a>(
 //   type τ is well-formed under well-formed GlFunCtxt, kinding ctx, output context Γ'.
 // Σ; Δ; Γ ⊢ e :^exec τ ⇒ Γ′, side conditions:  ⊢ Σ;Δ;Γ and Σ;Δ;Γ′ ⊢ τ
 // This never returns a dead type, because typing an expression with a dead type is not possible.
-fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr, arena) -> TyResult<()> {
+fn ty_check_expr<'a>(
+    ctx: &'a mut ExprTyCtx,
+    expr: &'a mut Expr<'a>,
+    arena: &'a Bump,
+) -> TyResult<'a, ()> {
     let ty = match &mut expr.expr {
         ExprKind::PlaceExpr(pl_expr) => {
             if pl_expr.is_place() {
@@ -234,7 +236,7 @@ fn ty_check_expr(ctx: &mut ExprTyCtx, expr: &mut Expr, arena) -> TyResult<()> {
     Ok(())
 }
 
-fn ty_check_hole(ctx: &ExprTyCtx) -> TyResult<Ty> {
+fn ty_check_hole<'a>(ctx: &ExprTyCtx, arena: &'a Bump) -> TyResult<'a, Ty<'a>> {
     if ctx.unsafe_flag {
         Ok(Ty::new(TyKind::Data(arena.alloc(DataTy::new(
             DataTyKind::Ident(Ident::new_impli(&utils::fresh_name("hole"))),
@@ -244,7 +246,10 @@ fn ty_check_hole(ctx: &ExprTyCtx) -> TyResult<Ty> {
     }
 }
 
-fn ty_check_sync(ctx: &mut ExprTyCtx, exec: &mut Option<ExecExpr>) -> TyResult<Ty> {
+fn ty_check_sync<'a>(
+    ctx: &mut ExprTyCtx,
+    exec: &'a mut Option<ExecExpr<'a>>,
+) -> TyResult<'a, Ty<'a>> {
     let synced = match exec {
         Some(exec) => {
             exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, exec)?;
@@ -260,7 +265,7 @@ fn ty_check_sync(ctx: &mut ExprTyCtx, exec: &mut Option<ExecExpr>) -> TyResult<T
 }
 
 // assumes fully typed ExecExpr as input
-fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
+fn syncable_under_exec<'a>(synced: &'a ExecExpr<'a>, under: &'a ExecExpr<'a>) -> TyResult<'a, ()> {
     if !syncable_exec_ty(synced.ty.as_ref().unwrap()) {
         return Err(TyError::String(
             "trying to synchronize non-synchronizable execution resource".to_string(),
@@ -282,7 +287,7 @@ fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
     }
 }
 
-fn syncable_exec_ty(exec_ty: &ExecTy) -> bool {
+fn syncable_exec_ty<'a>(exec_ty: &'a ExecTy<'a>) -> bool {
     match &exec_ty.ty {
         ExecTyKind::GpuBlock(_) | ExecTyKind::GpuWarp => true,
         ExecTyKind::CpuThread
@@ -296,7 +301,7 @@ fn syncable_exec_ty(exec_ty: &ExecTy) -> bool {
     }
 }
 
-fn infer_and_append_prv(ty_ctx: &mut TyCtx, prv_name: &Option<String>) -> String {
+fn infer_and_append_prv<'a>(ty_ctx: &'a mut TyCtx<'a>, prv_name: &Option<String>) -> String {
     if let Some(prv) = prv_name.as_ref() {
         prv.clone()
     } else {
@@ -306,13 +311,13 @@ fn infer_and_append_prv(ty_ctx: &mut TyCtx, prv_name: &Option<String>) -> String
     }
 }
 
-fn ty_check_for_nat(
+fn ty_check_for_nat<'a>(
     ctx: &mut ExprTyCtx,
-    ident: &Ident,
-    range: &NatRange,
+    ident: &Ident<'a>,
+    range: &NatRange<'a>,
     // TODO make this a block
-    body: &mut Expr,
-) -> TyResult<Ty> {
+    body: &mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     let compare_ty_ctx = ctx.ty_ctx.clone();
     let lifted_range = range.lift(ctx.nat_ctx)?;
 
@@ -340,12 +345,12 @@ fn ty_check_for_nat(
     )))
 }
 
-fn ty_check_for(
+fn ty_check_for<'a>(
     ctx: &mut ExprTyCtx,
-    ident: &Ident,
-    collec: &mut Expr,
-    body: &mut Expr,
-) -> TyResult<Ty> {
+    ident: &Ident<'a>,
+    collec: &mut Expr<'a>,
+    body: &mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(ctx, collec)?;
     let collec_dty = if let TyKind::Data(collec_dty) = &collec.ty.as_ref().unwrap().ty {
         collec_dty.as_ref()
@@ -408,7 +413,11 @@ fn ty_check_for(
     )))
 }
 
-fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyResult<Ty> {
+fn ty_check_while<'a>(
+    ctx: &mut ExprTyCtx,
+    cond: &'a mut Expr<'a>,
+    body: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(&mut *ctx, cond)?;
     ctx.ty_ctx.push_empty_frame();
     ty_check_expr(ctx, body)?;
@@ -462,12 +471,12 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
     )))
 }
 
-fn ty_check_if_else(
+fn ty_check_if_else<'a>(
     ctx: &mut ExprTyCtx,
-    cond: &mut Expr,
-    case_true: &mut Expr,
-    case_false: &mut Expr,
-) -> TyResult<Ty> {
+    cond: &'a mut Expr<'a>,
+    case_true: &'a mut Expr<'a>,
+    case_false: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     // TODO deal with provenances in cases
     ty_check_expr(ctx, cond)?;
     // TODO acccess_ctx clone
@@ -533,7 +542,11 @@ fn ty_check_if_else(
     )))
 }
 
-fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> TyResult<Ty> {
+fn ty_check_if<'a>(
+    ctx: &mut ExprTyCtx,
+    cond: &'a mut Expr<'a>,
+    case_true: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     // TODO deal with provenances in cases
     ty_check_expr(ctx, cond)?;
     ctx.ty_ctx.push_empty_frame();
@@ -573,7 +586,7 @@ fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> Ty
     )))
 }
 
-fn ty_check_split(ctx: &mut ExprTyCtx, indep: &mut Split) -> TyResult<Ty> {
+fn ty_check_split<'a>(ctx: &mut ExprTyCtx, indep: &mut Split<'a>) -> TyResult<'a, Ty<'a>> {
     // exec::ty_check(
     //     ctx.kind_ctx,
     //     ctx.ty_ctx,
@@ -645,7 +658,7 @@ fn ty_check_split(ctx: &mut ExprTyCtx, indep: &mut Split) -> TyResult<Ty> {
     )))
 }
 
-fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
+fn ty_check_sched<'a>(ctx: &mut ExprTyCtx, sched: &'a mut Sched<'a>) -> TyResult<'a, Ty<'a>> {
     exec::ty_check(
         ctx.nat_ctx,
         ctx.ty_ctx,
@@ -684,7 +697,7 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
     )))
 }
 
-fn ty_check_block(ctx: &mut ExprTyCtx, block: &mut Block) -> TyResult<Ty> {
+fn ty_check_block<'a>(ctx: &mut ExprTyCtx, block: &'a mut Block<'a>) -> TyResult<'a, Ty<'a>> {
     ctx.ty_ctx.push_empty_frame();
     for prv in &block.prvs {
         ctx.ty_ctx.append_prv_mapping(PrvMapping::new(prv));
@@ -695,7 +708,7 @@ fn ty_check_block(ctx: &mut ExprTyCtx, block: &mut Block) -> TyResult<Ty> {
     Ok(block.body.ty.as_ref().unwrap().as_ref().clone())
 }
 
-fn collect_valid_loans(ty_ctx: &TyCtx, mut loans: HashSet<Loan>) -> HashSet<Loan> {
+fn collect_valid_loans<'a>(ty_ctx: &TyCtx, mut loans: HashSet<Loan<'a>>) -> HashSet<Loan<'a>> {
     // FIXME this implementations assumes unique names which is not the case
     loans.retain(|l| {
         let root_ident = &l.place_expr.to_pl_ctx_and_most_specif_pl().1.ident;
@@ -704,7 +717,7 @@ fn collect_valid_loans(ty_ctx: &TyCtx, mut loans: HashSet<Loan>) -> HashSet<Loan
     loans
 }
 
-fn check_mutable(ty_ctx: &TyCtx, pl: &Place) -> TyResult<()> {
+fn check_mutable<'a>(ty_ctx: &TyCtx, pl: &'a Place<'a>) -> TyResult<'a, ()> {
     let ident_ty = ty_ctx.ident_ty(&pl.ident)?;
     if ident_ty.mutbl != Mutability::Mut {
         return Err(TyError::AssignToConst(pl.to_place_expr()));
@@ -712,11 +725,11 @@ fn check_mutable(ty_ctx: &TyCtx, pl: &Place) -> TyResult<()> {
     Ok(())
 }
 
-fn ty_check_assign_place(
+fn ty_check_assign_place<'a>(
     ctx: &mut ExprTyCtx,
-    pl_expr: &mut PlaceExpr,
-    e: &mut Expr,
-) -> TyResult<Ty> {
+    pl_expr: &'a mut PlaceExpr<'a>,
+    e: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(ctx, e)?;
     let pl = pl_expr.to_place().unwrap();
     let mut place_ty = ctx.ty_ctx.place_dty(&pl)?;
@@ -766,11 +779,11 @@ fn ty_check_assign_place(
     )))
 }
 
-fn ty_check_assign_non_place(
+fn ty_check_assign_non_place<'a>(
     ctx: &mut ExprTyCtx,
-    deref_expr: &mut PlaceExpr,
-    e: &mut Expr,
-) -> TyResult<Ty> {
+    deref_expr: &'a mut PlaceExpr<'a>,
+    e: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(ctx, e)?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), deref_expr)?;
     let potential_accesses = borrow_check::access_safety_check(
@@ -805,12 +818,12 @@ fn ty_check_assign_non_place(
     }
 }
 
-fn ty_check_idx_assign(
+fn ty_check_idx_assign<'a>(
     ctx: &mut ExprTyCtx,
-    pl_expr: &mut PlaceExpr,
-    idx: &Nat,
-    e: &mut Expr,
-) -> TyResult<Ty> {
+    pl_expr: &'a mut PlaceExpr<'a>,
+    idx: &'a Nat<'a>,
+    e: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(ctx, e)?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), pl_expr)?;
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
@@ -886,12 +899,12 @@ fn ty_check_idx_assign(
 
 // FIXME currently assumes that binary operators exist only for f32 and i32 and that both
 //  arguments have to be of the same type
-fn ty_check_binary_op(
+fn ty_check_binary_op<'a>(
     ctx: &mut ExprTyCtx,
     bin_op: &BinOp,
-    lhs: &mut Expr,
-    rhs: &mut Expr,
-) -> TyResult<Ty> {
+    lhs: &mut Expr<'a>,
+    rhs: &mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     // FIXME certain operations should only be allowed for certain data types
     //      true > false is currently valid
     ty_check_expr(ctx, lhs)?;
@@ -988,7 +1001,11 @@ fn ty_check_binary_op(
     }
 }
 
-fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResult<Ty> {
+fn ty_check_unary_op<'a>(
+    ctx: &mut ExprTyCtx,
+    un_op: &UnOp,
+    e: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(ctx, e)?;
     let e_ty = e.ty.as_ref().unwrap();
     let e_dty = if let TyKind::Data(dty) = &e_ty.ty {
@@ -1010,7 +1027,11 @@ fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResul
     }
 }
 
-fn ty_check_cast(ctx: &mut ExprTyCtx, e: &mut Expr, dty: &DataTy) -> TyResult<Ty> {
+fn ty_check_cast<'a>(
+    ctx: &mut ExprTyCtx,
+    e: &mut Expr<'a>,
+    dty: &'a DataTy<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(ctx, e)?;
     let e_ty = e.ty.as_ref().unwrap();
     match &e_ty.dty().dty {
@@ -1050,12 +1071,12 @@ fn ty_check_cast(ctx: &mut ExprTyCtx, e: &mut Expr, dty: &DataTy) -> TyResult<Ty
     }
 }
 
-fn ty_check_app(
+fn ty_check_app<'a>(
     ctx: &mut ExprTyCtx,
-    fn_ident: &mut Ident,
-    gen_args: &mut Vec<ArgKinded>,
-    args: &mut [Expr],
-) -> TyResult<Ty> {
+    fn_ident: &'a mut Ident<'a>,
+    gen_args: &'a mut Vec<ArgKinded<'a>>,
+    args: &'a mut [Expr<'a>],
+) -> TyResult<'a, Ty<'a>> {
     // TODO check well-kinded: FrameTyping, Prv, Ty
     let partially_applied_dep_fn_ty = ty_check_dep_app(ctx, fn_ident, gen_args)?;
     for arg in args.iter_mut() {
@@ -1128,11 +1149,11 @@ fn ty_check_app(
 //     }
 // }
 
-fn ty_check_dep_app(
+fn ty_check_dep_app<'a>(
     ctx: &mut ExprTyCtx,
-    fn_ident: &Ident,
-    gen_args: &[ArgKinded],
-) -> TyResult<FnTy> {
+    fn_ident: &'a Ident<'a>,
+    gen_args: &'a [ArgKinded<'a>],
+) -> TyResult<'a, FnTy<'a>> {
     //ty_check_expr(ctx, ef)?;
     let fn_ty = ctx.gl_ctx.fn_ty_by_ident(fn_ident)?;
     apply_gen_args_to_fn_ty_checked(ctx.kind_ctx, &ctx.exec, &fn_ty, gen_args)
@@ -1144,23 +1165,23 @@ fn ty_check_dep_app(
     // }
 }
 
-fn apply_gen_args_to_fn_ty_checked(
-    kind_ctx: &KindCtx,
-    exec: &ExecExpr,
-    fn_ty: &FnTy,
-    gen_args: &[ArgKinded],
-) -> TyResult<FnTy> {
+fn apply_gen_args_to_fn_ty_checked<'a>(
+    kind_ctx: &'a KindCtx<'a>,
+    exec: &'a ExecExpr<'a>,
+    fn_ty: &'a FnTy<'a>,
+    gen_args: &'a [ArgKinded<'a>],
+) -> TyResult<'a, FnTy<'a>> {
     let mut subst_fn_ty = fn_ty.clone();
     apply_gen_args_checked(kind_ctx, &mut subst_fn_ty, gen_args)?;
     apply_exec_checked(&mut subst_fn_ty, exec)?;
     Ok(subst_fn_ty)
 }
 
-fn apply_gen_args_checked(
-    kind_ctx: &KindCtx,
-    fn_ty: &mut FnTy,
-    gen_args: &[ArgKinded],
-) -> TyResult<()> {
+fn apply_gen_args_checked<'a>(
+    kind_ctx: &'a KindCtx<'a>,
+    fn_ty: &mut FnTy<'a>,
+    gen_args: &'a [ArgKinded<'a>],
+) -> TyResult<'a, ()> {
     if fn_ty.generics.len() < gen_args.len() {
         return Err(TyError::String(format!(
             "Wrong amount of generic arguments. Expected {}, found {}",
@@ -1176,7 +1197,11 @@ fn apply_gen_args_checked(
     Ok(())
 }
 
-fn check_arg_has_correct_kind(kind_ctx: &KindCtx, expected: &Kind, kv: &ArgKinded) -> TyResult<()> {
+fn check_arg_has_correct_kind<'a>(
+    kind_ctx: &'a KindCtx<'a>,
+    expected: &'a Kind,
+    kv: &'a ArgKinded<'a>,
+) -> TyResult<'a, ()> {
     if expected == &kv.kind() {
         Ok(())
     } else {
@@ -1189,7 +1214,7 @@ fn check_arg_has_correct_kind(kind_ctx: &KindCtx, expected: &Kind, kv: &ArgKinde
 
 // FIXME the correct way to do this is to unify execs and to unify an identifier with an exec_expr
 //  only if the types match (i.e., the exec expr type check must happen within unify)
-fn apply_exec_checked(fn_ty: &mut FnTy, exec: &ExecExpr) -> TyResult<()> {
+fn apply_exec_checked<'a>(fn_ty: &'a mut FnTy<'a>, exec: &'a ExecExpr<'a>) -> TyResult<'a, ()> {
     // TODO reintroduce
     // exec::ty_check(
     //     ctx.kind_ctx,
@@ -1212,7 +1237,10 @@ fn apply_exec_checked(fn_ty: &mut FnTy, exec: &ExecExpr) -> TyResult<()> {
     Ok(())
 }
 
-fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyResult<Ty> {
+fn ty_check_app_kernel<'a>(
+    ctx: &mut ExprTyCtx,
+    app_kernel: &'a mut AppKernel<'a>,
+) -> TyResult<'a, Ty<'a>> {
     // current exec = cpu.thread
     if !matches!(ctx.exec.ty.as_ref().unwrap().ty, ExecTyKind::CpuThread) {
         return Err(TyError::String(
@@ -1354,7 +1382,7 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
     Ok(unit_ty)
 }
 
-fn exec_distrib_over_blocks(exec_expr: &ExecExpr) -> ExecExpr {
+fn exec_distrib_over_blocks<'a>(exec_expr: &'a ExecExpr<'a>) -> ExecExpr<'a> {
     let base_clone = ExecExprKind::new(exec_expr.exec.base.clone());
     let distrib_over_blocks = if let BaseExec::GpuGrid(gdim, _) = &exec_expr.exec.base {
         match gdim {
@@ -1375,7 +1403,7 @@ fn exec_distrib_over_blocks(exec_expr: &ExecExpr) -> ExecExpr {
     ExecExpr::new(distrib_over_blocks)
 }
 
-fn ty_check_tuple(ctx: &mut ExprTyCtx, elems: &mut [Expr]) -> TyResult<Ty> {
+fn ty_check_tuple<'a>(ctx: &mut ExprTyCtx, elems: &'a mut [Expr<'a>]) -> TyResult<'a, Ty<'a>> {
     for elem in elems.iter_mut() {
         ty_check_expr(ctx, elem)?;
     }
@@ -1393,7 +1421,7 @@ fn ty_check_tuple(ctx: &mut ExprTyCtx, elems: &mut [Expr]) -> TyResult<Ty> {
     )))
 }
 
-fn ty_check_proj(ctx: &mut ExprTyCtx, e: &mut Expr, i: usize) -> TyResult<Ty> {
+fn ty_check_proj<'a>(ctx: &mut ExprTyCtx, e: &'a mut Expr<'a>, i: usize) -> TyResult<'a, Ty<'a>> {
     if let ExprKind::PlaceExpr(_) = e.expr {
         panic!("Place expression should have been typechecked by a different rule.")
     }
@@ -1407,7 +1435,7 @@ fn ty_check_proj(ctx: &mut ExprTyCtx, e: &mut Expr, i: usize) -> TyResult<Ty> {
     Ok(Ty::new(TyKind::Data(arena.alloc(elem_ty?))))
 }
 
-fn ty_check_array(ctx: &mut ExprTyCtx, elems: &mut Vec<Expr>) -> TyResult<Ty> {
+fn ty_check_array<'a>(ctx: &mut ExprTyCtx, elems: &'a mut Vec<Expr<'a>>) -> TyResult<'a, Ty<'a>> {
     assert!(!elems.is_empty());
     for elem in elems.iter_mut() {
         ty_check_expr(ctx, elem)?;
@@ -1432,7 +1460,7 @@ fn ty_check_array(ctx: &mut ExprTyCtx, elems: &mut Vec<Expr>) -> TyResult<Ty> {
     }
 }
 
-fn ty_check_literal(l: &mut Lit) -> Ty {
+fn ty_check_literal<'a>(l: &mut Lit) -> Ty<'a> {
     let scalar_data = match l {
         Lit::Unit => ScalarTy::Unit,
         Lit::Bool(_) => ScalarTy::Bool,
@@ -1448,11 +1476,11 @@ fn ty_check_literal(l: &mut Lit) -> Ty {
     ))
 }
 
-fn infer_pattern_ident_tys(
+fn infer_pattern_ident_tys<'a>(
     ctx: &mut ExprTyCtx,
-    pattern: &Pattern,
-    pattern_ty: &Ty,
-) -> TyResult<()> {
+    pattern: &'a Pattern<'a>,
+    pattern_ty: &'a Ty<'a>,
+) -> TyResult<'a, ()> {
     let pattern_dty = if let TyKind::Data(dty) = &pattern_ty.ty {
         dty.as_ref()
     } else {
@@ -1480,12 +1508,12 @@ fn infer_pattern_ident_tys(
     }
 }
 
-fn infer_tys_and_append_idents(
+fn infer_tys_and_append_idents<'a>(
     ctx: &mut ExprTyCtx,
-    pattern: &Pattern,
-    pattern_ty: &mut Option<Box<Ty>>,
-    assign_ty: &mut Ty,
-) -> TyResult<()> {
+    pattern: &'a Pattern<'a>,
+    pattern_ty: &'a mut Option<Box<Ty<'a>>>,
+    assign_ty: &'a mut Ty<'a>,
+) -> TyResult<'a, ()> {
     let pattern_ty = if let Some(pty) = pattern_ty {
         unify::sub_unify(ctx.kind_ctx, ctx.ty_ctx, assign_ty, pty)?;
         pty.as_ref().clone()
@@ -1495,12 +1523,12 @@ fn infer_tys_and_append_idents(
     infer_pattern_ident_tys(ctx, pattern, &pattern_ty)
 }
 
-fn ty_check_let(
+fn ty_check_let<'a>(
     ctx: &mut ExprTyCtx,
-    pattern: &Pattern,
-    pattern_ty: &mut Option<Box<Ty>>,
-    expr: &mut Expr,
-) -> TyResult<Ty> {
+    pattern: &'a Pattern<'a>,
+    pattern_ty: &'a mut Option<Box<Ty<'a>>>,
+    expr: &'a mut Expr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     ty_check_expr(ctx, expr)?;
     let e_ty = expr.ty.as_mut().unwrap();
     infer_tys_and_append_idents(ctx, pattern, pattern_ty, e_ty)?;
@@ -1510,12 +1538,12 @@ fn ty_check_let(
 }
 
 // TODO respect exec?
-fn ty_check_let_uninit(
+fn ty_check_let_uninit<'a>(
     ctx: &mut ExprTyCtx,
-    annot_exec: &Option<Box<ExecExpr>>,
-    ident: &Ident,
-    ty: &Ty,
-) -> TyResult<Ty> {
+    annot_exec: &'a Option<Box<ExecExpr<'a>>>,
+    ident: &'a Ident<'a>,
+    ty: &'a Ty<'a>,
+) -> TyResult<'a, Ty<'a>> {
     // TODO is the type well-formed?
     if let TyKind::Data(dty) = &ty.ty {
         let mut exec_expr = if let Some(ex) = annot_exec {
@@ -1541,7 +1569,7 @@ fn ty_check_let_uninit(
     }
 }
 
-fn ty_check_seq(ctx: &mut ExprTyCtx, es: &mut [Expr]) -> TyResult<Ty> {
+fn ty_check_seq<'a>(ctx: &mut ExprTyCtx, es: &'a mut [Expr<'a>]) -> TyResult<'a, Ty<'a>> {
     for e in &mut *es {
         ty_check_expr(ctx, e)?;
         ctx.ty_ctx.garbage_collect_loans();
@@ -1549,7 +1577,10 @@ fn ty_check_seq(ctx: &mut ExprTyCtx, es: &mut [Expr]) -> TyResult<Ty> {
     Ok(es.last().unwrap().ty.as_ref().unwrap().as_ref().clone())
 }
 
-fn ty_check_non_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> {
+fn ty_check_non_place<'a>(
+    ctx: &mut ExprTyCtx,
+    pl_expr: &'a mut PlaceExpr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Shrd), pl_expr)?;
     if !pl_expr.ty.as_ref().unwrap().is_fully_alive() {
         return Err(TyError::String(format!(
@@ -1579,7 +1610,7 @@ fn ty_check_non_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<
     }
 }
 
-fn ty_check_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> {
+fn ty_check_place<'a>(ctx: &mut ExprTyCtx, pl_expr: &'a mut PlaceExpr<'a>) -> TyResult<'a, Ty<'a>> {
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), pl_expr)?;
     let place = pl_expr.clone().to_place().unwrap();
     let pl_ty = ctx.ty_ctx.place_dty(&place)?;
@@ -1611,12 +1642,12 @@ fn ty_check_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> 
     Ok(Ty::new(TyKind::Data(arena.alloc(pl_ty))))
 }
 
-fn ty_check_borrow(
+fn ty_check_borrow<'a>(
     ctx: &mut ExprTyCtx,
     prv_val_name: &Option<String>,
     own: Ownership,
-    pl_expr: &mut PlaceExpr,
-) -> TyResult<Ty> {
+    pl_expr: &'a mut PlaceExpr<'a>,
+) -> TyResult<'a, Ty<'a>> {
     // If borrowing a place uniquely, is it mutable?
     if let Some(place) = pl_expr.to_place() {
         if own == Ownership::Uniq && ctx.ty_ctx.ident_ty(&place.ident)?.mutbl == Mutability::Const {
@@ -1673,7 +1704,7 @@ fn ty_check_borrow(
     Ok(Ty::new(TyKind::Data(arena.alloc(res_dty))))
 }
 
-fn allowed_mem_for_exec(exec_ty: &ExecTyKind) -> Vec<Memory> {
+fn allowed_mem_for_exec<'a>(exec_ty: &'a ExecTyKind<'a>) -> Vec<Memory<'a>> {
     match exec_ty {
         ExecTyKind::CpuThread => vec![Memory::CpuMem],
         ExecTyKind::GpuThread
@@ -1690,7 +1721,7 @@ fn allowed_mem_for_exec(exec_ty: &ExecTyKind) -> Vec<Memory> {
     }
 }
 
-pub fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
+pub fn accessible_memory(exec_ty: &'a ExecTy<'a>, mem: &'a Memory<'a>) -> TyResult<'a, ()> {
     if allowed_mem_for_exec(&exec_ty.ty).contains(mem) {
         Ok(())
     } else {
@@ -1702,7 +1733,12 @@ pub fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
 }
 
 // TODO respect memory
-fn ty_well_formed(kind_ctx: &KindCtx, ty_ctx: &TyCtx, exec_ty: &ExecTy, ty: &Ty) -> TyResult<()> {
+fn ty_well_formed<'a>(
+    kind_ctx: &'a KindCtx<'a>,
+    ty_ctx: &'a TyCtx<'a>,
+    exec_ty: &'a ExecTy<'a>,
+    ty: &'a Ty<'a>,
+) -> TyResult<'a, ()> {
     match &ty.ty {
         TyKind::Data(dty) => match &dty.dty {
             // TODO variables of Dead types can be reassigned. So why do we not have to check
@@ -1845,7 +1881,7 @@ fn ty_well_formed(kind_ctx: &KindCtx, ty_ctx: &TyCtx, exec_ty: &ExecTy, ty: &Ty)
     Ok(())
 }
 
-pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
+pub fn callable_in<'a>(callee_exec_ty: &'a ExecTy<'a>, caller_exec_ty: &'a ExecTy<'a>) -> bool {
     if &callee_exec_ty.ty == &ExecTyKind::Any {
         true
     } else {
@@ -1854,7 +1890,10 @@ pub fn callable_in(callee_exec_ty: &ExecTy, caller_exec_ty: &ExecTy) -> bool {
     }
 }
 
-fn expand_exec_expr(ctx: &ExprTyCtx, exec_expr: &ExecExpr) -> TyResult<ExecExpr> {
+fn expand_exec_expr<'a>(
+    ctx: &ExprTyCtx,
+    exec_expr: &'a ExecExpr<'a>,
+) -> TyResult<'a, ExecExpr<'a>> {
     match &exec_expr.exec.base {
         BaseExec::CpuThread | BaseExec::GpuGrid(_, _) => Ok(exec_expr.clone()),
         BaseExec::Ident(ident) => {
@@ -1875,7 +1914,7 @@ fn expand_exec_expr(ctx: &ExprTyCtx, exec_expr: &ExecExpr) -> TyResult<ExecExpr>
     }
 }
 
-fn legal_exec_under_current(ctx: &ExprTyCtx, exec: &ExecExpr) -> TyResult<()> {
+fn legal_exec_under_current<'a>(ctx: &ExprTyCtx, exec: &'a ExecExpr<'a>) -> TyResult<'a, ()> {
     let expanded_exec_expr = expand_exec_expr(ctx, exec)?;
     if ctx.exec != expanded_exec_expr {
         let current_exec_ty = &ctx.exec.ty.as_ref().unwrap().ty;
@@ -1897,7 +1936,7 @@ fn legal_exec_under_current(ctx: &ExprTyCtx, exec: &ExecExpr) -> TyResult<()> {
 }
 
 // TODO move into utility module (also used in codegen)
-pub fn proj_elem_dty(dty: &DataTy, i: usize) -> TyResult<DataTy> {
+pub fn proj_elem_dty<'a>(dty: &'a DataTy<'a>, i: usize) -> TyResult<'a, DataTy<'a>> {
     match &dty.dty {
         DataTyKind::Tuple(dtys) => match dtys.get(i) {
             Some(dty) => Ok(dty.clone()),

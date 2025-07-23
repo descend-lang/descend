@@ -4,12 +4,12 @@ use super::{
 };
 use crate::arena_ast::{LeftOrRight, NatCtx};
 
-pub(super) fn ty_check(
+pub(super) fn ty_check<'a>(
     nat_ctx: &NatCtx,
     ty_ctx: &TyCtx,
     ident_exec: Option<&IdentExec>,
     exec_expr: &mut ExecExpr,
-) -> TyResult<()> {
+) -> TyResult<'a, ()> {
     let mut exec_ty = match &exec_expr.exec.base {
         BaseExec::Ident(ident) => {
             if let Some(ie) = ident_exec {
@@ -50,7 +50,7 @@ pub(super) fn ty_check(
     Ok(())
 }
 
-fn ty_check_exec_to_threads(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+fn ty_check_exec_to_threads<'a>(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
     if let ExecTyKind::GpuGrid(gdim, bdim) = exec_ty {
         let (rest_gdim, rem_gdim) = remove_dim(gdim, d)?;
         let (rest_bdim, rem_bdim) = remove_dim(bdim, d)?;
@@ -89,7 +89,10 @@ fn ty_check_exec_to_threads(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecT
     }
 }
 
-fn ty_check_exec_to_warps(nat_ctx: &NatCtx, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+fn ty_check_exec_to_warps<'a>(
+    nat_ctx: &NatCtx,
+    exec_ty: &'a ExecTyKind<'a>,
+) -> TyResult<'a, ExecTyKind<'a>> {
     match exec_ty {
         ExecTyKind::GpuBlock(dim) => match dim.clone() {
             Dim::X(d) => {
@@ -118,7 +121,10 @@ fn ty_check_exec_to_warps(nat_ctx: &NatCtx, exec_ty: &ExecTyKind) -> TyResult<Ex
     }
 }
 
-fn ty_check_exec_forall(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+fn ty_check_exec_forall<'a>(
+    d: DimCompo,
+    exec_ty: &'a ExecTyKind<'a>,
+) -> TyResult<'a, ExecTyKind<'a>> {
     let res_ty = match exec_ty {
         ExecTyKind::GpuGrid(gdim, bdim) => {
             let inner_dim = remove_dim(gdim, d)?.0;
@@ -165,7 +171,10 @@ fn ty_check_exec_forall(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKin
     Ok(res_ty)
 }
 
-pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<(Option<Dim>, Dim)> {
+pub fn remove_dim<'a>(
+    dim: &'a Dim<'a>,
+    dim_compo: DimCompo,
+) -> TyResult<'a, (Option<Dim<'a>>, Dim<'a>)> {
     match (dim, dim_compo) {
         (Dim::XYZ(dim3d), DimCompo::X) => Ok((
             Some(Dim::YZ(Box::new(Dim2d(
@@ -219,12 +228,12 @@ pub fn remove_dim(dim: &Dim, dim_compo: DimCompo) -> TyResult<(Option<Dim>, Dim)
     }
 }
 
-fn ty_check_exec_take_range(
+fn ty_check_exec_take_range<'a>(
     d: DimCompo,
-    n: &Nat,
+    n: &'a Nat<'a>,
     proj: LeftOrRight,
-    exec_ty: &ExecTyKind,
-) -> TyResult<ExecTyKind> {
+    exec_ty: &'a ExecTyKind<'a>,
+) -> TyResult<'a, ExecTyKind<'a>> {
     // TODO check well-formedness of Nats
     let (lexec_ty, rexec_ty) = match exec_ty {
         ExecTyKind::GpuGrid(gdim, bdim) | ExecTyKind::GpuBlockGrp(gdim, bdim) => {
@@ -278,13 +287,17 @@ fn ty_check_exec_take_range(
     })
 }
 
-fn dim_compo_matches_dim(d: DimCompo, dim: &Dim) -> bool {
+fn dim_compo_matches_dim<'a>(d: DimCompo, dim: &'a Dim<'a>) -> bool {
     (matches!(dim, Dim::X(_)) && d == DimCompo::X)
         | (matches!(dim, Dim::Y(_)) && d == DimCompo::Y)
         | (matches!(dim, Dim::Z(_)) && d == DimCompo::Z)
 }
 
-fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
+fn split_dim<'a>(
+    split_dim: DimCompo,
+    pos: Nat<'a>,
+    dim: Dim<'a>,
+) -> TyResult<'a, (Dim<'a>, Dim<'a>)> {
     Ok(match dim {
         Dim::XYZ(d) => match split_dim {
             DimCompo::X => (
@@ -411,7 +424,7 @@ fn split_dim(split_dim: DimCompo, pos: Nat, dim: Dim) -> TyResult<(Dim, Dim)> {
     })
 }
 
-pub(super) fn normalize(mut exec: ExecExpr) -> ExecExpr {
+pub(super) fn normalize<'a>(mut exec: ExecExpr<'a>) -> ExecExpr<'a> {
     assert!(exec.ty.is_some());
     let mut exec_path = exec.exec.path;
     if !exec_path.is_empty() {
@@ -424,7 +437,7 @@ pub(super) fn normalize(mut exec: ExecExpr) -> ExecExpr {
 
 // FIXME: not correct if first take_range on dimension of lower level followed by forall on different dimension in upper level
 //  for fix: see formalism
-fn level_boundaries(exec_path: &[ExecPathElem]) -> Vec<usize> {
+fn level_boundaries<'a>(exec_path: &'a [ExecPathElem<'a>]) -> Vec<usize> {
     let mut forall_dims_encountered = Vec::with_capacity(3);
     let mut boundaries = Vec::with_capacity(3);
     for (i, elem) in exec_path.iter().enumerate() {
@@ -454,7 +467,7 @@ fn level_boundaries(exec_path: &[ExecPathElem]) -> Vec<usize> {
     boundaries
 }
 
-fn sort_within_boundaries(exec_path: &mut Vec<ExecPathElem>, boundaries: &[usize]) {
+fn sort_within_boundaries<'a>(exec_path: &'a mut Vec<ExecPathElem<'a>>, boundaries: &[usize]) {
     let mut lower_bound = 0;
     for b in boundaries {
         for i in lower_bound..*b {
@@ -468,7 +481,7 @@ fn sort_within_boundaries(exec_path: &mut Vec<ExecPathElem>, boundaries: &[usize
     }
 }
 
-fn swappable_exec_path_elems(lhs: &ExecPathElem, rhs: &ExecPathElem) -> bool {
+fn swappable_exec_path_elems<'a>(lhs: &'a ExecPathElem<'a>, rhs: &'a ExecPathElem<'a>) -> bool {
     match (lhs, rhs) {
         (ExecPathElem::ForAll(dl), ExecPathElem::ForAll(dr)) => dl > dr,
         (ExecPathElem::ForAll(_), ExecPathElem::TakeRange(_)) => true,

@@ -10,16 +10,16 @@ use annotate_snippets::snippet::{Annotation, AnnotationType, Slice, Snippet};
 
 #[must_use]
 #[derive(Debug)]
-pub enum TyError {
-    MultiError(Vec<TyError>),
-    MutabilityNotAllowed(Ty),
-    CtxError(CtxError),
-    SubTyError(SubTyError),
+pub enum TyError<'a> {
+    MultiError(Vec<TyError<'a>>),
+    MutabilityNotAllowed(Ty<'a>),
+    CtxError(CtxError<'a>),
+    SubTyError(SubTyError<'a>),
     // Standard data type mismatch, expected type followed by actual type
-    MismatchedDataTypes(DataTy, DataTy, Expr),
+    MismatchedDataTypes(DataTy<'a>, DataTy<'a>, Expr<'a>),
     // "Trying to violate existing borrow of {:?}.",
     // p1 under own1 is in conflict because of BorrowingError
-    ConflictingBorrow(Box<PlaceExpr>, Ownership, BorrowingError),
+    ConflictingBorrow(Box<PlaceExpr<'a>>, Ownership, BorrowingError<'a>),
     PrvValueAlreadyInUse(String),
     // No loan the reference points to has a type that fits the reference element type
     ReferenceToIncompatibleType,
@@ -29,15 +29,15 @@ pub enum TyError {
     // out from under the reference which is forbidden.
     ReferenceToDeadTy,
     // Assignment to a constant place expression.
-    AssignToConst(PlaceExpr), //, Box<Expr>),
+    AssignToConst(PlaceExpr<'a>), //, Box<Expr>),
     // Assigning to a view is forbidden
     AssignToView,
     // Trying to split a non-view array.
     SplittingNonViewArray,
     // Expected a different type
-    ExpectedTupleType(TyKind, PlaceExpr),
+    ExpectedTupleType(TyKind<'a>, PlaceExpr<'a>),
     // Trying to borrow uniquely but place is not mutable
-    ConstBorrow(PlaceExpr),
+    ConstBorrow(PlaceExpr<'a>),
     // The borrowed view type is at least paritally dead
     BorrowingDeadView,
     IllegalExec,
@@ -53,23 +53,23 @@ pub enum TyError {
     UnexpectedType,
     // The thread hierarchy dimension referred to does not exist
     IllegalDimension,
-    UnifyError(UnifyError),
+    UnifyError(UnifyError<'a>),
     MissingMain,
-    NatEvalError(NatEvalError),
-    CannotInferGenericArg(Ident),
+    NatEvalError(NatEvalError<'a>),
+    CannotInferGenericArg(Ident<'a>),
     UnsafeRequired,
     // TODO remove as soon as possible
     String(String),
 }
 
-impl<'a> FromIterator<TyError> for TyError {
-    fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
+impl<'a> FromIterator<TyError<'a>> for TyError<'a> {
+    fn from_iter<T: IntoIterator<Item = TyError<'a>>>(iter: T) -> Self {
         TyError::MultiError(iter.into_iter().collect())
     }
 }
 
-impl TyError {
-    pub fn emit(&self, source: &SourceCode) -> ErrorReported {
+impl<'a> TyError<'a> {
+    pub fn emit(&self, source: &'a SourceCode<'a>) -> ErrorReported {
         match &self {
             TyError::MultiError(errs) => {
                 for err in errs {
@@ -229,31 +229,31 @@ impl TyError {
     }
 }
 
-impl From<CtxError> for TyError {
-    fn from(err: CtxError) -> Self {
+impl<'a> From<CtxError<'a>> for TyError<'a> {
+    fn from(err: CtxError<'a>) -> Self {
         TyError::CtxError(err)
     }
 }
-impl From<SubTyError> for TyError {
-    fn from(err: SubTyError) -> Self {
+impl<'a> From<SubTyError<'a>> for TyError<'a> {
+    fn from(err: SubTyError<'a>) -> Self {
         TyError::SubTyError(err)
     }
 }
-impl From<UnifyError> for TyError {
-    fn from(err: UnifyError) -> Self {
+impl<'a> From<UnifyError<'a>> for TyError<'a> {
+    fn from(err: UnifyError<'a>) -> Self {
         TyError::UnifyError(err)
     }
 }
-impl From<NatEvalError> for TyError {
-    fn from(err: NatEvalError) -> Self {
+impl<'a> From<NatEvalError<'a>> for TyError<'a> {
+    fn from(err: NatEvalError<'a>) -> Self {
         TyError::NatEvalError(err)
     }
 }
 
 #[must_use]
 #[derive(Debug)]
-pub enum SubTyError {
-    CtxError(CtxError),
+pub enum SubTyError<'a> {
+    CtxError(CtxError<'a>),
     // format!("{} lives longer than {}.", shorter, longer)
     NotOutliving(String, String),
     // format!("No loans bound to provenance.")
@@ -268,79 +268,79 @@ pub enum SubTyError {
 
 #[must_use]
 #[derive(Debug)]
-pub enum UnifyError {
+pub enum UnifyError<'a> {
     // Cannot unify the two terms
     CannotUnify,
     // A type variable has to be equal to a term that is referring to the same type variable
     InfiniteType,
-    SubTyError(SubTyError),
+    SubTyError(SubTyError<'a>),
 }
 
-impl From<SubTyError> for UnifyError {
-    fn from(err: SubTyError) -> Self {
+impl<'a> From<SubTyError<'a>> for UnifyError<'a> {
+    fn from(err: SubTyError<'a>) -> Self {
         UnifyError::SubTyError(err)
     }
 }
 
 #[must_use]
 #[derive(Debug)]
-pub enum CtxError {
+pub enum CtxError<'a> {
     //format!("Identifier: {} not found in context.", ident)),
-    IdentNotFound(Ident),
+    IdentNotFound(Ident<'a>),
     //"Cannot find identifier {} in kinding context",
-    KindedIdentNotFound(Ident),
+    KindedIdentNotFound(Ident<'a>),
     // "Typing Context is missing the provenance value {}",
     PrvValueNotFound(String),
     // format!("{} is not declared", prv_rel.longer));
-    PrvIdentNotFound(Ident),
-    // format!("{} is not defined as outliving {}.", l, s)
-    OutlRelNotDefined(Ident, Ident),
+    PrvIdentNotFound(Ident<'a>),
+    // format!("{} is not de<'a>ined as outliving {}.", l, s)
+    OutlRelNotDefined(Ident<'a>, Ident<'a>),
     // TODO move to TyError
     IllegalProjection,
 }
 
-impl From<CtxError> for SubTyError {
-    fn from(err: CtxError) -> Self {
+impl<'a> From<CtxError<'a>> for SubTyError<'a> {
+    fn from(err: CtxError<'a>) -> Self {
         SubTyError::CtxError(err)
     }
 }
 
 #[must_use]
 #[derive(Debug)]
-pub enum BorrowingError {
+pub enum BorrowingError<'a> {
     Conflict {
-        checked: PlaceExpr,
-        existing: PlaceExpr,
+        checked: PlaceExpr<'a>,
+        existing: PlaceExpr<'a>,
     },
-    CtxError(CtxError),
+    CtxError(CtxError<'a>),
     // "Trying to use place expression with {} capability while it refers to a \
     //     loan with {} capability.",
     // checked_own, ref_own
     ConflictingOwnership,
     ConflictingAccess,
     // The borrowing place is not in the reborrow list
-    BorrowNotInReborrowList(Place),
+    BorrowNotInReborrowList(Place<'a>),
     TemporaryConflictingBorrow(String),
-    WrongDevice(BaseExec, BaseExec),
+    WrongDevice(BaseExec<'a>, BaseExec<'a>),
     MultipleDistribs,
     CannotNarrow,
     DivergingExec,
-    TyError(Box<TyError>),
-    NatEvalError(NatEvalError),
+    TyError(Box<TyError<'a>>),
+    NatEvalError(NatEvalError<'a>),
 }
 
-impl From<TyError> for BorrowingError {
-    fn from(err: TyError) -> Self {
+impl<'a> From<TyError<'a>> for BorrowingError<'a> {
+    fn from(err: TyError<'a>) -> Self {
         BorrowingError::TyError(Box::new(err))
     }
 }
-impl From<CtxError> for BorrowingError {
-    fn from(err: CtxError) -> Self {
+impl<'a> From<CtxError<'a>> for BorrowingError<'a> {
+    fn from(err: CtxError<'a>) -> Self {
         BorrowingError::CtxError(err)
     }
 }
-impl From<NatEvalError> for BorrowingError {
-    fn from(err: NatEvalError) -> Self {
+impl<'a> From<NatEvalError<'a>> for BorrowingError<'a> {
+    fn from(err: NatEvalError<'a>) -> Self {
         BorrowingError::NatEvalError(err)
     }
 }

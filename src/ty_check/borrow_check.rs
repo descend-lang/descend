@@ -1,11 +1,12 @@
 use super::ctxs::TyCtx;
 use crate::arena_ast::internal::{Loan, PlaceCtx, PrvMapping};
-use crate::arena_ast::*;
+use crate::arena_ast::{self, *};
 use crate::parser::descend::nat;
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::exec::normalize;
 use crate::ty_check::{exec, pre_decl, ExprTyCtx};
+use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
 use std::collections::HashSet;
 
 type OwnResult<T> = Result<T, BorrowingError>;
@@ -15,11 +16,11 @@ pub(super) struct BorrowCheckCtx<'gl, 'src, 'ctxt> {
     pub gl_ctx: &'ctxt GlobalCtx<'gl, 'src>,
     pub nat_ctx: &'ctxt NatCtx,
     pub kind_ctx: &'ctxt KindCtx,
-    pub ident_exec: Option<&'ctxt IdentExec>,
+    pub ident_exec: Option<&'ctxt IdentExec<'a>>,
     pub ty_ctx: &'ctxt TyCtx,
     pub access_ctx: &'ctxt AccessCtx,
-    pub exec: ExecExpr,
-    pub reborrows: Vec<internal::Place>,
+    pub exec: ExecExpr<'a>,
+    pub reborrows: Vec<internal::Place<'a>>,
     pub own: Ownership,
     pub unsafe_flag: bool,
 }
@@ -46,7 +47,7 @@ impl<'gl, 'src, 'ctxt> BorrowCheckCtx<'gl, 'src, 'ctxt> {
 
     fn extend_reborrows<I>(&self, iter: I) -> Self
     where
-        I: Iterator<Item = internal::Place>,
+        I: Iterator<Item = internal::Place<'a>>,
     {
         let mut extended_reborrows = self.reborrows.clone();
         extended_reborrows.extend(iter);
@@ -69,7 +70,10 @@ impl<'gl, 'src, 'ctxt> BorrowCheckCtx<'gl, 'src, 'ctxt> {
 // Ownership Safety
 //
 //p is ω-safe under δ and γ, with reborrow exclusion list π , and may point to any of the loans in ωp
-pub(super) fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
+pub(super) fn access_safety_check(
+    ctx: &BorrowCheckCtx,
+    p: &PlaceExpr,
+) -> OwnResult<HashSet<Loan<'a>>> {
     if !ctx.unsafe_flag {
         narrowing_check(ctx, p, &ctx.exec)?;
         access_conflict_check(ctx, p)?;
@@ -77,7 +81,7 @@ pub(super) fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnRes
     borrow_check(ctx, p)
 }
 
-pub(super) fn borrow_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
+pub(super) fn borrow_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan<'a>>> {
     let (pl_ctx, most_spec_pl) = p.to_pl_ctx_and_most_specif_pl();
     if p.is_place() {
         ownership_safe_place(ctx, p)
@@ -109,7 +113,7 @@ fn ownership_safe_deref_raw(
     ctx: &BorrowCheckCtx,
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
-) -> OwnResult<HashSet<Loan>> {
+) -> OwnResult<HashSet<Loan<'a>>> {
     // TODO is this correct?
     let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
@@ -122,7 +126,7 @@ fn ownership_safe_deref_raw(
     Ok(passed_through_prvs)
 }
 
-fn ownership_safe_place(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan>> {
+fn ownership_safe_place(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<HashSet<Loan<'a>>> {
     ownership_safe_under_existing_borrows(ctx, p)?;
     let mut loan_set = HashSet::new();
     loan_set.insert(Loan {
@@ -138,7 +142,7 @@ fn ownership_safe_deref(
     most_spec_pl: &internal::Place,
     prv_val_name: &str,
     ref_own: Ownership,
-) -> OwnResult<HashSet<Loan>> {
+) -> OwnResult<HashSet<Loan<'a>>> {
     // Γ(r) = { ω′pi }
     let loans_in_prv = ctx.ty_ctx.loans_in_prv(prv_val_name)?;
     // ω ≲ ωπ
@@ -174,9 +178,9 @@ fn ownership_safe_deref(
 fn subst_pl_with_potential_prvs_ownership_safe(
     ctx: &BorrowCheckCtx,
     pl_ctx_no_deref: &PlaceCtx,
-    loans_in_prv: &HashSet<Loan>,
-) -> OwnResult<HashSet<Loan>> {
-    let mut loans: HashSet<Loan> = HashSet::new();
+    loans_in_prv: &HashSet<Loan<'a>>,
+) -> OwnResult<HashSet<Loan<'a>>> {
+    let mut loans: HashSet<Loan<'a>> = HashSet::new();
     for pl_expr in loans_in_prv.iter().map(|loan| &loan.place_expr) {
         let insert_dereferenced_pl_expr = pl_ctx_no_deref.insert_pl_expr(pl_expr.clone());
         let loans_for_possible_prv_pl_expr =
@@ -191,7 +195,7 @@ fn ownership_safe_deref_abs(
     pl_ctx_no_deref: &PlaceCtx,
     most_spec_pl: &internal::Place,
     ref_own: Ownership,
-) -> OwnResult<HashSet<Loan>> {
+) -> OwnResult<HashSet<Loan<'a>>> {
     let currently_checked_pl_expr = pl_ctx_no_deref.insert_pl_expr(PlaceExpr::new(
         PlaceExprKind::Deref(Box::new(most_spec_pl.to_place_expr())),
     ));
@@ -210,8 +214,8 @@ fn ownership_safe_deref_abs(
 
 fn narrowing_check(
     ctx: &BorrowCheckCtx,
-    p: &PlaceExpr,
-    active_ctx_exec: &ExecExpr,
+    p: &'a PlaceExpr<'a>,
+    active_ctx_exec: &'a ExecExpr<'a>,
 ) -> OwnResult<()> {
     if ctx.own == Ownership::Shrd {
         return Ok(());
@@ -234,14 +238,14 @@ fn narrowing_check(
     }
 }
 
-fn narrowable(from: &ExecExpr, to: &ExecExpr) -> OwnResult<()> {
+fn narrowable(from: &'a ExecExpr<'a>, to: &'a ExecExpr<'a>) -> OwnResult<()> {
     let normal_from = normalize(from.clone());
     let normal_to = normalize(to.clone());
     exec_is_prefix_of(&normal_from, &normal_to)?;
     no_forall_in_diff(&normal_from, &normal_to)
 }
 
-fn exec_is_prefix_of(prefix: &ExecExpr, of: &ExecExpr) -> OwnResult<()> {
+fn exec_is_prefix_of(prefix: &&'a ExecExpr<'a>, of: &'a ExecExpr<'a>) -> OwnResult<()> {
     if prefix.exec.base != of.exec.base {
         return Err(BorrowingError::WrongDevice(
             of.exec.base.clone(),
@@ -259,7 +263,7 @@ fn exec_is_prefix_of(prefix: &ExecExpr, of: &ExecExpr) -> OwnResult<()> {
     Ok(())
 }
 
-fn access_conflict_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
+fn access_conflict_check(ctx: &BorrowCheckCtx, p: &'a PlaceExpr<'a>) -> OwnResult<()> {
     for loan in ctx.access_ctx.hash_set() {
         if possible_conflict_with_previous_access(ctx.nat_ctx, ctx.own, p, loan)? {
             return Err(BorrowingError::Conflict {
@@ -271,12 +275,12 @@ fn access_conflict_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<()> {
     Ok(())
 }
 
-fn possible_conflict_with_previous_access(
+fn possible_conflict_with_previous_access<'a>(
     nat_ctx: &NatCtx,
     own: Ownership,
-    p: &PlaceExpr,
-    previous: &Loan,
-) -> NatEvalResult<bool> {
+    p: &'a PlaceExpr<'a>,
+    previous: &'a Loan<'a>,
+) -> NatEvalResult<'a, bool> {
     if own == Ownership::Shrd && previous.own == Ownership::Shrd {
         return Ok(false);
     }
@@ -335,20 +339,20 @@ fn possible_conflict_with_previous_access(
     Ok(false)
 }
 
-fn range_intersects(
-    nat_ctx: &NatCtx,
-    lower_left: &Nat,
-    upper_left: &Nat,
-    lower_right: &Nat,
-    upper_right: &Nat,
-) -> NatEvalResult<bool> {
+fn range_intersects<'a>(
+    nat_ctx: &'a NatCtx<'a>,
+    lower_left: &'a Nat<'a>,
+    upper_left: &'a Nat<'a>,
+    lower_right: &'a Nat<'a>,
+    upper_right: &'a Nat<'a>,
+) -> NatEvalResult<'a, bool> {
     Ok((lower_left.eval(nat_ctx)? < lower_right.eval(nat_ctx)?
         && upper_left.eval(nat_ctx)? <= lower_right.eval(nat_ctx)?)
         || (lower_left.eval(nat_ctx)? >= upper_right.eval(nat_ctx)?
             && upper_left.eval(nat_ctx)? > upper_right.eval(nat_ctx)?))
 }
 
-fn no_forall_in_diff(from: &ExecExpr, under: &ExecExpr) -> OwnResult<()> {
+fn no_forall_in_diff<'a>(from: &'a ExecExpr<'a>, under: &'a ExecExpr<'a>) -> OwnResult<()> {
     if from.exec.path.len() > under.exec.path.len() {
         return Err(BorrowingError::CannotNarrow);
     }
@@ -360,9 +364,9 @@ fn no_forall_in_diff(from: &ExecExpr, under: &ExecExpr) -> OwnResult<()> {
     Ok(())
 }
 
-fn pl_ctxs_and_places_in_loans(
-    loans: &HashSet<Loan>,
-) -> impl Iterator<Item = (PlaceCtx, internal::Place)> + '_ {
+fn pl_ctxs_and_places_in_loans<'a>(
+    loans: &HashSet<Loan<'a>>,
+) -> impl Iterator<Item = (PlaceCtx, internal::Place<'a>)> + '_ {
     loans
         .iter()
         .map(|loan| &loan.place_expr)
@@ -377,9 +381,9 @@ fn new_own_weaker_equal(checked_own: Ownership, ref_own: Ownership) -> OwnResult
     }
 }
 
-fn ownership_safe_under_existing_borrows(
+fn ownership_safe_under_existing_borrows<'a>(
     ctx: &BorrowCheckCtx,
-    pl_expr: &PlaceExpr,
+    pl_expr: &'a PlaceExpr<'a>,
 ) -> OwnResult<()> {
     if !ctx.unsafe_flag {
         for prv_mapping in ctx.ty_ctx.prv_mappings() {
@@ -398,11 +402,11 @@ fn ownership_safe_under_existing_borrows(
 }
 
 // returns None if there is no unique loan overlap or Some with the existing overlapping loan
-fn no_uniq_loan_overlap(
+fn no_uniq_loan_overlap<'a>(
     own: Ownership,
-    pl_expr: &PlaceExpr,
-    loans: &HashSet<Loan>,
-) -> Option<Loan> {
+    pl_expr: &'a PlaceExpr<'a>,
+    loans: &HashSet<Loan<'a>>,
+) -> Option<Loan<'a>> {
     for l in loans {
         if (own == Ownership::Uniq || l.own == Ownership::Uniq) && overlap(&l.place_expr, pl_expr) {
             return Some(l.clone());
@@ -411,10 +415,10 @@ fn no_uniq_loan_overlap(
     None
 }
 
-fn at_least_one_borrowing_place_and_all_in_reborrow(
+fn at_least_one_borrowing_place_and_all_in_reborrow<'a>(
     ty_ctx: &TyCtx,
     prv_name: &str,
-    reborrows: &[internal::Place],
+    reborrows: &[internal::Place<'a>],
 ) -> OwnResult<()> {
     let all_places = ty_ctx.all_places();
     // check that a borrow with given provenance exists.
@@ -439,7 +443,7 @@ fn at_least_one_borrowing_place_and_all_in_reborrow(
     Ok(())
 }
 
-fn conflicting_path(pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> bool {
+fn conflicting_path<'a>(pathl: &[PlExprPathElem<'a>], pathr: &[PlExprPathElem<'a>]) -> bool {
     for lr in pathl.iter().zip(pathr) {
         match lr {
             (PlExprPathElem::Idx(_), _) => return true,
@@ -483,9 +487,9 @@ fn conflicting_path(pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> bool 
     true
 }
 
-fn overlap(pll: &PlaceExpr, plr: &PlaceExpr) -> bool {
-    let (pl_ident, pl_path) = pll.as_ident_and_path();
-    let (pr_ident, pr_path) = plr.as_ident_and_path();
+fn overlap<'a>(pll: &'a PlaceExpr<'a>, plr: &'a PlaceExpr<'a>, arena: &'a Bump) -> bool {
+    let (pl_ident, pl_path) = pll.as_ident_and_path(arena);
+    let (pr_ident, pr_path) = plr.as_ident_and_path(arena);
     if pl_ident == pr_ident {
         conflicting_path(&pl_path, &pr_path) || conflicting_path(&pr_path, &pl_path)
     } else {

@@ -9,17 +9,17 @@ use super::error::{CtxError, SubTyError};
 use crate::arena_ast::*;
 use std::collections::HashSet;
 
-type SubTyResult<T> = Result<T, SubTyError>;
+type SubTyResult<'a, T> = Result<T, SubTyError<'a>>;
 
 // FIXME respect memory alaways, somehow provenances can be different is this correct?
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
-pub(super) fn check(
-    kind_ctx: &KindCtx,
-    ty_ctx: &mut TyCtx,
-    sub_dty: &DataTy,
-    super_dty: &DataTy,
-) -> SubTyResult<()> {
+pub(super) fn check<'a>(
+    kind_ctx: &'a KindCtx<'a>,
+    ty_ctx: &'a mut TyCtx<'a>,
+    sub_dty: &'a DataTy<'a>,
+    super_dty: &'a DataTy<'a>,
+) -> SubTyResult<'a, ()> {
     use super::Ownership::*;
     use DataTyKind::*;
 
@@ -70,12 +70,12 @@ pub(super) fn check(
 
 // ρ1 outlives ρ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ ρ1 :> ρ2 ⇒ Γ′
-fn outlives(
-    kind_ctx: &KindCtx,
-    ty_ctx: &mut TyCtx,
-    longer_prv: &Provenance,
-    shorter_prv: &Provenance,
-) -> SubTyResult<()> {
+fn outlives<'a>(
+    kind_ctx: &'a KindCtx<'a>,
+    ty_ctx: &'a mut TyCtx<'a>,
+    longer_prv: &'a Provenance<'a>,
+    shorter_prv: &'a Provenance<'a>,
+) -> SubTyResult<'a, ()> {
     use Provenance::*;
 
     match (longer_prv, shorter_prv) {
@@ -109,7 +109,11 @@ fn outlives(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs(ty_ctx: &mut TyCtx, longer: &str, shorter: &str) -> SubTyResult<()> {
+fn outl_check_val_prvs<'a>(
+    ty_ctx: &mut TyCtx<'a>,
+    longer: &str,
+    shorter: &str,
+) -> SubTyResult<'a, ()> {
     // CHECK:
     //    NOT CLEAR WHY a. IS NECESSARY
     // a. for every variable of reference type with r1 in ty_ctx: there must not exist a loan
@@ -134,7 +138,7 @@ fn outl_check_val_prvs(ty_ctx: &mut TyCtx, longer: &str, shorter: &str) -> SubTy
     Ok(())
 }
 
-fn longer_occurs_before_shorter(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> bool {
+fn longer_occurs_before_shorter<'a>(ty_ctx: &'a TyCtx<'a>, longer: &str, shorter: &str) -> bool {
     for prv in ty_ctx
         .prv_mappings()
         .map(|prv_mappings| prv_mappings.prv.clone())
@@ -148,7 +152,7 @@ fn longer_occurs_before_shorter(ty_ctx: &TyCtx, longer: &str, shorter: &str) -> 
     panic!("Neither provenance found in typing context")
 }
 
-fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
+fn exists_deref_loan_with_prv<'a>(ty_ctx: &'a TyCtx<'a>, prv: &str) -> bool {
     ty_ctx
         .all_places()
         .into_iter()
@@ -171,7 +175,7 @@ fn exists_deref_loan_with_prv(ty_ctx: &TyCtx, prv: &str) -> bool {
         })
 }
 
-fn outl_check_val_ident_prv(ty_ctx: &TyCtx, longer_val: &str) -> SubTyResult<()> {
+fn outl_check_val_ident_prv<'a>(ty_ctx: &'a TyCtx<'a>, longer_val: &str) -> SubTyResult<'a, ()> {
     // TODO how could the set ever be empty?
     let loan_set = ty_ctx.loans_in_prv(longer_val)?;
     if loan_set.is_empty() {
@@ -183,19 +187,22 @@ fn outl_check_val_ident_prv(ty_ctx: &TyCtx, longer_val: &str) -> SubTyResult<()>
 }
 
 // FIXME Makes no sense!
-fn borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx: &TyCtx, loan_set: &HashSet<Loan>) -> bool {
+fn borrowed_pl_expr_no_ref_to_existing_pl<'a>(
+    ty_ctx: &'a TyCtx<'a>,
+    loan_set: &HashSet<Loan<'a>>,
+) -> bool {
     ty_ctx
         .all_places()
         .iter()
         .any(|(pl, _)| loan_set.iter().any(|loan| loan.place_expr.equiv(pl)))
 }
 
-fn outl_check_ident_val_prv(
-    kind_ctx: &KindCtx,
-    ty_ctx: &TyCtx,
-    longer_ident: &Ident,
+fn outl_check_ident_val_prv<'a>(
+    kind_ctx: &'a KindCtx<'a>,
+    ty_ctx: &'a TyCtx<'a>,
+    longer_ident: &'a Ident<'a>,
     shorter_val: &str,
-) -> SubTyResult<()> {
+) -> SubTyResult<'a, ()> {
     if !kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance) {
         return Err(SubTyError::CtxError(CtxError::PrvIdentNotFound(
             longer_ident.clone(),
@@ -211,12 +218,12 @@ fn outl_check_ident_val_prv(
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
 pub(super) fn multiple_outlives<'a, I>(
-    kind_ctx: &KindCtx,
-    ty_ctx: &mut TyCtx,
+    kind_ctx: &'a KindCtx<'a>,
+    ty_ctx: &'a mut TyCtx<'a>,
     prv_rels: I,
-) -> SubTyResult<()>
+) -> SubTyResult<'a, ()>
 where
-    I: IntoIterator<Item = (&'a Provenance, &'a Provenance)>,
+    I: IntoIterator<Item = (&'a Provenance<'a>, &'a Provenance<'a>)>,
 {
     for prv_rel in prv_rels {
         let (longer, shorter) = prv_rel;

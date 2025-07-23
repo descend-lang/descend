@@ -41,7 +41,7 @@ pub static TAKE_RIGHT: &str = "take_right";
 pub static SELECT_RANGE: &str = "select_range";
 pub static MAP: &str = "map";
 
-pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
+pub fn fun_decls<'a>() -> Vec<(&'static str, FnTy<'a>)> {
     let decls = [
         // Built-in functions
         (GPU_DEVICE, gpu_device_ty()),
@@ -81,7 +81,7 @@ pub fn fun_decls() -> Vec<(&'static str, FnTy)> {
     decls.to_vec()
 }
 
-fn create_array_ty() -> FnTy {
+fn create_array_ty<'a>() -> FnTy<'a> {
     let n = Ident::new("n");
     let d = Ident::new("d");
     let n_nat = IdentKinded {
@@ -116,7 +116,7 @@ fn create_array_ty() -> FnTy {
 //  <r: prv, m: mem, t: ty> (
 //      &r gpu.thread uniq m t
 // ) -[gpu.thread]-> RawPtr<t>
-fn to_raw_ptr_ty() -> FnTy {
+fn to_raw_ptr_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let d = Ident::new("d");
@@ -161,7 +161,7 @@ fn to_raw_ptr_ty() -> FnTy {
 //  <m: mem, t: ty> (
 //      RawPtr<t>, i32
 // ) -[gpu.thread]-> RawPtr<t>
-fn offset_raw_ptr_ty() -> FnTy {
+fn offset_raw_ptr_ty<'a>() -> FnTy<'a> {
     let d = Ident::new("d");
     let d_dty = IdentKinded {
         ident: d.clone(),
@@ -196,7 +196,7 @@ fn offset_raw_ptr_ty() -> FnTy {
 
 // ballot_sync:
 //  <>(bool) -[w: gpu.warp]-> u32
-fn ballot_sync_ty() -> FnTy {
+fn ballot_sync_ty<'a>() -> FnTy<'a> {
     let ident_exec = IdentExec::new(Ident::new("w"), ExecTy::new(ExecTyKind::GpuWarp));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
     let param_exec = ExecExpr::new(exec_expr.exec.clone().forall(DimCompo::X));
@@ -221,7 +221,7 @@ fn ballot_sync_ty() -> FnTy {
 // FIXME warp should have the type given in the comment below
 // shfl_sync:
 //  <w: gpu.warp>(u32, u32) -[w.forall]-> u32
-fn shfl_sync_ty() -> FnTy {
+fn shfl_sync_ty<'a>() -> FnTy<'a> {
     let ident_exec = IdentExec::new(Ident::new("w"), ExecTy::new(ExecTyKind::GpuWarp));
     let exec_expr_lane = ExecExpr::new(
         ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())).forall(DimCompo::X),
@@ -255,7 +255,7 @@ fn shfl_sync_ty() -> FnTy {
 
 // shfl_up:
 //  <>(u32, i32) -[gpu.warp]-> u32
-fn shfl_up_ty() -> FnTy {
+fn shfl_up_ty<'a>() -> FnTy<'a> {
     let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuWarp));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
@@ -286,7 +286,7 @@ fn shfl_up_ty() -> FnTy {
 
 // nat_as_u64:
 //  <n: nat>() -[view]-> u64
-fn nat_as_u64_ty() -> FnTy {
+fn nat_as_u64_ty<'a>() -> FnTy<'a> {
     let n = Ident::new("n");
     let n_nat = IdentKinded {
         ident: n,
@@ -308,7 +308,7 @@ fn nat_as_u64_ty() -> FnTy {
 }
 
 // get_warp_id: <>() -[w: gpu.Warp]-> u32
-fn get_warp_id_ty() -> FnTy {
+fn get_warp_id_ty<'a>() -> FnTy<'a> {
     let ident_exec = IdentExec::new(Ident::new("w"), ExecTy::new(ExecTyKind::GpuWarp));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
@@ -325,7 +325,7 @@ fn get_warp_id_ty() -> FnTy {
 }
 
 // get_lane_id: <>() -[w: gpu.Thread]-> u32
-fn get_lane_id_ty() -> FnTy {
+fn get_lane_id_ty<'a>() -> FnTy<'a> {
     let ident_exec = IdentExec::new(Ident::new("t"), ExecTy::new(ExecTyKind::GpuThread));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
@@ -343,7 +343,7 @@ fn get_lane_id_ty() -> FnTy {
 
 // thread_id_x:
 //  <>() -[gpu.thread]-> u32
-fn thread_id_x_ty() -> FnTy {
+fn thread_id_x_ty<'a>() -> FnTy<'a> {
     let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::GpuThread));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
@@ -361,7 +361,7 @@ fn thread_id_x_ty() -> FnTy {
 
 // gpu:
 //   <>(i32) -[cpu.thread]-> Gpu
-fn gpu_device_ty() -> FnTy {
+fn gpu_device_ty<'a>() -> FnTy<'a> {
     let ident_exec = IdentExec::new(Ident::new("ex"), ExecTy::new(ExecTyKind::CpuThread));
     let exec_expr = ExecExpr::new(ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
 
@@ -384,7 +384,7 @@ fn gpu_device_ty() -> FnTy {
 
 // to_atomic_array:
 //  <r: prv, m: mem, n: nat>(ex: &r uniq m [u32; n]) -[x: Any]-> &r uniq m [AtomicU32; n]
-fn to_atomic_array_ty() -> FnTy {
+fn to_atomic_array_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let n = Ident::new("n");
@@ -438,7 +438,7 @@ fn to_atomic_array_ty() -> FnTy {
 
 // to_atomic:
 //  <r: prv, m: mem>(&r uniq x m u32) -[x: Any]-> &r uniq x m AtomicU32
-fn to_atomic_ty() -> FnTy {
+fn to_atomic_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let r_prv = IdentKinded {
@@ -481,7 +481,7 @@ fn to_atomic_ty() -> FnTy {
 
 // atomic_store:
 //  <r: prv, m: mem>(&r shrd  m AtomicU32, u32) -[gpu.thread]-> ()
-fn atomic_store_ty() -> FnTy {
+fn atomic_store_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let r_prv = IdentKinded {
@@ -527,7 +527,7 @@ fn atomic_store_ty() -> FnTy {
 
 // atomic_fetch_or:
 //  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> u32
-fn atomic_fetch_or_ty() -> FnTy {
+fn atomic_fetch_or_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let r_prv = IdentKinded {
@@ -573,7 +573,7 @@ fn atomic_fetch_or_ty() -> FnTy {
 
 // atomic_min:
 //  <r: prv, m: mem>(&r shrd m AtomicI32, i32) -[gpu.thread]-> i32
-fn atomic_min_ty() -> FnTy {
+fn atomic_min_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let r_prv = IdentKinded {
@@ -619,7 +619,7 @@ fn atomic_min_ty() -> FnTy {
 
 // atomic_fetch_add:
 //  <r: prv, m: mem>(&r shrd m AtomicU32, u32) -[gpu.thread]-> u32
-fn atomic_fetch_add_ty() -> FnTy {
+fn atomic_fetch_add_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let r_prv = IdentKinded {
@@ -665,7 +665,7 @@ fn atomic_fetch_add_ty() -> FnTy {
 
 // atomic_load:
 //  <r: prv, m: mem>(&r shrd m AtomicU32) -[gpu.thread]-> u32
-fn atomic_load_ty() -> FnTy {
+fn atomic_load_ty<'a>() -> FnTy<'a> {
     let r = Ident::new("r");
     let m = Ident::new("m");
     let r_prv = IdentKinded {
@@ -705,7 +705,7 @@ fn atomic_load_ty() -> FnTy {
 //   <r1: prv, r2: prv, d: dty>(
 //      &r1 uniq cpu.mem Gpu, &r2 shrd cpu.mem t
 //   ) -[cpu.thread]-> t @ gpu.global
-fn gpu_alloc_copy_ty() -> FnTy {
+fn gpu_alloc_copy_ty<'a>() -> FnTy<'a> {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
     let d = Ident::new("d");
@@ -762,7 +762,7 @@ fn gpu_alloc_copy_ty() -> FnTy {
 // copy_to_host:
 //   <r1: prv, r2: prv, d: dty>(&r1 shrd gpu.global d, &r2 uniq cpu.mem d)
 //      -[cpu.thread]-> ()
-fn copy_to_host_ty() -> FnTy {
+fn copy_to_host_ty<'a>() -> FnTy<'a> {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
     let d = Ident::new("d");
@@ -818,7 +818,7 @@ fn copy_to_host_ty() -> FnTy {
 // copy_to_gpu:
 //  <r1: prv, r2: prv, d: dty>(& r1 uniq gpu.global d,
 //      & r2 shrd cpu.mem d) -[cpu.thread]-> ()
-fn copy_to_gpu_ty() -> FnTy {
+fn copy_to_gpu_ty<'a>() -> FnTy<'a> {
     let r1 = Ident::new("r1");
     let r2 = Ident::new("r2");
     let d = Ident::new("d");
@@ -873,7 +873,7 @@ fn copy_to_gpu_ty() -> FnTy {
 
 // to_view:
 //  <r: prv, m: mem, n: nat, d: dty>([d; n]) -[view]-> [[d; n]]
-fn to_view_ty() -> FnTy {
+fn to_view_ty<'a>() -> FnTy<'a> {
     let n = Ident::new("n");
     let d = Ident::new("d");
     let n_nat = IdentKinded {
@@ -908,7 +908,7 @@ fn to_view_ty() -> FnTy {
 
 // rev/rev_mut:
 // <n: nat, r: prv, m: mem, d: dty>(&r W m [[d; n]]) -> &r W m [[d; n]]
-fn reverse_ty() -> FnTy {
+fn reverse_ty<'a>() -> FnTy<'a> {
     let n = Ident::new("n");
     let d = Ident::new("d");
     let n_nat = IdentKinded {
@@ -942,7 +942,7 @@ fn reverse_ty() -> FnTy {
 }
 
 //map_mut:<d: dty, d2: dty, n: nat>(|d| -[ex]-> d2, [[d;n]]) -[ex: Any]-> [[d2; n]]
-fn map_ty() -> FnTy {
+fn map_ty<'a>() -> FnTy<'a> {
     let d = Ident::new("d");
     let d2 = Ident::new("d2");
     let n = Ident::new("n");
@@ -1002,7 +1002,7 @@ fn map_ty() -> FnTy {
 
 // group/group_mut:
 //  <size: nat, n: nat, d: dty>([[d; n]]) -> [[ [[d; size]]; n/size ]]
-fn group_ty() -> FnTy {
+fn group_ty<'a>() -> FnTy<'a> {
     let s = Ident::new("s");
     let n = Ident::new("n");
     let d = Ident::new("d");
@@ -1112,7 +1112,7 @@ pub enum TakeSide {
 // }
 
 // select: <l: nat, u: nat, n: nat, d: dty>([[ d; n ]]) -[a: any]-> [[ d; u-l ]]
-fn select_range_ty() -> FnTy {
+fn select_range_ty<'a>() -> FnTy<'a> {
     let l = Ident::new("l");
     let u = Ident::new("u");
     let n = Ident::new("n");
@@ -1193,7 +1193,7 @@ fn select_range_ty() -> FnTy {
 
 // join/join_mut:
 //  <r: prv, m: mem, o: nat, n: nat, d: dty>(&r W m [[ [[d; n]]; o]]) -> [[d; n*o]]
-fn join_ty() -> FnTy {
+fn join_ty<'a>() -> FnTy<'a> {
     let n = Ident::new("n");
     let o = Ident::new("o");
     let d = Ident::new("d");
@@ -1240,7 +1240,7 @@ fn join_ty() -> FnTy {
 
 // transpose:
 //  <r: prv, m: mem, n: nat, o: nat, d: dty>(&r W m [[ [[d; n]]; o]]) -> &r W m [[ [[d; o]]; n]]
-fn transpose_ty() -> FnTy {
+fn transpose_ty<'a>() -> FnTy<'a> {
     let n = Ident::new("n");
     let o = Ident::new("o");
     let d = Ident::new("d");

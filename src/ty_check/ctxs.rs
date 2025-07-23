@@ -4,22 +4,23 @@ use crate::arena_ast::internal::{
 use crate::arena_ast::*;
 use crate::ty_check::error::CtxError;
 use std::collections::HashSet;
+use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
 
 // TODO introduce proper struct
-pub(super) type TypedPlace = (internal::Place, DataTy);
+pub(super) type TypedPlace<'a> = (internal::Place<'a>, DataTy<'a>);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub(super) struct TyCtx {
-    frames: Vec<Frame>,
+pub(super) struct TyCtx<'a> {
+    frames: BumpVec<'a, Frame<'a>>,
 }
 
-impl TyCtx {
-    pub fn new() -> Self {
-        TyCtx {
-            frames: vec![Frame::new()],
+impl<'a> TyCtx<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+            let mut frames = BumpVec::new_in(arena);
+            frames.push(Frame::new_in(arena));
+            TyCtx { frames }
         }
-    }
-
+    
     pub fn get_exec_expr_for_exec_ident(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
         let exec_expr = self.flat_bindings().rev().find_map(|entry| match entry {
             FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
@@ -48,7 +49,7 @@ impl TyCtx {
     }
 
     pub fn push_empty_frame(&mut self) -> &mut Self {
-        self.frames.push(Frame::new());
+        self.frames.push(Frame<'a>::new());
         self
     }
 
@@ -144,7 +145,7 @@ impl TyCtx {
 
     pub fn extend_loans_for_prv<I>(&mut self, base: &str, extension: I) -> CtxResult<&mut TyCtx>
     where
-        I: IntoIterator<Item = Loan>,
+        I: IntoIterator<Item = Loan<'a>>,
     {
         let base_loans = self.loans_for_prv_mut(base)?;
         base_loans.extend(extension);
@@ -200,13 +201,13 @@ impl TyCtx {
             .collect()
     }
 
-    fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<TypedPlace> {
-        fn proj(mut pl: internal::Place, idx: PathElem) -> internal::Place {
+    fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<TypedPlace<'a>> {
+        fn proj(mut pl: internal::Place, idx: PathElem) -> internal::Place<'a> {
             pl.path.push(idx);
             pl
         }
 
-        fn explode(pl: internal::Place, dty: DataTy) -> Vec<TypedPlace> {
+        fn explode(pl: internal::Place, dty: DataTy) -> Vec<TypedPlace<'a>> {
             use DataTyKind as d;
 
             match &dty.dty {
@@ -264,8 +265,8 @@ impl TyCtx {
         self.idents_typed().any(|i| i.ident.name == ident.name)
     }
 
-    pub fn place_dty(&self, place: &internal::Place) -> CtxResult<DataTy> {
-        fn proj_ty(dty: DataTy, path: &[PathElem]) -> CtxResult<DataTy> {
+    pub fn place_dty(&self, place: &internal::Place<'a>) -> CtxResult<DataTy<'a>> {
+        fn proj_ty(dty: DataTy, path: &[PathElem<'a>]) -> CtxResult<DataTy<'a>> {
             let mut res_dty = dty;
             for pe in path {
                 match (&res_dty.dty, pe) {
@@ -482,19 +483,19 @@ fn trim_after_select_of(ty_ctx: &TyCtx, exec: &ExecExpr, pl_expr: PlaceExpr) -> 
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-enum KindingCtxEntry {
-    Ident(IdentKinded),
-    PrvRel(PrvRel),
+enum KindingCtxEntry<'a> {
+    Ident(IdentKinded<'a>),
+    PrvRel(PrvRel<'a>),
 }
 
 pub(super) type CtxResult<T> = Result<T, CtxError>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub(super) struct KindCtx {
-    ctx: Vec<Vec<KindingCtxEntry>>,
+pub(super) struct KindCtx<'a> {
+    ctx: Vec<Vec<KindingCtxEntry<'a>>>,
 }
 
-impl KindCtx {
+impl<'a> KindCtx<'a> {
     pub fn new() -> Self {
         KindCtx { ctx: vec![vec![]] }
     }
@@ -515,7 +516,7 @@ impl KindCtx {
         self.ctx.pop();
     }
 
-    pub fn append_idents<I: IntoIterator<Item = IdentKinded>>(&mut self, idents: I) -> &mut Self {
+    pub fn append_idents<I: IntoIterator<Item = IdentKinded<'a>>>(&mut self, idents: I) -> &mut Self {
         let entries = idents.into_iter().map(KindingCtxEntry::Ident);
         for e in entries {
             self.ctx.last_mut().unwrap().push(e);
@@ -523,7 +524,7 @@ impl KindCtx {
         self
     }
 
-    pub fn append_prv_rels<I: IntoIterator<Item = PrvRel> + Clone>(
+    pub fn append_prv_rels<I: IntoIterator<Item = PrvRel<'a>> + Clone>(
         &mut self,
         prv_rels: I,
     ) -> CtxResult<&mut Self> {
@@ -537,7 +538,7 @@ impl KindCtx {
         Ok(self)
     }
 
-    pub fn well_kinded_prv_rels<I: IntoIterator<Item = PrvRel>>(
+    pub fn well_kinded_prv_rels<I: IntoIterator<Item = PrvRel<'a>>>(
         &self,
         prv_rels: I,
     ) -> CtxResult<()> {
@@ -553,7 +554,7 @@ impl KindCtx {
         Ok(())
     }
 
-    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
+    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &'a Ident<'a>> {
         self.ctx.iter().flatten().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
@@ -567,11 +568,11 @@ impl KindCtx {
         })
     }
 
-    pub fn ident_of_kind_exists(&self, ident: &Ident, kind: Kind) -> bool {
+    pub fn ident_of_kind_exists<'a>(&self, ident: &'a Ident<'a>, kind: Kind) -> bool {
         self.get_idents(kind).any(|id| ident == id)
     }
 
-    pub fn outlives(&self, l: &Ident, s: &Ident) -> CtxResult<()> {
+    pub fn outlives<'a>(&self, l: &'a Ident<'a>, s: &'a Ident<'a>) -> CtxResult<()> {
         if self.ctx.iter().flatten().any(|entry| match entry {
             KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
@@ -584,9 +585,9 @@ impl KindCtx {
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum GlobalDecl {
-    FnDecl(Box<str>, Box<FnTy>),
-    StructDecl(Box<StructDecl>),
+pub(super) enum GlobalDecl<'a> {
+    FnDecl(Box<str>, Box<FnTy<'a>>),
+    StructDecl(Box<StructDecl<'a>>),
 }
 
 #[derive(Debug)]
@@ -620,19 +621,19 @@ impl<'src, 'compil> GlobalCtx<'src, 'compil> {
         }
     }
 
-    pub fn has_been_checked(&self, name: &str, nat_args: &[usize]) -> bool {
+    pub fn has_been_checked<'a>(&self, name: &str, nat_args: &[usize]) -> bool {
         self.checked_funs
             .iter()
             .any(|(fun_name, nargs)| fun_name.as_ref() == name && nargs.as_ref() == nat_args)
     }
 
-    pub fn push_fun_checked_under_nats(&mut self, fun_def: Box<FunDef>, nat_vals: Box<[usize]>) {
+    pub fn push_fun_checked_under_nats<'a>(&mut self, fun_def: Box<FunDef>, nat_vals: Box<[usize]>) {
         let fun_name = fun_def.ident.name.clone();
         self.compil_unit.items.push(Item::FunDef(fun_def));
         self.checked_funs.push((fun_name, nat_vals))
     }
 
-    pub fn pop_fun_def(&mut self, name: &str) -> Option<Box<FunDef>> {
+    pub fn pop_fun_def<'a>(&mut self, name: &str) -> Option<Box<FunDef>> {
         let index = self.compil_unit.items.iter().position(|item| {
             if let Item::FunDef(fun_def) = item {
                 fun_def.ident.name.as_ref() == name
@@ -651,7 +652,7 @@ impl<'src, 'compil> GlobalCtx<'src, 'compil> {
         }
     }
 
-    pub fn fn_ty_by_ident(&self, ident: &Ident) -> CtxResult<&FnTy> {
+    pub fn fn_ty_by_ident<'a>(&self, ident: &'a Ident<'a>) -> CtxResult<&'a FnTy<'a>> {
         if let Some(fn_ty) = self.decls.iter().find_map(|decl| match decl {
             GlobalDecl::FnDecl(name, fn_ty) if name == &ident.name => Some(fn_ty),
             GlobalDecl::FnDecl(_, _) | GlobalDecl::StructDecl(_) => None,
