@@ -881,7 +881,7 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, ExecExpr<'a>> {
 mod tests {
     use super::*;
 
-    fn shrd_ref_ty() -> DataTy {
+    fn shrd_ref_ty<'a>() -> DataTy<'a> {
         Dim::X(Box::new(Dim1d(Nat::Lit(32))));
         DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
             Provenance::Value("r".to_string()),
@@ -895,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar() -> UnifyResult<()> {
+    fn scalar<'a>() -> UnifyResult<'a, ()> {
         let mut i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
         let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
         let (subst, _) = constrain(&mut i32, &mut t)?;
@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn shrd_reft() -> UnifyResult<()> {
+    fn shrd_reft<'a>() -> UnifyResult<'a, ()> {
         let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
         let mut shrd_ref = shrd_ref_ty();
         let (subst, _) = constrain(&mut shrd_ref, &mut t)?;
@@ -917,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn shrd_ref_inner_var() -> UnifyResult<()> {
+    fn shrd_ref_inner_var<'a>() -> UnifyResult<'a, ()> {
         let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
             Provenance::Value("r".to_string()),
             Ownership::Shrd,
@@ -934,7 +934,7 @@ mod tests {
     }
 
     #[test]
-    fn prv_val_ident() -> UnifyResult<()> {
+    fn prv_val_ident<'a>() -> UnifyResult<'a, ()> {
         let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
             Provenance::Ident(Ident::new("a")),
             Ownership::Shrd,

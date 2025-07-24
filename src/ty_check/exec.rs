@@ -50,7 +50,10 @@ pub(super) fn ty_check<'a>(
     Ok(())
 }
 
-fn ty_check_exec_to_threads<'a>(d: DimCompo, exec_ty: &ExecTyKind) -> TyResult<ExecTyKind> {
+fn ty_check_exec_to_threads<'a>(
+    d: DimCompo,
+    exec_ty: &'a ExecTyKind<'a>,
+) -> TyResult<'a, ExecTyKind<'a>> {
     if let ExecTyKind::GpuGrid(gdim, bdim) = exec_ty {
         let (rest_gdim, rem_gdim) = remove_dim(gdim, d)?;
         let (rest_bdim, rem_bdim) = remove_dim(bdim, d)?;

@@ -11,13 +11,13 @@ use crate::ty_check::unify;
 use crate::ty_check::unify::ConstrainMap;
 use crate::ty_check::{exec, ExprTyCtx};
 
-pub(super) struct PlExprTyCtx<'gl, 'src, 'ctxt> {
+pub(super) struct PlExprTyCtx<'a, 'gl, 'src, 'ctxt> {
     gl_ctx: &'ctxt GlobalCtx<'gl, 'src>,
     nat_ctx: &'ctxt NatCtx,
-    kind_ctx: &'ctxt KindCtx,
-    ident_exec: Option<&'ctxt IdentExec>,
-    exec: ExecExpr,
-    ty_ctx: &'ctxt TyCtx,
+    kind_ctx: &'ctxt KindCtx<'a>,
+    ident_exec: Option<&'ctxt IdentExec<'a>>,
+    exec: ExecExpr<'a>,
+    ty_ctx: &'ctxt TyCtx<'a>,
     exec_borrow_ctx: &'ctxt AccessCtx,
     own: Ownership,
 }
@@ -391,7 +391,7 @@ fn ty_check_index(
     ctx: &PlExprTyCtx,
     pl_expr: &mut PlaceExpr,
     idx: &mut Nat,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+) -> TyResult<(Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
         dty
