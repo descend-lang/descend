@@ -14,7 +14,7 @@ pub(crate) static WARP_IDENT: &str = "$warp";
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
-pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
+pub fn gen<'a>(comp_unit: &'a desc::CompilUnit<'a>, idx_checks: bool) -> String {
     let mut initial_fns_to_generate = collect_initial_fns_to_generate(comp_unit);
     let mut codegen_ctx = CodegenCtx::new(
         // CpuThread is only a dummy and will be set according to the generated function.
@@ -74,7 +74,9 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     printer::print(&cu_program)
 }
 
-fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::FunDef> {
+fn collect_initial_fns_to_generate<'a>(
+    comp_unit: &'a desc::CompilUnit<'a>,
+) -> Vec<desc::FunDef<'a>> {
     comp_unit
         .items
         .iter()
@@ -142,11 +144,11 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
 //     }
 // }
 
-fn mv_shrd_mem_params_into_decls(
-    mut f: cu::FnDef,
-    unnamed_shrd_mem_decls: &dyn Fn(&[String]) -> cu::Stmt,
+fn mv_shrd_mem_params_into_decls<'a>(
+    mut f: cu::FnDef<'a>,
+    unnamed_shrd_mem_decls: &dyn Fn(&[String]) -> cu::Stmt<'a>,
     num_shared_mem_decls: usize,
-) -> cu::FnDef {
+) -> cu::FnDef<'a> {
     if let cu::Stmt::Block(stmt) = f.body {
         let shrd_mem_params = f
             .fn_sig
@@ -179,16 +181,16 @@ fn collect_fn_decls<'a>(items: &'a [cu::Item<'a>]) -> Vec<cu::Item<'a>> {
 }
 
 struct CodegenCtx<'a> {
-    view_ctx: ViewCtx,
-    inst_fn_ctx: HashMap<String, cu::FnDef>,
-    exec_mapping: ExecMapping,
-    exec: desc::ExecExpr,
-    comp_unit: &'a [desc::Item],
+    view_ctx: ViewCtx<'a>,
+    inst_fn_ctx: HashMap<String, cu::FnDef<'a>>,
+    exec_mapping: ExecMapping<'a>,
+    exec: desc::ExecExpr<'a>,
+    comp_unit: &'a [desc::Item<'a>],
     kernel_infos: Vec<KernelInfo>,
 }
 
 impl<'a> CodegenCtx<'a> {
-    fn new(exec: desc::ExecExpr, comp_unit: &'a [desc::Item]) -> Self {
+    fn new(exec: desc::ExecExpr<'a>, comp_unit: &'a [desc::Item<'a>]) -> Self {
         CodegenCtx {
             view_ctx: ViewCtx::new(),
             inst_fn_ctx: HashMap::new(),
@@ -216,8 +218,8 @@ struct KernelInfo {
     num_shrd_mem_decls: usize,
 }
 
-type ViewCtx = ScopeCtx<desc::PlaceExpr>;
-type ExecMapping = ScopeCtx<desc::ExecExpr>;
+type ViewCtx<'a> = ScopeCtx<desc::PlaceExpr<'a>>;
+type ExecMapping<'a> = ScopeCtx<desc::ExecExpr<'a>>;
 
 #[derive(Default, Clone, Debug)]
 struct ScopeCtx<T: Debug + Clone> {
@@ -269,7 +271,10 @@ impl<T: Debug + Clone> ScopeCtx<T> {
     }
 }
 
-fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef {
+fn gen_fun_def<'a>(
+    gl_fun: &'a desc::FunDef<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::FnDef<'a> {
     let desc::FunDef {
         ident: name,
         generic_params: ty_idents,
@@ -312,7 +317,11 @@ fn gen_fun_def(gl_fun: &desc::FunDef, codegen_ctx: &mut CodegenCtx) -> cu::FnDef
 }
 
 // Generate CUDA code for Descend syntax that allows sequencing.
-fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+fn gen_stmt<'a>(
+    expr: &'a desc::Expr<'a>,
+    return_value: bool,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     use desc::ExprKind::*;
     match &expr.expr {
         Let(pattern, _, e) => {
@@ -498,7 +507,11 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
     }
 }
 
-fn gen_let(pattern: &desc::Pattern, e: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+fn gen_let<'a>(
+    pattern: &'a desc::Pattern<'a>,
+    e: &'a desc::Expr<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     match pattern {
         desc::Pattern::Tuple(tuple_elems) => {
             let tuple_ident = desc::Ident::new(&desc::utils::fresh_name("tuple"));
@@ -550,12 +563,12 @@ fn gen_let(pattern: &desc::Pattern, e: &desc::Expr, codegen_ctx: &mut CodegenCtx
     }
 }
 
-fn gen_decl_init(
-    ident: &desc::Ident,
+fn gen_decl_init<'a>(
+    ident: &'a desc::Ident<'a>,
     mutbl: desc::Mutability,
-    e: &desc::Expr,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Stmt {
+    e: &'a desc::Expr<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     //let gened_ty = gen_ty(&e.ty.as_ref().unwrap().ty, mutbl);
     let (init_expr, cu_ty) = if let desc::ExprKind::Ref(_, _, pl_expr) = &e.expr {
         match &pl_expr.ty.as_ref().unwrap().dty().dty {
@@ -618,12 +631,12 @@ fn gen_decl_init(
     }
 }
 
-fn gen_if_else(
-    cond: cu_ast::Expr,
-    e_tt: &desc::Expr,
-    e_ff: &desc::Expr,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Stmt {
+fn gen_if_else<'a>(
+    cond: cu_ast::Expr<'a>,
+    e_tt: &'a desc::Expr<'a>,
+    e_ff: &'a desc::Expr<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     cu::Stmt::IfElse {
         cond: cond,
         true_body: Box::new(gen_stmt(e_tt, false, codegen_ctx)),
@@ -631,19 +644,23 @@ fn gen_if_else(
     }
 }
 
-fn gen_if(cond: cu_ast::Expr, e_tt: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+fn gen_if<'a>(
+    cond: cu_ast::Expr<'a>,
+    e_tt: &'a desc::Expr<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     cu::Stmt::If {
         cond: cond,
         body: Box::new(gen_stmt(e_tt, false, codegen_ctx)),
     }
 }
 
-fn gen_for_each(
-    ident: &desc::Ident,
-    coll_expr: &desc::Expr,
-    body: &desc::Block,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Stmt {
+fn gen_for_each<'a>(
+    ident: &'a desc::Ident<'a>,
+    coll_expr: &'a desc::Expr<'a>,
+    body: &'a desc::Block<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     todo!();
     let i_name = crate::arena_ast::utils::fresh_name("i__");
     let i_decl = cu::Stmt::VarDecl {
@@ -691,12 +708,12 @@ fn gen_for_each(
     // for_loop
 }
 
-fn gen_for_range(
-    ident: &desc::Ident,
-    range: &desc::Expr,
-    body: &desc::Expr,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Stmt {
+fn gen_for_range<'a>(
+    ident: &'a desc::Ident<'a>,
+    range: &'a desc::Expr<'a>,
+    body: &'a desc::Expr<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     if let desc::ExprKind::Range(l, u) = &range.expr {
         let lower = gen_expr(l, codegen_ctx);
         let upper = gen_expr(u, codegen_ctx);
@@ -733,7 +750,10 @@ fn gen_for_range(
     }
 }
 
-fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+fn gen_app_kernel(
+    app_kernel: &'a desc::AppKernel<'a>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Stmt<'a> {
     let tmp_global_fn_call = gen_global_fn_call(
         &app_kernel.fun_ident,
         &app_kernel.gen_args,
@@ -759,14 +779,16 @@ fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) ->
     }))
 }
 
-fn convert_to_fn_name(f_expr: &cu::Expr) -> String {
+fn convert_to_fn_name<'a>(f_expr: &'a cu::Expr<'a>) -> String {
     match f_expr {
         cu::Expr::Ident(f_name) => f_name.clone(),
         _ => panic!("The expression does not refer to a function by its identifier."),
     }
 }
 
-fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) -> cu::Stmt> {
+fn unnamed_shared_mem_decls<'a>(
+    dtys: Vec<desc::DataTy<'a>>,
+) -> Box<dyn Fn(&[String]) -> cu::Stmt<'a>> {
     // Multiple shared memory arrays and Alignments:
     // Memory accesses require that the address be aligned to a multiple of the access size.
     // The access size of a memory instruction is the total number of bytes accessed in memory.
@@ -841,7 +863,7 @@ fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) ->
     })
 }
 
-fn size_of_dty(dty: &desc::DataTy) -> usize {
+fn size_of_dty<'a>(dty: &'a desc::DataTy<'a>) -> usize {
     match &dty.dty {
         desc::DataTyKind::Scalar(desc::ScalarTy::Bool) => 1,
         desc::DataTyKind::Scalar(desc::ScalarTy::U32)
@@ -855,7 +877,7 @@ fn size_of_dty(dty: &desc::DataTy) -> usize {
     }
 }
 
-fn get_elem_ty_and_amount(dty: &desc::DataTy) -> (desc::Ty, desc::Nat) {
+fn get_elem_ty_and_amount<'a>(dty: &'a desc::DataTy<'a>) -> (desc::Ty<'a>, desc::Nat<'a>) {
     let nat_1 = desc::Nat::Lit(1);
     match &dty.dty {
         desc::DataTyKind::Scalar(desc::ScalarTy::Bool)
@@ -882,7 +904,7 @@ fn get_elem_ty_and_amount(dty: &desc::DataTy) -> (desc::Ty, desc::Nat) {
     }
 }
 
-fn count_bytes(dtys: &[desc::DataTy]) -> desc::Nat {
+fn count_bytes(dtys: &'a [desc::DataTy<'a>]) -> desc::Nat<'a> {
     let mut bytes = desc::Nat::Lit(0);
     for dty in dtys {
         let (elem_ty, amount) = get_elem_ty_and_amount(dty);
@@ -896,7 +918,7 @@ fn count_bytes(dtys: &[desc::DataTy]) -> desc::Nat {
     bytes
 }
 
-fn gen_indep(indep: &desc::Split, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+fn gen_indep<'a>(indep: &'a desc::Split<'a>, codegen_ctx: &'a mut CodegenCtx<'a>) -> cu::Stmt<'a> {
     let outer_exec = codegen_ctx.exec.clone();
     let expanded_outer_exec = expand_exec_expr(codegen_ctx, &outer_exec);
     codegen_ctx.push_scope();
@@ -947,7 +969,7 @@ fn gen_indep(indep: &desc::Split, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     }
 }
 
-fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
+fn gen_sync_stmt<'a>(exec: &'a desc::ExecExpr<'a>) -> cu::Stmt<'a> {
     let sync = cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall::new(
         cu::Expr::Ident("__syncthreads".to_string()),
         vec![],
@@ -972,7 +994,7 @@ fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
     // }
 }
 
-fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
+fn gen_sched(sched: &'a desc::Sched<'a>, codegen_ctx: &'a mut CodegenCtx<'a>) -> cu::Stmt<'a> {
     codegen_ctx.push_scope();
     let expanded_sched_exec_expr = expand_exec_expr(codegen_ctx, sched.sched_exec.as_ref());
     let inner_exec = desc::ExecExpr::new(expanded_sched_exec_expr.exec.clone().forall(sched.dim));
@@ -1055,7 +1077,7 @@ fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
 //     }
 // }
 
-fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
+fn gen_expr<'a>(expr: &'a desc::Expr<'a>, codegen_ctx: &'a mut CodegenCtx<'a>) -> cu::Expr<'a> {
     use desc::ExprKind::*;
     match &expr.expr {
         Hole => cu::Expr::Empty,
@@ -1235,10 +1257,10 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
 }
 
 fn gen_lambda_call(
-    fun: &desc::Expr,
-    args: &[desc::Expr],
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Expr {
+    fun: &'a desc::Expr<'a>,
+    args: &'a [desc::Expr<'a>],
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Expr<'a> {
     unimplemented!(
         "The only case for which this would have to be generated is, when a lambda is called right\
     where it is created. There is no way to bind a lambda with let.\
@@ -1246,12 +1268,12 @@ fn gen_lambda_call(
     )
 }
 
-fn gen_global_fn_call(
-    fun_ident: &desc::Ident,
-    gen_args: &[desc::ArgKinded],
-    args: &[desc::Expr],
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::FnCall {
+fn gen_global_fn_call<'a>(
+    fun_ident: &'a desc::Ident<'a>,
+    gen_args: &'a [desc::ArgKinded<'a>],
+    args: &'a [desc::Expr<'a>],
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::FnCall<'a> {
     // Make sure that we do not accidentally add views conflicting to fun,
     // because during type checking the order is: check fun first then do the arguments.
     codegen_ctx.push_scope();
@@ -1279,7 +1301,10 @@ fn gen_global_fn_call(
 }
 
 // TODO generate different arguments for views or inline
-fn gen_fn_call_args(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> Vec<cu::Expr> {
+fn gen_fn_call_args<'a>(
+    args: &'a [desc::Expr<'a>],
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> Vec<cu::Expr<'a>> {
     args.iter()
         .map(|arg| gen_expr(arg, codegen_ctx))
         //            GenState::Gened(cu_expr) => cu_expr,
@@ -1290,7 +1315,7 @@ fn gen_fn_call_args(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> Vec<cu
 }
 
 // Assumption: view_expr is fully expanded/inlined
-fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
+fn basis_ref<'a>(view_expr: &'a desc::PlaceExpr<'a>) -> desc::PlaceExpr<'a> {
     let mut bref = view_expr.clone();
     let mut current = view_expr.clone();
     while !matches!(&current.pl_expr, desc::PlaceExprKind::Ident(_)) {
@@ -1312,7 +1337,7 @@ fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
     bref
 }
 
-fn view_exprs_in_args(args: &[desc::Expr]) -> Vec<&desc::Expr> {
+fn view_exprs_in_args<'a>(args: &'a [desc::Expr<'a>]) -> Vec<&'a desc::Expr<'a>> {
     let (views, _): (Vec<_>, Vec<_>) = args
         .iter()
         .partition(|a| is_view_dty(a.ty.as_ref().unwrap()));
@@ -1335,7 +1360,7 @@ fn view_exprs_in_args(args: &[desc::Expr]) -> Vec<&desc::Expr> {
 fn separate_view_params_with_args_from_rest<'a>(
     param_decls: &'a [desc::ParamDecl],
     args: &'a [desc::Expr],
-) -> Vec<(&'a desc::ParamDecl, &'a desc::Expr)> {
+) -> Vec<(&'a desc::ParamDecl<'a>, &'a desc::Expr<'a>)> {
     let (view_params_with_args, _): (Vec<_>, Vec<_>) = param_decls
         .iter()
         .zip(args.iter())
@@ -1356,7 +1381,7 @@ fn separate_view_params_with_args_from_rest<'a>(
 //     }
 // }
 
-fn stringify_exec(exec: &desc::ExecExpr) -> String {
+fn stringify_exec<'a>(exec: &'a desc::ExecExpr<'a>) -> String {
     let mut str = String::with_capacity(10);
     for e in &exec.exec.path {
         match e {
@@ -1442,19 +1467,19 @@ fn stringify_exec(exec: &desc::ExecExpr) -> String {
 //     str
 // }
 
-fn create_named_fn_call(
+fn create_named_fn_call<'a>(
     name: String,
-    gen_args: Vec<cu::TemplateArg>,
-    args: Vec<cu::Expr>,
-) -> cu::FnCall {
+    gen_args: Vec<cu::TemplateArg<'a>>,
+    args: Vec<cu::Expr<'a>>,
+) -> cu::FnCall<'a> {
     create_fn_call(cu::Expr::Ident(name), gen_args, args)
 }
 
-fn create_fn_call(
-    fun: cu::Expr,
+fn create_fn_call<'a>(
+    fun: cu::Expr<'a>,
     gen_args: Vec<cu::TemplateArg>,
     params: Vec<cu::Expr>,
-) -> cu::FnCall {
+) -> cu::FnCall<'a> {
     cu::FnCall {
         fun: Box::new(fun),
         template_args: gen_args,
@@ -1462,12 +1487,12 @@ fn create_fn_call(
     }
 }
 
-fn gen_bin_op_expr(
+fn gen_bin_op_expr<'a>(
     op: &desc::BinOp,
-    lhs: &desc::Expr,
-    rhs: &desc::Expr,
+    lhs: &'a desc::Expr<'a>,
+    rhs: &'a desc::Expr<'a>,
     codegen_ctx: &mut CodegenCtx,
-) -> cu::Expr {
+) -> cu::Expr<'a> {
     let op = match op {
         desc::BinOp::Add => cu::BinOp::Add,
         desc::BinOp::Sub => cu::BinOp::Sub,
@@ -1494,7 +1519,7 @@ fn gen_bin_op_expr(
     }
 }
 
-fn extract_fn_ident(ident: &desc::Expr) -> desc::Ident {
+fn extract_fn_ident<'a>(ident: &'a desc::Expr<'a>) -> desc::Ident<'a> {
     if let desc::ExprKind::PlaceExpr(pl_expr) = &ident.expr {
         if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
             ident.clone()
@@ -1506,7 +1531,7 @@ fn extract_fn_ident(ident: &desc::Expr) -> desc::Ident {
     }
 }
 
-fn contains_shape_expr(pl_expr: &desc::PlaceExpr, shape_ctx: &ViewCtx) -> bool {
+fn contains_shape_expr<'a>(pl_expr: &'a desc::PlaceExpr<'a>, shape_ctx: &ViewCtx) -> bool {
     let (_, pl) = pl_expr.to_pl_ctx_and_most_specif_pl();
     shape_ctx.contains_key(&pl.ident.name)
 }
@@ -1530,7 +1555,7 @@ fn contains_shape_expr(pl_expr: &desc::PlaceExpr, shape_ctx: &ViewCtx) -> bool {
 //     )
 // }
 
-fn gen_lit(l: desc::Lit) -> cu::Expr {
+fn gen_lit<'a>(l: desc::Lit) -> cu::Expr<'a> {
     match l {
         desc::Lit::Bool(b) => cu::Expr::Lit(cu::Lit::Bool(b)),
         desc::Lit::I32(i) => cu::Expr::Lit(cu::Lit::I32(i)),
@@ -1543,15 +1568,15 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
     }
 }
 
-enum IdxOrProj {
-    Idx(desc::Nat),
+enum IdxOrProj<'a> {
+    Idx(desc::Nat<'a>),
     Proj(usize),
 }
 
-fn flattened_elem_counts_per_dim(
-    dty: &desc::DataTy,
-    mut elem_counts: Vec<desc::Nat>,
-) -> Vec<desc::Nat> {
+fn flattened_elem_counts_per_dim<'a>(
+    dty: &'a desc::DataTy<'a>,
+    mut elem_counts: Vec<desc::Nat<'a>>,
+) -> Vec<desc::Nat<'a>> {
     match &dty.dty {
         desc::DataTyKind::Array(d, n) | desc::DataTyKind::ArrayShape(d, n) => {
             for elem_count in &mut elem_counts {
@@ -1568,16 +1593,16 @@ fn flattened_elem_counts_per_dim(
     }
 }
 
-fn gen_pl_expr(
-    pl_expr: &desc::PlaceExpr,
-    path: &mut Vec<desc::Nat>,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Expr {
-    fn gen_flat_indexing(
-        expr: cu::Expr,
-        path: &[desc::Nat],
-        operand_dty: &desc::DataTy,
-    ) -> cu::Expr {
+fn gen_pl_expr<'a>(
+    pl_expr: &'a desc::PlaceExpr<'a>,
+    path: &'a mut Vec<desc::Nat<'a>>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Expr<'a> {
+    fn gen_flat_indexing<'a>(
+        expr: cu::Expr<'a>,
+        path: &'a [desc::Nat<'a>],
+        operand_dty: &'a desc::DataTy<'a>,
+    ) -> cu::Expr<'a> {
         let elem_counts = flattened_elem_counts_per_dim(operand_dty, vec![]);
         let mut elem_counts_iter = elem_counts.iter();
         // skip outermost dimension
@@ -1668,7 +1693,10 @@ fn gen_pl_expr(
     }
 }
 
-fn inline_view_expr(pl_expr: &desc::PlaceExpr, codegen_ctx: &CodegenCtx) -> desc::PlaceExpr {
+fn inline_view_expr<'a>(
+    pl_expr: &'a desc::PlaceExpr<'a>,
+    codegen_ctx: &'a CodegenCtx<'a>,
+) -> desc::PlaceExpr<'a> {
     let (_, most_spec_pl) = pl_expr.to_pl_ctx_and_most_specif_pl();
     if codegen_ctx.view_ctx.contains_key(&most_spec_pl.ident.name) {
         insert_into_pl_expr(
@@ -1680,11 +1708,14 @@ fn inline_view_expr(pl_expr: &desc::PlaceExpr, codegen_ctx: &CodegenCtx) -> desc
     }
 }
 
-fn insert_into_pl_expr(mut pl_expr: desc::PlaceExpr, insert: &desc::PlaceExpr) -> desc::PlaceExpr {
+fn insert_into_pl_expr<'a>(
+    mut pl_expr: desc::PlaceExpr<'a>,
+    insert: &'a desc::PlaceExpr<'a>,
+) -> desc::PlaceExpr<'a> {
     struct InsertIntoPlExpr<'a> {
-        insert: &'a desc::PlaceExpr,
+        insert: &'a desc::PlaceExpr<'a>,
     }
-    impl VisitMut for InsertIntoPlExpr<'_> {
+    impl<'a> VisitMut<'a> for InsertIntoPlExpr<'_> {
         fn visit_pl_expr(&mut self, pl_expr: &mut desc::PlaceExpr) {
             match &mut pl_expr.pl_expr {
                 desc::PlaceExprKind::Deref(ple) => {
@@ -1779,7 +1810,10 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<desc::Nat>) -> boo
     true
 }
 
-fn transform_path_with_group(grp_size: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
+fn transform_path_with_group<'a>(
+    grp_size: &'a desc::Nat<'a>,
+    path: &'a mut Vec<desc::Nat<'a>>,
+) -> bool {
     let i = path.pop();
     let j = path.pop();
     match (i, j) {
@@ -1807,7 +1841,7 @@ fn transform_path_with_group(grp_size: &desc::Nat, path: &mut Vec<desc::Nat>) ->
     }
 }
 
-fn transform_path_with_rev(len: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
+fn transform_path_with_rev<'a>(len: &'a desc::Nat<'a>, path: &'a mut Vec<desc::Nat<'a>>) -> bool {
     let i = path.pop();
     match i {
         Some(i) => {
@@ -1826,7 +1860,7 @@ fn transform_path_with_rev(len: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
     }
 }
 
-fn transform_path_with_transpose(path: &mut Vec<desc::Nat>) -> bool {
+fn transform_path_with_transpose<'a>(path: &'a mut Vec<desc::Nat<'a>>) -> bool {
     let i = path.pop();
     let j = path.pop();
     match (i, j) {
@@ -1839,7 +1873,10 @@ fn transform_path_with_transpose(path: &mut Vec<desc::Nat>) -> bool {
     }
 }
 
-fn transform_path_with_join(row_size: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
+fn transform_path_with_join<'a>(
+    row_size: &'a desc::Nat<'a>,
+    path: &'a mut Vec<desc::Nat<'a>>,
+) -> bool {
     let i = path.pop();
     match i {
         Some(idx) => {
@@ -1859,7 +1896,10 @@ fn transform_path_with_join(row_size: &desc::Nat, path: &mut Vec<desc::Nat>) -> 
     }
 }
 
-fn transform_path_with_select_range(lower_bound: &desc::Nat, path: &mut Vec<desc::Nat>) -> bool {
+fn transform_path_with_select_range<'a>(
+    lower_bound: &'a desc::Nat<'a>,
+    path: &'a mut Vec<desc::Nat<'a>>,
+) -> bool {
     let idx = path.pop();
     match idx {
         Some(i) => {
@@ -1875,9 +1915,9 @@ fn transform_path_with_select_range(lower_bound: &desc::Nat, path: &mut Vec<desc
 }
 
 // TODO remove. depricated. superseded by range
-fn transform_path_with_take(
-    split_pos: &desc::Nat,
-    path: &mut Vec<desc::Nat>,
+fn transform_path_with_take<'a>(
+    split_pos: &'a desc::Nat<'a>,
+    path: &'a mut Vec<desc::Nat<'a>>,
     take_side: ty_check::pre_decl::TakeSide,
 ) -> bool {
     let idx = path.pop();
@@ -1900,7 +1940,7 @@ fn transform_path_with_take(
     }
 }
 
-fn transform_path_with_map(f: &desc::View, path: &mut Vec<desc::Nat>) -> bool {
+fn transform_path_with_map<'a>(f: &'a desc::View<'a>, path: &'a mut Vec<desc::Nat<'a>>) -> bool {
     let i = path.pop();
     match i {
         Some(idx) => {
@@ -1912,11 +1952,11 @@ fn transform_path_with_map(f: &desc::View, path: &mut Vec<desc::Nat>) -> bool {
     }
 }
 
-fn gen_indep_branch_cond(
+fn gen_indep_branch_cond<'a>(
     dim_compo: desc::DimCompo,
-    pos: &desc::Nat,
-    exec: &desc::ExecExprKind,
-) -> cu::Expr {
+    pos: &'a desc::Nat<'a>,
+    exec: &'a desc::ExecExprKind<'a>,
+) -> cu::Expr<'a> {
     cu::Expr::BinOp {
         op: cu::BinOp::Lt,
         lhs: Box::new(cu::Expr::Nat(parall_idx(
@@ -1929,7 +1969,7 @@ fn gen_indep_branch_cond(
     }
 }
 
-fn gen_templ_params(ty_idents: &[desc::IdentKinded]) -> Vec<cu::TemplParam> {
+fn gen_templ_params<'a>(ty_idents: &'a [desc::IdentKinded<'a>]) -> Vec<cu::TemplParam<'a>> {
     ty_idents
         .iter()
         .filter_map(|ty_ident| {
@@ -1942,7 +1982,7 @@ fn gen_templ_params(ty_idents: &[desc::IdentKinded]) -> Vec<cu::TemplParam> {
         .collect()
 }
 
-fn gen_templ_param(ty_ident: &desc::IdentKinded) -> cu::TemplParam {
+fn gen_templ_param<'a>(ty_ident: &'a desc::IdentKinded<'a>) -> cu::TemplParam<'a> {
     let name = ty_ident.ident.name.clone();
     match ty_ident.kind {
         desc::Kind::Nat => cu::TemplParam::Value {
@@ -1963,11 +2003,11 @@ fn gen_templ_param(ty_ident: &desc::IdentKinded) -> cu::TemplParam {
     }
 }
 
-fn gen_param_decls(param_decls: &[desc::ParamDecl]) -> Vec<cu::ParamDecl> {
+fn gen_param_decls<'a>(param_decls: &'a [desc::ParamDecl<'a>]) -> Vec<cu::ParamDecl<'a>> {
     param_decls.iter().map(gen_param_decl).collect()
 }
 
-fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
+fn gen_param_decl<'a>(param_decl: &'a desc::ParamDecl<'a>) -> cu::ParamDecl<'a> {
     let desc::ParamDecl {
         ident,
         ty,
@@ -1980,11 +2020,11 @@ fn gen_param_decl(param_decl: &desc::ParamDecl) -> cu::ParamDecl {
     }
 }
 
-fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
+fn gen_args_kinded<'a>(templ_args: &'a [desc::ArgKinded<'a>]) -> Vec<cu::TemplateArg<'a>> {
     templ_args.iter().filter_map(gen_arg_kinded).collect()
 }
 
-fn gen_nat_as_u64(templ_args: &[desc::ArgKinded]) -> cu::Expr {
+fn gen_nat_as_u64<'a>(templ_args: &'a [desc::ArgKinded<'a>]) -> cu::Expr<'a> {
     let generated_arg_expr = gen_arg_kinded(&templ_args[0]);
     if let Some(e) = generated_arg_expr {
         if let cu::TemplateArg::Expr(expr) = e {
@@ -1997,15 +2037,18 @@ fn gen_nat_as_u64(templ_args: &[desc::ArgKinded]) -> cu::Expr {
     }
 }
 
-fn gen_to_atomic_array(args: &Vec<desc::Expr>, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
+fn gen_to_atomic_array<'a>(
+    args: &'a Vec<desc::Expr<'a>>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Expr<'a> {
     gen_fn_call_args(args, codegen_ctx)[0].clone()
 }
 
-fn gen_shfl_up(
-    args: &Vec<desc::Expr>,
-    kinded_args: &Vec<desc::ArgKinded>,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Expr {
+fn gen_shfl_up<'a>(
+    args: &'a Vec<desc::Expr<'a>>,
+    kinded_args: &'a Vec<desc::ArgKinded<'a>>,
+    codegen_ctx: &'a mut CodegenCtx<'a>,
+) -> cu::Expr<'a> {
     cu::Expr::FnCall(create_fn_call(
         cu::Expr::Ident(format!("{}.shfl_up", WARP_IDENT)),
         gen_args_kinded(kinded_args),
@@ -2013,7 +2056,7 @@ fn gen_shfl_up(
     ))
 }
 
-fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
+fn gen_arg_kinded<'a>(templ_arg: &'a desc::ArgKinded<'a>) -> Option<cu::TemplateArg<'a>> {
     match templ_arg {
         desc::ArgKinded::Nat(n) => Some(cu::TemplateArg::Expr(cu::Expr::Nat(n.clone()))),
         desc::ArgKinded::DataTy(dty) => Some(cu::TemplateArg::Ty(gen_ty(
@@ -2030,7 +2073,7 @@ fn gen_arg_kinded(templ_arg: &desc::ArgKinded) -> Option<cu::TemplateArg> {
 // in cu::Ty::Const. However, the formalism uses this, because it shows the generated code
 // as opposed to a Cuda-AST and there, the order of the const is different
 // when it comes to pointers (C things).
-fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
+fn gen_ty<'a>(ty: &'a desc::TyKind<'a>, mutbl: desc::Mutability) -> cu::Ty<'a> {
     use desc::DataTyKind as d;
     use desc::TyKind::*;
 
@@ -2139,7 +2182,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
     }
 }
 
-fn base_dty(dty: &desc::DataTy) -> desc::DataTy {
+fn base_dty<'a>(dty: &desc::DataTy) -> desc::DataTy<'a> {
     if let desc::DataTyKind::Array(elem_dty, _) = &dty.dty {
         base_dty(elem_dty)
     } else {
@@ -2161,7 +2204,10 @@ fn is_dev_fun(exec_ty: &desc::ExecTy) -> bool {
     }
 }
 
-fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &desc::ExecExpr) -> desc::ExecExpr {
+fn expand_exec_expr<'a>(
+    codegen_ctx: &CodegenCtx,
+    exec_expr: &desc::ExecExpr,
+) -> desc::ExecExpr<'a> {
     match &exec_expr.exec.base {
         desc::BaseExec::CpuThread | desc::BaseExec::GpuGrid(_, _) => exec_expr.clone(),
         desc::BaseExec::Ident(ident) => {
@@ -2176,7 +2222,9 @@ fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &desc::ExecExpr) -> des
     }
 }
 
-fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat) {
+fn to_parall_indices<'a>(
+    exec: &'a desc::ExecExpr<'a>,
+) -> (desc::Nat<'a>, desc::Nat<'a>, desc::Nat<'a>) {
     let mut indices = match &exec.exec.base {
         desc::BaseExec::GpuGrid(_, _) => {
             (desc::Nat::GridIdx, desc::Nat::GridIdx, desc::Nat::GridIdx)
@@ -2272,12 +2320,12 @@ fn to_parall_indices(exec: &desc::ExecExpr) -> (desc::Nat, desc::Nat, desc::Nat)
     indices
 }
 
-fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
-    struct ContainedParIdx {
-        par_idx: Option<desc::Nat>,
+fn contained_par_idx<'a>(n: &'a desc::Nat<'a>) -> Option<desc::Nat<'a>> {
+    struct ContainedParIdx<'a> {
+        par_idx: Option<desc::Nat<'a>>,
     }
-    impl Visit for ContainedParIdx {
-        fn visit_nat(&mut self, n: &desc::Nat) {
+    impl<'a> Visit<'a> for ContainedParIdx<'a> {
+        fn visit_nat(&mut self, n: &desc::Nat<'a>) {
             match n {
                 desc::Nat::GridIdx => self.par_idx = Some(n.clone()),
                 desc::Nat::BlockIdx(_) => self.par_idx = Some(n.clone()),
@@ -2292,16 +2340,20 @@ fn contained_par_idx(n: &desc::Nat) -> Option<desc::Nat> {
     contained.par_idx
 }
 
-fn set_distrib_idx(idx: &mut desc::Nat, parall_idx: desc::Nat, shift: &mut desc::Nat) {
+fn set_distrib_idx<'a>(
+    idx: &'a mut desc::Nat<'a>,
+    parall_idx: desc::Nat<'a>,
+    shift: &'a mut desc::Nat<'a>,
+) {
     *idx = shift_idx_by(parall_idx, shift.clone());
     *shift = desc::Nat::Lit(0);
 }
 
-fn shift_idx_by(idx: desc::Nat, shift: desc::Nat) -> desc::Nat {
+fn shift_idx_by<'a>(idx: desc::Nat<'a>, shift: desc::Nat<'a>) -> desc::Nat<'a> {
     desc::Nat::BinOp(desc::BinOpNat::Sub, Box::new(idx), Box::new(shift))
 }
 
-fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr) -> desc::Nat {
+fn parall_idx<'a>(dim: desc::DimCompo, exec: &'a desc::ExecExpr<'a>) -> desc::Nat<'a> {
     match dim {
         desc::DimCompo::X => to_parall_indices(exec).0,
         desc::DimCompo::Y => to_parall_indices(exec).1,
@@ -2309,7 +2361,7 @@ fn parall_idx(dim: desc::DimCompo, exec: &desc::ExecExpr) -> desc::Nat {
     }
 }
 
-fn gen_dim3(dim: &desc::Dim) -> cu::Expr {
+fn gen_dim3<'a>(dim: &'a desc::Dim<'a>) -> cu::Expr<'a> {
     let one = desc::Nat::Lit(1);
     let (nx, ny, nz) = match dim {
         desc::Dim::X(n) => (n.0.clone(), one.clone(), one),
@@ -2328,7 +2380,7 @@ fn gen_dim3(dim: &desc::Dim) -> cu::Expr {
     })
 }
 
-fn is_view_dty(ty: &desc::Ty) -> bool {
+fn is_view_dty<'a>(ty: &'a desc::Ty<'a>) -> bool {
     match &ty.ty {
         desc::TyKind::Data(dty) => match &dty.dty {
             desc::DataTyKind::Ref(reff) => {

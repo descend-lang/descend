@@ -2,26 +2,26 @@ use crate::arena_ast::Nat;
 
 pub(super) enum Item<'a> {
     Include(String),
-    FunDecl(&'a FnSig),
-    FnDef(Box<FnDef>),
+    FunDecl(&'a FnSig<'a>),
+    FnDef(Box<FnDef<'a>>),
     MultiLineComment(String),
 }
 
 #[derive(Clone)]
-pub(super) struct FnSig {
+pub(super) struct FnSig<'a> {
     pub(super) name: String,
-    pub(super) templ_params: Vec<TemplParam>,
-    pub(super) params: Vec<ParamDecl>,
-    pub(super) ret_ty: Ty,
+    pub(super) templ_params: Vec<TemplParam<'a>>,
+    pub(super) params: Vec<ParamDecl<'a>>,
+    pub(super) ret_ty: Ty<'a>,
     pub(super) exec_kind: ExecKind,
 }
 
-impl FnSig {
+impl<'a> FnSig<'a> {
     pub(super) fn new(
         name: String,
-        templ_params: Vec<TemplParam>,
-        params: Vec<ParamDecl>,
-        ret_ty: Ty,
+        templ_params: Vec<TemplParam<'a>>,
+        params: Vec<ParamDecl<'a>>,
+        ret_ty: Ty<'a>,
         exec_kind: ExecKind,
     ) -> Self {
         FnSig {
@@ -42,135 +42,135 @@ pub(super) enum ExecKind {
 }
 
 #[derive(Clone)]
-pub(super) struct FnDef {
-    pub(super) fn_sig: FnSig,
-    pub(super) body: Stmt,
+pub(super) struct FnDef<'a> {
+    pub(super) fn_sig: FnSig<'a>,
+    pub(super) body: Stmt<'a>,
 }
 
-impl FnDef {
-    pub(super) fn new(fn_sig: FnSig, body: Stmt) -> Self {
+impl<'a> FnDef<'a> {
+    pub(super) fn new(fn_sig: FnSig<'a>, body: Stmt<'a>) -> Self {
         FnDef { fn_sig, body }
     }
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ParamDecl {
+pub(super) struct ParamDecl<'a> {
     pub(super) name: String,
-    pub(super) ty: Ty,
+    pub(super) ty: Ty<'a>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum Stmt {
+pub(super) enum Stmt<'a> {
     Skip,
     VarDecl {
         name: String,
-        ty: Ty,
+        ty: Ty<'a>,
         addr_space: Option<GpuAddrSpace>,
-        expr: Option<Expr>,
+        expr: Option<Expr<'a>>,
         is_extern: bool,
     },
-    Block(Box<Stmt>),
-    Seq(Vec<Stmt>),
-    Expr(Expr),
+    Block(Box<Stmt<'a>>),
+    Seq(Vec<Stmt<'a>>),
+    Expr(Expr<'a>),
     If {
-        cond: Expr,
-        body: Box<Stmt>,
+        cond: Expr<'a>,
+        body: Box<Stmt<'a>>,
     },
     IfElse {
-        cond: Expr,
-        true_body: Box<Stmt>,
-        false_body: Box<Stmt>,
+        cond: Expr<'a>,
+        true_body: Box<Stmt<'a>>,
+        false_body: Box<Stmt<'a>>,
     },
     While {
-        cond: Expr,
-        stmt: Box<Stmt>,
+        cond: Expr<'a>,
+        stmt: Box<Stmt<'a>>,
     },
     ForLoop {
-        init: Box<Stmt>,
-        cond: Expr,
-        iter: Expr,
-        stmt: Box<Stmt>,
+        init: Box<Stmt<'a>>,
+        cond: Expr<'a>,
+        iter: Expr<'a>,
+        stmt: Box<Stmt<'a>>,
     },
-    Return(Option<Expr>),
-    ExecKernel(Box<ExecKernel>),
+    Return(Option<Expr<'a>>),
+    ExecKernel(Box<ExecKernel<'a>>),
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ExecKernel {
+pub(super) struct ExecKernel<'a> {
     pub fun_name: String,
-    pub template_args: Vec<TemplateArg>,
-    pub grid_dim: Box<Expr>,
-    pub block_dim: Box<Expr>,
-    pub shared_mem_bytes: Box<Nat>,
-    pub args: Vec<Expr>,
+    pub template_args: Vec<TemplateArg<'a>>,
+    pub grid_dim: Box<Expr<'a>>,
+    pub block_dim: Box<Expr<'a>>,
+    pub shared_mem_bytes: Box<Nat<'a>>,
+    pub args: Vec<Expr<'a>>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum Expr {
+pub(super) enum Expr<'a> {
     Empty,
     Ident(String),
     Lit(Lit),
     Assign {
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
+        lhs: Box<Expr<'a>>,
+        rhs: Box<Expr<'a>>,
     },
     Lambda {
-        captures: Vec<crate::arena_ast::Ident>,
-        params: Vec<ParamDecl>,
-        body: Box<Stmt>,
-        ret_ty: Ty,
+        captures: Vec<crate::arena_ast::Ident<'a>>,
+        params: Vec<ParamDecl<'a>>,
+        body: Box<Stmt<'a>>,
+        ret_ty: Ty<'a>,
         is_dev_fun: bool,
     },
-    FnCall(FnCall),
+    FnCall(FnCall<'a>),
     UnOp {
         op: UnOp,
-        arg: Box<Expr>,
+        arg: Box<Expr<'a>>,
     },
     BinOp {
         op: BinOp,
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
+        lhs: Box<Expr<'a>>,
+        rhs: Box<Expr<'a>>,
     },
     Cast {
-        expr: Box<Expr>,
-        ty: Ty,
+        expr: Box<Expr<'a>>,
+        ty: Ty<'a>,
     },
     ArraySubscript {
-        array: Box<Expr>,
-        index: Nat,
+        array: Box<Expr<'a>>,
+        index: Nat<'a>,
     },
     Proj {
-        tuple: Box<Expr>,
+        tuple: Box<Expr<'a>>,
         n: usize,
     },
     FieldProj {
-        struct_expr: Box<Expr>,
+        struct_expr: Box<Expr<'a>>,
         field_name: String,
     },
     InitializerList {
-        elems: Vec<Expr>,
+        elems: Vec<Expr<'a>>,
     },
     AtomicRef {
-        expr: Box<Expr>,
-        base_ty: Ty,
+        expr: Box<Expr<'a>>,
+        base_ty: Ty<'a>,
     },
-    Ref(Box<Expr>),
-    Deref(Box<Expr>),
-    Tuple(Vec<Expr>),
+    Ref(Box<Expr<'a>>),
+    Deref(Box<Expr<'a>>),
+    Tuple(Vec<Expr<'a>>),
     // The current plan for Nats is to simply print them with C syntax.
     // Instead generate a C/Cuda expression?
-    Nat(Nat),
+    Nat(Nat<'a>),
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct FnCall {
-    pub fun: Box<Expr>,
-    pub template_args: Vec<TemplateArg>,
-    pub args: Vec<Expr>,
+pub(super) struct FnCall<'a> {
+    pub fun: Box<Expr<'a>>,
+    pub template_args: Vec<TemplateArg<'a>>,
+    pub args: Vec<Expr<'a>>,
 }
 
-impl FnCall {
-    pub fn new(fun: Expr, template_args: Vec<TemplateArg>, args: Vec<Expr>) -> Self {
+impl<'a> FnCall<'a> {
+    pub fn new(fun: Expr<'a>, template_args: Vec<TemplateArg<'a>>, args: Vec<Expr<'a>>) -> Self {
         FnCall {
             fun: Box::new(fun),
             template_args,
@@ -218,15 +218,15 @@ pub(super) enum BinOp {
 }
 
 #[derive(Clone)]
-pub(super) enum TemplParam {
-    Value { param_name: String, ty: Ty },
+pub(super) enum TemplParam<'a> {
+    Value { param_name: String, ty: Ty<'a> },
     TyName { name: String },
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum TemplateArg {
-    Expr(Expr),
-    Ty(Ty),
+pub(super) enum TemplateArg<'a> {
+    Expr(Expr<'a>),
+    Ty(Ty<'a>),
 }
 
 #[derive(Clone, Debug)]
@@ -237,21 +237,21 @@ pub(super) enum GpuAddrSpace {
 }
 
 #[derive(Clone, Debug)]
-pub(super) enum Ty {
+pub(super) enum Ty<'a> {
     Scalar(ScalarTy),
-    Tuple(Vec<Ty>),
-    Array(Box<Ty>, Nat),
-    CArray(Box<Ty>, Option<Nat>),
-    Buffer(Box<Ty>, BufferKind),
+    Tuple(Vec<Ty<'a>>),
+    Array(Box<Ty<'a>>, Nat<'a>),
+    CArray(Box<Ty<'a>>, Option<Nat<'a>>),
+    Buffer(Box<Ty<'a>>, BufferKind),
     // for now assume every pointer to be __restrict__ qualified
     // http://www.open-std.org/JTC1/SC22/WG14/www/docs/n1256.pdf#page=122&zoom=auto,-205,535
-    Ptr(Box<Ty>),
+    Ptr(Box<Ty<'a>>),
     // The pointer itself is mutable, but the underlying data is not.
-    PtrConst(Box<Ty>),
+    PtrConst(Box<Ty<'a>>),
     // const in a parameter declaration changes the parameter type in a definition but not
     // "necessarily" the function signature ... https://abseil.io/tips/109
     // Top-level const
-    Const(Box<Ty>),
+    Const(Box<Ty<'a>>),
     // Template parameter identifer
     Ident(String),
 }
