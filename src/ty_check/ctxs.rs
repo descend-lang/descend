@@ -408,26 +408,26 @@ impl<'a> TyCtx<'a> {
     }
 }
 
-pub(super) struct AccessCtx {
-    ctx: HashSet<Loan>,
+pub(super) struct AccessCtx<'a> {
+    ctx: HashSet<Loan<'a>>,
 }
 
-impl AccessCtx {
+impl<'a> AccessCtx<'a> {
     pub fn new() -> Self {
         AccessCtx {
             ctx: HashSet::new(),
         }
     }
 
-    pub fn insert(&mut self, loans: HashSet<Loan>) {
+    pub fn insert(&mut self, loans: HashSet<Loan<'a>>) {
         self.ctx.extend(loans.into_iter())
     }
 
-    pub fn hash_set(&self) -> &HashSet<Loan> {
+    pub fn hash_set(&self) -> &HashSet<Loan<'a>> {
         &self.ctx
     }
 
-    pub fn clear_sync_for(&mut self, ty_ctx: &TyCtx, exec: &ExecExpr) {
+    pub fn clear_sync_for(&mut self, ty_ctx: &'a TyCtx<'a>, exec: &'a ExecExpr<'a>) {
         self.ctx = self
             .ctx
             .iter()
@@ -440,7 +440,7 @@ impl AccessCtx {
             .collect();
     }
 
-    pub fn garbage_collect(&mut self, ty_ctx: &TyCtx) {
+    pub fn garbage_collect(&mut self, ty_ctx: &'a TyCtx<'a>) {
         // TODO make more efficient
         //  drain is unstable for HashSet, use Vec anyway?
         let mut cleaned_up_set = HashSet::new();
@@ -454,7 +454,7 @@ impl AccessCtx {
     }
 }
 
-fn trim_after_select_of(ty_ctx: &TyCtx, exec: &ExecExpr, pl_expr: PlaceExpr) -> Option<PlaceExpr> {
+fn trim_after_select_of<'a>(ty_ctx: &'a TyCtx<'a>, exec: &'a ExecExpr<'a>, pl_expr: PlaceExpr<'a>) -> Option<PlaceExpr<'a>> {
     match pl_expr.pl_expr {
         PlaceExprKind::Select(p, sel_exec) if sel_exec.as_ref() == exec => {
             Some(PlaceExpr::new(PlaceExprKind::Select(p, sel_exec)))
@@ -488,7 +488,7 @@ enum KindingCtxEntry<'a> {
     PrvRel(PrvRel<'a>),
 }
 
-pub(super) type CtxResult<T> = Result<T, CtxError>;
+pub(super) type CtxResult<'a, T> = Result<T, CtxError<'a>>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct KindCtx<'a> {
@@ -500,7 +500,7 @@ impl<'a> KindCtx<'a> {
         KindCtx { ctx: vec![vec![]] }
     }
 
-    pub fn gl_fun_kind_ctx(idents: Vec<IdentKinded>, prv_rels: Vec<PrvRel>) -> CtxResult<Self> {
+    pub fn gl_fun_kind_ctx(idents: Vec<IdentKinded<'a>>, prv_rels: Vec<PrvRel<'a>>) -> CtxResult<'a, Self> {
         let mut kind_ctx: Self = KindCtx::new();
         kind_ctx.append_idents(idents);
         kind_ctx.append_prv_rels(prv_rels)?;
@@ -554,7 +554,7 @@ impl<'a> KindCtx<'a> {
         Ok(())
     }
 
-    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &'a Ident<'a>> {
+    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
         self.ctx.iter().flatten().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
@@ -568,11 +568,11 @@ impl<'a> KindCtx<'a> {
         })
     }
 
-    pub fn ident_of_kind_exists<'a>(&self, ident: &'a Ident<'a>, kind: Kind) -> bool {
+    pub fn ident_of_kind_exists(&self, ident: &'a Ident<'a>, kind: Kind) -> bool {
         self.get_idents(kind).any(|id| ident == id)
     }
 
-    pub fn outlives<'a>(&self, l: &'a Ident<'a>, s: &'a Ident<'a>) -> CtxResult<()> {
+    pub fn outlives(&self, l: &'a Ident<'a>, s: &'a Ident<'a>) -> CtxResult<'a, ()> {
         if self.ctx.iter().flatten().any(|entry| match entry {
             KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
@@ -594,7 +594,7 @@ pub(super) enum GlobalDecl<'a> {
 pub(super) struct GlobalCtx<'src, 'compil> {
     compil_unit: &'compil mut CompilUnit<'src>,
     checked_funs: Vec<(Box<str>, Box<[usize]>)>,
-    decls: Vec<GlobalDecl>,
+    decls: Vec<GlobalDecl<'a>>,
     //items: HashMap<Box<str>, GlobalItem>,
 }
 

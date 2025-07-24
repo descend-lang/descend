@@ -23,7 +23,7 @@ type TyResult<'a, T> = Result<T, TyError<'a>>;
 macro_rules! matches_dty {
     ($ty: expr, $dty_pat: pat_param) => {
         if let crate::arena_ast::TyKind::Data(d) = &$ty.ty {
-            matches!(d.as_ref(), $dty_pat)
+            matches!(d, $dty_pat)
         } else {
             false
         }

@@ -133,8 +133,8 @@ pub(super) trait Constrainable<'a>: Visitable<'a> + Substitutable<'a> {
     fn constrain(
         &mut self,
         other: &mut Self,
-        constr_map: &mut ConstrainMap,
-        prv_rels: &mut Vec<PrvConstr<'a>>,
+        constr_map: &'a mut ConstrainMap<'a>,
+        prv_rels: &'a mut Vec<PrvConstr<'a>>,
     ) -> UnifyResult<()>;
     fn occurs_check<S: Constrainable<'a>>(ident_kinded: &'a IdentKinded<'a>, s: &S) -> bool {
         utils::free_kinded_idents(s).contains(ident_kinded)
@@ -589,7 +589,7 @@ impl<'a> Nat<'a> {
         Ok(())
     }
 
-    fn unify(n1: &Nat, n2: &Nat, _constr_map: &mut ConstrainMap) -> UnifyResult<()> {
+    fn unify<'a>(n1: &'a Nat<'a>, n2: &'a Nat<'a>, _constr_map: &'a mut ConstrainMap<'a>) -> UnifyResult<'a, ()> {
         if n1 == n2 {
             Ok(())
         } else {
@@ -599,12 +599,12 @@ impl<'a> Nat<'a> {
 }
 
 impl<'a> Constrainable<'a> for Nat<'a> {
-    fn constrain<'a>(
+    fn constrain(
         &mut self,
         other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+        constr_map: &mut ConstrainMap<'a>,
+        prv_rels: &mut Vec<PrvConstr<'a>>,
+    ) -> UnifyResult<'a, ()> {
         match (&mut *self, &mut *other) {
             (Nat::Ident(n1i), Nat::Ident(n2i)) if n1i.is_implicit || n2i.is_implicit => {
                 match (n1i.is_implicit, n2i.is_implicit) {
@@ -630,14 +630,14 @@ impl<'a> Constrainable<'a> for Nat<'a> {
 }
 
 impl<'a> Substitutable<'a> for Nat<'a> {
-    fn substitute<'a>(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_nat(self);
     }
 }
 
 impl<'a> Memory<'a> {
-    fn bind_to<'a>(&self, ident: &'a Ident<'a>, constr_map: &'a mut ConstrainMap<'a>) -> UnifyResult<'a, ()> {
+    fn bind_to(&self, ident: &'a Ident<'a>, constr_map: &'a mut ConstrainMap<'a>) -> UnifyResult<'a, ()> {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::Memory), self) {
             return Err(UnifyError::InfiniteType);
         }
@@ -668,7 +668,7 @@ impl<'a> Memory<'a> {
 }
 
 impl<'a> Constrainable<'a> for Memory<'a> {
-    fn constrain<'a>(
+    fn constrain(
         &mut self,
         other: &mut Self,
         constr_map: &'a mut ConstrainMap<'a>,
@@ -781,7 +781,7 @@ impl<'a> ApplySubst<'a> {
 }
 
 impl<'a> VisitMut<'a> for ApplySubst<'a> {
-    fn visit_nat(&mut self, nat: &'a mut Nat<'a>) {
+    fn visit_nat(&mut self, nat: &mut Nat<'a>) {
         match nat {
             Nat::Ident(ident) if self.subst.nat_unifier.contains_key(&ident.name) => {
                 *nat = self.subst.nat_unifier.get(&ident.name).unwrap().clone();
@@ -790,7 +790,7 @@ impl<'a> VisitMut<'a> for ApplySubst<'a> {
         }
     }
 
-    fn visit_mem(&mut self, mem: &'a mut Memory<'a>) {
+    fn visit_mem(&mut self, mem: & mut Memory<'a>) {
         match mem {
             Memory::Ident(ident) if self.subst.mem_unifier.contains_key(&ident.name) => {
                 *mem = self.subst.mem_unifier.get(&ident.name).unwrap().clone();
@@ -799,7 +799,7 @@ impl<'a> VisitMut<'a> for ApplySubst<'a> {
         }
     }
 
-    fn visit_prv(&mut self, prv: &'a mut Provenance<'a>) {
+    fn visit_prv(&mut self, prv: &mut Provenance<'a>) {
         match prv {
             Provenance::Ident(ident) if self.subst.prv_unifier.contains_key(&ident.name) => {
                 *prv = self.subst.prv_unifier.get(&ident.name).unwrap().clone()
@@ -808,7 +808,7 @@ impl<'a> VisitMut<'a> for ApplySubst<'a> {
         }
     }
 
-    fn visit_dty(&mut self, dty: &'a mut DataTy<'a>) {
+    fn visit_dty(&mut self, dty: &mut DataTy<'a>) {
         match &mut dty.dty {
             DataTyKind::Ident(ident) if self.subst.dty_unifier.contains_key(&ident.name) => {
                 *dty = self.subst.dty_unifier.get(&ident.name).unwrap().clone()
@@ -830,7 +830,7 @@ impl<'a, S: Constrainable<'a>> SubstIdent<'a, S> {
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, Nat<'a>> {
-    fn visit_nat(&mut self, nat: &'a mut Nat<'a>) {
+    fn visit_nat(&mut self, nat: &mut Nat<'a>) {
         match nat {
             Nat::Ident(ident) if ident.name == self.ident.name => *nat = self.term.clone(),
             _ => visit_mut::walk_nat(self, nat),
@@ -839,7 +839,7 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, Nat<'a>> {
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, Memory<'a>> {
-    fn visit_mem(&mut self, mem: &'a mut Memory<'a>) {
+    fn visit_mem(&mut self, mem: &mut Memory<'a>) {
         match mem {
             Memory::Ident(ident) if ident.name == self.ident.name => *mem = self.term.clone(),
             _ => visit_mut::walk_mem(self, mem),
@@ -848,7 +848,7 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, Memory<'a>> {
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, Provenance<'a>> {
-    fn visit_prv(&mut self, prv: &'a mut Provenance) {
+    fn visit_prv(&mut self, prv: &mut Provenance<'a>) {
         match prv {
             Provenance::Ident(ident) if ident.name == self.ident.name => *prv = self.term.clone(),
             _ => visit_mut::walk_prv(self, prv),
@@ -857,7 +857,7 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, Provenance<'a>> {
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, DataTy<'a>> {
-    fn visit_dty(&mut self, dty: &'a mut DataTy<'a>) {
+    fn visit_dty(&mut self, dty: &mut DataTy<'a>) {
         match &mut dty.dty {
             DataTyKind::Ident(ident) if ident.name == self.ident.name => *dty = self.term.clone(),
             _ => visit_mut::walk_dty(self, dty),
@@ -866,7 +866,7 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, DataTy<'a>> {
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, ExecExpr<'a>> {
-    fn visit_exec_expr(&mut self, exec: &'a mut ExecExpr<'a>) {
+    fn visit_exec_expr(&mut self, exec: &mut ExecExpr<'a>) {
         if let BaseExec::Ident(i) = &exec.exec.base {
             if i.name == self.ident.name {
                 let mut subst_exec = self.term.clone();

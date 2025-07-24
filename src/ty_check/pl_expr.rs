@@ -56,25 +56,25 @@ impl<'gl, 'src, 'ctxt> From<&'ctxt BorrowCheckCtx<'gl, 'src, 'ctxt>>
 
 // Δ; Γ ⊢ω p:τ
 // p in an ω context has type τ under Δ and Γ
-pub(super) fn ty_check(ctx: &PlExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<()> {
+pub(super) fn ty_check<'a>(ctx: &PlExprTyCtx, pl_expr: &'a mut PlaceExpr<'a>) -> TyResult<'a, ()> {
     let _mem = ty_check_and_passed_mems(ctx, pl_expr)?;
     Ok(())
 }
 
-pub(super) fn ty_check_and_passed_mems(
+pub(super) fn ty_check_and_passed_mems<'a>(
     ctx: &PlExprTyCtx,
-    pl_expr: &mut PlaceExpr,
-) -> TyResult<Vec<Memory>> {
+    pl_expr: &'a mut PlaceExpr<'a>,
+) -> TyResult<'a, Vec<Memory<'a>>> {
     let (mem, _) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
     Ok(mem)
 }
 
 // Δ; Γ ⊢ω p:τ,{ρ}
 // p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
-fn ty_check_and_passed_mems_prvs(
+fn ty_check_and_passed_mems_prvs<'a>(
     ctx: &PlExprTyCtx,
-    pl_expr: &mut PlaceExpr,
-) -> TyResult<(Vec<Memory>, Vec<Provenance>)> {
+    pl_expr: &'a mut PlaceExpr<'a>,
+) -> TyResult<'a, (Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (ty, mem, prvs) = match &mut pl_expr.pl_expr {
         // TC-Var
         PlaceExprKind::Ident(ident) => ty_check_ident(ctx, ident)?,
@@ -95,11 +95,11 @@ fn ty_check_and_passed_mems_prvs(
     Ok((mem, prvs))
 }
 
-fn ty_check_view_pl_expr(
+fn ty_check_view_pl_expr<'a>(
     ctx: &PlExprTyCtx,
-    pl_expr: &mut PlaceExpr,
-    view: &mut View,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    pl_expr: &'a mut PlaceExpr<'a>,
+    view: &'a mut View<'a>,
+) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
     let view_fn_ty = ty_check_view(ctx, view)?;
     let in_dty = pl_expr.ty.as_ref().unwrap().dty().clone();
@@ -109,11 +109,11 @@ fn ty_check_view_pl_expr(
     Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
 }
 
-fn ty_check_app_view_fn_ty(
+fn ty_check_app_view_fn_ty<'a>(
     ctx: &PlExprTyCtx,
-    in_dty: &DataTy,
-    mut view_fn_ty: FnTy,
-) -> TyResult<(DataTy, ConstrainMap)> {
+    in_dty: &'a DataTy<'a>,
+    mut view_fn_ty: FnTy<'a>,
+) -> TyResult<'a, (DataTy<'a>, ConstrainMap<'a>)> {
     let mut arg_dty_fn_ty = FnTy::new(
         vec![],
         None,
@@ -132,7 +132,7 @@ fn ty_check_app_view_fn_ty(
     Ok((res_dty, constr_map))
 }
 
-fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
+fn ty_check_view<'a>(ctx: &PlExprTyCtx, view: &'a mut View<'a>) -> TyResult<'a, FnTy<'a>> {
     let arg_tys = view
         .args
         .iter_mut()
@@ -164,7 +164,10 @@ fn ty_check_view(ctx: &PlExprTyCtx, view: &mut View) -> TyResult<FnTy> {
     Ok(res_view_ty)
 }
 
-fn create_view_ty_with_input_view_and_free_ret(exec: &ExecExpr, mut arg_tys: Vec<Ty>) -> FnTy {
+fn create_view_ty_with_input_view_and_free_ret<'a>(
+    exec: &ExecExpr,
+    mut arg_tys: Vec<Ty<'a>>,
+) -> FnTy<'a> {
     arg_tys.push(Ty::new(TyKind::Data(Box::new(DataTy::new(
         utils::fresh_ident("in_view_dty", DataTyKind::Ident),
     )))));
@@ -184,10 +187,10 @@ fn create_view_ty_with_input_view_and_free_ret(exec: &ExecExpr, mut arg_tys: Vec
     )
 }
 
-fn ty_check_ident(
+fn ty_check_ident<'a>(
     ctx: &PlExprTyCtx,
-    ident: &Ident,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    ident: &'a Ident<'a>,
+) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     // if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
     let tty = ctx.ty_ctx.ty_of_ident(ident)?;
     if !&tty.is_fully_alive() {
@@ -214,7 +217,7 @@ fn ty_check_ident(
     // }
 }
 
-fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
+fn default_mem_by_exec<'a>(exec_ty: &'a ExecTyKind<'a>) -> Option<Memory<'a>> {
     match exec_ty {
         ExecTyKind::CpuThread => Some(Memory::CpuMem),
         ExecTyKind::GpuThread => Some(Memory::GpuLocal),
@@ -230,11 +233,11 @@ fn default_mem_by_exec(exec_ty: &ExecTyKind) -> Option<Memory> {
 }
 
 // TODO refactor by fusing with ty_check_field_proj
-fn ty_check_proj(
+fn ty_check_proj<'a>(
     ctx: &PlExprTyCtx,
-    tuple_expr: &mut PlaceExpr,
+    tuple_expr: &'a mut PlaceExpr<'a>,
     n: usize,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, tuple_expr)?;
     let tuple_dty = match &tuple_expr.ty.as_ref().unwrap().ty {
         TyKind::Data(dty) => dty,
@@ -266,11 +269,11 @@ fn ty_check_proj(
     }
 }
 
-fn ty_check_field_proj(
+fn ty_check_field_proj<'a>(
     ctx: &PlExprTyCtx,
-    struct_expr: &mut PlaceExpr,
-    ident: &Ident,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    struct_expr: &'a mut PlaceExpr<'a>,
+    ident: &'a Ident<'a>,
+) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, struct_expr)?;
     let struct_dty = match &struct_expr.ty.as_ref().unwrap().ty {
         TyKind::Data(dty) => dty,
@@ -303,10 +306,10 @@ fn ty_check_field_proj(
     }
 }
 
-fn ty_check_deref(
+fn ty_check_deref<'a>(
     ctx: &PlExprTyCtx,
-    borr_expr: &mut PlaceExpr,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    borr_expr: &'a mut PlaceExpr<'a>,
+) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mut inner_mem, mut passed_prvs) = ty_check_and_passed_mems_prvs(ctx, borr_expr)?;
     let borr_dty = if let TyKind::Data(dty) = &borr_expr.ty.as_ref().unwrap().ty {
         dty
@@ -344,11 +347,11 @@ fn ty_check_deref(
     }
 }
 
-fn ty_check_select(
+fn ty_check_select<'a>(
     ctx: &PlExprTyCtx,
-    p: &mut PlaceExpr,
-    select_exec: &mut ExecExpr,
-) -> TyResult<(Ty, Vec<Memory>, Vec<Provenance>)> {
+    p: &'a mut PlaceExpr<'a>,
+    select_exec: &'a mut ExecExpr<'a>,
+) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, select_exec)?;
     // FIXME this check is required for uniq accesses, but not for shared accesses because there
     //  the duplication of accesses is fine. Move this check into ownership/borrow checking?
@@ -387,11 +390,11 @@ fn ty_check_select(
     Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
 }
 
-fn ty_check_index(
+fn ty_check_index<'a>(
     ctx: &PlExprTyCtx,
-    pl_expr: &mut PlaceExpr,
-    idx: &mut Nat,
-) -> TyResult<(Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
+    pl_expr: &'a mut PlaceExpr<'a>,
+    idx: &'a mut Nat<'a>,
+) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
         dty
