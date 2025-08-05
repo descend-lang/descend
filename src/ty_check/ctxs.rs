@@ -3,8 +3,9 @@ use crate::arena_ast::internal::{
 };
 use crate::arena_ast::*;
 use crate::ty_check::error::CtxError;
-use std::collections::HashSet;
+use bumpalo::collections::CollectIn;
 use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
+use std::collections::HashSet;
 
 // TODO introduce proper struct
 pub(super) type TypedPlace<'a> = (internal::Place<'a>, DataTy<'a>);
@@ -16,12 +17,12 @@ pub(super) struct TyCtx<'a> {
 
 impl<'a> TyCtx<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-            let mut frames = BumpVec::new_in(arena);
-            frames.push(Frame::new_in(arena));
-            TyCtx { frames }
-        }
-    
-    pub fn get_exec_expr_for_exec_ident(&self, ident: &Ident) -> CtxResult<&ExecExpr> {
+        let mut frames = BumpVec::new_in(arena);
+        frames.push(Frame::new_in(arena));
+        TyCtx { frames }
+    }
+
+    pub fn get_exec_expr_for_exec_ident(&self, ident: &Ident<'a>) -> CtxResult<'a, &ExecExpr<'a>> {
         let exec_expr = self.flat_bindings().rev().find_map(|entry| match entry {
             FrameEntry::ExecMapping(em) if &em.ident == ident => Some(&em.exec_expr),
             _ => None,
@@ -31,59 +32,55 @@ impl<'a> TyCtx<'a> {
             None => Err(CtxError::IdentNotFound(ident.clone())),
         }
     }
-    //
-    // pub fn last_frame(&self) -> &Frame {
-    //     self.frames.last().unwrap()
-    // }
 
-    pub fn last_frame_mut(&mut self) -> &mut Frame {
+    pub fn last_frame_mut(&mut self) -> &mut Frame<'a> {
         self.frames.last_mut().unwrap()
     }
 
-    pub fn flat_bindings_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut FrameEntry> {
-        self.frames.iter_mut().flat_map(|frm| &mut frm.bindings)
+    fn flat_bindings(&self) -> impl DoubleEndedIterator<Item = &FrameEntry<'a>> {
+        self.frames.iter().flat_map(|f| &f.bindings)
+    }
+    fn flat_bindings_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut FrameEntry<'a>> {
+        self.frames.iter_mut().flat_map(|f| &mut f.bindings)
     }
 
-    pub fn flat_bindings(&self) -> impl DoubleEndedIterator<Item = &'_ FrameEntry> {
-        self.frames.iter().flat_map(|frm| &frm.bindings)
-    }
-
-    pub fn push_empty_frame(&mut self) -> &mut Self {
-        self.frames.push(Frame<'a>::new());
+    pub fn push_empty_frame(&mut self, arena: &'a Bump) -> &mut Self {
+        self.frames.push(Frame::new_in(arena));
         self
     }
 
-    pub fn push_frame(&mut self, frame: Frame) -> &mut Self {
+    pub fn push_frame(&mut self, frame: Frame<'a>) -> &mut Self {
         self.frames.push(frame);
         self
     }
 
-    pub fn pop_frame(&mut self) -> Frame {
-        self.frames.pop().expect("There must always be a scope.")
+    pub fn pop_frame(&mut self) -> Frame<'a> {
+        assert!(self.frames.len() > 1, "Cannot pop the last frame");
+        self.frames.pop().unwrap()
     }
 
-    pub fn append_ident_typed(&mut self, id_typed: IdentTyped) -> &mut Self {
+    pub fn append_ident_typed(&mut self, id_typed: IdentTyped<'a>) -> &mut Self {
         self.last_frame_mut()
             .bindings
             .push(FrameEntry::Var(id_typed));
         self
     }
 
-    pub fn append_exec_mapping(&mut self, ident: Ident, exec: ExecExpr) -> &mut Self {
+    pub fn append_exec_mapping(&mut self, ident: Ident<'a>, exec: ExecExpr<'a>) -> &mut Self {
         self.last_frame_mut()
             .bindings
             .push(FrameEntry::ExecMapping(ExecMapping::new(ident, exec)));
         self
     }
 
-    pub fn append_prv_mapping(&mut self, prv_mapping: PrvMapping) -> &mut Self {
+    pub fn append_prv_mapping(&mut self, prv_mapping: PrvMapping<'a>) -> &mut Self {
         self.last_frame_mut()
             .bindings
             .push(FrameEntry::PrvMapping(prv_mapping));
         self
     }
 
-    fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped> {
+    fn idents_typed(&self) -> impl DoubleEndedIterator<Item = &'_ IdentTyped<'a>> {
         self.flat_bindings().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
@@ -93,7 +90,7 @@ impl<'a> TyCtx<'a> {
         })
     }
 
-    fn idents_typed_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut IdentTyped> {
+    fn idents_typed_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut IdentTyped<'a>> {
         self.flat_bindings_mut().filter_map(|fe| {
             if let FrameEntry::Var(ident_typed) = fe {
                 Some(ident_typed)
@@ -103,7 +100,7 @@ impl<'a> TyCtx<'a> {
         })
     }
 
-    pub(crate) fn prv_mappings(&self) -> impl DoubleEndedIterator<Item = &'_ PrvMapping> {
+    pub(crate) fn prv_mappings(&self) -> impl DoubleEndedIterator<Item = &'_ PrvMapping<'a>> {
         self.flat_bindings().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
@@ -113,7 +110,7 @@ impl<'a> TyCtx<'a> {
         })
     }
 
-    fn prv_mappings_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut PrvMapping> {
+    fn prv_mappings_mut(&mut self) -> impl DoubleEndedIterator<Item = &'_ mut PrvMapping<'a>> {
         self.flat_bindings_mut().filter_map(|fe| {
             if let FrameEntry::PrvMapping(prv_mapping) = fe {
                 Some(prv_mapping)
@@ -126,7 +123,7 @@ impl<'a> TyCtx<'a> {
     pub fn update_loan_set(
         &mut self,
         prv_val_name: &str,
-        loan_set: HashSet<Loan>,
+        loan_set: HashSet<Loan<'a>>,
     ) -> CtxResult<&mut Self> {
         let mut found = false;
         for prv_mapping in self.prv_mappings_mut().rev() {
@@ -143,7 +140,11 @@ impl<'a> TyCtx<'a> {
         }
     }
 
-    pub fn extend_loans_for_prv<I>(&mut self, base: &str, extension: I) -> CtxResult<&mut TyCtx>
+    pub fn extend_loans_for_prv<I>(
+        &mut self,
+        base: &str,
+        extension: I,
+    ) -> CtxResult<'a, &mut TyCtx<'a>>
     where
         I: IntoIterator<Item = Loan<'a>>,
     {
@@ -152,7 +153,7 @@ impl<'a> TyCtx<'a> {
         Ok(self)
     }
 
-    pub fn loans_in_prv(&self, prv_val_name: &str) -> CtxResult<&HashSet<Loan>> {
+    pub fn loans_in_prv(&self, prv_val_name: &str) -> CtxResult<'a, &HashSet<Loan<'a>>> {
         match self
             .prv_mappings()
             .rev()
@@ -163,7 +164,10 @@ impl<'a> TyCtx<'a> {
         }
     }
 
-    pub fn loans_for_prv_mut(&mut self, prv_val_name: &str) -> CtxResult<&mut HashSet<Loan>> {
+    pub fn loans_for_prv_mut(
+        &mut self,
+        prv_val_name: &str,
+    ) -> CtxResult<'a, &mut HashSet<Loan<'a>>> {
         match self
             .prv_mappings_mut()
             .rev()
@@ -188,26 +192,34 @@ impl<'a> TyCtx<'a> {
     }
 
     // ∀π:τ ∈ Γ
-    pub fn all_places(&self) -> Vec<TypedPlace> {
+    pub fn all_places(&self, arena: &'a Bump) -> BumpVec<'a, TypedPlace<'a>> {
         self.idents_typed()
             .filter_map(|IdentTyped { ident, ty, .. }| {
                 if let TyKind::Data(dty) = &ty.ty {
-                    Some(TyCtx::explode_places(ident, dty))
+                    Some(TyCtx::explode_places(ident, dty, arena))
                 } else {
                     None
                 }
             })
             .flatten()
-            .collect()
+            .collect_in(arena)
     }
 
-    fn explode_places(ident: &Ident, dty: &DataTy) -> Vec<TypedPlace<'a>> {
-        fn proj(mut pl: internal::Place, idx: PathElem) -> internal::Place<'a> {
+    fn explode_places(
+        ident: &Ident<'a>,
+        dty: &DataTy<'a>,
+        arena: &'a Bump,
+    ) -> BumpVec<'a, TypedPlace<'a>> {
+        fn proj<'a>(mut pl: internal::Place<'a>, idx: PathElem<'a>) -> internal::Place<'a> {
             pl.path.push(idx);
             pl
         }
 
-        fn explode(pl: internal::Place, dty: DataTy) -> Vec<TypedPlace<'a>> {
+        fn explode<'a>(
+            pl: internal::Place<'a>,
+            dty: DataTy<'a>,
+            arena: &'a Bump,
+        ) -> BumpVec<'a, TypedPlace<'a>> {
             use DataTyKind as d;
 
             match &dty.dty {
@@ -219,22 +231,29 @@ impl<'a> TyCtx<'a> {
                 | d::Ref(_)
                 | d::RawPtr(_)
                 | d::Ident(_)
-                | d::Dead(_) => vec![(pl, dty.clone())],
+                | d::Dead(_) => BumpVec::from_iter_in([(pl.clone(), dty.clone())], arena), //vec![(pl, dty.clone())],
                 d::Tuple(tys) => {
-                    let mut place_frame = vec![(pl.clone(), dty.clone())];
+                    let mut place_frame = BumpVec::from_iter_in([(pl.clone(), dty.clone())], arena);
                     for (index, proj_ty) in tys.iter().enumerate() {
-                        let mut exploded_index =
-                            explode(proj(pl.clone(), PathElem::Proj(index)), proj_ty.clone());
+                        let mut exploded_index = explode(
+                            proj(pl.clone(), PathElem::Proj(index)),
+                            proj_ty.clone(),
+                            arena,
+                        );
                         place_frame.append(&mut exploded_index);
                     }
                     place_frame
                 }
                 d::Struct(sdecl) => {
-                    let mut place_frame = vec![(pl.clone(), dty.clone())];
+                    let mut place_frame = BumpVec::from_iter_in([(pl.clone(), dty.clone())], arena);
                     for field in sdecl.fields.iter() {
                         let mut exploded_field = explode(
-                            proj(pl.clone(), PathElem::FieldProj(Box::new(field.0.clone()))),
+                            proj(
+                                pl.clone(),
+                                PathElem::FieldProj(arena.alloc(field.0.clone())),
+                            ),
                             field.1.clone(),
+                            arena,
                         );
                         place_frame.append(&mut exploded_field);
                     }
@@ -243,14 +262,18 @@ impl<'a> TyCtx<'a> {
             }
         }
 
-        explode(internal::Place::new(ident.clone(), vec![]), dty.clone())
+        explode(
+            internal::Place::new(ident.clone(), BumpVec::new_in(arena)),
+            dty.clone(),
+            arena,
+        )
     }
 
-    pub fn ty_of_ident(&self, ident: &Ident) -> CtxResult<&Ty> {
+    pub fn ty_of_ident(&self, ident: &Ident<'a>) -> CtxResult<'a, &Ty<'a>> {
         Ok(&self.ident_ty(ident)?.ty)
     }
 
-    pub fn ident_ty(&self, ident: &Ident) -> CtxResult<&IdentTyped> {
+    pub fn ident_ty(&self, ident: &Ident<'a>) -> CtxResult<'a, &IdentTyped<'a>> {
         match self
             .idents_typed()
             .rev()
@@ -261,12 +284,12 @@ impl<'a> TyCtx<'a> {
         }
     }
 
-    pub fn contains(&self, ident: &Ident) -> bool {
+    pub fn contains(&self, ident: &Ident<'a>) -> bool {
         self.idents_typed().any(|i| i.ident.name == ident.name)
     }
 
-    pub fn place_dty(&self, place: &internal::Place<'a>) -> CtxResult<DataTy<'a>> {
-        fn proj_ty(dty: DataTy, path: &[PathElem<'a>]) -> CtxResult<DataTy<'a>> {
+    pub fn place_dty(&self, place: &internal::Place<'a>) -> CtxResult<'a, DataTy<'a>> {
+        fn proj_ty<'a>(dty: DataTy<'a>, path: &[PathElem<'a>]) -> CtxResult<'a, DataTy<'a>> {
             let mut res_dty = dty;
             for pe in path {
                 match (&res_dty.dty, pe) {
@@ -278,7 +301,7 @@ impl<'a> TyCtx<'a> {
                     }
                     (DataTyKind::Struct(struct_decl), PathElem::FieldProj(ident)) => {
                         res_dty = if let Some(field) =
-                            struct_decl.fields.iter().find(|f| &f.0 == ident.as_ref())
+                            struct_decl.fields.iter().find(|f| &f.0 == *ident)
                         {
                             field.1.clone()
                         } else {
@@ -298,18 +321,24 @@ impl<'a> TyCtx<'a> {
         }
         let ident_ty = self.ty_of_ident(&place.ident)?;
         if let TyKind::Data(dty) = &ident_ty.ty {
-            proj_ty(dty.as_ref().clone(), &place.path)
+            proj_ty((**dty).clone(), &place.path)
         } else {
             panic!("This place is not of a data type.")
         }
     }
 
-    pub fn set_place_dty(&mut self, pl: &internal::Place, pl_ty: DataTy) -> &mut Self {
-        fn set_dty_for_path_in_dty(
-            orig_dty: DataTy,
-            path: &[PathElem],
-            part_dty: DataTy,
-        ) -> DataTy {
+    pub fn set_place_dty(
+        &mut self,
+        pl: &internal::Place<'a>,
+        pl_ty: DataTy<'a>,
+        arena: &'a Bump,
+    ) -> &mut Self {
+        fn set_dty_for_path_in_dty<'a>(
+            arena: &'a Bump,
+            orig_dty: DataTy<'a>,
+            path: &[PathElem<'a>],
+            part_dty: DataTy<'a>,
+        ) -> DataTy<'a> {
             if path.is_empty() {
                 return part_dty;
             }
@@ -318,17 +347,15 @@ impl<'a> TyCtx<'a> {
             match (orig_dty.dty, pe) {
                 (DataTyKind::Tuple(mut elem_tys), PathElem::Proj(n)) => {
                     elem_tys[*n] =
-                        set_dty_for_path_in_dty(elem_tys[*n].clone(), &path[1..], part_dty);
-                    DataTy::new(DataTyKind::Tuple(elem_tys))
+                        set_dty_for_path_in_dty(arena, elem_tys[*n].clone(), &path[1..], part_dty);
+                    DataTy::new(arena, DataTyKind::Tuple(elem_tys))
                 }
-                (DataTyKind::Struct(mut struct_decl), PathElem::FieldProj(ident)) => {
-                    if let Some(field) = struct_decl
-                        .fields
-                        .iter_mut()
-                        .find(|f| &f.0 == ident.as_ref())
-                    {
-                        field.1 = set_dty_for_path_in_dty(field.1.clone(), &path[1..], part_dty);
-                        DataTy::new(DataTyKind::Struct(struct_decl))
+                (DataTyKind::Struct(struct_decl), PathElem::FieldProj(ident)) => {
+                    let struct_decl = arena.alloc(struct_decl.clone());
+                    if let Some(field) = struct_decl.fields.iter_mut().find(|f| &f.0 == *ident) {
+                        field.1 =
+                            set_dty_for_path_in_dty(arena, field.1.clone(), &path[1..], part_dty);
+                        DataTy::new(arena, DataTyKind::Struct(struct_decl))
                     } else {
                         panic!("Struct field with name `{}` does not exist.", ident.name)
                     }
@@ -337,23 +364,28 @@ impl<'a> TyCtx<'a> {
             }
         }
 
-        let mut ident_typed = self
+        let ident_typed = self
             .idents_typed_mut()
             .rev()
             .find(|ident_typed| ident_typed.ident == pl.ident)
             .unwrap();
         if let TyKind::Data(dty) = &ident_typed.ty.ty {
-            let updated_dty = set_dty_for_path_in_dty(*dty.clone(), pl.path.as_slice(), pl_ty);
-            ident_typed.ty = Ty::new(TyKind::Data(Box::new(updated_dty)));
+            let updated_dty =
+                set_dty_for_path_in_dty(arena, (**dty).clone(), pl.path.as_slice(), pl_ty);
+            ident_typed.ty = Ty::new(TyKind::Data(arena.alloc(updated_dty)));
             self
         } else {
             panic!("Trying to set data type for identifier without data type.")
         }
     }
 
-    pub fn kill_place(&mut self, pl: &internal::Place) -> &mut Self {
+    pub fn kill_place(&mut self, pl: &internal::Place<'a>, arena: &'a Bump) -> &mut Self {
         if let Ok(pl_dty) = self.place_dty(pl) {
-            self.set_place_dty(pl, DataTy::new(DataTyKind::Dead(Box::new(pl_dty))))
+            self.set_place_dty(
+                pl,
+                DataTy::new(arena, DataTyKind::Dead(arena.alloc(pl_dty))),
+                arena,
+            )
         } else {
             panic!("Trying to kill the type of a place that doesn't exist.")
         }
@@ -383,7 +415,7 @@ impl<'a> TyCtx<'a> {
     }
 
     // Γ ▷- p = Γ′
-    pub(super) fn without_reborrow_loans(&mut self, pl_expr: &PlaceExpr) -> &mut Self {
+    pub(super) fn without_reborrow_loans(&mut self, pl_expr: &PlaceExpr<'a>) -> &mut Self {
         for frame_entry in self.flat_bindings_mut() {
             if let FrameEntry::PrvMapping(PrvMapping { prv: _, loans }) = frame_entry {
                 // FIXME not prefix_of but *x within p?
@@ -409,25 +441,30 @@ impl<'a> TyCtx<'a> {
 }
 
 pub(super) struct AccessCtx<'a> {
-    ctx: HashSet<Loan<'a>>,
+    ctx: BumpVec<'a, Loan<'a>>,
 }
 
 impl<'a> AccessCtx<'a> {
-    pub fn new() -> Self {
+    pub fn new(arena: &'a Bump) -> Self {
         AccessCtx {
-            ctx: HashSet::new(),
+            ctx: BumpVec::new_in(arena),
         }
     }
 
-    pub fn insert(&mut self, loans: HashSet<Loan<'a>>) {
+    pub fn insert(&mut self, loans: BumpVec<Loan<'a>>) {
         self.ctx.extend(loans.into_iter())
     }
 
-    pub fn hash_set(&self) -> &HashSet<Loan<'a>> {
+    pub fn hash_set(&self) -> &BumpVec<Loan<'a>> {
         &self.ctx
     }
 
-    pub fn clear_sync_for(&mut self, ty_ctx: &'a TyCtx<'a>, exec: &'a ExecExpr<'a>) {
+    pub fn clear_sync_for(
+        &mut self,
+        ty_ctx: &'a TyCtx<'a>,
+        exec: &'a ExecExpr<'a>,
+        arena: &'a Bump,
+    ) {
         self.ctx = self
             .ctx
             .iter()
@@ -437,26 +474,53 @@ impl<'a> AccessCtx<'a> {
                     place_expr,
                 })
             })
-            .collect();
+            .collect_in(arena);
     }
 
-    pub fn garbage_collect(&mut self, ty_ctx: &'a TyCtx<'a>) {
-        // TODO make more efficient
-        //  drain is unstable for HashSet, use Vec anyway?
-        let mut cleaned_up_set = HashSet::new();
-        for l in &self.ctx {
-            let ident = &l.place_expr.as_ident_and_path().0;
-            if ty_ctx.contains(ident) {
-                cleaned_up_set.insert(l.clone());
+    // a tiny helper that drills down a PlaceExpr to its `Ident`
+    // and returns it by value (i.e. clones the Box<str> inside Ident)
+    // maybe move this one out ?
+    fn root_ident_of_expr(pe: &PlaceExpr<'a>) -> Ident<'a> {
+        match &pe.pl_expr {
+            PlaceExprKind::Ident(id) => id.clone(),
+            PlaceExprKind::Select(inner, _)
+            | PlaceExprKind::View(inner, _)
+            | PlaceExprKind::Proj(inner, _)
+            | PlaceExprKind::FieldProj(inner, _)
+            | PlaceExprKind::Idx(inner, _)
+            | PlaceExprKind::Deref(inner) => {
+                // recursive descent
+                Self::root_ident_of_expr(inner)
             }
         }
-        self.ctx = cleaned_up_set;
+    }
+
+    pub fn garbage_collect(&mut self, ty_ctx: &TyCtx<'a>, arena: &'a Bump) {
+        // 1) take ownership of the old loans
+        let old_loans = std::mem::replace(&mut self.ctx, BumpVec::new_in(arena));
+
+        // 2) build a fresh vec of only the “alive” loans
+        let mut new_loans = BumpVec::new_in(arena);
+        for loan in old_loans.into_iter() {
+            // extract root ident by *value* (no long‐lived borrow)
+            let ident = Self::root_ident_of_expr(&loan.place_expr);
+            if ty_ctx.contains(&ident) {
+                new_loans.push(loan);
+            }
+        }
+
+        // 3) store it back
+        self.ctx = new_loans;
     }
 }
 
-fn trim_after_select_of<'a>(ty_ctx: &'a TyCtx<'a>, exec: &'a ExecExpr<'a>, pl_expr: PlaceExpr<'a>) -> Option<PlaceExpr<'a>> {
+fn trim_after_select_of<'a>(
+    ty_ctx: &'a TyCtx<'a>,
+    exec: &'a ExecExpr<'a>,
+    pl_expr: PlaceExpr<'a>,
+) -> Option<PlaceExpr<'a>> {
     match pl_expr.pl_expr {
-        PlaceExprKind::Select(p, sel_exec) if sel_exec.as_ref() == exec => {
+        PlaceExprKind::Select(p, sel_exec) if sel_exec == exec => {
             Some(PlaceExpr::new(PlaceExprKind::Select(p, sel_exec)))
         }
         PlaceExprKind::Select(ipl, _)
@@ -464,7 +528,7 @@ fn trim_after_select_of<'a>(ty_ctx: &'a TyCtx<'a>, exec: &'a ExecExpr<'a>, pl_ex
         | PlaceExprKind::Proj(ipl, _)
         | PlaceExprKind::FieldProj(ipl, _)
         | PlaceExprKind::Idx(ipl, _)
-        | PlaceExprKind::Deref(ipl) => trim_after_select_of(ty_ctx, exec, *ipl),
+        | PlaceExprKind::Deref(ipl) => trim_after_select_of(ty_ctx, exec, ipl.clone()),
         PlaceExprKind::Ident(ident) => {
             let ident_exec = &ty_ctx
                 .ident_ty(&ident)
@@ -492,23 +556,29 @@ pub(super) type CtxResult<'a, T> = Result<T, CtxError<'a>>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub(super) struct KindCtx<'a> {
-    ctx: Vec<Vec<KindingCtxEntry<'a>>>,
+    ctx: BumpVec<'a, BumpVec<'a, KindingCtxEntry<'a>>>,
 }
 
 impl<'a> KindCtx<'a> {
-    pub fn new() -> Self {
-        KindCtx { ctx: vec![vec![]] }
+    pub fn new(arena: &'a Bump) -> Self {
+        let mut scopes = BumpVec::new_in(arena);
+        scopes.push(BumpVec::new_in(arena));
+        KindCtx { ctx: scopes }
     }
 
-    pub fn gl_fun_kind_ctx(idents: Vec<IdentKinded<'a>>, prv_rels: Vec<PrvRel<'a>>) -> CtxResult<'a, Self> {
-        let mut kind_ctx: Self = KindCtx::new();
+    pub fn gl_fun_kind_ctx(
+        idents: BumpVec<'a, IdentKinded<'a>>,
+        prv_rels: BumpVec<'a, PrvRel<'a>>,
+        arena: &'a Bump,
+    ) -> CtxResult<'a, Self> {
+        let mut kind_ctx: Self = KindCtx::new(arena);
         kind_ctx.append_idents(idents);
         kind_ctx.append_prv_rels(prv_rels)?;
         Ok(kind_ctx)
     }
 
-    pub fn push_empty_scope(&mut self) -> &mut Self {
-        self.ctx.push(vec![]);
+    pub fn push_empty_scope(&mut self, arena: &'a Bump) -> &mut Self {
+        self.ctx.push(BumpVec::new_in(arena));
         self
     }
 
@@ -516,7 +586,10 @@ impl<'a> KindCtx<'a> {
         self.ctx.pop();
     }
 
-    pub fn append_idents<I: IntoIterator<Item = IdentKinded<'a>>>(&mut self, idents: I) -> &mut Self {
+    pub fn append_idents<I: IntoIterator<Item = IdentKinded<'a>>>(
+        &mut self,
+        idents: I,
+    ) -> &mut Self {
         let entries = idents.into_iter().map(KindingCtxEntry::Ident);
         for e in entries {
             self.ctx.last_mut().unwrap().push(e);
@@ -527,7 +600,7 @@ impl<'a> KindCtx<'a> {
     pub fn append_prv_rels<I: IntoIterator<Item = PrvRel<'a>> + Clone>(
         &mut self,
         prv_rels: I,
-    ) -> CtxResult<&mut Self> {
+    ) -> CtxResult<'a, &mut Self> {
         self.well_kinded_prv_rels(prv_rels.clone())?;
         for prv_rel in prv_rels {
             self.ctx
@@ -541,7 +614,7 @@ impl<'a> KindCtx<'a> {
     pub fn well_kinded_prv_rels<I: IntoIterator<Item = PrvRel<'a>>>(
         &self,
         prv_rels: I,
-    ) -> CtxResult<()> {
+    ) -> CtxResult<'a, ()> {
         let mut prv_idents = self.get_idents(Kind::Provenance);
         for prv_rel in prv_rels.into_iter() {
             if !prv_idents.any(|prv_ident| &prv_rel.longer == prv_ident) {
@@ -554,7 +627,7 @@ impl<'a> KindCtx<'a> {
         Ok(())
     }
 
-    pub fn get_idents(&self, kind: Kind) -> impl Iterator<Item = &Ident> {
+    pub fn get_idents(&'a self, kind: Kind) -> impl Iterator<Item = &'a Ident<'a>> + 'a {
         self.ctx.iter().flatten().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
@@ -586,57 +659,79 @@ impl<'a> KindCtx<'a> {
 
 #[derive(Debug, Clone)]
 pub(super) enum GlobalDecl<'a> {
-    FnDecl(Box<str>, Box<FnTy<'a>>),
-    StructDecl(Box<StructDecl<'a>>),
+    FnDecl(&'a str, &'a FnTy<'a>),
+    StructDecl(&'a StructDecl<'a>),
 }
 
 #[derive(Debug)]
-pub(super) struct GlobalCtx<'src, 'compil> {
-    compil_unit: &'compil mut CompilUnit<'src>,
-    checked_funs: Vec<(Box<str>, Box<[usize]>)>,
-    decls: Vec<GlobalDecl<'a>>,
-    //items: HashMap<Box<str>, GlobalItem>,
+pub(super) struct GlobalCtx<'a> {
+    compil_unit: &'a mut CompilUnit<'a>,
+    checked_funs: BumpVec<'a, (&'a str, &'a [usize])>,
+    decls: BumpVec<'a, GlobalDecl<'a>>,
 }
 
-impl<'src, 'compil> GlobalCtx<'src, 'compil> {
-    pub fn new(compil_unit: &'compil mut CompilUnit<'src>, mut decls: Vec<GlobalDecl>) -> Self {
-        let mut compil_unit_decls = compil_unit
-            .items
-            .iter()
-            .map(|item| match item {
+impl<'a> GlobalCtx<'a> {
+    pub fn new(
+        compil_unit: &'a mut CompilUnit<'a>,
+        mut decls: BumpVec<'a, GlobalDecl<'a>>,
+        arena: &'a Bump,
+    ) -> Self {
+        // 1) grab a raw pointer + length; this does NOT borrow.
+        let items_ptr = compil_unit.items.as_ptr();
+        let len = compil_unit.items.len();
+
+        // 2) iterate by pointer offets
+        for i in 0..len {
+            // SAFETY: `i < len` so ptr.add(i) is in-bounds, and we never touch compil_unit.items mutably.
+            let item: &Item<'a> = unsafe { &*items_ptr.add(i) };
+            match item {
                 Item::FunDef(fun_def) => {
-                    GlobalDecl::FnDecl(fun_def.ident.name.clone(), Box::new(fun_def.fn_ty()))
+                    let name: &str = &fun_def.ident.name;
+                    let ty_ref: &FnTy<'a> = arena.alloc(fun_def.fn_ty(arena));
+                    decls.push(GlobalDecl::FnDecl(name, ty_ref));
                 }
                 Item::FunDecl(fun_decl) => {
-                    GlobalDecl::FnDecl(fun_decl.ident.name.clone(), Box::new(fun_decl.fn_ty()))
+                    let name: &str = &fun_decl.ident.name;
+                    let ty_ref: &FnTy<'a> = arena.alloc(fun_decl.fn_ty(arena));
+                    decls.push(GlobalDecl::FnDecl(name, ty_ref));
                 }
-                Item::StructDecl(struct_decl) => GlobalDecl::StructDecl(struct_decl.clone()),
-            })
-            .collect();
-        decls.append(&mut compil_unit_decls);
+                Item::StructDecl(struct_decl) => {
+                    // We can safely store the reference here,
+                    // because `struct_decl` lives inside `compil_unit` for 'a.
+                    decls.push(GlobalDecl::StructDecl(struct_decl));
+                }
+                _ => {}
+            }
+        }
+
+        // 3) now that we never held any &borrows of items, we can store the &mut
         GlobalCtx {
             compil_unit,
-            checked_funs: vec![],
+            checked_funs: BumpVec::new_in(arena),
             decls,
         }
     }
 
-    pub fn has_been_checked<'a>(&self, name: &str, nat_args: &[usize]) -> bool {
+    pub fn has_been_checked(&self, name: &str, nat_args: &[usize]) -> bool {
         self.checked_funs
             .iter()
-            .any(|(fun_name, nargs)| fun_name.as_ref() == name && nargs.as_ref() == nat_args)
+            .any(|(fun_name, nargs)| *fun_name == name && *nargs == nat_args)
     }
 
-    pub fn push_fun_checked_under_nats<'a>(&mut self, fun_def: Box<FunDef>, nat_vals: Box<[usize]>) {
+    pub fn push_fun_checked_under_nats(
+        &mut self,
+        fun_def: BumpBox<'a, FunDef<'a>>,
+        nat_vals: &'a [usize],
+    ) {
         let fun_name = fun_def.ident.name.clone();
         self.compil_unit.items.push(Item::FunDef(fun_def));
         self.checked_funs.push((fun_name, nat_vals))
     }
 
-    pub fn pop_fun_def<'a>(&mut self, name: &str) -> Option<Box<FunDef>> {
+    pub fn pop_fun_def(&mut self, name: &'a str) -> Option<BumpBox<'a, FunDef<'a>>> {
         let index = self.compil_unit.items.iter().position(|item| {
             if let Item::FunDef(fun_def) = item {
-                fun_def.ident.name.as_ref() == name
+                fun_def.ident.name == name
             } else {
                 false
             }
@@ -652,7 +747,7 @@ impl<'src, 'compil> GlobalCtx<'src, 'compil> {
         }
     }
 
-    pub fn fn_ty_by_ident<'a>(&self, ident: &'a Ident<'a>) -> CtxResult<&'a FnTy<'a>> {
+    pub fn fn_ty_by_ident(&self, ident: &'a Ident<'a>) -> CtxResult<'a, &'a FnTy<'a>> {
         if let Some(fn_ty) = self.decls.iter().find_map(|decl| match decl {
             GlobalDecl::FnDecl(name, fn_ty) if name == &ident.name => Some(fn_ty),
             GlobalDecl::FnDecl(_, _) | GlobalDecl::StructDecl(_) => None,
@@ -666,17 +761,23 @@ impl<'src, 'compil> GlobalCtx<'src, 'compil> {
 
 #[test]
 fn test_kill_place_ident() {
-    let mut ty_ctx = TyCtx::new();
-    let x = IdentTyped::new(
-        Ident::new("x"),
-        Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
-            ScalarTy::I32,
-        ))))),
-        Mutability::Const,
-        ExecExpr::new(ExecExprKind::new(BaseExec::Ident(Ident::new("exec")))),
+    let arena = Bump::new();
+
+    let mut ty_ctx = TyCtx::new(&arena);
+    let x_ident = Ident::new(&arena, "x");
+    let exec_ident = Ident::new(&arena, "exec");
+    let exec_expr = ExecExpr::new(
+        &arena,
+        ExecExprKind::new(&arena, BaseExec::Ident(exec_ident.clone())),
     );
-    let place = internal::Place::new(x.ident.clone(), vec![]);
-    ty_ctx.append_ident_typed(x).kill_place(&place);
+    let scalar_ty = arena.alloc(DataTy::new(&arena, DataTyKind::Scalar(ScalarTy::I32)));
+    let ty_kind = TyKind::Data(scalar_ty);
+    let x_typed = IdentTyped::new_in(&arena, "x", Ty::new(ty_kind), Mutability::Const, exec_expr);
+
+    ty_ctx.append_ident_typed(x_typed);
+    let place = internal::Place::new(x_ident.clone(), BumpVec::new_in(&arena));
+    ty_ctx.kill_place(&place, &arena);
+
     assert!(matches!(
         ty_ctx.idents_typed().next().unwrap().ty.dty(),
         DataTy {
