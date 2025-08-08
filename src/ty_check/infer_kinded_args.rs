@@ -66,6 +66,7 @@ macro_rules! panic_no_inst {
         panic!("Unexpected: mono type is not an instantiation of poly type")
     };
 }
+
 macro_rules! panic_if_neq {
     ($lhs: expr, $rhs: expr) => {
         if $lhs != $rhs {

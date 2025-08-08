@@ -43,7 +43,7 @@ pub fn ty_check<'a>(compil_unit: &mut CompilUnit, arena: &'a Bump) -> Result<(),
         pre_decl::fun_decls()
             .into_iter()
             .map(|(fname, fty)| GlobalDecl::FnDecl(Box::from(fname), arena.alloc(fty)))
-            .collect(),
+            .collect_in(arena),
     );
     let mut nat_ctx = NatCtx::new();
     if let Some(mut main_fun) = gl_ctx.pop_fun_def("main") {
@@ -61,14 +61,14 @@ pub fn ty_check<'a>(compil_unit: &mut CompilUnit, arena: &'a Bump) -> Result<(),
     }
 }
 
-struct ExprTyCtx<'a, 'src, 'compil, 'ctxt> {
-    gl_ctx: &'ctxt mut GlobalCtx<'src, 'compil>,
-    nat_ctx: &'ctxt mut NatCtx,
-    ident_exec: Option<&'ctxt IdentExec<'a>>,
-    kind_ctx: &'ctxt mut KindCtx<'a>,
+struct ExprTyCtx<'a> {
+    gl_ctx: &'a mut GlobalCtx<'a>,
+    nat_ctx: &'a mut NatCtx<'a>,
+    ident_exec: Option<&'a IdentExec<'a>>,
+    kind_ctx: &'a mut KindCtx<'a>,
     exec: ExecExpr<'a>,
-    ty_ctx: &'ctxt mut TyCtx<'a>,
-    access_ctx: &'ctxt mut AccessCtx,
+    ty_ctx: &'a mut TyCtx<'a>,
+    access_ctx: &'a mut AccessCtx<'a>,
     unsafe_flag: bool,
 }
 
@@ -1721,7 +1721,7 @@ fn allowed_mem_for_exec<'a>(exec_ty: &'a ExecTyKind<'a>) -> Vec<Memory<'a>> {
     }
 }
 
-pub fn accessible_memory(exec_ty: &'a ExecTy<'a>, mem: &'a Memory<'a>) -> TyResult<'a, ()> {
+pub fn accessible_memory<'a>(exec_ty: &'a ExecTy<'a>, mem: &'a Memory<'a>) -> TyResult<'a, ()> {
     if allowed_mem_for_exec(&exec_ty.ty).contains(mem) {
         Ok(())
     } else {

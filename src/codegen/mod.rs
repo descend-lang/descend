@@ -994,7 +994,7 @@ fn gen_sync_stmt<'a>(exec: &'a desc::ExecExpr<'a>) -> cu::Stmt<'a> {
     // }
 }
 
-fn gen_sched(sched: &'a desc::Sched<'a>, codegen_ctx: &'a mut CodegenCtx<'a>) -> cu::Stmt<'a> {
+fn gen_sched<'a>(sched: &'a desc::Sched<'a>, codegen_ctx: &'a mut CodegenCtx<'a>) -> cu::Stmt<'a> {
     codegen_ctx.push_scope();
     let expanded_sched_exec_expr = expand_exec_expr(codegen_ctx, sched.sched_exec.as_ref());
     let inner_exec = desc::ExecExpr::new(expanded_sched_exec_expr.exec.clone().forall(sched.dim));

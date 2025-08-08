@@ -347,11 +347,19 @@ fn narrowing_check<'a>(
         PlaceExprKind::Select(pl_expr, select_exec) => {
             narrowable(select_exec, active_ctx_exec, arena)?;
 
-            let local_outer = active_ctx_exec.remove_last_distrib(arena);
-            let outer_exec: &'a mut ExecExpr<'a> = arena.alloc(local_outer);
+            let mut outer_exec: ExecExpr<'a> = active_ctx_exec.remove_last_distrib(arena);
 
-            exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, outer_exec, arena)?;
-            narrowing_check(ctx, pl_expr, outer_exec, arena)
+            exec::ty_check(
+                ctx.nat_ctx,
+                ctx.ty_ctx,
+                ctx.ident_exec,
+                &mut outer_exec,
+                arena,
+            )?;
+
+            let outer_exec_ref: &'a ExecExpr<'a> = arena.alloc(outer_exec);
+
+            narrowing_check(ctx, pl_expr, outer_exec_ref, arena)
         }
         PlaceExprKind::View(pl_expr, _)
         | PlaceExprKind::Deref(pl_expr)
@@ -366,8 +374,8 @@ fn narrowable<'a>(
     to: &'a ExecExpr<'a>,
     arena: &'a Bump,
 ) -> OwnResult<'a, ()> {
-    let normal_from = arena.alloc(normalize(from.clone()));
-    let normal_to = arena.alloc(normalize(to.clone()));
+    let normal_from = arena.alloc(normalize(from.clone(), arena));
+    let normal_to = arena.alloc(normalize(to.clone(), arena));
     exec_is_prefix_of(normal_from, normal_to)?;
     no_forall_in_diff(normal_from, normal_to)
 }

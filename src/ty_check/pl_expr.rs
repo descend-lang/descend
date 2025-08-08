@@ -11,19 +11,19 @@ use crate::ty_check::unify;
 use crate::ty_check::unify::ConstrainMap;
 use crate::ty_check::{exec, ExprTyCtx};
 
-pub(super) struct PlExprTyCtx<'a, 'gl, 'src, 'ctxt> {
-    gl_ctx: &'ctxt GlobalCtx<'gl, 'src>,
-    nat_ctx: &'ctxt NatCtx,
-    kind_ctx: &'ctxt KindCtx<'a>,
-    ident_exec: Option<&'ctxt IdentExec<'a>>,
+pub(super) struct PlExprTyCtx<'a> {
+    gl_ctx: &'a GlobalCtx<'a>,
+    nat_ctx: &'a NatCtx<'a>,
+    kind_ctx: &'a KindCtx<'a>,
+    ident_exec: Option<&'a IdentExec<'a>>,
     exec: ExecExpr<'a>,
-    ty_ctx: &'ctxt TyCtx<'a>,
-    exec_borrow_ctx: &'ctxt AccessCtx,
+    ty_ctx: &'a TyCtx<'a>,
+    exec_borrow_ctx: &'a AccessCtx<'a>,
     own: Ownership,
 }
 
-impl<'gl, 'src, 'ctxt> PlExprTyCtx<'gl, 'src, 'ctxt> {
-    pub(super) fn new(expr_ty_ctx: &'ctxt ExprTyCtx<'gl, 'src, 'ctxt>, own: Ownership) -> Self {
+impl<'a> PlExprTyCtx<'a> {
+    pub(super) fn new(expr_ty_ctx: &'a ExprTyCtx<'a>, own: Ownership) -> Self {
         PlExprTyCtx {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             nat_ctx: &*expr_ty_ctx.nat_ctx,
@@ -37,10 +37,8 @@ impl<'gl, 'src, 'ctxt> PlExprTyCtx<'gl, 'src, 'ctxt> {
     }
 }
 
-impl<'gl, 'src, 'ctxt> From<&'ctxt BorrowCheckCtx<'gl, 'src, 'ctxt>>
-    for PlExprTyCtx<'gl, 'src, 'ctxt>
-{
-    fn from(ctx: &'ctxt BorrowCheckCtx<'gl, 'src, 'ctxt>) -> Self {
+impl<'a> From<&'a BorrowCheckCtx<'a>> for PlExprTyCtx<'a> {
+    fn from(ctx: &'a BorrowCheckCtx<'a>) -> Self {
         PlExprTyCtx {
             gl_ctx: ctx.gl_ctx,
             nat_ctx: ctx.nat_ctx,

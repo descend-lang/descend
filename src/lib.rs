@@ -13,6 +13,6 @@ pub fn compile(file_path: &str) -> Result<String, ErrorReported> {
     let source = parser::SourceCode::from_file(file_path)?;
     let arena = Bump::new();
     let mut compil_unit = parser::parse(&arena, &source);
-    ty_check::ty_check(&mut compil_unit)?;
+    ty_check::ty_check(&mut compil_unit, &arena)?;
     Ok(codegen::gen(&compil_unit, false))
 }
