@@ -6,7 +6,7 @@ pub use span::*;
 
 use crate::arena_ast;
 use crate::parser::SourceCode;
-use bumpalo::{boxed::Box as BumpBox, collections::CollectIn, collections::Vec as BumpVec, Bump};
+use bumpalo::{collections::CollectIn, collections::Vec as BumpVec, Bump};
 
 pub mod internal;
 
@@ -36,19 +36,19 @@ pub enum Item {
 }
 
 impl Item {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::Item<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Item<'a> {
         match self {
             Item::FunDef(f) => {
                 let arena_f = f.into_arena(arena);
-                arena_ast::Item::FunDef(BumpBox::new_in(arena_f, arena))
+                arena_ast::Item::FunDef(arena.alloc(arena_f))
             }
             Item::FunDecl(f) => {
                 let arena_fd = f.into_arena(arena);
-                arena_ast::Item::FunDecl(BumpBox::new_in(arena_fd, arena))
+                arena_ast::Item::FunDecl(arena.alloc(arena_fd))
             }
             Item::StructDecl(s) => {
                 let arena_s = s.into_arena(arena);
-                arena_ast::Item::StructDecl(BumpBox::new_in(arena_s, arena))
+                arena_ast::Item::StructDecl(arena.alloc(arena_s))
             }
         }
     }
@@ -87,7 +87,7 @@ impl FunDecl {
         }
     }
 
-    pub fn into_arena<'a>(self: Box<Self>, arena: &'a bumpalo::Bump) -> arena_ast::FunDecl<'a> {
+    pub fn into_arena<'a>(self: Box<Self>, arena: &'a Bump) -> arena_ast::FunDecl<'a> {
         let generic_params = self
             .generic_params
             .into_iter()
@@ -126,7 +126,7 @@ pub struct StructDecl {
 }
 
 impl StructDecl {
-    pub fn into_arena<'a>(self: Box<Self>, arena: &'a bumpalo::Bump) -> arena_ast::StructDecl<'a> {
+    pub fn into_arena<'a>(self: Box<Self>, arena: &'a Bump) -> arena_ast::StructDecl<'a> {
         let generic_params = self
             .generic_params
             .into_iter()
@@ -182,7 +182,7 @@ impl FunDef {
         }
     }
 
-    pub fn into_arena<'a>(self: Box<Self>, arena: &'a bumpalo::Bump) -> arena_ast::FunDef<'a> {
+    pub fn into_arena<'a>(self: Box<Self>, arena: &'a Bump) -> arena_ast::FunDef<'a> {
         let generic_params = self
             .generic_params
             .into_iter()
@@ -234,7 +234,7 @@ impl IdentExec {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::IdentExec<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::IdentExec<'a> {
         arena_ast::IdentExec {
             ident: self.ident.into_arena(arena),
             ty: arena.alloc(self.ty.into_arena(arena)),
@@ -251,7 +251,7 @@ pub struct ParamDecl {
 }
 
 impl ParamDecl {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::ParamDecl<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ParamDecl<'a> {
         let ty = self.ty.map(|t| &*arena.alloc(t.into_arena(arena)));
         let exec_expr = self
             .exec_expr
@@ -302,7 +302,7 @@ impl Expr {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::Expr<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Expr<'a> {
         arena_ast::Expr {
             expr: self.expr.into_arena(arena),
             ty: self.ty.map(|t| &*arena.alloc(t.into_arena(arena))),
@@ -415,12 +415,12 @@ impl Sched {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::Sched<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Sched<'a> {
         arena_ast::Sched {
             dim: self.dim.into_arena(),
             inner_exec_ident: self.inner_exec_ident.map(|id| id.into_arena(arena)),
-            sched_exec: BumpBox::new_in(self.sched_exec.into_arena(arena), arena),
-            body: BumpBox::new_in(self.body.into_arena(arena), arena),
+            sched_exec: arena.alloc(self.sched_exec.into_arena(arena)),
+            body: arena.alloc(self.body.into_arena(arena)),
         }
     }
 }
@@ -451,7 +451,7 @@ impl Split {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::Split<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Split<'a> {
         let mut branch_idents = bumpalo::collections::Vec::new_in(arena);
         branch_idents.extend(
             self.branch_idents
@@ -490,7 +490,7 @@ impl Block {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::Block<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Block<'a> {
         let prvs: bumpalo::collections::Vec<'a, String> = self.prvs.into_iter().collect_in(arena);
 
         arena_ast::Block {
@@ -519,7 +519,7 @@ pub struct AppKernel {
 }
 
 impl AppKernel {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::AppKernel<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::AppKernel<'a> {
         arena_ast::AppKernel {
             grid_dim: self.grid_dim.into_arena(arena),
             block_dim: self.block_dim.into_arena(arena),
@@ -533,7 +533,7 @@ impl AppKernel {
                 .iter()
                 .map(|s| arena.alloc_str(s).to_string())
                 .collect_in(arena),
-            fun_ident: BumpBox::new_in(self.fun_ident.clone().into_arena(arena), arena),
+            fun_ident: arena.alloc(self.fun_ident.clone().into_arena(arena)),
             gen_args: self
                 .gen_args
                 .iter()
@@ -607,7 +607,7 @@ pub enum ExprKind {
 }
 
 impl ExprKind {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::ExprKind<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExprKind<'a> {
         use ExprKind::*;
         match self {
             Hole => arena_ast::ExprKind::Hole,
@@ -675,9 +675,9 @@ impl ExprKind {
                     .map(|a| a.into_arena(arena))
                     .collect_in(arena),
             ),
-            ExprKind::AppKernel(kern) => arena_ast::ExprKind::AppKernel(
-                bumpalo::boxed::Box::new_in(kern.into_arena(arena), arena),
-            ),
+            ExprKind::AppKernel(kern) => {
+                arena_ast::ExprKind::AppKernel(arena.alloc(kern.into_arena(arena)))
+            }
             IfElse(cond, then_, else_) => arena_ast::ExprKind::IfElse(
                 arena.alloc(cond.into_arena(arena)),
                 arena.alloc(then_.into_arena(arena)),
@@ -761,7 +761,7 @@ impl Ident {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::Ident<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Ident<'a> {
         arena_ast::Ident {
             name: arena.alloc_str(&self.name),
             span: self.span,
@@ -778,7 +778,7 @@ pub enum Pattern {
 }
 
 impl Pattern {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::Pattern<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Pattern<'a> {
         use Pattern::*;
         match self {
             Ident(mutability, ident) => {
@@ -807,7 +807,7 @@ pub enum Lit {
 }
 
 impl Lit {
-    pub fn into_arena<'a>(&self, _arena: &'a bumpalo::Bump) -> arena_ast::Lit {
+    pub fn into_arena<'a>(&self, _arena: &'a Bump) -> arena_ast::Lit {
         use arena_ast::Lit as ALit;
         use Lit::*;
 
@@ -996,7 +996,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn into_arena(&self, _arena: &bumpalo::Bump) -> arena_ast::Kind {
+    pub fn into_arena(&self, _arena: &Bump) -> arena_ast::Kind {
         match self {
             Kind::Nat => arena_ast::Kind::Nat,
             Kind::Memory => arena_ast::Kind::Memory,
@@ -1039,7 +1039,7 @@ impl ArgKinded {
         }
     }
 
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::ArgKinded<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::ArgKinded<'a> {
         use ArgKinded::*;
 
         match self {
@@ -1064,7 +1064,7 @@ pub struct PlaceExpr {
 }
 
 impl PlaceExpr {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::PlaceExpr<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::PlaceExpr<'a> {
         arena_ast::PlaceExpr {
             pl_expr: self.pl_expr.into_arena(arena),
             ty: self.ty.map(|t| &*arena.alloc(t.into_arena(arena))),
@@ -1104,7 +1104,7 @@ impl View {
         Ok(true)
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::View<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::View<'a> {
         let gen_args = self
             .gen_args
             .into_iter()
@@ -1156,7 +1156,7 @@ pub enum PlaceExprKind {
 }
 
 impl PlaceExprKind {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::PlaceExprKind<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::PlaceExprKind<'a> {
         use PlaceExprKind::*;
 
         match self {
@@ -1351,7 +1351,7 @@ impl ExecExpr {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::ExecExpr<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecExpr<'a> {
         arena_ast::ExecExpr {
             exec: arena.alloc(self.exec.into_arena(arena)),
             ty: self.ty.map(|t| {
@@ -1488,7 +1488,7 @@ impl TakeRange {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::TakeRange<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::TakeRange<'a> {
         arena_ast::TakeRange {
             split_dim: self.split_dim.into_arena(),
             pos: self.pos.into_arena(arena),
@@ -1534,7 +1534,7 @@ impl ExecExprKind {
         None
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::ExecExprKind<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecExprKind<'a> {
         let path = bumpalo::collections::Vec::from_iter_in(
             self.path.into_iter().map(|elem| elem.into_arena(arena)),
             arena,
@@ -1555,7 +1555,7 @@ pub enum BaseExec {
 }
 
 impl BaseExec {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::BaseExec<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::BaseExec<'a> {
         use BaseExec::*;
         match self {
             Ident(ident) => arena_ast::BaseExec::Ident(ident.into_arena(arena)),
@@ -1576,7 +1576,7 @@ pub enum ExecPathElem {
 }
 
 impl ExecPathElem {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::ExecPathElem<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecPathElem<'a> {
         use ExecPathElem::*;
 
         match self {
@@ -1611,7 +1611,7 @@ impl ExecTy {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::ExecTy<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecTy<'a> {
         arena_ast::ExecTy {
             ty: self.ty.into_arena(arena),
             span: self.span,
@@ -1634,7 +1634,7 @@ pub enum ExecTyKind {
 }
 
 impl ExecTyKind {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::ExecTyKind<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::ExecTyKind<'a> {
         use ExecTyKind::*;
 
         match self {
@@ -1668,7 +1668,7 @@ pub struct Ty {
 }
 
 impl Ty {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::Ty<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Ty<'a> {
         arena_ast::Ty {
             ty: self.ty.into_arena(arena),
             span: self.span,
@@ -1687,7 +1687,7 @@ impl ParamSig {
         ParamSig { exec_expr, ty }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::ParamSig<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ParamSig<'a> {
         let ty = self.ty.into_arena(arena);
         arena_ast::ParamSig {
             exec_expr: self.exec_expr.into_arena(arena),
@@ -1725,7 +1725,7 @@ impl FnTy {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::FnTy<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::FnTy<'a> {
         let generics = self
             .generics
             .into_iter()
@@ -1767,26 +1767,26 @@ pub enum NatConstr {
 }
 
 impl NatConstr {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::NatConstr<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::NatConstr<'a> {
         use NatConstr::*;
 
         match self {
             True => arena_ast::NatConstr::True,
             Eq(lhs, rhs) => arena_ast::NatConstr::Eq(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
             Lt(lhs, rhs) => arena_ast::NatConstr::Lt(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
             And(lhs, rhs) => arena_ast::NatConstr::And(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
             Or(lhs, rhs) => arena_ast::NatConstr::Or(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
         }
     }
@@ -1800,7 +1800,7 @@ pub enum TyKind {
 }
 
 impl TyKind {
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::TyKind<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::TyKind<'a> {
         match self {
             TyKind::Data(dty) => {
                 let boxed = bumpalo::boxed::Box::new_in(dty.into_arena(arena), arena);
@@ -1920,7 +1920,7 @@ impl Dim {
         }
     }
 
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::Dim<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Dim<'a> {
         use Dim::*;
 
         match self {
@@ -1984,7 +1984,7 @@ impl DataTy {
         }
     }
 
-    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::DataTy<'a> {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::DataTy<'a> {
         arena_ast::DataTy {
             dty: self.dty.into_arena(arena),
             constraints: self
@@ -2166,7 +2166,7 @@ impl RefDty {
         }
     }
 
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::RefDty<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::RefDty<'a> {
         arena_ast::RefDty {
             rgn: self.rgn.into_arena(arena),
             own: self.own.into_arena(),
@@ -2196,7 +2196,7 @@ pub enum DataTyKind {
 }
 
 impl DataTyKind {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::DataTyKind<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::DataTyKind<'a> {
         use DataTyKind::*;
 
         match self {
@@ -2298,7 +2298,7 @@ pub enum Provenance {
 }
 
 impl Provenance {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::Provenance<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Provenance<'a> {
         match self {
             Provenance::Value(s) => arena_ast::Provenance::Value(arena.alloc_str(s)),
             Provenance::Ident(ident) => {
@@ -2318,7 +2318,7 @@ pub enum Memory {
 }
 
 impl Memory {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::Memory<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Memory<'a> {
         match self {
             Memory::CpuMem => arena_ast::Memory::CpuMem,
             Memory::GpuGlobal => arena_ast::Memory::GpuGlobal,
@@ -2336,7 +2336,7 @@ pub struct PrvRel {
 }
 
 impl PrvRel {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::PrvRel<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::PrvRel<'a> {
         arena_ast::PrvRel {
             longer: self.longer.clone().into_arena(arena),
             shorter: self.shorter.clone().into_arena(arena),
@@ -2358,7 +2358,7 @@ impl IdentKinded {
         }
     }
 
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::IdentKinded<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::IdentKinded<'a> {
         arena_ast::IdentKinded {
             ident: self.ident.clone().into_arena(arena),
             kind: self.kind.into_arena(arena),
@@ -2393,7 +2393,7 @@ impl NatRange {
         Ok(range_iter)
     }
 
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::NatRange<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::NatRange<'a> {
         use NatRange::*;
 
         match self {
@@ -2520,7 +2520,7 @@ pub struct NatEvalError {
 }
 
 impl NatEvalError {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::NatEvalError<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::NatEvalError<'a> {
         arena_ast::NatEvalError {
             unevaluable: self.unevaluable.clone().into_arena(arena),
         }
@@ -2531,13 +2531,13 @@ pub type NatEvalResult<T> = Result<T, NatEvalError>;
 
 fn convert_result<'a>(
     result: NatEvalResult<usize>,
-    arena: &'a bumpalo::Bump,
+    arena: &'a Bump,
 ) -> arena_ast::NatEvalResult<'a, usize> {
     result.map_err(|e| e.into_arena(arena))
 }
 
 impl Nat {
-    pub fn into_arena<'a>(&self, arena: &'a bumpalo::Bump) -> arena_ast::Nat<'a> {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Nat<'a> {
         use Nat::*;
 
         match self {
@@ -2556,14 +2556,15 @@ impl Nat {
 
             BinOp(op, lhs, rhs) => arena_ast::Nat::BinOp(
                 op.clone().into_arena(),
-                Box::new(lhs.into_arena(arena)),
-                Box::new(rhs.into_arena(arena)),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
 
             App(ident, args) => {
-                let new_args: Vec<_> = args.iter().map(|n| n.into_arena(arena)).collect();
-                let boxed_slice: Box<[arena_ast::Nat<'a>]> = new_args.into_boxed_slice();
-                arena_ast::Nat::App(ident.clone().into_arena(arena), boxed_slice)
+                let arena_args: BumpVec<'a, arena_ast::Nat<'a>> =
+                    BumpVec::from_iter_in(args.iter().map(|n| n.into_arena(arena)), arena);
+
+                arena_ast::Nat::App(ident.clone().into_arena(arena), arena_args)
             }
         }
     }

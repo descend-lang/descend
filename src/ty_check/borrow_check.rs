@@ -5,7 +5,7 @@ use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::exec::normalize;
 use crate::ty_check::{exec, pre_decl, ExprTyCtx};
-use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
+use bumpalo::{collections::Vec as BumpVec, Bump};
 use std::collections::HashSet;
 
 type OwnResult<'a, T> = Result<T, BorrowingError<'a>>;

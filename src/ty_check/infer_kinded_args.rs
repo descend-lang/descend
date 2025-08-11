@@ -15,28 +15,39 @@ pub fn infer_kinded_args<'a>(
     mono_fn_ty: &'a FnTy<'a>,
 ) -> TyResult<'a, Vec<ArgKinded<'a>>> {
     if poly_fn_ty.param_sigs.len() != mono_fn_ty.param_sigs.len() {
-        panic!("Unexpected difference in amount of paramters.")
+        panic!("Unexpected difference in amount of parameters.");
     }
-    let mut res_map = HashMap::new();
-    for (subst_ty, mono_ty) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
-        infer_kargs_param_sig(&mut res_map, subst_ty, mono_ty)
+
+    // Map each generic Ident -> inferred ArgKinded
+    let mut res_map: HashMap<&'a Ident<'a>, ArgKinded<'a>> = HashMap::new();
+
+    // 1) from param sigs
+    for (subst_ps, mono_ps) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
+        infer_kargs_param_sig(&mut res_map, subst_ps, mono_ps);
     }
+
+    // 2) from exec expr
     infer_kargs_exec_expr(&mut res_map, &poly_fn_ty.exec, &mono_fn_ty.exec);
-    infer_kargs_tys(&mut res_map, &poly_fn_ty.ret_ty, &mono_fn_ty.ret_ty);
-    let mut res_vec = Vec::new();
-    for gen_arg in &poly_fn_ty.generics {
-        // FIXME unwrap leads to panic when the value for ident could not be inferred
-        //  as does happen when the identifier is not used in the argument type or part of
-        //  an expression in the case of nats
-        if let Some(res_karg) = res_map.get(&gen_arg.ident) {
-            if gen_arg.kind != res_karg.kind() {
-                panic!("Unexpected: Kinds of identifier and argument do not match.")
+
+    // 3) from return type
+    infer_kargs_tys(&mut res_map, poly_fn_ty.ret_ty, mono_fn_ty.ret_ty);
+
+    // 4) build result vector in the order of generics
+    let mut res_vec = Vec::with_capacity(poly_fn_ty.generics.len());
+    for g in &poly_fn_ty.generics {
+        match res_map.remove(&g.ident) {
+            Some(arg) => {
+                if g.kind != arg.kind() {
+                    panic!("Unexpected: Kinds of identifier and argument do not match.");
+                }
+                res_vec.push(arg);
             }
-            res_vec.push(res_karg.clone());
-        } else {
-            return Err(TyError::CannotInferGenericArg(gen_arg.ident.clone()));
+            None => {
+                return Err(TyError::CannotInferGenericArg(g.ident.clone()));
+            }
         }
     }
+
     Ok(res_vec)
 }
 
@@ -51,7 +62,7 @@ macro_rules! infer_from_lists {
 macro_rules! insert_checked {
     ($map: expr, $constr: path, $id_ref: expr, $mono_ref: expr) => {{
         let arg_kinded = $constr($mono_ref.clone());
-        if let Some(old) = $map.insert($id_ref.clone(), arg_kinded.clone()) {
+        if let Some(old) = $map.insert($id_ref, arg_kinded.clone()) {
             if old != arg_kinded {
                 println!("old: {:?}", old);
                 println!("new: {:?}", arg_kinded);
@@ -75,8 +86,8 @@ macro_rules! panic_if_neq {
     };
 }
 
-fn infer_kargs_tys<'a>(
-    map: &mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_tys<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_ty: &'a Ty<'a>,
     mono_ty: &'a Ty<'a>,
 ) {
@@ -102,8 +113,8 @@ fn infer_kargs_tys<'a>(
     }
 }
 
-fn infer_kargs_param_sig<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_param_sig<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_param_sig: &'a ParamSig<'a>,
     mono_param_sig: &'a ParamSig<'a>,
 ) {
@@ -111,8 +122,8 @@ fn infer_kargs_param_sig<'a>(
     infer_kargs_tys(map, &poly_param_sig.ty, &mono_param_sig.ty);
 }
 
-fn infer_kargs_exec_expr<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_exec_expr<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_exec_expr: &'a ExecExpr<'a>,
     mono_exec_expr: &'a ExecExpr<'a>,
 ) {
@@ -127,8 +138,8 @@ fn infer_kargs_exec_expr<'a>(
     }
 }
 
-fn infer_kargs_exec_level<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_exec_level<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_exec_level: &'a ExecTy<'a>,
     mono_exec_level: &'a ExecTy<'a>,
 ) {
@@ -149,8 +160,8 @@ fn infer_kargs_exec_level<'a>(
     }
 }
 
-fn infer_kargs_dims<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_dims<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_dim: &'a Dim<'a>,
     mono_dim: &'a Dim<'a>,
 ) {
@@ -175,16 +186,16 @@ fn infer_kargs_dims<'a>(
     }
 }
 
-fn infer_kargs_field<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_field<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_field: &'a (Ident<'a>, DataTy<'a>),
     mono_field: &'a (Ident<'a>, DataTy<'a>),
 ) {
     infer_kargs_dtys(map, &poly_field.1, &mono_field.1)
 }
 
-fn infer_kargs_dtys<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_dtys<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_dty: &'a DataTy<'a>,
     mono_dty: &'a DataTy<'a>,
 ) {
@@ -231,16 +242,14 @@ fn infer_kargs_dtys<'a>(
     }
 }
 
-fn infer_kargs_nats<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_nats<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_nat: &'a Nat<'a>,
     mono_nat: &'a Nat<'a>,
 ) {
     match (poly_nat, mono_nat) {
         (Nat::Ident(id), _) => {
-            if let Some(ArgKinded::Nat(old)) =
-                map.insert(id.clone(), ArgKinded::Nat(mono_nat.clone()))
-            {
+            if let Some(ArgKinded::Nat(old)) = map.insert(id, ArgKinded::Nat(mono_nat.clone())) {
                 if &old != mono_nat {
                     panic!(
                         "not able to check equality of Nats `{}` and `{}`",
@@ -263,8 +272,8 @@ fn infer_kargs_nats<'a>(
     }
 }
 
-fn infer_kargs_mems<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_mems<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_mem: &'a Memory<'a>,
     mono_mem: &'a Memory<'a>,
 ) {
@@ -274,8 +283,8 @@ fn infer_kargs_mems<'a>(
     }
 }
 
-fn infer_kargs_prvs<'a>(
-    map: &'a mut HashMap<Ident<'a>, ArgKinded<'a>>,
+fn infer_kargs_prvs<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
     poly_prv: &'a Provenance<'a>,
     mono_prv: &'a Provenance<'a>,
 ) {

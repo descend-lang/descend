@@ -27,12 +27,12 @@ impl<'a> CompilUnit<'a> {
 
 #[derive(Debug)]
 pub enum Item<'a> {
-    FunDef(BumpBox<'a, FunDef<'a>>),
-    FunDecl(BumpBox<'a, FunDecl<'a>>),
-    StructDecl(BumpBox<'a, StructDecl<'a>>),
+    FunDef(&'a FunDef<'a>),
+    FunDecl(&'a FunDecl<'a>),
+    StructDecl(&'a StructDecl<'a>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct FunDecl<'a> {
     pub ident: Ident<'a>,
     pub generic_params: BumpVec<'a, IdentKinded<'a>>,
@@ -67,6 +67,29 @@ impl<'a> FunDecl<'a> {
             }),
             [],
         )
+    }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> FunDecl<'a> {
+        let mut generic_params = BumpVec::new_in(arena);
+        generic_params.extend(self.generic_params.iter().cloned());
+
+        let generic_exec = self.generic_exec.clone();
+
+        let mut param_decls = BumpVec::new_in(arena);
+        param_decls.extend(self.param_decls.iter().cloned());
+
+        let mut prv_rels = BumpVec::new_in(arena);
+        prv_rels.extend(self.prv_rels.iter().cloned());
+
+        FunDecl {
+            ident: self.ident.clone(),
+            generic_params,
+            generic_exec,
+            param_decls,
+            ret_dty: self.ret_dty, // copy pointer; visitor will re-point if needed
+            exec: self.exec.clone(),
+            prv_rels,
+        }
     }
 }
 
@@ -135,7 +158,7 @@ impl<'a> IdentExec<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ParamDecl<'a> {
     pub ident: Ident<'a>,
     pub ty: Option<&'a Ty<'a>>,
@@ -144,7 +167,7 @@ pub struct ParamDecl<'a> {
 }
 
 #[span_derive(PartialEq)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expr<'a> {
     pub expr: ExprKind<'a>,
     // FIXME misusing span_derive_ignore to ignore type on equality checks
@@ -261,17 +284,17 @@ impl<'a> Expr<'a> {
     // }
 }
 
-#[derive(PartialEq, Debug)] // Apparently you cannot clone BumpBoxes. If needed again, just make them mutable references?
+#[derive(PartialEq, Debug, Clone)]
 pub struct Sched<'a> {
     pub dim: DimCompo,
     pub inner_exec_ident: Option<Ident<'a>>,
-    pub sched_exec: BumpBox<'a, ExecExpr<'a>>,
-    pub body: BumpBox<'a, Block<'a>>,
+    pub sched_exec: &'a ExecExpr<'a>,
+    pub body: &'a Block<'a>,
 }
 
 impl<'a> Sched<'a> {
     pub fn new_in(
-        bump: &'a bumpalo::Bump,
+        arena: &'a bumpalo::Bump,
         dim: DimCompo,
         inner_exec_ident: Option<Ident<'a>>,
         sched_exec: ExecExpr<'a>,
@@ -280,8 +303,8 @@ impl<'a> Sched<'a> {
         Sched {
             dim,
             inner_exec_ident,
-            sched_exec: BumpBox::new_in(sched_exec, bump),
-            body: BumpBox::new_in(body, bump),
+            sched_exec: arena.alloc(sched_exec),
+            body: arena.alloc(body),
         }
     }
 }
@@ -356,12 +379,12 @@ pub struct AppKernel<'a> {
     pub block_dim: Dim<'a>,
     pub shared_mem_dtys: BumpVec<'a, DataTy<'a>>,
     pub shared_mem_prvs: BumpVec<'a, String>,
-    pub fun_ident: BumpBox<'a, Ident<'a>>,
+    pub fun_ident: &'a Ident<'a>,
     pub gen_args: BumpVec<'a, ArgKinded<'a>>,
     pub args: BumpVec<'a, Expr<'a>>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind<'a> {
     Hole,
     Lit(Lit),
@@ -397,7 +420,7 @@ pub enum ExprKind<'a> {
     ),
     DepApp(Ident<'a>, BumpVec<'a, ArgKinded<'a>>),
     //AppKernel(&'a AppKernel<'a>),
-    AppKernel(BumpBox<'a, AppKernel<'a>>),
+    AppKernel(&'a AppKernel<'a>),
     // TODO branches must be blocks
     IfElse(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
     // TODO branch must be block
@@ -620,7 +643,7 @@ impl<'a> ArgKinded<'a> {
         }
     }
 
-    pub fn equal(&'a self, nat_ctx: &'a NatCtx, other: &'a Self) -> NatEvalResult<'a, bool> {
+    pub fn equal(&'a self, nat_ctx: &'a NatCtx<'a>, other: &'a Self) -> NatEvalResult<'a, bool> {
         match (self, other) {
             (ArgKinded::Ident(i), ArgKinded::Ident(o)) => Ok(i == o),
             (ArgKinded::Nat(n), ArgKinded::Nat(no)) => Ok(n.eval(nat_ctx)? == no.eval(nat_ctx)?),
@@ -651,7 +674,11 @@ pub struct View<'a> {
 }
 
 impl<'a> View<'a> {
-    pub fn equal(&'a self, nat_ctx: &'a NatCtx, other: &'a View<'a>) -> NatEvalResult<'a, bool> {
+    pub fn equal(
+        &'a self,
+        nat_ctx: &'a NatCtx<'a>,
+        other: &'a View<'a>,
+    ) -> NatEvalResult<'a, bool> {
         if self.name.name != other.name.name {
             return Ok(false);
         }
@@ -835,7 +862,7 @@ impl<'a> PlaceExpr<'a> {
         arena: &'a bumpalo::Bump,
     ) -> (Ident<'a>, BumpVec<'a, PlExprPathElem<'a>>) {
         fn as_ident_and_path_rec<'a>(
-            pl_expr: &'a PlaceExpr,
+            pl_expr: &'a PlaceExpr<'a>,
             mut path: BumpVec<'a, PlExprPathElem<'a>>,
         ) -> (Ident<'a>, BumpVec<'a, PlExprPathElem<'a>>) {
             match &pl_expr.pl_expr {
@@ -923,7 +950,7 @@ impl<'a> ExecExpr<'a> {
         )
     }
 
-    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+    pub fn equal(&self, nat_ctx: &'a NatCtx<'a>, other: &Self) -> NatEvalResult<bool> {
         match (&self.exec.base, &other.exec.base) {
             (BaseExec::Ident(i), BaseExec::Ident(o)) => {
                 if i != o {
@@ -1216,15 +1243,14 @@ impl<'a> FnTy<'a> {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum NatConstr<'a> {
     True,
-    Eq(BumpBox<'a, Nat<'a>>, BumpBox<'a, Nat<'a>>),
-    Lt(BumpBox<'a, Nat<'a>>, BumpBox<'a, Nat<'a>>),
-    And(BumpBox<'a, NatConstr<'a>>, BumpBox<'a, NatConstr<'a>>),
-    Or(BumpBox<'a, NatConstr<'a>>, BumpBox<'a, NatConstr<'a>>),
+    Eq(&'a Nat<'a>, &'a Nat<'a>),
+    Lt(&'a Nat<'a>, &'a Nat<'a>),
+    And(&'a NatConstr<'a>, &'a NatConstr<'a>),
+    Or(&'a NatConstr<'a>, &'a NatConstr<'a>),
 }
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind<'a> {
     Data(&'a DataTy<'a>),
@@ -1307,20 +1333,21 @@ impl<'a> Dim<'a> {
         Dim::XYZ(arena.alloc(Dim3d(n1, n2, n3)))
     }
 
-    pub fn new_2d<F: Fn(&'a Dim2d) -> Self>(
-        arena: &'a Bump,
-        constr: F,
-        n1: Nat<'a>,
-        n2: Nat<'a>,
-    ) -> Self {
+    pub fn new_2d<F>(arena: &'a Bump, constr: F, n1: Nat<'a>, n2: Nat<'a>) -> Self
+    where
+        F: Fn(&'a Dim2d<'a>) -> Self + 'a,
+    {
         constr(arena.alloc(Dim2d(n1, n2)))
     }
 
-    pub fn new_1d<F: Fn(&'a Dim1d) -> Self>(arena: &'a Bump, constr: F, n: Nat<'a>) -> Self {
+    pub fn new_1d<F>(arena: &'a Bump, constr: F, n: Nat<'a>) -> Self
+    where
+        F: Fn(&'a Dim1d<'a>) -> Self + 'a,
+    {
         constr(arena.alloc(Dim1d(n)))
     }
 
-    pub fn equal(&self, nat_ctx: &NatCtx, other: &Self) -> NatEvalResult<bool> {
+    pub fn equal(&self, nat_ctx: &'a NatCtx<'a>, other: &Self) -> NatEvalResult<bool> {
         match (self, other) {
             (Dim::XYZ(d), Dim::XYZ(o)) => Ok(d.0.eval(nat_ctx)? == o.0.eval(nat_ctx)?
                 && d.1.eval(nat_ctx)? == o.1.eval(nat_ctx)?
@@ -1488,7 +1515,7 @@ impl<'a> DataTy<'a> {
         }
     }
 
-    pub fn equal(&'a self, nat_ctx: &'a NatCtx, other: &'a Self) -> NatEvalResult<'a, bool> {
+    pub fn equal(&'a self, nat_ctx: &'a NatCtx<'a>, other: &'a Self) -> NatEvalResult<'a, bool> {
         match (&self.dty, &other.dty) {
             (DataTyKind::Ident(i), DataTyKind::Ident(o)) => Ok(i == o),
             (DataTyKind::Tuple(dtys), DataTyKind::Tuple(dtyos)) => {
@@ -1628,7 +1655,7 @@ pub enum NatRange<'a> {
 }
 
 impl<'a> NatRange<'a> {
-    pub fn lift(&self, arena: &'a Bump, nat_ctx: &NatCtx) -> NatEvalResult<NatRangeIter> {
+    pub fn lift(&self, arena: &'a Bump, nat_ctx: &'a NatCtx<'a>) -> NatEvalResult<NatRangeIter> {
         let range_iter = match self {
             NatRange::Simple { lower, upper } => {
                 let lower = lower.eval(nat_ctx)?;
@@ -1700,51 +1727,53 @@ pub enum Nat<'a> {
     LaneIdx,
     // Dummy that is always 0, i.e. equivalent to Lit(0)
     GridIdx,
-    BinOp(BinOpNat, Box<Nat<'a>>, Box<Nat<'a>>),
+    BinOp(BinOpNat, &'a Nat<'a>, &'a Nat<'a>),
     // Use Box<[Nat]> to safe 8 bytes compared to Vec<Nat>
-    App(Ident<'a>, Box<[Nat<'a>]>),
+    App(Ident<'a>, BumpVec<'a, Nat<'a>>),
 }
 
-pub struct NatCtx {
-    frames: Vec<Vec<(Box<str>, usize)>>,
+pub struct NatCtx<'a> {
+    frames: BumpVec<'a, BumpVec<'a, (&'a str, usize)>>,
 }
 
-impl NatCtx {
-    pub fn new() -> Self {
-        NatCtx {
-            frames: vec![vec![]],
-        }
+impl<'a> NatCtx<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        let mut frames = BumpVec::new_in(arena);
+        frames.push(BumpVec::new_in(arena));
+        NatCtx { frames }
     }
 
-    pub fn with_frame(frame: Vec<(Box<str>, usize)>) -> Self {
-        let mut ctx = NatCtx { frames: vec![] };
-        ctx.push_frame(frame);
-        ctx
+    pub fn with_frame(arena: &'a Bump, frame: BumpVec<'a, (&'a str, usize)>) -> Self {
+        let mut frames = BumpVec::new_in(arena);
+        frames.push(frame);
+        NatCtx { frames }
     }
 
-    pub fn append(&mut self, nat_name: &str, val: usize) {
-        self.frames
-            .last_mut()
-            .unwrap()
-            .push((Box::from(nat_name), val))
-    }
-
-    pub fn find(&self, name: &str) -> Option<usize> {
-        self.frames.iter().flatten().rev().find_map(|(i, n)| {
-            if i.as_ref() == name {
-                Some(*n)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn push_empty_frame(&mut self) -> &mut Self {
-        self.frames.push(vec![]);
+    pub fn append(&mut self, nat_name: &str, val: usize, arena: &'a Bump) -> &mut Self {
+        let interned: &'a str = arena.alloc_str(nat_name);
+        let frame = self.frames.last_mut().unwrap();
+        frame.push((interned, val));
         self
     }
 
-    fn push_frame(&mut self, frame: Vec<(Box<str>, usize)>) -> &mut Self {
+    pub fn find(&self, name: &str) -> Option<usize> {
+        self.frames.iter().flatten().rev().find_map(
+            |(i, n)| {
+                if *i == name {
+                    Some(*n)
+                } else {
+                    None
+                }
+            },
+        )
+    }
+
+    pub fn push_empty_frame(&mut self, arena: &'a Bump) -> &mut Self {
+        self.frames.push(BumpVec::new_in(arena));
+        self
+    }
+
+    fn push_frame(&mut self, frame: BumpVec<'a, (&'a str, usize)>) -> &mut Self {
         self.frames.push(frame);
         self
     }
@@ -1763,7 +1792,7 @@ pub struct NatEvalError<'a> {
 pub type NatEvalResult<'a, T> = Result<T, NatEvalError<'a>>;
 
 impl<'a> Nat<'a> {
-    pub fn eval(&self, nat_ctx: &NatCtx) -> NatEvalResult<usize> {
+    pub fn eval(&self, nat_ctx: &'a NatCtx<'a>) -> NatEvalResult<usize> {
         match self {
             Nat::GridIdx
             | Nat::BlockIdx(_)
@@ -1794,9 +1823,15 @@ impl<'a> Nat<'a> {
             Nat::App(_, _) => unimplemented!(),
         }
     }
+
+    pub fn new_binop_ref(arena: &'a Bump, op: BinOpNat, lhs: Nat<'a>, rhs: Nat<'a>) -> Self {
+        let l_ref = arena.alloc(lhs);
+        let r_ref = arena.alloc(rhs);
+        Nat::BinOp(op, l_ref, r_ref)
+    }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum BinOpNat {
     Add,
     Sub,
@@ -1820,21 +1855,21 @@ mod size_asserts {
         };
     }
     static_assert_size!(Dim, 16);
-    static_assert_size!(DataTy, 112);
-    static_assert_size!(DataTyKind, 64);
+    static_assert_size!(DataTy, 128);
+    static_assert_size!(DataTyKind, 80);
     static_assert_size!(ExecExpr, 32);
     static_assert_size!(ExecExprKind, 72);
     static_assert_size!(ExecPathElem, 16);
-    static_assert_size!(ExecTy, 64);
-    static_assert_size!(ExecTyKind, 48);
-    static_assert_size!(Expr, 104);
-    static_assert_size!(ExprKind, 80);
+    static_assert_size!(ExecTy, 80);
+    static_assert_size!(ExecTyKind, 64);
+    static_assert_size!(Expr, 112);
+    static_assert_size!(ExprKind, 88);
     static_assert_size!(FunDef, 216);
     static_assert_size!(Ident, 32); // maybe too large?
     static_assert_size!(IdentExec, 40);
     static_assert_size!(Lit, 16);
     static_assert_size!(Memory, 32);
-    static_assert_size!(Nat, 48);
+    static_assert_size!(Nat, 64);
     static_assert_size!(ParamDecl, 80);
     static_assert_size!(Pattern, 40);
     static_assert_size!(PlaceExpr, 56);
