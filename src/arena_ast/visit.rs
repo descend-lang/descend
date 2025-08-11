@@ -51,7 +51,7 @@ pub trait Visit<'a>: Sized {
 
 macro_rules! walk_list {
     ($visitor: expr, $method: ident, $list: expr) => {
-        for elem in $list.iter_mut() {
+        for elem in $list.iter() {
             $visitor.$method(elem)
         }
     };
@@ -76,7 +76,7 @@ pub fn walk_nat<'a, V: Visit<'a>>(visitor: &mut V, n: &Nat<'a>) {
         | Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
-            walk_list!(visitor, visit_nat, args.as_ref())
+            walk_list!(visitor, visit_nat, args)
         }
     }
 }

@@ -3,70 +3,74 @@ use crate::arena_ast::*;
 #[rustfmt::skip]
 pub trait VisitMut<'a>: Sized {
     fn visit_binary_op_nat(&mut self, _op: &mut BinOpNat) {}
-    fn visit_nat(&mut self, n: &mut Nat<'a>) { walk_nat(self, n) }
-    fn visit_nat_range(&mut self, nr: &mut NatRange<'a>) { walk_nat_range(self, nr) }
-    fn visit_ident_kinded(&mut self, id_kind: &mut IdentKinded<'a>) { walk_ident_kinded(self, id_kind) }
-    fn visit_ident_exec(&mut self, id_exec: &mut IdentExec<'a>) { walk_ident_exec(self, id_exec) }
-    fn visit_prv_rel(&mut self, prv_rel: &mut PrvRel<'a>) { walk_prv_rel(self, prv_rel) }
+    fn visit_nat(&mut self, arena: &'a Bump, n: &mut Nat<'a>) { walk_nat(self, arena, n) }
+    fn visit_nat_ref(&mut self, arena: &'a Bump, slot: &mut &'a Nat<'a>) {
+        walk_nat_ref(self, arena, slot)
+    }
+    fn visit_nat_range(&mut self, arena: &'a Bump, nr: &mut NatRange<'a>) { walk_nat_range(self, arena, nr) }
+    fn visit_ident_kinded(&mut self, arena: &'a Bump, id_kind: &mut IdentKinded<'a>) { walk_ident_kinded(self, arena, id_kind) }
+    fn visit_ident_exec(&mut self, arena: &'a Bump, id_exec: &mut IdentExec<'a>) { walk_ident_exec(self, arena, id_exec) }
+    fn visit_prv_rel(&mut self, arena: &'a Bump, prv_rel: &mut PrvRel<'a>) { walk_prv_rel(self, arena, prv_rel) }
     fn visit_exec_ty(&mut self, _exec: &mut ExecTy<'a>) {}
-    fn visit_mem(&mut self, mem: &mut Memory<'a>) { walk_mem(self, mem) }
-    fn visit_prv(&mut self, prv: &mut Provenance<'a>) { walk_prv(self, prv) }
+    fn visit_exec_ty_ref(&mut self, _arena: &'a bumpalo::Bump, _slot: &mut &'a ExecTy<'a>) {}
+    fn visit_mem(&mut self, arena: &'a Bump, mem: &mut Memory<'a>) { walk_mem(self, arena, mem) }
+    fn visit_prv(&mut self, arena: &'a Bump, prv: &mut Provenance<'a>) { walk_prv(self, arena, prv) }
     fn visit_scalar_ty(&mut self, _sty: &mut ScalarTy) {}
     fn visit_atomic_ty(&mut self, _aty: &mut AtomicTy) {}
     fn visit_dim_compo(&mut self, _dim_compo: &mut DimCompo) {}
-    fn visit_dim(&mut self, dim: &mut Dim<'a>) { walk_dim(self, dim) }
-    fn visit_dim3d(&mut self, dim3d: &mut Dim3d<'a>) { walk_dim3d(self, dim3d) }
-    fn visit_dim2d(&mut self, dim2d: &mut Dim2d<'a>) { walk_dim2d(self, dim2d) }
-    fn visit_dim1d(&mut self, dim1d: &mut Dim1d<'a>) { walk_dim1d(self, dim1d) }
-    fn visit_ref(&mut self, reff: &mut RefDty<'a>) { walk_ref(self, reff) }
-    fn visit_dty(&mut self, dty: &mut DataTy<'a>) { walk_dty(self, dty) }
-    fn visit_fn_ty(&mut self, fn_ty: &mut FnTy<'a>) { walk_fn_ty(self, fn_ty) }
-    fn visit_nat_constr(&mut self, nat_constr: &mut NatConstr<'a>) { walk_nat_constr(self, nat_constr) }
-    fn visit_ty(&mut self, ty: &mut Ty<'a>) { walk_ty(self, ty) }
-    fn visit_view(&mut self, view: &mut View<'a>) { walk_view(self, view) }
-    fn visit_pl_expr(&mut self, pl_expr: &mut PlaceExpr<'a>) { walk_pl_expr(self, pl_expr) }
-    fn visit_arg_kinded(&mut self, arg_kinded: &mut ArgKinded<'a>) { walk_arg_kinded(self, arg_kinded) }
+    fn visit_dim(&mut self, arena: &'a Bump, dim: &mut Dim<'a>) { walk_dim(self, arena, dim) }
+    fn visit_dim3d(&mut self, arena: &'a Bump, dim3d: &mut Dim3d<'a>) { walk_dim3d(self, arena, dim3d) }
+    fn visit_dim2d(&mut self, arena: &'a Bump, dim2d: &mut Dim2d<'a>) { walk_dim2d(self, arena, dim2d) }
+    fn visit_dim1d(&mut self, arena: &'a Bump, dim1d: &mut Dim1d<'a>) { walk_dim1d(self, arena, dim1d) }
+    fn visit_ref(&mut self, arena: &'a Bump, reff: &mut RefDty<'a>) { walk_ref(self, arena, reff) }
+    fn visit_dty(&mut self, arena: &'a Bump, dty: &mut DataTy<'a>) { walk_dty(self, arena, dty) }
+    fn visit_fn_ty(&mut self, arena: &'a Bump, fn_ty: &mut FnTy<'a>) { walk_fn_ty(self, arena, fn_ty) }
+    fn visit_nat_constr(&mut self, arena: &'a Bump, nat_constr: &mut NatConstr<'a>) { walk_nat_constr(self, arena, nat_constr) }
+    fn visit_ty(&mut self, arena: &'a Bump, ty: &mut Ty<'a>) { walk_ty(self, arena, ty) }
+    fn visit_view(&mut self, arena: &'a Bump, view: &mut View<'a>) { walk_view(self, arena, view) }
+    fn visit_pl_expr(&mut self, arena: &'a Bump, pl_expr: &mut PlaceExpr<'a>) { walk_pl_expr(self, arena, pl_expr) }
+    fn visit_arg_kinded(&mut self, arena: &'a Bump, arg_kinded: &mut ArgKinded<'a>) { walk_arg_kinded(self, arena, arg_kinded) }
     fn visit_kind(&mut self, _kind: &mut Kind) {}
     fn visit_binary_op(&mut self, _op: &mut BinOp) {}
     fn visit_unary_op(&mut self, _op: &mut UnOp) {}
     fn visit_own(&mut self, _own: &mut Ownership) {}
     fn visit_mutability(&mut self, _mutbl: &mut Mutability) {}
     fn visit_lit(&mut self, _lit: &mut Lit) {}
-    fn visit_ident(&mut self, _ident: &mut Ident<'a>) {}
-    fn visit_pattern(&mut self, pattern: &mut Pattern<'a>) { walk_pattern(self, pattern) }
-    fn visit_split(&mut self, split: &mut Split<'a>) { walk_split(self, split) }
-    fn visit_sched(&mut self, sched: &mut Sched<'a>) { walk_sched(self, sched) }
-    fn visit_expr(&mut self, expr: &mut Expr<'a>) { walk_expr(self, expr) }
-    fn visit_app_kernel(&mut self, app_kernel: &mut AppKernel<'a>) { walk_app_kernel(self, app_kernel) }
-    fn visit_block(&mut self, block: &mut Block<'a>) { walk_block(self, block) }
-    fn visit_split_proj(&mut self, exec_split: &mut TakeRange<'a>) { walk_split_proj(self, exec_split) }
-    fn visit_exec_expr(&mut self, exec_expr: &mut ExecExpr<'a>) { walk_exec_expr(self, exec_expr) }
-    fn visit_exec(&mut self, exec: &mut ExecExprKind<'a>) { walk_exec(self, exec) }
-    fn visit_exec_path_elem(&mut self, exec_path_elem: &mut ExecPathElem<'a>) { walk_exec_path_elem(self, exec_path_elem) }
-    fn visit_param_decl(&mut self, param_decl: &mut ParamDecl<'a>) { walk_param_decl(self, param_decl) }
-    fn visit_fun_def(&mut self, fun_def: &mut FunDef<'a>) { walk_fun_def(self, fun_def) }
-    fn visit_fun_decl(&mut self, fun_decl: &mut FunDecl<'a>) { walk_fun_decl(self, fun_decl) }
-    fn visit_param_sig(&mut self, param_sig: &mut ParamSig<'a>) { walk_param_sig(self, param_sig) }
-    fn visit_field(&mut self, field: &mut (Ident<'a>, DataTy<'a>)) { walk_field(self, field) }
+    fn visit_ident(&mut self, arena: &'a Bump, _ident: &mut Ident<'a>) {}
+    fn visit_pattern(&mut self, arena: &'a Bump, pattern: &mut Pattern<'a>) { walk_pattern(self, arena, pattern) }
+    fn visit_split(&mut self, arena: &'a Bump, split: &mut Split<'a>) { walk_split(self, arena, split) }
+    fn visit_sched(&mut self, arena: &'a Bump, sched: &mut Sched<'a>) { walk_sched(self, arena, sched) }
+    fn visit_expr(&mut self, arena: &'a Bump, expr: &mut Expr<'a>) { walk_expr(self, arena, expr) }
+    fn visit_app_kernel(&mut self, arena: &'a Bump, app_kernel: &mut AppKernel<'a>) { walk_app_kernel(self, arena, app_kernel) }
+    fn visit_block(&mut self, arena: &'a Bump, block: &mut Block<'a>) { walk_block(self, arena, block) }
+    fn visit_split_proj(&mut self,arena: &'a Bump, exec_split: &mut TakeRange<'a>) { walk_split_proj(self, arena, exec_split) }
+    fn visit_exec_expr(&mut self, arena: &'a Bump, exec_expr: &mut ExecExpr<'a>) { walk_exec_expr(self, arena, exec_expr) }
+    fn visit_exec(&mut self, arena: &'a Bump, exec: &mut ExecExprKind<'a>) { walk_exec(self, arena, exec) }
+    fn visit_exec_path_elem(&mut self, arena: &'a Bump, exec_path_elem: &mut ExecPathElem<'a>) { walk_exec_path_elem(self,  arena, exec_path_elem) }
+    fn visit_param_decl(&mut self, arena: &'a Bump, param_decl: &mut ParamDecl<'a>) { walk_param_decl(self, arena, param_decl) }
+    fn visit_fun_def(&mut self, arena: &'a Bump, fun_def: &mut FunDef<'a>) { walk_fun_def(self, arena, fun_def) }
+    fn visit_fun_decl(&mut self, arena: &'a Bump, fun_decl: &mut FunDecl<'a>) { walk_fun_decl(self, arena, fun_decl) }
+    fn visit_param_sig(&mut self, arena: &'a Bump, param_sig: &mut ParamSig<'a>) { walk_param_sig(self, arena, param_sig) }
+    fn visit_field(&mut self, arena: &'a Bump, field: &mut (Ident<'a>, DataTy<'a>)) { walk_field(self, arena, field) }
 }
 
 // Taken from the Rust compiler
 macro_rules! walk_list {
-    ($visitor: expr, $method: ident, $list: expr) => {
+    ($visitor:expr, $method:ident, $list:expr, $arena:expr) => {
         for elem in $list.iter_mut() {
-            $visitor.$method(elem)
+            $visitor.$method($arena, elem)
         }
     };
 }
 pub(crate) use walk_list;
 
-pub fn walk_nat<'a, V: VisitMut<'a>>(visitor: &mut V, n: &mut Nat<'a>) {
+pub fn walk_nat<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, n: &mut Nat<'a>) {
     match n {
-        Nat::Ident(ident) => visitor.visit_ident(ident),
-        Nat::BinOp(op, l, r) => {
+        Nat::Ident(ident) => visitor.visit_ident(arena, ident),
+        Nat::BinOp(op, ref mut l, ref mut r) => {
             visitor.visit_binary_op_nat(op);
-            visitor.visit_nat(l);
-            visitor.visit_nat(r)
+            visitor.visit_nat_ref(arena, l);
+            visitor.visit_nat_ref(arena, r);
         }
         Nat::GridIdx
         | Nat::BlockIdx(_)
@@ -77,122 +81,241 @@ pub fn walk_nat<'a, V: VisitMut<'a>>(visitor: &mut V, n: &mut Nat<'a>) {
         | Nat::LaneIdx
         | Nat::Lit(_) => {}
         Nat::App(func, args) => {
-            visitor.visit_ident(func);
-            walk_list!(visitor, visit_nat, args.as_mut())
+            visitor.visit_ident(arena, func);
+            walk_list!(visitor, visit_nat, args.as_mut_slice(), arena)
         }
     }
 }
 
-pub fn walk_nat_range<'a, V: VisitMut<'a>>(visitor: &mut V, nr: &mut NatRange<'a>) {
+pub fn walk_nat_ref<'a, V: VisitMut<'a>>(
+    v: &mut V,
+    arena: &'a bumpalo::Bump,
+    slot: &mut &'a Nat<'a>,
+) {
+    match &*(*slot) {
+        Nat::BinOp(op, l, r) => {
+            let mut l_slot: &'a Nat<'a> = *l;
+            let mut r_slot: &'a Nat<'a> = *r;
+
+            v.visit_nat_ref(arena, &mut l_slot);
+            v.visit_nat_ref(arena, &mut r_slot);
+
+            // Rebuild the parent node with possibly-updated children
+            let new = arena.alloc(Nat::BinOp(*op, l_slot, r_slot));
+            *slot = new;
+        }
+        Nat::App(func, args) => {
+            // Owned children: visit in place
+            let mut rebuilt = bumpalo::collections::Vec::new_in(arena);
+            rebuilt.reserve(args.len());
+            for a in args.iter() {
+                let mut owned = a.clone();
+                v.visit_nat(arena, &mut owned);
+                rebuilt.push(owned);
+            }
+            *slot = arena.alloc(Nat::App(func.clone(), rebuilt));
+        }
+        _ => {}
+    }
+}
+
+pub fn walk_nat_range<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    nr: &mut NatRange<'a>,
+) {
     match nr {
         NatRange::Simple { lower, upper } => {
-            visitor.visit_nat(lower);
-            visitor.visit_nat(upper);
+            visitor.visit_nat(arena, lower);
+            visitor.visit_nat(arena, upper);
         }
-        NatRange::Halved { upper } | NatRange::Doubled { upper } => visitor.visit_nat(upper),
+        NatRange::Halved { upper } | NatRange::Doubled { upper } => visitor.visit_nat(arena, upper),
     }
 }
 
-pub fn walk_ident_kinded<'a, V: VisitMut<'a>>(visitor: &mut V, id_kind: &mut IdentKinded<'a>) {
+pub fn walk_ident_kinded<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    id_kind: &mut IdentKinded<'a>,
+) {
     let IdentKinded { ident, kind } = id_kind;
-    visitor.visit_ident(ident);
+    visitor.visit_ident(arena, ident);
     visitor.visit_kind(kind)
 }
 
-pub fn walk_ident_exec<'a, V: VisitMut<'a>>(visitor: &mut V, id_exec: &mut IdentExec<'a>) {
+pub fn walk_ident_exec<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    id_exec: &mut IdentExec<'a>,
+) {
     let IdentExec { ident, ty } = id_exec;
-    visitor.visit_ident(ident);
-    visitor.visit_exec_ty(ty)
+    visitor.visit_ident(arena, ident);
+    visitor.visit_exec_ty_ref(arena, ty)
 }
 
-pub fn walk_prv_rel<'a, V: VisitMut<'a>>(visitor: &mut V, prv_rel: &mut PrvRel<'a>) {
+pub fn walk_prv_rel<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    prv_rel: &mut PrvRel<'a>,
+) {
     let PrvRel { longer, shorter } = prv_rel;
-    visitor.visit_ident(longer);
-    visitor.visit_ident(shorter)
+    visitor.visit_ident(arena, longer);
+    visitor.visit_ident(arena, shorter)
 }
 
-pub fn walk_mem<'a, V: VisitMut<'a>>(visitor: &mut V, mem: &mut Memory<'a>) {
+pub fn walk_mem<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, mem: &mut Memory<'a>) {
     if let Memory::Ident(ident) = mem {
-        visitor.visit_ident(ident)
+        visitor.visit_ident(arena, ident)
     }
 }
 
-pub fn walk_prv<'a, V: VisitMut<'a>>(visitor: &mut V, prv: &mut Provenance<'a>) {
+pub fn walk_prv<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, prv: &mut Provenance<'a>) {
     match prv {
-        Provenance::Ident(ident) => visitor.visit_ident(ident),
+        Provenance::Ident(ident) => visitor.visit_ident(arena, ident),
         Provenance::Value(_) => {}
     }
 }
 
-pub fn walk_dim3d<'a, V: VisitMut<'a>>(visitor: &mut V, dim3d: &mut Dim3d<'a>) {
+pub fn walk_dim3d<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, dim3d: &mut Dim3d<'a>) {
     let Dim3d(n1, n2, n3) = dim3d;
-    visitor.visit_nat(n1);
-    visitor.visit_nat(n2);
-    visitor.visit_nat(n3);
+    visitor.visit_nat(arena, n1);
+    visitor.visit_nat(arena, n2);
+    visitor.visit_nat(arena, n3);
 }
 
-pub fn walk_dim2d<'a, V: VisitMut<'a>>(visitor: &mut V, dim2d: &mut Dim2d<'a>) {
+pub fn walk_dim2d<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, dim2d: &mut Dim2d<'a>) {
     let Dim2d(n1, n2) = dim2d;
-    visitor.visit_nat(n1);
-    visitor.visit_nat(n2);
+    visitor.visit_nat(arena, n1);
+    visitor.visit_nat(arena, n2);
 }
 
-pub fn walk_dim1d<'a, V: VisitMut<'a>>(visitor: &mut V, dim1d: &mut Dim1d<'a>) {
+pub fn walk_dim1d<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, dim1d: &mut Dim1d<'a>) {
     let Dim1d(n) = dim1d;
-    visitor.visit_nat(n);
+    visitor.visit_nat(arena, n);
 }
 
-pub fn walk_dim<'a, V: VisitMut<'a>>(visitor: &mut V, dim: &mut Dim<'a>) {
+/**
+pub fn walk_dim<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, dim: &mut Dim<'a>) {
     match dim {
         Dim::XYZ(dim3d) => {
-            visitor.visit_dim3d(dim3d);
+            visitor.visit_dim3d(arena, dim3d);
         }
         Dim::XY(dim2d) | Dim::XZ(dim2d) | Dim::YZ(dim2d) => {
-            visitor.visit_dim2d(dim2d);
+            visitor.visit_dim2d(arena, dim2d);
         }
-        Dim::X(dim1d) | Dim::Y(dim1d) | Dim::Z(dim1d) => visitor.visit_dim1d(dim1d),
+        Dim::X(dim1d) | Dim::Y(dim1d) | Dim::Z(dim1d) => visitor.visit_dim1d(arena, dim1d),
     }
+}*/
+
+pub fn walk_dim<'a, V: VisitMut<'a>>(v: &mut V, arena: &'a bumpalo::Bump, dim: &mut Dim<'a>) {
+    let new_dim = match dim {
+        Dim::XYZ(d3_ref) => {
+            let mut d3 = (*(*d3_ref)).clone(); // owned, mutable
+            v.visit_dim3d(arena, &mut d3);
+            Dim::new_3d(arena, d3.0.clone(), d3.1.clone(), d3.2.clone())
+        }
+        Dim::XY(d2_ref) => {
+            let mut d2 = (*(*d2_ref)).clone();
+            v.visit_dim2d(arena, &mut d2);
+            Dim::new_2d(arena, Dim::XY, d2.0.clone(), d2.1.clone())
+        }
+        Dim::XZ(d2_ref) => {
+            let mut d2 = (*(*d2_ref)).clone();
+            v.visit_dim2d(arena, &mut d2);
+            Dim::new_2d(arena, Dim::XZ, d2.0.clone(), d2.1.clone())
+        }
+        Dim::YZ(d2_ref) => {
+            let mut d2 = (*(*d2_ref)).clone();
+            v.visit_dim2d(arena, &mut d2);
+            Dim::new_2d(arena, Dim::YZ, d2.0.clone(), d2.1.clone())
+        }
+        Dim::X(d1_ref) => {
+            let mut d1 = (*(*d1_ref)).clone();
+            v.visit_dim1d(arena, &mut d1);
+            Dim::new_1d(arena, Dim::X, d1.0.clone())
+        }
+        Dim::Y(d1_ref) => {
+            let mut d1 = (*(*d1_ref)).clone();
+            v.visit_dim1d(arena, &mut d1);
+            Dim::new_1d(arena, Dim::Y, d1.0.clone())
+        }
+        Dim::Z(d1_ref) => {
+            let mut d1 = (*(*d1_ref)).clone();
+            v.visit_dim1d(arena, &mut d1);
+            Dim::new_1d(arena, Dim::Z, d1.0.clone())
+        }
+    };
+    *dim = new_dim;
 }
 
-pub fn walk_ref<'a, V: VisitMut<'a>>(visitor: &mut V, reff: &mut RefDty<'a>) {
+pub fn walk_ref<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, reff: &mut RefDty<'a>) {
     let RefDty { rgn, own, mem, dty } = reff;
-    visitor.visit_prv(rgn);
+    visitor.visit_prv(arena, rgn);
     visitor.visit_own(own);
-    visitor.visit_mem(mem);
-    visitor.visit_dty(dty);
+    visitor.visit_mem(arena, mem);
+
+    let mut owned = (*reff.dty).clone();
+    visitor.visit_dty(arena, &mut owned);
+    reff.dty = arena.alloc(owned);
 }
 
-pub fn walk_dty<'a, V: VisitMut<'a>>(visitor: &mut V, dty: &mut DataTy<'a>) {
+pub fn walk_dty<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, dty: &mut DataTy<'a>) {
     match &mut dty.dty {
-        DataTyKind::Ident(ident) => visitor.visit_ident(ident),
+        DataTyKind::Ident(ident) => visitor.visit_ident(arena, ident),
         DataTyKind::Scalar(sty) => visitor.visit_scalar_ty(sty),
         DataTyKind::Atomic(aty) => visitor.visit_atomic_ty(aty),
-        DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys),
-        DataTyKind::Struct(struct_decl) => {
-            visitor.visit_ident(&mut struct_decl.ident);
-            walk_list!(visitor, visit_field, &mut struct_decl.fields)
+        DataTyKind::Tuple(elem_dtys) => walk_list!(visitor, visit_dty, elem_dtys, arena),
+        DataTyKind::Struct(struct_decl_ref) => {
+            let mut owned = (**struct_decl_ref).clone();
+            visitor.visit_ident(arena, &mut owned.ident);
+            walk_list!(visitor, visit_field, &mut owned.fields, arena);
+            *struct_decl_ref = arena.alloc(owned);
         }
-        DataTyKind::Array(dty, n) => {
-            visitor.visit_dty(dty);
-            visitor.visit_nat(n)
+        DataTyKind::Array(dty_ref, n_ref) => {
+            let mut elem = (**dty_ref).clone();
+            visitor.visit_dty(arena, &mut elem);
+            *dty_ref = arena.alloc(elem);
+
+            let mut n = (*n_ref).clone();
+            visitor.visit_nat(arena, &mut n);
+            *n_ref = n;
         }
-        DataTyKind::ArrayShape(dty, n) => {
-            visitor.visit_dty(dty);
-            visitor.visit_nat(n);
+        DataTyKind::ArrayShape(dty_ref, n_ref) => {
+            let mut elem = (**dty_ref).clone();
+            visitor.visit_dty(arena, &mut elem);
+            *dty_ref = arena.alloc(elem);
+
+            let mut n = (*n_ref).clone();
+            visitor.visit_nat(arena, &mut n);
+            *n_ref = n;
         }
-        DataTyKind::At(dty, mem) => {
-            visitor.visit_dty(dty);
-            visitor.visit_mem(mem)
+        DataTyKind::At(dty_ref, mem) => {
+            let mut elem = (**dty_ref).clone();
+            visitor.visit_dty(arena, &mut elem);
+            *dty_ref = arena.alloc(elem);
+
+            visitor.visit_mem(arena, mem);
         }
-        DataTyKind::Ref(reff) => {
-            visitor.visit_ref(reff);
+        DataTyKind::Ref(reff_ref) => {
+            let mut r = (**reff_ref).clone();
+            visitor.visit_ref(arena, &mut r);
+            *reff_ref = arena.alloc(r);
         }
-        DataTyKind::RawPtr(dty) => visitor.visit_dty(dty),
-        DataTyKind::Dead(dty) => visitor.visit_dty(dty),
+        DataTyKind::RawPtr(datayt_ref) => {
+            let mut elem = (**datayt_ref).clone();
+            visitor.visit_dty(arena, &mut elem);
+            *datayt_ref = arena.alloc(elem);
+        }
+
+        DataTyKind::Dead(datayt_ref) => {
+            let mut elem = (**datayt_ref).clone();
+            visitor.visit_dty(arena, &mut elem);
+            *datayt_ref = arena.alloc(elem);
+        }
     }
 }
 
-pub fn walk_fn_ty<'a, V: VisitMut<'a>>(visitor: &mut V, fn_ty: &mut FnTy<'a>) {
+pub fn walk_fn_ty<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, fn_ty: &mut FnTy<'a>) {
     let FnTy {
         generics,
         generic_exec,
@@ -201,105 +324,228 @@ pub fn walk_fn_ty<'a, V: VisitMut<'a>>(visitor: &mut V, fn_ty: &mut FnTy<'a>) {
         ret_ty,
         nat_constrs,
     } = fn_ty;
-    walk_list!(visitor, visit_ident_kinded, generics);
+    walk_list!(visitor, visit_ident_kinded, generics, arena);
     for exec_decl in generic_exec {
-        visitor.visit_ident_exec(exec_decl)
+        visitor.visit_ident_exec(arena, exec_decl)
     }
-    walk_list!(visitor, visit_param_sig, param_sigs);
-    visitor.visit_exec_expr(exec);
-    visitor.visit_ty(ret_ty);
-    walk_list!(visitor, visit_nat_constr, nat_constrs);
+    walk_list!(visitor, visit_param_sig, param_sigs, arena);
+    visitor.visit_exec_expr(arena, exec);
+    let mut ret_ty_owned = (**ret_ty).clone();
+    visitor.visit_ty(arena, &mut ret_ty_owned);
+    *ret_ty = arena.alloc(ret_ty_owned);
+    walk_list!(visitor, visit_nat_constr, nat_constrs, arena);
 }
 
-pub fn walk_nat_constr<'a, V: VisitMut<'a>>(visitor: &mut V, nat_constr: &mut NatConstr<'a>) {
+pub fn walk_nat_constr<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    nat_constr: &mut NatConstr<'a>,
+) {
     match nat_constr {
         NatConstr::True => {}
         NatConstr::Eq(l, r) => {
-            visitor.visit_nat(l);
-            visitor.visit_nat(r);
+            visitor.visit_nat(arena, l);
+            visitor.visit_nat(arena, r);
         }
         NatConstr::Lt(l, r) => {
-            visitor.visit_nat(l);
-            visitor.visit_nat(r);
+            visitor.visit_nat(arena, l);
+            visitor.visit_nat(arena, r);
         }
         NatConstr::And(l, r) => {
-            visitor.visit_nat_constr(l);
-            visitor.visit_nat_constr(r);
+            visitor.visit_nat_constr(arena, l);
+            visitor.visit_nat_constr(arena, r);
         }
         NatConstr::Or(l, r) => {
-            visitor.visit_nat_constr(l);
-            visitor.visit_nat_constr(r);
+            visitor.visit_nat_constr(arena, l);
+            visitor.visit_nat_constr(arena, r);
         }
     }
 }
 
-pub fn walk_ty<'a, V: VisitMut<'a>>(visitor: &mut V, ty: &mut Ty<'a>) {
+pub fn walk_ty<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a bumpalo::Bump, ty: &mut Ty<'a>) {
     match &mut ty.ty {
-        TyKind::Data(dty) => visitor.visit_dty(dty),
-        TyKind::FnTy(fn_ty) => {
-            visitor.visit_fn_ty(fn_ty);
+        TyKind::Data(dty) => visitor.visit_dty(arena, dty),
+
+        TyKind::FnTy(fn_slot) => {
+            // 1) Detach: copy fields out of the &'a FnTy<'a>
+            let src: &FnTy<'a> = *fn_slot;
+
+            let mut owned = FnTy {
+                generics: src.generics.clone(),
+                generic_exec: src.generic_exec.clone(),
+                param_sigs: src.param_sigs.clone(),
+                exec: src.exec.clone(),
+                ret_ty: src.ret_ty,
+                nat_constrs: src.nat_constrs.clone(),
+            };
+
+            // 2) Visit children on the owned struct
+            walk_list!(visitor, visit_ident_kinded, &mut owned.generics, arena);
+
+            if let Some(ref mut ie) = owned.generic_exec {
+                visitor.visit_ident_exec(arena, ie);
+            }
+
+            walk_list!(visitor, visit_param_sig, &mut owned.param_sigs, arena);
+            visitor.visit_exec_expr(arena, &mut owned.exec);
+
+            // ret_ty needs its own detach/reattach
+            let mut ret_owned = (*owned.ret_ty).clone();
+            visitor.visit_ty(arena, &mut ret_owned);
+            owned.ret_ty = arena.alloc(ret_owned);
+
+            walk_list!(visitor, visit_nat_constr, &mut owned.nat_constrs, arena);
+
+            // 3) Reattach
+            *fn_slot = arena.alloc(owned);
         }
     }
 }
 
-pub fn walk_view<'a, V: VisitMut<'a>>(visitor: &mut V, view: &mut View<'a>) {
-    visitor.visit_ident(&mut view.name);
-    walk_list!(visitor, visit_arg_kinded, &mut view.gen_args);
+pub fn walk_view<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, view: &mut View<'a>) {
+    visitor.visit_ident(arena, &mut view.name);
+    walk_list!(visitor, visit_arg_kinded, &mut view.gen_args, arena);
     for v in &mut view.args {
-        visitor.visit_view(v)
+        visitor.visit_view(arena, v)
     }
 }
 
-pub fn walk_pl_expr<'a, V: VisitMut<'a>>(visitor: &mut V, pl_expr: &mut PlaceExpr<'a>) {
+/**
+pub fn walk_pl_expr<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    pl_expr: &mut PlaceExpr<'a>,
+) {
     match &mut pl_expr.pl_expr {
-        PlaceExprKind::Ident(ident) => visitor.visit_ident(ident),
-        PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(pl_expr),
+        PlaceExprKind::Ident(ident) => visitor.visit_ident(arena, ident),
+        PlaceExprKind::Deref(pl_expr) => visitor.visit_pl_expr(arena, pl_expr),
         PlaceExprKind::Select(p, distrib_exec) => {
-            visitor.visit_pl_expr(p);
-            visitor.visit_exec_expr(distrib_exec);
+            visitor.visit_pl_expr(arena, p);
+            visitor.visit_exec_expr(arena, distrib_exec);
         }
         PlaceExprKind::Proj(pl_expr, _) => {
-            visitor.visit_pl_expr(pl_expr);
+            visitor.visit_pl_expr(arena, pl_expr);
         }
         PlaceExprKind::FieldProj(pl_expr, field_name) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_ident(field_name);
+            visitor.visit_pl_expr(arena, pl_expr);
+            visitor.visit_ident(arena, field_name);
         }
         PlaceExprKind::View(pl_expr, view) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_view(view);
+            visitor.visit_pl_expr(arena, pl_expr);
+            visitor.visit_view(arena, view);
         }
         PlaceExprKind::Idx(pl_expr, n) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(n)
+            visitor.visit_pl_expr(arena, pl_expr);
+            visitor.visit_nat(arena, n)
+        }
+    }
+}
+*/
+
+pub fn walk_pl_expr<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a bumpalo::Bump,
+    pl_expr: &mut PlaceExpr<'a>,
+) {
+    match &mut pl_expr.pl_expr {
+        PlaceExprKind::Ident(ident) => {
+            visitor.visit_ident(arena, ident);
+        }
+
+        PlaceExprKind::Deref(inner_ref) => {
+            let mut owned = (**inner_ref).clone();
+            visitor.visit_pl_expr(arena, &mut owned);
+            *inner_ref = arena.alloc(owned);
+        }
+
+        PlaceExprKind::Select(p_ref, exec_ref) => {
+            // place
+            let mut p_owned = (**p_ref).clone();
+            visitor.visit_pl_expr(arena, &mut p_owned);
+            *p_ref = arena.alloc(p_owned);
+
+            // exec
+            let mut exec_owned = (**exec_ref).clone();
+            visitor.visit_exec_expr(arena, &mut exec_owned);
+            *exec_ref = arena.alloc(exec_owned);
+        }
+
+        PlaceExprKind::Proj(p_ref, _k) => {
+            let mut p_owned = (**p_ref).clone();
+            visitor.visit_pl_expr(arena, &mut p_owned);
+            *p_ref = arena.alloc(p_owned);
+        }
+
+        PlaceExprKind::FieldProj(p_ref, field_ref) => {
+            // place
+            let mut p_owned = (**p_ref).clone();
+            visitor.visit_pl_expr(arena, &mut p_owned);
+            *p_ref = arena.alloc(p_owned);
+
+            // field ident (held by reference)
+            let mut field_owned = (**field_ref).clone();
+            visitor.visit_ident(arena, &mut field_owned);
+            *field_ref = arena.alloc(field_owned);
+        }
+
+        PlaceExprKind::View(p_ref, view_ref) => {
+            // place
+            let mut p_owned = (**p_ref).clone();
+            visitor.visit_pl_expr(arena, &mut p_owned);
+            *p_ref = arena.alloc(p_owned);
+
+            // view (held by reference)
+            let mut view_owned = (**view_ref).clone();
+            visitor.visit_view(arena, &mut view_owned);
+            *view_ref = arena.alloc(view_owned);
+        }
+
+        PlaceExprKind::Idx(p_ref, n_ref) => {
+            // place
+            let mut p_owned = (**p_ref).clone();
+            visitor.visit_pl_expr(arena, &mut p_owned);
+            *p_ref = arena.alloc(p_owned);
+
+            // index nat (held by reference)
+            let mut n_owned = (**n_ref).clone();
+            visitor.visit_nat(arena, &mut n_owned);
+            *n_ref = arena.alloc(n_owned);
         }
     }
 }
 
-pub fn walk_arg_kinded<'a, V: VisitMut<'a>>(visitor: &mut V, arg_kinded: &mut ArgKinded<'a>) {
+pub fn walk_arg_kinded<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    arg_kinded: &mut ArgKinded<'a>,
+) {
     match arg_kinded {
-        ArgKinded::Ident(ident) => visitor.visit_ident(ident),
-        ArgKinded::Nat(n) => visitor.visit_nat(n),
-        ArgKinded::Memory(mem) => visitor.visit_mem(mem),
-        ArgKinded::DataTy(dty) => visitor.visit_dty(dty),
-        ArgKinded::Provenance(prv) => visitor.visit_prv(prv),
+        ArgKinded::Ident(ident) => visitor.visit_ident(arena, ident),
+        ArgKinded::Nat(n) => visitor.visit_nat(arena, n),
+        ArgKinded::Memory(mem) => visitor.visit_mem(arena, mem),
+        ArgKinded::DataTy(dty) => visitor.visit_dty(arena, dty),
+        ArgKinded::Provenance(prv) => visitor.visit_prv(arena, prv),
     }
 }
 
-pub fn walk_pattern<'a, V: VisitMut<'a>>(visitor: &mut V, pattern: &mut Pattern<'a>) {
+pub fn walk_pattern<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    pattern: &mut Pattern<'a>,
+) {
     match pattern {
         Pattern::Ident(mutab, ident) => {
             visitor.visit_mutability(mutab);
-            visitor.visit_ident(ident);
+            visitor.visit_ident(arena, ident);
         }
         Pattern::Tuple(patterns) => {
-            walk_list!(visitor, visit_pattern, patterns)
+            walk_list!(visitor, visit_pattern, patterns, arena)
         }
         Pattern::Wildcard => {}
     }
 }
 
-pub fn walk_split<'a, V: VisitMut<'a>>(visitor: &mut V, indep: &mut Split<'a>) {
+pub fn walk_split<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, indep: &mut Split<'a>) {
     let Split {
         dim_compo,
         pos,
@@ -308,13 +554,13 @@ pub fn walk_split<'a, V: VisitMut<'a>>(visitor: &mut V, indep: &mut Split<'a>) {
         branch_bodies,
     } = indep;
     visitor.visit_dim_compo(dim_compo);
-    visitor.visit_nat(pos);
-    visitor.visit_exec_expr(split_exec);
-    walk_list!(visitor, visit_ident, branch_idents);
-    walk_list!(visitor, visit_expr, branch_bodies);
+    visitor.visit_nat(arena, pos);
+    visitor.visit_exec_expr(arena, split_exec);
+    walk_list!(visitor, visit_ident, branch_idents, arena);
+    walk_list!(visitor, visit_expr, branch_bodies, arena);
 }
 
-pub fn walk_sched<'a, V: VisitMut<'a>>(visitor: &mut V, sched: &mut Sched<'a>) {
+pub fn walk_sched<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, sched: &mut Sched<'a>) {
     let Sched {
         dim,
         inner_exec_ident,
@@ -323,49 +569,66 @@ pub fn walk_sched<'a, V: VisitMut<'a>>(visitor: &mut V, sched: &mut Sched<'a>) {
     } = sched;
     visitor.visit_dim_compo(dim);
     for ident in inner_exec_ident {
-        visitor.visit_ident(ident)
+        visitor.visit_ident(arena, ident)
     }
-    visitor.visit_exec_expr(sched_exec);
-    visitor.visit_block(body);
+    visitor.visit_exec_expr(arena, sched_exec);
+    visitor.visit_block(arena, body);
 }
 
-pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, expr: &mut Expr<'a>) {
+pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &mut Expr<'a>) {
     // For now, only visit ExprKind
     match &mut expr.expr {
         ExprKind::Lit(l) => visitor.visit_lit(l),
-        ExprKind::PlaceExpr(pl_expr) => visitor.visit_pl_expr(pl_expr),
-
-        ExprKind::Ref(_, own, pl_expr) => {
+        ExprKind::PlaceExpr(pl_ref) => {
+            let mut owned = (**pl_ref).clone();
+            visitor.visit_pl_expr(arena, &mut owned);
+            *pl_ref = arena.alloc(owned);
+        }
+        ExprKind::Ref(_, own, pl_ref) => {
             visitor.visit_own(own);
-            visitor.visit_pl_expr(pl_expr);
+            let mut owned = (**pl_ref).clone();
+            visitor.visit_pl_expr(arena, &mut owned);
+            *pl_ref = arena.alloc(owned);
         }
-        ExprKind::Block(block) => visitor.visit_block(block),
-        ExprKind::LetUninit(maybe_exec_expr, ident, ty) => {
-            for e in maybe_exec_expr {
-                visitor.visit_exec_expr(e);
-            }
-            visitor.visit_ident(ident);
-            visitor.visit_ty(ty);
+        ExprKind::Block(block_ref) => {
+            let mut owned = (**block_ref).clone();
+            visitor.visit_block(arena, &mut owned);
+            *block_ref = arena.alloc(owned);
         }
-        ExprKind::Let(pattern, ty, e) => {
-            visitor.visit_pattern(pattern);
-            for ty in ty.as_mut() {
-                visitor.visit_ty(ty);
+        ExprKind::LetUninit(maybe_exec_expr, ident_ref, ty_ref) => {
+            if let Some(slot) = maybe_exec_expr.as_mut() {
+                let mut owned = (**slot).clone();
+                visitor.visit_exec_expr(arena, &mut owned);
+                *slot = arena.alloc(owned);
             }
-            visitor.visit_expr(e);
+
+            visitor.visit_ident(arena, ident_ref);
+
+            let mut ty_owned = (**ty_ref).clone();
+            visitor.visit_ty(arena, &mut ty_owned);
+            *ty_ref = arena.alloc(ty_owned);
+        }
+        ExprKind::Let(pattern, ty_opt, e) => {
+            visitor.visit_pattern(arena, pattern);
+            if let Some(slot) = ty_opt.as_mut() {
+                let mut ty_owned = (**slot).clone();
+                visitor.visit_ty(arena, &mut ty_owned);
+                *slot = arena.alloc(ty_owned);
+            }
+            visitor.visit_expr(arena, e);
         }
         ExprKind::Assign(pl_expr, expr) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_expr(expr)
+            visitor.visit_pl_expr(arena, pl_expr);
+            visitor.visit_expr(arena, expr)
         }
         ExprKind::IdxAssign(pl_expr, idx, expr) => {
-            visitor.visit_pl_expr(pl_expr);
-            visitor.visit_nat(idx);
-            visitor.visit_expr(expr);
+            visitor.visit_pl_expr(arena, pl_expr);
+            visitor.visit_nat(arena, idx);
+            visitor.visit_expr(arena, expr);
         }
         ExprKind::Seq(es) => {
             for e in es {
-                visitor.visit_expr(e)
+                visitor.visit_expr(arena, e)
             }
         }
         // ExprKind::Lambda(params, exec_decl, dty, expr) => {
@@ -375,74 +638,88 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, expr: &mut Expr<'a>) {
         //     visitor.visit_expr(expr)
         // }
         ExprKind::App(f, gen_args, args) => {
-            visitor.visit_ident(f);
-            walk_list!(visitor, visit_arg_kinded, gen_args);
-            walk_list!(visitor, visit_expr, args);
+            visitor.visit_ident(arena, f);
+            walk_list!(visitor, visit_arg_kinded, gen_args, arena);
+            walk_list!(visitor, visit_expr, args, arena);
         }
         ExprKind::DepApp(f, gen_args) => {
-            visitor.visit_ident(f);
-            walk_list!(visitor, visit_arg_kinded, gen_args);
+            visitor.visit_ident(arena, f);
+            walk_list!(visitor, visit_arg_kinded, gen_args, arena);
         }
-        ExprKind::AppKernel(app_kernel) => visitor.visit_app_kernel(app_kernel),
-        ExprKind::IfElse(cond, tt, ff) => {
-            visitor.visit_expr(cond);
-            visitor.visit_expr(tt);
-            visitor.visit_expr(ff)
+        ExprKind::AppKernel(app_kernel) => visitor.visit_app_kernel(arena, app_kernel),
+        ExprKind::IfElse(cond_ref, tt_ref, ff_ref) => {
+            let mut cond = (**cond_ref).clone();
+            let mut tt = (**tt_ref).clone();
+            let mut ff = (**ff_ref).clone();
+            visitor.visit_expr(arena, &mut cond);
+            visitor.visit_expr(arena, &mut tt);
+            visitor.visit_expr(arena, &mut ff);
+            *cond_ref = arena.alloc(cond);
+            *tt_ref = arena.alloc(tt);
+            *ff_ref = arena.alloc(ff)
         }
         ExprKind::If(cond, tt) => {
-            visitor.visit_expr(cond);
-            visitor.visit_expr(tt)
+            visitor.visit_expr(arena, cond);
+            visitor.visit_expr(arena, tt)
         }
         ExprKind::Array(elems) => {
-            walk_list!(visitor, visit_expr, elems);
+            walk_list!(visitor, visit_expr, elems, arena);
         }
         ExprKind::Tuple(elems) => {
-            walk_list!(visitor, visit_expr, elems);
+            walk_list!(visitor, visit_expr, elems, arena);
         }
-        ExprKind::For(ident, coll, body) => {
-            visitor.visit_ident(ident);
-            visitor.visit_expr(coll);
-            visitor.visit_expr(body);
+        ExprKind::For(ident, coll_ref, body_ref) => {
+            visitor.visit_ident(arena, ident);
+            let mut coll = (**coll_ref).clone();
+            let mut body = (**body_ref).clone();
+            visitor.visit_expr(arena, &mut coll);
+            visitor.visit_expr(arena, &mut body);
+            *coll_ref = arena.alloc(coll);
+            *body_ref = arena.alloc(body);
         }
         ExprKind::Split(par_branch) => {
-            visitor.visit_split(par_branch);
+            visitor.visit_split(arena, par_branch);
         }
         ExprKind::Sched(sched) => {
-            visitor.visit_sched(sched);
+            visitor.visit_sched(arena, sched);
         }
         ExprKind::ForNat(ident, range, body) => {
-            visitor.visit_ident(ident);
-            visitor.visit_nat_range(range);
-            visitor.visit_expr(body)
+            visitor.visit_ident(arena, ident);
+            visitor.visit_nat_range(arena, range);
+            visitor.visit_expr(arena, body)
         }
         ExprKind::While(cond, body) => {
-            visitor.visit_expr(cond);
-            visitor.visit_expr(body);
+            visitor.visit_expr(arena, cond);
+            visitor.visit_expr(arena, body);
         }
         ExprKind::BinOp(op, l, r) => {
             visitor.visit_binary_op(op);
-            visitor.visit_expr(l);
-            visitor.visit_expr(r)
+            visitor.visit_expr(arena, l);
+            visitor.visit_expr(arena, r)
         }
         ExprKind::UnOp(op, expr) => {
             visitor.visit_unary_op(op);
-            visitor.visit_expr(expr)
+            visitor.visit_expr(arena, expr)
         }
         ExprKind::Sync(exec) => {
             for e in exec {
-                visitor.visit_exec_expr(e)
+                visitor.visit_exec_expr(arena, e)
             }
         }
-        ExprKind::Unsafe(expr) => visitor.visit_expr(expr),
+        ExprKind::Unsafe(expr) => visitor.visit_expr(arena, expr),
         ExprKind::Cast(expr, dty) => {
-            visitor.visit_expr(expr);
-            visitor.visit_dty(dty)
+            visitor.visit_expr(arena, expr);
+            visitor.visit_dty(arena, dty)
         }
         ExprKind::Range(_, _) | ExprKind::Hole => (),
     }
 }
 
-pub fn walk_app_kernel<'a, V: VisitMut<'a>>(visitor: &mut V, app_kernel: &mut AppKernel<'a>) {
+pub fn walk_app_kernel<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    app_kernel: &mut AppKernel<'a>,
+) {
     let AppKernel {
         grid_dim,
         block_dim,
@@ -452,87 +729,108 @@ pub fn walk_app_kernel<'a, V: VisitMut<'a>>(visitor: &mut V, app_kernel: &mut Ap
         gen_args,
         args,
     } = app_kernel;
-    visitor.visit_dim(grid_dim);
-    visitor.visit_dim(block_dim);
+    visitor.visit_dim(arena, grid_dim);
+    visitor.visit_dim(arena, block_dim);
     for dty in shared_mem_dtys {
-        visitor.visit_dty(dty);
+        visitor.visit_dty(arena, dty);
     }
-    visitor.visit_ident(fun_ident);
+    visitor.visit_ident(arena, fun_ident);
     for garg in gen_args {
-        visitor.visit_arg_kinded(garg);
+        visitor.visit_arg_kinded(arena, garg);
     }
     for arg in args {
-        visitor.visit_expr(arg);
+        visitor.visit_expr(arena, arg);
     }
 }
 
-pub fn walk_block<'a, V: VisitMut<'a>>(visitor: &mut V, block: &mut Block<'a>) {
+pub fn walk_block<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, block: &mut Block<'a>) {
     let Block { body, .. } = block;
-    visitor.visit_expr(body);
+    visitor.visit_expr(arena, body);
 }
 
-pub fn walk_split_proj<'a, V: VisitMut<'a>>(visitor: &mut V, split_proj: &mut TakeRange<'a>) {
+pub fn walk_split_proj<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    split_proj: &mut TakeRange<'a>,
+) {
     let TakeRange {
         split_dim,
         pos,
         left_or_right: _,
     } = split_proj;
     visitor.visit_dim_compo(split_dim);
-    visitor.visit_nat(pos);
+    visitor.visit_nat(arena, pos);
 }
 
-pub fn walk_exec_expr<'a, V: VisitMut<'a>>(visitor: &mut V, exec_expr: &mut ExecExpr<'a>) {
-    visitor.visit_exec(&mut exec_expr.exec);
+pub fn walk_exec_expr<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    exec_expr: &mut ExecExpr<'a>,
+) {
+    visitor.visit_exec(arena, &mut exec_expr.exec);
     for t in &mut exec_expr.ty {
         visitor.visit_exec_ty(t);
     }
 }
 
-pub fn walk_exec<'a, V: VisitMut<'a>>(visitor: &mut V, exec: &mut ExecExprKind<'a>) {
+pub fn walk_exec<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    exec: &mut ExecExprKind<'a>,
+) {
     let ExecExprKind { base, path } = exec;
     match base {
         BaseExec::CpuThread => (),
-        BaseExec::Ident(ident) => visitor.visit_ident(ident),
+        BaseExec::Ident(ident) => visitor.visit_ident(arena, ident),
         BaseExec::GpuGrid(gdim, bdim) => {
-            visitor.visit_dim(gdim);
-            visitor.visit_dim(bdim);
+            visitor.visit_dim(arena, gdim);
+            visitor.visit_dim(arena, bdim);
         }
     };
     for e in path {
-        visitor.visit_exec_path_elem(e)
+        visitor.visit_exec_path_elem(arena, e)
     }
 }
 
 pub fn walk_exec_path_elem<'a, V: VisitMut<'a>>(
     visitor: &mut V,
+    arena: &'a Bump,
     exec_path_elem: &mut ExecPathElem<'a>,
 ) {
     match exec_path_elem {
-        ExecPathElem::TakeRange(split_proj) => visitor.visit_split_proj(split_proj),
+        ExecPathElem::TakeRange(split_proj) => visitor.visit_split_proj(arena, split_proj),
         ExecPathElem::ForAll(dim_compo) => visitor.visit_dim_compo(dim_compo),
         ExecPathElem::ToWarps => {}
         ExecPathElem::ToThreads(dim_compo) => visitor.visit_dim_compo(dim_compo),
     }
 }
 
-pub fn walk_param_decl<'a, V: VisitMut<'a>>(visitor: &mut V, param_decl: &mut ParamDecl<'a>) {
+pub fn walk_param_decl<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    param_decl: &mut ParamDecl<'a>,
+) {
     let ParamDecl {
         ident,
         ty,
         mutbl,
         exec_expr,
     } = param_decl;
-    visitor.visit_ident(ident);
+    visitor.visit_ident(arena, ident);
     if let Some(tty) = ty {
-        visitor.visit_ty(tty);
+        visitor.visit_ty(arena, tty);
     }
     visitor.visit_mutability(mutbl);
     for ex in exec_expr {
-        visitor.visit_exec_expr(ex);
+        visitor.visit_exec_expr(arena, ex);
     }
 }
 
-pub fn walk_fun_def<'a, V: VisitMut<'a>>(visitor: &mut V, fun_def: &mut FunDef<'a>) {
+pub fn walk_fun_def<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    fun_def: &mut FunDef<'a>,
+) {
     let FunDef {
         ident: _,
         generic_params,
@@ -543,18 +841,22 @@ pub fn walk_fun_def<'a, V: VisitMut<'a>>(visitor: &mut V, fun_def: &mut FunDef<'
         prv_rels,
         body,
     } = fun_def;
-    walk_list!(visitor, visit_ident_kinded, generic_params);
+    walk_list!(visitor, visit_ident_kinded, generic_params, arena);
     for exec_decl in generic_exec {
-        visitor.visit_ident_exec(exec_decl);
+        visitor.visit_ident_exec(arena, exec_decl);
     }
-    walk_list!(visitor, visit_param_decl, params);
-    visitor.visit_dty(ret_dty);
-    visitor.visit_exec_expr(exec);
-    walk_list!(visitor, visit_prv_rel, prv_rels);
-    visitor.visit_block(body)
+    walk_list!(visitor, visit_param_decl, params, arena);
+    visitor.visit_dty(arena, ret_dty);
+    visitor.visit_exec_expr(arena, exec);
+    walk_list!(visitor, visit_prv_rel, prv_rels, arena);
+    visitor.visit_block(arena, body)
 }
 
-pub fn walk_fun_decl<'a, V: VisitMut<'a>>(visitor: &mut V, fun_decl: &mut FunDecl<'a>) {
+pub fn walk_fun_decl<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    fun_decl: &mut FunDecl<'a>,
+) {
     let FunDecl {
         ident: _,
         generic_params,
@@ -564,24 +866,36 @@ pub fn walk_fun_decl<'a, V: VisitMut<'a>>(visitor: &mut V, fun_decl: &mut FunDec
         exec,
         prv_rels,
     } = fun_decl;
-    walk_list!(visitor, visit_ident_kinded, generic_params);
+    walk_list!(visitor, visit_ident_kinded, generic_params, arena);
     for exec_decl in generic_exec {
-        visitor.visit_ident_exec(exec_decl);
+        visitor.visit_ident_exec(arena, exec_decl);
     }
-    walk_list!(visitor, visit_param_decl, params);
-    visitor.visit_dty(ret_dty);
-    visitor.visit_exec_expr(exec);
-    walk_list!(visitor, visit_prv_rel, prv_rels);
+    walk_list!(visitor, visit_param_decl, params, arena);
+    let mut ret_dty_owned = (**ret_dty).clone();
+    visitor.visit_dty(arena, &mut ret_dty_owned);
+    *ret_dty = arena.alloc(ret_dty_owned);
+    visitor.visit_exec_expr(arena, exec);
+    walk_list!(visitor, visit_prv_rel, prv_rels, arena);
 }
 
-pub fn walk_param_sig<'a, V: VisitMut<'a>>(visitor: &mut V, param_sig: &mut ParamSig<'a>) {
+pub fn walk_param_sig<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    param_sig: &mut ParamSig<'a>,
+) {
     let ParamSig { exec_expr, ty } = param_sig;
-    visitor.visit_exec_expr(exec_expr);
-    visitor.visit_ty(ty);
+    visitor.visit_exec_expr(arena, exec_expr);
+    let mut ty_owned = (**ty).clone();
+    visitor.visit_ty(arena, &mut ty_owned);
+    *ty = arena.alloc(ty_owned);
 }
 
-pub fn walk_field<'a, V: VisitMut<'a>>(visitor: &mut V, field: &mut (Ident<'a>, DataTy<'a>)) {
+pub fn walk_field<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a Bump,
+    field: &mut (Ident<'a>, DataTy<'a>),
+) {
     let (ident, dty) = field;
-    visitor.visit_ident(ident);
-    visitor.visit_dty(dty);
+    visitor.visit_ident(arena, ident);
+    visitor.visit_dty(arena, dty);
 }

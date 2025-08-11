@@ -144,7 +144,7 @@ pub struct ParamDecl<'a> {
 }
 
 #[span_derive(PartialEq)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expr<'a> {
     pub expr: ExprKind<'a>,
     // FIXME misusing span_derive_ignore to ignore type on equality checks
@@ -361,7 +361,7 @@ pub struct AppKernel<'a> {
     pub args: BumpVec<'a, Expr<'a>>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum ExprKind<'a> {
     Hole,
     Lit(Lit),
@@ -397,7 +397,7 @@ pub enum ExprKind<'a> {
     ),
     DepApp(Ident<'a>, BumpVec<'a, ArgKinded<'a>>),
     //AppKernel(&'a AppKernel<'a>),
-    AppKernel(BumpBox<'a, AppKernel<'a>>),
+    AppKernel(&'a AppKernel<'a>),
     // TODO branches must be blocks
     IfElse(&'a Expr<'a>, &'a Expr<'a>, &'a Expr<'a>),
     // TODO branch must be block
@@ -1168,7 +1168,7 @@ pub struct Ty<'a> {
     pub span: Option<Span>,
 }
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct ParamSig<'a> {
     pub exec_expr: ExecExpr<'a>,
     pub ty: &'a Ty<'a>,
@@ -1220,15 +1220,14 @@ impl<'a> FnTy<'a> {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum NatConstr<'a> {
     True,
-    Eq(BumpBox<'a, Nat<'a>>, BumpBox<'a, Nat<'a>>),
-    Lt(BumpBox<'a, Nat<'a>>, BumpBox<'a, Nat<'a>>),
-    And(BumpBox<'a, NatConstr<'a>>, BumpBox<'a, NatConstr<'a>>),
-    Or(BumpBox<'a, NatConstr<'a>>, BumpBox<'a, NatConstr<'a>>),
+    Eq(&'a Nat<'a>, &'a Nat<'a>),
+    Lt(&'a Nat<'a>, &'a Nat<'a>),
+    And(&'a NatConstr<'a>, &'a NatConstr<'a>),
+    Or(&'a NatConstr<'a>, &'a NatConstr<'a>),
 }
-
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind<'a> {
     Data(&'a DataTy<'a>),
@@ -1809,7 +1808,7 @@ impl<'a> Nat<'a> {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum BinOpNat {
     Add,
     Sub,

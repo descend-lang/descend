@@ -264,6 +264,7 @@ impl<'a> SubstIdentExec<'a> {
         SubstIdentExec { ident, exec }
     }
 }
+
 impl<'a> VisitMut<'a> for SubstIdentExec<'a> {
     fn visit_exec_expr(&mut self, bump: &'a bumpalo::Bump, exec_expr: &mut ExecExpr<'a>) {
         insert_for_ident(bump, self.exec, &self.ident, exec_expr)
