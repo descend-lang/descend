@@ -2556,14 +2556,15 @@ impl Nat {
 
             BinOp(op, lhs, rhs) => arena_ast::Nat::BinOp(
                 op.clone().into_arena(),
-                Box::new(lhs.into_arena(arena)),
-                Box::new(rhs.into_arena(arena)),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
 
             App(ident, args) => {
-                let new_args: Vec<_> = args.iter().map(|n| n.into_arena(arena)).collect();
-                let boxed_slice: Box<[arena_ast::Nat<'a>]> = new_args.into_boxed_slice();
-                arena_ast::Nat::App(ident.clone().into_arena(arena), boxed_slice)
+                let arena_args: BumpVec<'a, arena_ast::Nat<'a>> =
+                    BumpVec::from_iter_in(args.iter().map(|n| n.into_arena(arena)), arena);
+
+                arena_ast::Nat::App(ident.clone().into_arena(arena), arena_args)
             }
         }
     }
