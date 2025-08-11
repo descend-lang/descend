@@ -344,28 +344,47 @@ pub fn walk_nat_constr<'a, V: VisitMut<'a>>(
     match nat_constr {
         NatConstr::True => {}
         NatConstr::Eq(l, r) => {
-            visitor.visit_nat(arena, l);
-            visitor.visit_nat(arena, r);
+            let mut owned_l = (**l).clone();
+            let mut owned_r = (**r).clone();
+            visitor.visit_nat(arena, &mut owned_l);
+            visitor.visit_nat(arena, &mut owned_r);
+            *l = arena.alloc(owned_l);
+            *r = arena.alloc(owned_r);
         }
         NatConstr::Lt(l, r) => {
-            visitor.visit_nat(arena, l);
-            visitor.visit_nat(arena, r);
+            let mut owned_l = (**l).clone();
+            let mut owned_r = (**r).clone();
+            visitor.visit_nat(arena, &mut owned_l);
+            visitor.visit_nat(arena, &mut owned_r);
+            *l = arena.alloc(owned_l);
+            *r = arena.alloc(owned_r);
         }
         NatConstr::And(l, r) => {
-            visitor.visit_nat_constr(arena, l);
-            visitor.visit_nat_constr(arena, r);
+            let mut owned_l = (**l).clone();
+            let mut owned_r = (**r).clone();
+            visitor.visit_nat_constr(arena, &mut owned_l);
+            visitor.visit_nat_constr(arena, &mut owned_r);
+            *l = arena.alloc(owned_l);
+            *r = arena.alloc(owned_r);
         }
         NatConstr::Or(l, r) => {
-            visitor.visit_nat_constr(arena, l);
-            visitor.visit_nat_constr(arena, r);
+            let mut owned_l = (**l).clone();
+            let mut owned_r = (**r).clone();
+            visitor.visit_nat_constr(arena, &mut owned_l);
+            visitor.visit_nat_constr(arena, &mut owned_r);
+            *l = arena.alloc(owned_l);
+            *r = arena.alloc(owned_r);
         }
     }
 }
 
 pub fn walk_ty<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a bumpalo::Bump, ty: &mut Ty<'a>) {
     match &mut ty.ty {
-        TyKind::Data(dty) => visitor.visit_dty(arena, dty),
-
+        TyKind::Data(dty) => {
+            let mut dty_owned = (**dty).clone();
+            visitor.visit_dty(arena, &mut dty_owned);
+            *dty = arena.alloc(dty_owned);
+        }
         TyKind::FnTy(fn_slot) => {
             // 1) Detach: copy fields out of the &'a FnTy<'a>
             let src: &FnTy<'a> = *fn_slot;
@@ -618,8 +637,12 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
             visitor.visit_expr(arena, e);
         }
         ExprKind::Assign(pl_expr, expr) => {
-            visitor.visit_pl_expr(arena, pl_expr);
-            visitor.visit_expr(arena, expr)
+            let mut pl_expr_owned = (**pl_expr).clone();
+            let mut expr_owned = (**expr).clone();
+            visitor.visit_pl_expr(arena, &mut pl_expr_owned);
+            visitor.visit_expr(arena, &mut expr_owned);
+            *pl_expr = arena.alloc(pl_expr_owned);
+            *expr = arena.alloc(expr_owned);
         }
         ExprKind::IdxAssign(pl_expr, idx, expr) => {
             visitor.visit_pl_expr(arena, pl_expr);
@@ -818,7 +841,9 @@ pub fn walk_param_decl<'a, V: VisitMut<'a>>(
     } = param_decl;
     visitor.visit_ident(arena, ident);
     if let Some(tty) = ty {
-        visitor.visit_ty(arena, tty);
+        let mut tty_owned = (**tty).clone();
+        visitor.visit_ty(arena, &mut tty_owned);
+        *tty = arena.alloc(tty_owned);
     }
     visitor.visit_mutability(mutbl);
     for ex in exec_expr {
