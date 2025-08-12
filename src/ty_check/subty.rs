@@ -1,5 +1,5 @@
 use super::ctxs::{KindCtx, TyCtx};
-use crate::arena_ast::{self, internal::Loan};
+use crate::arena_ast::internal::Loan;
 
 //
 // Subtyping and Provenance Subtyping from Oxide
@@ -7,17 +7,17 @@ use crate::arena_ast::{self, internal::Loan};
 
 use super::error::{CtxError, SubTyError};
 use crate::arena_ast::*;
-use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
+use bumpalo::Bump;
 use std::collections::HashSet;
 
 type SubTyResult<'a, T> = Result<T, SubTyError<'a>>;
 
-// FIXME respect memory alaways, somehow provenances can be different is this correct?
+// FIXME respect memory always, somehow provenances can be different is this correct?
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
-pub(super) fn check<'a>(
+pub(super) fn check<'m, 'a>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'a mut TyCtx<'a>,
+    ty_ctx: &'m mut TyCtx<'a>,
     sub_dty: &'a DataTy<'a>,
     super_dty: &'a DataTy<'a>,
     arena: &'a Bump,
@@ -72,9 +72,9 @@ pub(super) fn check<'a>(
 
 // ρ1 outlives ρ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ ρ1 :> ρ2 ⇒ Γ′
-fn outlives<'a>(
+pub(super) fn outlives<'m, 'a>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'a mut TyCtx<'a>,
+    ty_ctx: &'m mut TyCtx<'a>,
     longer_prv: &'a Provenance<'a>,
     shorter_prv: &'a Provenance<'a>,
     arena: &'a Bump,
@@ -112,8 +112,8 @@ fn outlives<'a>(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs<'a>(
-    ty_ctx: &'a mut TyCtx<'a>,
+fn outl_check_val_prvs<'m, 'a>(
+    ty_ctx: &'m mut TyCtx<'a>,
     longer: &str,
     shorter: &str,
     arena: &'a Bump,
@@ -142,7 +142,11 @@ fn outl_check_val_prvs<'a>(
     Ok(())
 }
 
-fn longer_occurs_before_shorter<'a>(ty_ctx: &'a TyCtx<'a>, longer: &str, shorter: &str) -> bool {
+fn longer_occurs_before_shorter<'m, 'a>(
+    ty_ctx: &'m TyCtx<'a>,
+    longer: &str,
+    shorter: &str,
+) -> bool {
     for prv in ty_ctx
         .prv_mappings()
         .map(|prv_mappings| prv_mappings.prv.clone())
@@ -156,7 +160,7 @@ fn longer_occurs_before_shorter<'a>(ty_ctx: &'a TyCtx<'a>, longer: &str, shorter
     panic!("Neither provenance found in typing context")
 }
 
-fn exists_deref_loan_with_prv<'a>(ty_ctx: &'a TyCtx<'a>, prv: &str, arena: &'a Bump) -> bool {
+fn exists_deref_loan_with_prv<'m, 'a>(ty_ctx: &'m TyCtx<'a>, prv: &str, arena: &'a Bump) -> bool {
     ty_ctx
         .all_places(arena)
         .into_iter()
@@ -179,8 +183,8 @@ fn exists_deref_loan_with_prv<'a>(ty_ctx: &'a TyCtx<'a>, prv: &str, arena: &'a B
         })
 }
 
-fn outl_check_val_ident_prv<'a>(
-    ty_ctx: &'a TyCtx<'a>,
+fn outl_check_val_ident_prv<'m, 'a>(
+    ty_ctx: &'m TyCtx<'a>,
     longer_val: &str,
     arena: &'a Bump,
 ) -> SubTyResult<'a, ()> {
@@ -195,8 +199,8 @@ fn outl_check_val_ident_prv<'a>(
 }
 
 // FIXME Makes no sense!
-fn borrowed_pl_expr_no_ref_to_existing_pl<'a>(
-    ty_ctx: &'a TyCtx<'a>,
+fn borrowed_pl_expr_no_ref_to_existing_pl<'m, 'a>(
+    ty_ctx: &'m TyCtx<'a>,
     loan_set: &HashSet<Loan<'a>>,
     arena: &'a Bump,
 ) -> bool {
@@ -206,9 +210,9 @@ fn borrowed_pl_expr_no_ref_to_existing_pl<'a>(
         .any(|(pl, _)| loan_set.iter().any(|loan| loan.place_expr.equiv(arena, pl)))
 }
 
-fn outl_check_ident_val_prv<'a>(
+fn outl_check_ident_val_prv<'m, 'a>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'a TyCtx<'a>,
+    ty_ctx: &'m TyCtx<'a>,
     longer_ident: &'a Ident<'a>,
     shorter_val: &str,
 ) -> SubTyResult<'a, ()> {
@@ -226,17 +230,18 @@ fn outl_check_ident_val_prv<'a>(
 }
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
-pub(super) fn multiple_outlives<'a, I>(
+pub(super) fn multiple_outlives<'m, 'a, I>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'a mut TyCtx<'a>,
+    ty_ctx: &'m mut TyCtx<'a>,
     prv_rels: I,
+    arena: &'a Bump,
 ) -> SubTyResult<'a, ()>
 where
     I: IntoIterator<Item = (&'a Provenance<'a>, &'a Provenance<'a>)>,
 {
     for prv_rel in prv_rels {
         let (longer, shorter) = prv_rel;
-        outlives(kind_ctx, ty_ctx, longer, shorter)?;
+        outlives(kind_ctx, ty_ctx, longer, shorter, arena)?;
     }
     Ok(())
 }
