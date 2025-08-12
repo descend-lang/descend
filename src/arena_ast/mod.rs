@@ -27,9 +27,9 @@ impl<'a> CompilUnit<'a> {
 
 #[derive(Debug)]
 pub enum Item<'a> {
-    FunDef(BumpBox<'a, FunDef<'a>>),
-    FunDecl(BumpBox<'a, FunDecl<'a>>),
-    StructDecl(BumpBox<'a, StructDecl<'a>>),
+    FunDef(&'a FunDef<'a>),
+    FunDecl(&'a FunDecl<'a>),
+    StructDecl(&'a StructDecl<'a>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,6 +67,29 @@ impl<'a> FunDecl<'a> {
             }),
             [],
         )
+    }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> FunDecl<'a> {
+        let mut generic_params = BumpVec::new_in(arena);
+        generic_params.extend(self.generic_params.iter().cloned());
+
+        let generic_exec = self.generic_exec.clone();
+
+        let mut param_decls = BumpVec::new_in(arena);
+        param_decls.extend(self.param_decls.iter().cloned());
+
+        let mut prv_rels = BumpVec::new_in(arena);
+        prv_rels.extend(self.prv_rels.iter().cloned());
+
+        FunDecl {
+            ident: self.ident.clone(),
+            generic_params,
+            generic_exec,
+            param_decls,
+            ret_dty: self.ret_dty, // copy pointer; visitor will re-point if needed
+            exec: self.exec.clone(),
+            prv_rels,
+        }
     }
 }
 

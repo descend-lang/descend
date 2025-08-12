@@ -7,6 +7,7 @@ use crate::arena_ast::visit_mut::VisitMut as ArenaVisitMut;
 use crate::arena_ast::AppKernel as ArenaAppKernel;
 use crate::arena_ast::ArgKinded as ArenaArgKinded;
 use crate::arena_ast::BaseExec as ArenaBaseExec;
+use crate::arena_ast::Block as ArenaBlock;
 use crate::arena_ast::CompilUnit as ArenaCompilUnit;
 use crate::arena_ast::DataTy as ArenaDataTy;
 use crate::arena_ast::DataTyKind as ArenaDataTyKind;
@@ -45,39 +46,36 @@ pub fn parse<'a>(
     let parser = Parser::new(source);
     let heap_items = parser.parse().map_err(|err| err.emit())?;
 
-    // Step 1: Convert heap AST -> arena AST
-    let mut arena_items = BumpVec::new_in(arena);
+    // 1) heap -> arena, collect &'a StructDecl while we build the vec
+    let mut arena_items: bumpalo::collections::Vec<'a, ArenaItem<'a>> =
+        bumpalo::collections::Vec::new_in(arena);
+    let mut struct_refs: Vec<&'a ArenaStructDecl<'a>> = Vec::new();
+
     for heap_item in heap_items {
-        arena_items.push(heap_item.into_arena(arena)) // into arena will be the converter
-    }
-
-    // Step 2: Postprocess
-    // TODO refactor to not require unnecessary copying out of items
-    let struct_copies = arena_items
-        .iter()
-        .filter_map(|i| {
-            if let ArenaItem::StructDecl(struct_dty) = i {
-                Some(struct_dty.as_ref())
-            } else {
-                None
+        match heap_item.into_arena(arena) {
+            ArenaItem::StructDecl(sd_ref) => {
+                struct_refs.push(sd_ref);
+                arena_items.push(ArenaItem::StructDecl(sd_ref));
             }
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    for fun_def in arena_items.iter_mut().filter_map(|i| {
-        if let ArenaItem::FunDef(fun_def) = i {
-            Some(fun_def)
-        } else {
-            None
+            other => {
+                arena_items.push(other);
+            }
         }
-    }) {
-        replace_arg_kinded_idents(fun_def);
-        replace_exec_idents_with_specific_execs(arena, fun_def);
     }
 
-    for i in &mut arena_items.iter_mut() {
-        replace_struct_idents_with_specific_struct_dtys(&struct_copies, i);
+    // 2) mutate fun defs (safe; we’re not holding borrows into arena_items)
+    for item in arena_items.iter_mut() {
+        if let ArenaItem::FunDef(fun_def) = item {
+            let mut fun_def_owned = (**fun_def).clone();
+            replace_arg_kinded_idents(&mut fun_def_owned, arena);
+            replace_exec_idents_with_specific_execs(arena, &mut fun_def_owned);
+            *fun_def = arena.alloc(fun_def_owned);
+        }
+    }
+
+    // 3) resolve struct idents using the collected &'a decls
+    for item in arena_items.iter_mut() {
+        replace_struct_idents_with_specific_struct_dtys(arena, &struct_refs, item);
     }
 
     Ok(ArenaCompilUnit::new(arena_items, source))
@@ -98,7 +96,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-fn replace_arg_kinded_idents<'a>(fun_def: &mut ArenaFunDef) {
+fn replace_arg_kinded_idents<'a>(fun_def: &mut ArenaFunDef<'a>, arena: &'a Bump) {
     struct ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap<Box<str>, ArenaKind>,
     }
@@ -135,56 +133,112 @@ fn replace_arg_kinded_idents<'a>(fun_def: &mut ArenaFunDef) {
     }
 
     impl<'a> ArenaVisitMut<'a> for ReplaceArgKindedIdents {
-        fn visit_expr(&mut self, arena: &'a Bump, expr: &mut ArenaExpr) {
+        fn visit_expr(&mut self, arena: &'a Bump, expr: &mut ArenaExpr<'a>) {
             match &mut expr.expr {
-                ArenaExprKind::Block(block) => {
-                    self.ident_names_to_kinds.extend(
-                        block
-                            .prvs
-                            .iter()
-                            .map(|prv| (prv.clone().into_boxed_str(), ArenaKind::Provenance)),
-                    );
-                    self.visit_expr(&mut block.body)
+                ArenaExprKind::Block(block_ref) => {
+                    let src = *block_ref;
+
+                    let added_keys: Vec<Box<str>> = src
+                        .prvs
+                        .iter()
+                        .map(|p| p.clone().into_boxed_str())
+                        .collect();
+                    for k in &added_keys {
+                        self.ident_names_to_kinds
+                            .insert(k.clone(), ArenaKind::Provenance);
+                    }
+
+                    let mut body_owned = (*src.body).clone();
+                    self.visit_expr(arena, &mut body_owned);
+                    let body_ref = arena.alloc(body_owned);
+
+                    let mut new_prvs = BumpVec::new_in(arena);
+                    new_prvs.extend(src.prvs.iter().cloned());
+
+                    let new_block = ArenaBlock {
+                        prvs: new_prvs,
+                        body: body_ref,
+                    };
+
+                    *block_ref = arena.alloc(new_block);
+
+                    for k in added_keys {
+                        self.ident_names_to_kinds.remove(k.as_ref());
+                    }
                 }
                 ArenaExprKind::DepApp(fun_ident, gen_args) => {
-                    self.visit_ident(fun_ident);
+                    self.visit_ident(arena, fun_ident);
                     self.subst_in_gen_args(arena, gen_args);
                 }
-                ArenaExprKind::AppKernel(app_kernel) => {
-                    let ArenaAppKernel {
-                        fun_ident,
+                ArenaExprKind::AppKernel(app_kernel_ref) => {
+                    let src = *app_kernel_ref;
+                    let mut grid_dim = src.grid_dim.clone();
+                    let mut block_dim = src.block_dim.clone();
+                    self.visit_dim(arena, &mut grid_dim);
+                    self.visit_dim(arena, &mut block_dim);
+                    let mut fun_ident_owned = (*src.fun_ident).clone();
+                    self.visit_ident(arena, &mut fun_ident_owned);
+                    let fun_ident_ref = arena.alloc(fun_ident_owned);
+
+                    let mut gen_args = BumpVec::new_in(arena);
+                    gen_args.extend(src.gen_args.iter().cloned());
+                    self.subst_in_gen_args(arena, gen_args.as_mut_slice());
+
+                    let mut args = BumpVec::new_in(arena);
+                    for mut e in src.args.iter().cloned() {
+                        self.visit_expr(arena, &mut e);
+                        args.push(e);
+                    }
+
+                    let mut shared_mem_dtys = BumpVec::new_in(arena);
+                    for mut d in src.shared_mem_dtys.iter().cloned() {
+                        self.visit_dty(arena, &mut d);
+                        shared_mem_dtys.push(d);
+                    }
+
+                    let mut shared_mem_prvs = BumpVec::new_in(arena);
+                    shared_mem_prvs.extend(src.shared_mem_prvs.iter().cloned());
+
+                    let new_node = ArenaAppKernel {
+                        grid_dim,
+                        block_dim,
+                        shared_mem_dtys,
+                        shared_mem_prvs,
+                        fun_ident: fun_ident_ref,
                         gen_args,
                         args,
-                        ..
-                    } = app_kernel.as_mut();
-                    self.visit_ident(fun_ident);
-                    self.subst_in_gen_args(arena, gen_args);
-                    arena_visit_mut::walk_list!(self, visit_expr, args)
+                    };
+                    *app_kernel_ref = arena.alloc(new_node);
                 }
+
                 ArenaExprKind::App(fun_ident, gen_args, args) => {
-                    self.visit_ident(fun_ident);
+                    let mut fun_ident_owned = (**fun_ident).clone();
+                    self.visit_ident(arena, &mut fun_ident_owned);
+                    *fun_ident = arena.alloc(fun_ident_owned);
                     self.subst_in_gen_args(arena, gen_args);
-                    arena_visit_mut::walk_list!(self, visit_expr, args)
+                    arena_visit_mut::walk_list!(self, visit_expr, args, arena)
                 }
                 ArenaExprKind::ForNat(ident, _, body) => {
                     self.ident_names_to_kinds.extend(iter::once((
                         ident.name.to_owned().into_boxed_str(),
                         ArenaKind::Nat,
                     )));
-                    self.visit_expr(body)
+                    let mut body_owned = (**body).clone();
+                    self.visit_expr(arena, &mut body_owned);
+                    *body = arena.alloc(body_owned);
                 }
-                _ => arena_visit_mut::walk_expr(self, expr),
+                _ => arena_visit_mut::walk_expr(self, arena, expr),
             }
         }
 
-        fn visit_view(&mut self, arena: &'a Bump, view: &mut ArenaView) {
+        fn visit_view(&mut self, arena: &'a Bump, view: &mut ArenaView<'a>) {
             self.subst_in_gen_args(arena, &mut view.gen_args);
             for v in &mut view.args {
-                self.visit_view(v)
+                self.visit_view(arena, v)
             }
         }
 
-        fn visit_fun_def(&mut self, fun_def: &mut ArenaFunDef) {
+        fn visit_fun_def(&mut self, arena: &'a Bump, fun_def: &mut ArenaFunDef<'a>) {
             self.ident_names_to_kinds = fun_def
                 .generic_params
                 .iter()
@@ -192,13 +246,13 @@ fn replace_arg_kinded_idents<'a>(fun_def: &mut ArenaFunDef) {
                     (ident.name.to_owned().into_boxed_str(), *kind)
                 })
                 .collect();
-            arena_visit_mut::walk_fun_def(self, fun_def)
+            arena_visit_mut::walk_fun_def(self, arena, fun_def)
         }
     }
     let mut replace = ReplaceArgKindedIdents {
         ident_names_to_kinds: HashMap::new(),
     };
-    replace.visit_fun_def(fun_def);
+    replace.visit_fun_def(arena, fun_def);
 }
 
 fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut ArenaFunDef<'a>) {
@@ -233,7 +287,7 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
                 );
                 self.ident_names_to_exec_expr
                     .push((ident.name.to_owned().into_boxed_str(), branch_exec_expr));
-                self.visit_expr(branch);
+                self.visit_expr(arena, branch);
                 self.ident_names_to_exec_expr.pop();
             }
         }
@@ -247,7 +301,7 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
                 self.ident_names_to_exec_expr
                     .push((ident.name.to_owned().into_boxed_str(), body_exec));
             }
-            arena_visit_mut::walk_sched(self, sched);
+            arena_visit_mut::walk_sched(self, arena, sched);
             self.ident_names_to_exec_expr.pop();
             // self.visit_block(&mut sched.body);
         }
@@ -285,7 +339,7 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
                     _ => {}
                 }
             }
-            arena_visit_mut::walk_fun_def(self, fun_def)
+            arena_visit_mut::walk_fun_def(self, arena, fun_def)
         }
     }
 
@@ -345,32 +399,47 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
     let mut replace_exec_idents = ReplaceExecIdents {
         ident_names_to_exec_expr: vec![],
     };
-    replace_exec_idents.visit_fun_def(fun_def);
+    replace_exec_idents.visit_fun_def(arena, fun_def);
 }
 
-fn replace_struct_idents_with_specific_struct_dtys<'a>(
-    struct_dtys: &[ArenaStructDecl<'a>],
-    item: &mut ArenaItem,
+fn replace_struct_idents_with_specific_struct_dtys<'a, 's>(
+    arena: &'a bumpalo::Bump,
+    struct_dtys: &'s [&'a ArenaStructDecl<'a>], // outer borrow 's, elements 'a
+    item: &mut ArenaItem<'a>,
 ) {
-    struct ReplaceStructIdents<'a> {
-        struct_dtys: &'a [ArenaStructDecl<'a>],
+    struct ReplaceStructIdents<'s, 'a> {
+        struct_dtys: &'s [&'a ArenaStructDecl<'a>],
     }
-    impl<'a> ArenaVisitMut<'a> for ReplaceStructIdents<'a> {
-        fn visit_dty(&mut self, dty: &mut ArenaDataTy<'a>) {
+
+    impl<'s, 'a> ArenaVisitMut<'a> for ReplaceStructIdents<'s, 'a> {
+        fn visit_dty(&mut self, arena: &'a bumpalo::Bump, dty: &mut ArenaDataTy<'a>) {
             if let ArenaDataTyKind::Ident(ident) = &mut dty.dty {
-                if let Some(struct_decl) = self.struct_dtys.iter().find(|s| &s.ident == ident) {
-                    dty.dty = ArenaDataTyKind::Struct(struct_decl)
+                if let Some(sd) = self
+                    .struct_dtys
+                    .iter()
+                    .copied() // &&T -> &T
+                    .find(|sd| &sd.ident == ident)
+                {
+                    dty.dty = ArenaDataTyKind::Struct(sd);
+                    return;
                 }
-            } else {
-                arena_visit_mut::walk_dty(self, dty)
             }
+            arena_visit_mut::walk_dty(self, arena, dty)
         }
     }
 
-    let mut replace_struct_idents = ReplaceStructIdents { struct_dtys };
+    let mut v = ReplaceStructIdents { struct_dtys };
     match item {
-        ArenaItem::FunDef(fun_def) => replace_struct_idents.visit_fun_def(fun_def),
-        ArenaItem::FunDecl(fun_decl) => replace_struct_idents.visit_fun_decl(fun_decl),
+        ArenaItem::FunDef(fd) => {
+            let mut fd_owned = (**fd).clone();
+            v.visit_fun_def(arena, &mut fd_owned);
+            *fd = arena.alloc(fd_owned);
+        }
+        ArenaItem::FunDecl(fd) => {
+            let mut fd_owned = (**fd).clone_in(arena);
+            v.visit_fun_decl(arena, &mut fd_owned);
+            *fd = arena.alloc(fd_owned);
+        }
         _ => {}
     }
 }

@@ -4,7 +4,7 @@ use crate::arena_ast::internal::{
 use crate::arena_ast::*;
 use crate::ty_check::error::CtxError;
 use bumpalo::collections::CollectIn;
-use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
+use bumpalo::{collections::Vec as BumpVec, Bump};
 use std::collections::HashSet;
 
 // TODO introduce proper struct
@@ -720,15 +720,17 @@ impl<'a> GlobalCtx<'a> {
 
     pub fn push_fun_checked_under_nats(
         &mut self,
-        fun_def: BumpBox<'a, FunDef<'a>>,
+        arena: &'a bumpalo::Bump,
+        fun_def_owned: FunDef<'a>, // take by value
         nat_vals: &'a [usize],
     ) {
-        let fun_name = fun_def.ident.name.clone();
-        self.compil_unit.items.push(Item::FunDef(fun_def));
-        self.checked_funs.push((fun_name, nat_vals))
+        let fun_name = fun_def_owned.ident.name.clone();
+        let fd_ref: &'a FunDef<'a> = arena.alloc(fun_def_owned);
+        self.compil_unit.items.push(Item::FunDef(fd_ref));
+        self.checked_funs.push((fun_name, nat_vals));
     }
 
-    pub fn pop_fun_def(&mut self, name: &'a str) -> Option<BumpBox<'a, FunDef<'a>>> {
+    pub fn pop_fun_def(&mut self, name: &'a str) -> Option<&'a FunDef<'a>> {
         let index = self.compil_unit.items.iter().position(|item| {
             if let Item::FunDef(fun_def) = item {
                 fun_def.ident.name == name
