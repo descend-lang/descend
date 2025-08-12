@@ -419,8 +419,8 @@ impl Sched {
         arena_ast::Sched {
             dim: self.dim.into_arena(),
             inner_exec_ident: self.inner_exec_ident.map(|id| id.into_arena(arena)),
-            sched_exec: BumpBox::new_in(self.sched_exec.into_arena(arena), arena),
-            body: BumpBox::new_in(self.body.into_arena(arena), arena),
+            sched_exec: arena.alloc(self.sched_exec.into_arena(arena)),
+            body: arena.alloc(self.body.into_arena(arena)),
         }
     }
 }
@@ -533,7 +533,7 @@ impl AppKernel {
                 .iter()
                 .map(|s| arena.alloc_str(s).to_string())
                 .collect_in(arena),
-            fun_ident: BumpBox::new_in(self.fun_ident.clone().into_arena(arena), arena),
+            fun_ident: arena.alloc(self.fun_ident.clone().into_arena(arena)),
             gen_args: self
                 .gen_args
                 .iter()
@@ -675,9 +675,9 @@ impl ExprKind {
                     .map(|a| a.into_arena(arena))
                     .collect_in(arena),
             ),
-            ExprKind::AppKernel(kern) => arena_ast::ExprKind::AppKernel(
-                bumpalo::boxed::Box::new_in(kern.into_arena(arena), arena),
-            ),
+            ExprKind::AppKernel(kern) => {
+                arena_ast::ExprKind::AppKernel(arena.alloc(kern.into_arena(arena)))
+            }
             IfElse(cond, then_, else_) => arena_ast::ExprKind::IfElse(
                 arena.alloc(cond.into_arena(arena)),
                 arena.alloc(then_.into_arena(arena)),
@@ -1773,20 +1773,20 @@ impl NatConstr {
         match self {
             True => arena_ast::NatConstr::True,
             Eq(lhs, rhs) => arena_ast::NatConstr::Eq(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
             Lt(lhs, rhs) => arena_ast::NatConstr::Lt(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
             And(lhs, rhs) => arena_ast::NatConstr::And(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
             Or(lhs, rhs) => arena_ast::NatConstr::Or(
-                bumpalo::boxed::Box::new_in(lhs.into_arena(arena), arena),
-                bumpalo::boxed::Box::new_in(rhs.into_arena(arena), arena),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
             ),
         }
     }
