@@ -261,17 +261,17 @@ impl<'a> Expr<'a> {
     // }
 }
 
-#[derive(PartialEq, Debug)] // Apparently you cannot clone BumpBoxes. If needed again, just make them mutable references?
+#[derive(PartialEq, Debug, Clone)]
 pub struct Sched<'a> {
     pub dim: DimCompo,
     pub inner_exec_ident: Option<Ident<'a>>,
-    pub sched_exec: BumpBox<'a, ExecExpr<'a>>,
-    pub body: BumpBox<'a, Block<'a>>,
+    pub sched_exec: &'a ExecExpr<'a>,
+    pub body: &'a Block<'a>,
 }
 
 impl<'a> Sched<'a> {
     pub fn new_in(
-        bump: &'a bumpalo::Bump,
+        arena: &'a bumpalo::Bump,
         dim: DimCompo,
         inner_exec_ident: Option<Ident<'a>>,
         sched_exec: ExecExpr<'a>,
@@ -280,8 +280,8 @@ impl<'a> Sched<'a> {
         Sched {
             dim,
             inner_exec_ident,
-            sched_exec: BumpBox::new_in(sched_exec, bump),
-            body: BumpBox::new_in(body, bump),
+            sched_exec: arena.alloc(sched_exec),
+            body: arena.alloc(body),
         }
     }
 }
@@ -356,7 +356,7 @@ pub struct AppKernel<'a> {
     pub block_dim: Dim<'a>,
     pub shared_mem_dtys: BumpVec<'a, DataTy<'a>>,
     pub shared_mem_prvs: BumpVec<'a, String>,
-    pub fun_ident: BumpBox<'a, Ident<'a>>,
+    pub fun_ident: &'a Ident<'a>,
     pub gen_args: BumpVec<'a, ArgKinded<'a>>,
     pub args: BumpVec<'a, Expr<'a>>,
 }

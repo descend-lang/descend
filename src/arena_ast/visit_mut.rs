@@ -100,12 +100,10 @@ pub fn walk_nat_ref<'a, V: VisitMut<'a>>(
             v.visit_nat_ref(arena, &mut l_slot);
             v.visit_nat_ref(arena, &mut r_slot);
 
-            // Rebuild the parent node with possibly-updated children
             let new = arena.alloc(Nat::BinOp(*op, l_slot, r_slot));
             *slot = new;
         }
         Nat::App(func, args) => {
-            // Owned children: visit in place
             let mut rebuilt = bumpalo::collections::Vec::new_in(arena);
             rebuilt.reserve(args.len());
             for a in args.iter() {
@@ -386,7 +384,6 @@ pub fn walk_ty<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a bumpalo::Bump, t
             *dty = arena.alloc(dty_owned);
         }
         TyKind::FnTy(fn_slot) => {
-            // 1) Detach: copy fields out of the &'a FnTy<'a>
             let src: &FnTy<'a> = *fn_slot;
 
             let mut owned = FnTy {
@@ -398,7 +395,6 @@ pub fn walk_ty<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a bumpalo::Bump, t
                 nat_constrs: src.nat_constrs.clone(),
             };
 
-            // 2) Visit children on the owned struct
             walk_list!(visitor, visit_ident_kinded, &mut owned.generics, arena);
 
             if let Some(ref mut ie) = owned.generic_exec {
@@ -408,14 +404,12 @@ pub fn walk_ty<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a bumpalo::Bump, t
             walk_list!(visitor, visit_param_sig, &mut owned.param_sigs, arena);
             visitor.visit_exec_expr(arena, &mut owned.exec);
 
-            // ret_ty needs its own detach/reattach
             let mut ret_owned = (*owned.ret_ty).clone();
             visitor.visit_ty(arena, &mut ret_owned);
             owned.ret_ty = arena.alloc(ret_owned);
 
             walk_list!(visitor, visit_nat_constr, &mut owned.nat_constrs, arena);
 
-            // 3) Reattach
             *fn_slot = arena.alloc(owned);
         }
     }
@@ -478,12 +472,10 @@ pub fn walk_pl_expr<'a, V: VisitMut<'a>>(
         }
 
         PlaceExprKind::Select(p_ref, exec_ref) => {
-            // place
             let mut p_owned = (**p_ref).clone();
             visitor.visit_pl_expr(arena, &mut p_owned);
             *p_ref = arena.alloc(p_owned);
 
-            // exec
             let mut exec_owned = (**exec_ref).clone();
             visitor.visit_exec_expr(arena, &mut exec_owned);
             *exec_ref = arena.alloc(exec_owned);
@@ -496,36 +488,30 @@ pub fn walk_pl_expr<'a, V: VisitMut<'a>>(
         }
 
         PlaceExprKind::FieldProj(p_ref, field_ref) => {
-            // place
             let mut p_owned = (**p_ref).clone();
             visitor.visit_pl_expr(arena, &mut p_owned);
             *p_ref = arena.alloc(p_owned);
 
-            // field ident (held by reference)
             let mut field_owned = (**field_ref).clone();
             visitor.visit_ident(arena, &mut field_owned);
             *field_ref = arena.alloc(field_owned);
         }
 
         PlaceExprKind::View(p_ref, view_ref) => {
-            // place
             let mut p_owned = (**p_ref).clone();
             visitor.visit_pl_expr(arena, &mut p_owned);
             *p_ref = arena.alloc(p_owned);
 
-            // view (held by reference)
             let mut view_owned = (**view_ref).clone();
             visitor.visit_view(arena, &mut view_owned);
             *view_ref = arena.alloc(view_owned);
         }
 
         PlaceExprKind::Idx(p_ref, n_ref) => {
-            // place
             let mut p_owned = (**p_ref).clone();
             visitor.visit_pl_expr(arena, &mut p_owned);
             *p_ref = arena.alloc(p_owned);
 
-            // index nat (held by reference)
             let mut n_owned = (**n_ref).clone();
             visitor.visit_nat(arena, &mut n_owned);
             *n_ref = arena.alloc(n_owned);
@@ -574,7 +560,9 @@ pub fn walk_split<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, indep: 
     } = indep;
     visitor.visit_dim_compo(dim_compo);
     visitor.visit_nat(arena, pos);
-    visitor.visit_exec_expr(arena, split_exec);
+    let mut split_exec_owned = (**split_exec).clone();
+    visitor.visit_exec_expr(arena, &mut split_exec_owned);
+    *split_exec = arena.alloc(split_exec_owned);
     walk_list!(visitor, visit_ident, branch_idents, arena);
     walk_list!(visitor, visit_expr, branch_bodies, arena);
 }
@@ -590,8 +578,13 @@ pub fn walk_sched<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, sched: 
     for ident in inner_exec_ident {
         visitor.visit_ident(arena, ident)
     }
-    visitor.visit_exec_expr(arena, sched_exec);
-    visitor.visit_block(arena, body);
+    let mut sched_exec_owned = (**sched_exec).clone();
+    visitor.visit_exec_expr(arena, &mut sched_exec_owned);
+    *sched_exec = arena.alloc(sched_exec_owned);
+
+    let mut body_owned = (**body).clone();
+    visitor.visit_block(arena, &mut body_owned);
+    *body = arena.alloc(body_owned);
 }
 
 pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &mut Expr<'a>) {
@@ -634,7 +627,9 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
                 visitor.visit_ty(arena, &mut ty_owned);
                 *slot = arena.alloc(ty_owned);
             }
-            visitor.visit_expr(arena, e);
+            let mut e_owned = (**e).clone();
+            visitor.visit_expr(arena, &mut e_owned);
+            *e = arena.alloc(e_owned);
         }
         ExprKind::Assign(pl_expr, expr) => {
             let mut pl_expr_owned = (**pl_expr).clone();
@@ -645,9 +640,13 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
             *expr = arena.alloc(expr_owned);
         }
         ExprKind::IdxAssign(pl_expr, idx, expr) => {
-            visitor.visit_pl_expr(arena, pl_expr);
+            let mut pl_expr_owned = (**pl_expr).clone();
+            let mut expr_owned = (**expr).clone();
+            visitor.visit_pl_expr(arena, &mut pl_expr_owned);
             visitor.visit_nat(arena, idx);
-            visitor.visit_expr(arena, expr);
+            visitor.visit_expr(arena, &mut expr_owned);
+            *pl_expr = arena.alloc(pl_expr_owned);
+            *expr = arena.alloc(expr_owned);
         }
         ExprKind::Seq(es) => {
             for e in es {
@@ -661,7 +660,9 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
         //     visitor.visit_expr(expr)
         // }
         ExprKind::App(f, gen_args, args) => {
-            visitor.visit_ident(arena, f);
+            let mut f_owned = (**f).clone();
+            visitor.visit_ident(arena, &mut f_owned);
+            *f = arena.alloc(f_owned);
             walk_list!(visitor, visit_arg_kinded, gen_args, arena);
             walk_list!(visitor, visit_expr, args, arena);
         }
@@ -669,7 +670,43 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
             visitor.visit_ident(arena, f);
             walk_list!(visitor, visit_arg_kinded, gen_args, arena);
         }
-        ExprKind::AppKernel(app_kernel) => visitor.visit_app_kernel(arena, app_kernel),
+        ExprKind::AppKernel(app_kernel_ref) => {
+            let src: &AppKernel<'a> = *app_kernel_ref;
+
+            let mut tmp = AppKernel {
+                grid_dim: src.grid_dim.clone(),
+                block_dim: src.block_dim.clone(),
+                shared_mem_dtys: src.shared_mem_dtys.clone(),
+                shared_mem_prvs: src.shared_mem_prvs.clone(),
+                fun_ident: {
+                    let mut id = (*src.fun_ident).clone();
+                    visitor.visit_ident(arena, &mut id);
+                    arena.alloc(id)
+                },
+                gen_args: {
+                    let mut v = src.gen_args.clone();
+                    for a in v.iter_mut() {
+                        visitor.visit_arg_kinded(arena, a);
+                    }
+                    v
+                },
+                args: {
+                    let mut v = src.args.clone();
+                    for e in v.iter_mut() {
+                        visitor.visit_expr(arena, e);
+                    }
+                    v
+                },
+            };
+
+            visitor.visit_dim(arena, &mut tmp.grid_dim);
+            visitor.visit_dim(arena, &mut tmp.block_dim);
+            for d in tmp.shared_mem_dtys.iter_mut() {
+                visitor.visit_dty(arena, d);
+            }
+
+            *app_kernel_ref = arena.alloc(tmp);
+        }
         ExprKind::IfElse(cond_ref, tt_ref, ff_ref) => {
             let mut cond = (**cond_ref).clone();
             let mut tt = (**tt_ref).clone();
@@ -682,8 +719,12 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
             *ff_ref = arena.alloc(ff)
         }
         ExprKind::If(cond, tt) => {
-            visitor.visit_expr(arena, cond);
-            visitor.visit_expr(arena, tt)
+            let mut cond_owned = (**cond).clone();
+            let mut tt_owned = (**tt).clone();
+            visitor.visit_expr(arena, &mut cond_owned);
+            visitor.visit_expr(arena, &mut tt_owned);
+            *cond = arena.alloc(cond_owned);
+            *tt = arena.alloc(tt_owned);
         }
         ExprKind::Array(elems) => {
             walk_list!(visitor, visit_expr, elems, arena);
@@ -700,39 +741,92 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
             *coll_ref = arena.alloc(coll);
             *body_ref = arena.alloc(body);
         }
-        ExprKind::Split(par_branch) => {
-            visitor.visit_split(arena, par_branch);
+        ExprKind::Split(split_ref) => {
+            let src: &Split<'a> = *split_ref;
+
+            let mut dim = src.dim_compo;
+            visitor.visit_dim_compo(&mut dim);
+
+            let mut pos = src.pos.clone();
+            visitor.visit_nat(arena, &mut pos);
+
+            let mut exec_owned = (*src.split_exec).clone();
+            visitor.visit_exec_expr(arena, &mut exec_owned);
+            let exec_ref: &'a ExecExpr<'a> = arena.alloc(exec_owned);
+
+            let mut branch_idents = src.branch_idents.clone();
+            for id in branch_idents.iter_mut() {
+                visitor.visit_ident(arena, id);
+            }
+
+            let mut branch_bodies = src.branch_bodies.clone();
+            for body in branch_bodies.iter_mut() {
+                visitor.visit_expr(arena, body);
+            }
+
+            let new_split = Split {
+                dim_compo: dim,
+                pos,
+                split_exec: exec_ref,
+                branch_idents,
+                branch_bodies,
+            };
+            *split_ref = arena.alloc(new_split);
         }
         ExprKind::Sched(sched) => {
-            visitor.visit_sched(arena, sched);
+            let mut sched_owned = (**sched).clone();
+            visitor.visit_sched(arena, &mut sched_owned);
+            *sched = arena.alloc(sched_owned);
         }
         ExprKind::ForNat(ident, range, body) => {
             visitor.visit_ident(arena, ident);
-            visitor.visit_nat_range(arena, range);
-            visitor.visit_expr(arena, body)
+            let mut range_owned = (**range).clone();
+            let mut body_owned = (**body).clone();
+            visitor.visit_nat_range(arena, &mut range_owned);
+            visitor.visit_expr(arena, &mut body_owned);
+            *range = arena.alloc(range_owned);
+            *body = arena.alloc(body_owned);
         }
         ExprKind::While(cond, body) => {
-            visitor.visit_expr(arena, cond);
-            visitor.visit_expr(arena, body);
+            let mut cond_owned = (**cond).clone();
+            let mut body_owned = (**body).clone();
+            visitor.visit_expr(arena, &mut cond_owned);
+            visitor.visit_expr(arena, &mut body_owned);
+            *cond = arena.alloc(cond_owned);
+            *body = arena.alloc(body_owned);
         }
         ExprKind::BinOp(op, l, r) => {
             visitor.visit_binary_op(op);
-            visitor.visit_expr(arena, l);
-            visitor.visit_expr(arena, r)
+            let mut l_owned = (**l).clone();
+            let mut r_owned = (**r).clone();
+            visitor.visit_expr(arena, &mut l_owned);
+            visitor.visit_expr(arena, &mut r_owned);
+            *l = arena.alloc(l_owned);
+            *r = arena.alloc(r_owned);
         }
         ExprKind::UnOp(op, expr) => {
             visitor.visit_unary_op(op);
-            visitor.visit_expr(arena, expr)
+            let mut expr_owned = (**expr).clone();
+            visitor.visit_expr(arena, &mut expr_owned);
+            *expr = arena.alloc(expr_owned);
         }
         ExprKind::Sync(exec) => {
             for e in exec {
                 visitor.visit_exec_expr(arena, e)
             }
         }
-        ExprKind::Unsafe(expr) => visitor.visit_expr(arena, expr),
+        ExprKind::Unsafe(expr) => {
+            let mut expr_owned = (**expr).clone();
+            visitor.visit_expr(arena, &mut expr_owned);
+            *expr = arena.alloc(expr_owned);
+        }
         ExprKind::Cast(expr, dty) => {
-            visitor.visit_expr(arena, expr);
-            visitor.visit_dty(arena, dty)
+            let mut expr_owned = (**expr).clone();
+            let mut dty_owned = (**dty).clone();
+            visitor.visit_expr(arena, &mut expr_owned);
+            visitor.visit_dty(arena, &mut dty_owned);
+            *expr = arena.alloc(expr_owned);
+            *dty = arena.alloc(dty_owned);
         }
         ExprKind::Range(_, _) | ExprKind::Hole => (),
     }
@@ -757,7 +851,9 @@ pub fn walk_app_kernel<'a, V: VisitMut<'a>>(
     for dty in shared_mem_dtys {
         visitor.visit_dty(arena, dty);
     }
-    visitor.visit_ident(arena, fun_ident);
+    let mut fun_owned = (**fun_ident).clone();
+    visitor.visit_ident(arena, &mut fun_owned);
+    *fun_ident = arena.alloc(fun_owned);
     for garg in gen_args {
         visitor.visit_arg_kinded(arena, garg);
     }
@@ -768,7 +864,9 @@ pub fn walk_app_kernel<'a, V: VisitMut<'a>>(
 
 pub fn walk_block<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, block: &mut Block<'a>) {
     let Block { body, .. } = block;
-    visitor.visit_expr(arena, body);
+    let mut body_owned = (**body).clone();
+    visitor.visit_expr(arena, &mut body_owned);
+    *body = arena.alloc(body_owned);
 }
 
 pub fn walk_split_proj<'a, V: VisitMut<'a>>(
@@ -785,6 +883,7 @@ pub fn walk_split_proj<'a, V: VisitMut<'a>>(
     visitor.visit_nat(arena, pos);
 }
 
+/**
 pub fn walk_exec_expr<'a, V: VisitMut<'a>>(
     visitor: &mut V,
     arena: &'a Bump,
@@ -793,6 +892,23 @@ pub fn walk_exec_expr<'a, V: VisitMut<'a>>(
     visitor.visit_exec(arena, &mut exec_expr.exec);
     for t in &mut exec_expr.ty {
         visitor.visit_exec_ty(t);
+    }
+}
+*/
+
+pub fn walk_exec_expr<'a, V: VisitMut<'a>>(
+    visitor: &mut V,
+    arena: &'a bumpalo::Bump,
+    exec_expr: &mut ExecExpr<'a>,
+) {
+    let mut exec_owned = (*exec_expr.exec).clone();
+    visitor.visit_exec(arena, &mut exec_owned);
+    exec_expr.exec = arena.alloc(exec_owned);
+
+    if let Some(ty_ref) = &mut exec_expr.ty {
+        let mut ty_owned = (**ty_ref).clone();
+        visitor.visit_exec_ty(&mut ty_owned);
+        *ty_ref = arena.alloc(ty_owned);
     }
 }
 
@@ -821,7 +937,11 @@ pub fn walk_exec_path_elem<'a, V: VisitMut<'a>>(
     exec_path_elem: &mut ExecPathElem<'a>,
 ) {
     match exec_path_elem {
-        ExecPathElem::TakeRange(split_proj) => visitor.visit_split_proj(arena, split_proj),
+        ExecPathElem::TakeRange(split_proj) => {
+            let mut split_proj_owned = (**split_proj).clone();
+            visitor.visit_split_proj(arena, &mut split_proj_owned);
+            *split_proj = arena.alloc(split_proj_owned);
+        }
         ExecPathElem::ForAll(dim_compo) => visitor.visit_dim_compo(dim_compo),
         ExecPathElem::ToWarps => {}
         ExecPathElem::ToThreads(dim_compo) => visitor.visit_dim_compo(dim_compo),
@@ -871,10 +991,16 @@ pub fn walk_fun_def<'a, V: VisitMut<'a>>(
         visitor.visit_ident_exec(arena, exec_decl);
     }
     walk_list!(visitor, visit_param_decl, params, arena);
-    visitor.visit_dty(arena, ret_dty);
+    let mut ret_dty_owned = (**ret_dty).clone();
+    visitor.visit_dty(arena, &mut ret_dty_owned);
+    *ret_dty = arena.alloc(ret_dty_owned);
+
     visitor.visit_exec_expr(arena, exec);
     walk_list!(visitor, visit_prv_rel, prv_rels, arena);
-    visitor.visit_block(arena, body)
+
+    let mut body_owned = (**body).clone();
+    visitor.visit_block(arena, &mut body_owned);
+    *body = arena.alloc(body_owned);
 }
 
 pub fn walk_fun_decl<'a, V: VisitMut<'a>>(
