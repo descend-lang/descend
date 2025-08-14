@@ -101,7 +101,7 @@ impl<'a> ConstrainMap<'a> {
 
 impl<'a> DataTy<'a> {
     fn bind_to(
-        &self,
+        &'a self,
         ident: &'a Ident<'a>,
         constr_map: &'a mut ConstrainMap<'a>,
         arena: &'a Bump,
@@ -587,7 +587,7 @@ impl<'a> Substitutable<'a> for Dim<'a> {
 
 impl<'a> Nat<'a> {
     fn bind_to(
-        &self,
+        &'a self,
         ident: &'a Ident<'a>,
         constr_map: &'a mut ConstrainMap<'a>,
         _: &'a mut BumpVec<'a, PrvConstr<'a>>,
@@ -671,7 +671,7 @@ impl<'a> Substitutable<'a> for Nat<'a> {
 
 impl<'a> Memory<'a> {
     fn bind_to(
-        &self,
+        &'a self,
         ident: &'a Ident<'a>,
         constr_map: &'a mut ConstrainMap<'a>,
         arena: &'a Bump,
@@ -736,7 +736,7 @@ impl<'a> Substitutable<'a> for Memory<'a> {
 
 impl<'a> Provenance<'a> {
     fn bind_to(
-        &self,
+        &'a self,
         ident: &'a Ident<'a>,
         constr_map: &'a mut ConstrainMap<'a>,
         arena: &'a Bump,

@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::arena_ast::internal::PathElem;
-use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
+use bumpalo::{collections::Vec as BumpVec, Bump};
 use descend_derive::span_derive;
 
 use crate::ast::Span;
@@ -1239,6 +1239,28 @@ impl<'a> FnTy<'a> {
             exec,
             ret_ty: arena.alloc(ret_ty),
             nat_constrs: nat_vec,
+        }
+    }
+}
+
+impl<'a> Clone for FnTy<'a> {
+    fn clone(&self) -> Self {
+        let mut generics = BumpVec::new_in(self.generics.bump());
+        generics.extend(self.generics.iter().cloned());
+
+        let mut param_sigs = BumpVec::new_in(self.param_sigs.bump());
+        param_sigs.extend(self.param_sigs.iter().cloned());
+
+        let mut nat_constrs = BumpVec::new_in(self.nat_constrs.bump());
+        nat_constrs.extend(self.nat_constrs.iter().cloned());
+
+        FnTy {
+            generics,
+            generic_exec: self.generic_exec.clone(),
+            param_sigs,
+            exec: self.exec.clone(),
+            ret_ty: self.ret_ty,
+            nat_constrs,
         }
     }
 }

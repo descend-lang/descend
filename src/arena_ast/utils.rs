@@ -12,11 +12,21 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 static mut COUNTER: AtomicI32 = AtomicI32::new(0);
 
+/**
 pub(crate) fn fresh_ident<'a, F, R>(arena: &'a bumpalo::Bump, name: &str, ident_constr: F) -> R
 where
     F: Fn(Ident) -> R,
 {
     ident_constr(Ident::new_impli(&arena, &fresh_name(name)))
+}
+*/
+
+pub(crate) fn fresh_ident<'a, F, R>(arena: &'a bumpalo::Bump, name: &'a str, ident_constr: F) -> R
+where
+    F: FnOnce(Ident<'a>) -> R,
+{
+    let id = Ident::new(arena, name);
+    ident_constr(id)
 }
 
 pub(crate) fn fresh_name(name: &str) -> String {
@@ -47,7 +57,6 @@ pub fn implicit_idents<'a>(f: &FunDef<'a>) -> Option<HashSet<Ident<'a>>> {
     }
 }
 
-// utils.rs (or wherever you define this trait)
 pub trait VisitableMut<'a> {
     fn visit_mut<V: VisitMut<'a>>(&mut self, visitor: &mut V, arena: &'a bumpalo::Bump);
 }
@@ -313,7 +322,7 @@ fn insert_for_ident<'a>(
                 path: merged,
             });
 
-            // Keep or drop the cached type (choose one)
+            // Keep or drop the cached type
             // let new_ty = in_exec.ty;         // keep it (may be stale)
             let new_ty = None; // safer: force re-tycheck later
 
