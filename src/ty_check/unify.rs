@@ -5,41 +5,49 @@ use crate::arena_ast::*;
 use crate::ty_check::ctxs::{KindCtx, TyCtx};
 use crate::ty_check::error::UnifyError;
 use crate::ty_check::subty;
+use bumpalo::{collections::Vec as BumpVec, Bump};
 use std::collections::HashMap;
 
 type UnifyResult<'a, T> = Result<T, UnifyError<'a>>;
 
-pub(super) fn unify<'a, C: Constrainable<'a>>(t1: &mut C, t2: &mut C) -> UnifyResult<'a, ()> {
-    let (_, _) = constrain(t1, t2)?;
+pub(super) fn unify<'a, C: Constrainable<'a>>(
+    t1: &'a mut C,
+    t2: &'a mut C,
+    arena: &'a Bump,
+) -> UnifyResult<'a, ()> {
+    let (_, _) = constrain(t1, t2, arena)?;
     Ok(())
 }
 
 pub(super) fn sub_unify<'a, C: Constrainable<'a>>(
-    kind_ctx: &KindCtx,
-    ty_ctx: &mut TyCtx,
-    sub: &mut C,
-    sup: &mut C,
+    kind_ctx: &'a KindCtx<'a>,
+    ty_ctx: &'a mut TyCtx<'a>,
+    sub: &'a mut C,
+    sup: &'a mut C,
+    arena: &'a Bump,
 ) -> UnifyResult<'a, ()> {
-    let (_, prv_rels) = constrain(sub, sup)?;
+    let (_map, prv) = constrain(sub, sup, arena)?;
     subty::multiple_outlives(
         kind_ctx,
         ty_ctx,
-        prv_rels.iter().map(|PrvConstr(p1, p2)| (p1, p2)),
+        prv.iter().map(|PrvConstr(p1, p2)| (*p1, *p2)),
+        arena,
     )?;
     Ok(())
 }
 
 pub(super) fn constrain<'a, S: Constrainable<'a>>(
-    t1: &mut S,
-    t2: &mut S,
-) -> UnifyResult<'a, (ConstrainMap<'a>, Vec<PrvConstr<'a>>)> {
+    t1: &'a mut S,
+    t2: &'a mut S,
+    arena: &'a Bump,
+) -> UnifyResult<'a, (ConstrainMap<'a>, BumpVec<'a, PrvConstr<'a>>)> {
     let mut constr_map = ConstrainMap::new();
-    let mut prv_rels = Vec::new();
-    t1.constrain(t2, &mut constr_map, &mut prv_rels)?;
+    let mut prv_rels = BumpVec::new_in(arena);
+    t1.constrain(t2, &mut constr_map, &mut prv_rels, arena)?;
     Ok((constr_map, prv_rels))
 }
 
-pub(super) fn inst_fn_ty_scheme<'a>(fn_ty: &'a FnTy<'a>) -> FnTy<'a> {
+pub(super) fn inst_fn_ty_scheme<'a>(fn_ty: &'a FnTy<'a>, arena: &'a Bump) -> FnTy<'a> {
     assert!(
         fn_ty.generic_exec.is_none(),
         "exec must be substituted before instantiation to make sure that it has the correct type"
@@ -48,39 +56,40 @@ pub(super) fn inst_fn_ty_scheme<'a>(fn_ty: &'a FnTy<'a>) -> FnTy<'a> {
         .generics
         .iter()
         .map(|i| match i.kind {
-            Kind::DataTy => ArgKinded::DataTy(DataTy::new(utils::fresh_ident(
-                &i.ident.name,
-                DataTyKind::Ident,
-            ))),
-            Kind::Nat => ArgKinded::Nat(utils::fresh_ident(&i.ident.name, Nat::Ident)),
-            Kind::Memory => ArgKinded::Memory(utils::fresh_ident(&i.ident.name, Memory::Ident)),
+            Kind::DataTy => ArgKinded::DataTy(DataTy::new(
+                arena,
+                utils::fresh_ident(arena, &i.ident.name, DataTyKind::Ident),
+            )),
+            Kind::Nat => ArgKinded::Nat(utils::fresh_ident(arena, &i.ident.name, Nat::Ident)),
+            Kind::Memory => {
+                ArgKinded::Memory(utils::fresh_ident(arena, &i.ident.name, Memory::Ident))
+            }
             Kind::Provenance => {
-                ArgKinded::Provenance(utils::fresh_ident(&i.ident.name, Provenance::Ident))
+                ArgKinded::Provenance(utils::fresh_ident(arena, &i.ident.name, Provenance::Ident))
             }
         })
         .collect();
     let mut inst_fn_ty = fn_ty.clone();
     let generics = inst_fn_ty.generics.drain(..).collect::<Vec<_>>();
-    utils::subst_idents_kinded(generics.iter(), mono_idents.iter(), &mut inst_fn_ty);
+    utils::subst_idents_kinded(arena, generics.iter(), mono_idents.iter(), &mut inst_fn_ty);
     inst_fn_ty
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub(super) struct PrvConstr<'a>(pub Provenance<'a>, pub Provenance<'a>);
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) struct PrvConstr<'a>(pub &'a Provenance<'a>, pub &'a Provenance<'a>);
 
 #[derive(Debug)]
 pub(super) struct ConstrainMap<'a> {
-    // TODO swap Box<str> for something more abstract, like Symbol or Identifier
-    pub dty_unifier: HashMap<Box<str>, DataTy<'a>>,
-    pub nat_unifier: HashMap<Box<str>, Nat<'a>>,
-    pub mem_unifier: HashMap<Box<str>, Memory<'a>>,
-    pub prv_unifier: HashMap<Box<str>, Provenance<'a>>,
-    pub exec_unifier: HashMap<Box<str>, ExecExpr<'a>>,
+    pub dty_unifier: HashMap<&'a str, DataTy<'a>>,
+    pub nat_unifier: HashMap<&'a str, Nat<'a>>,
+    pub mem_unifier: HashMap<&'a str, Memory<'a>>,
+    pub prv_unifier: HashMap<&'a str, Provenance<'a>>,
+    pub exec_unifier: HashMap<&'a str, ExecExpr<'a>>,
 }
 
 impl<'a> ConstrainMap<'a> {
     fn new() -> Self {
-        ConstrainMap {
+        Self {
             dty_unifier: HashMap::new(),
             nat_unifier: HashMap::new(),
             mem_unifier: HashMap::new(),
@@ -95,6 +104,7 @@ impl<'a> DataTy<'a> {
         &self,
         ident: &'a Ident<'a>,
         constr_map: &'a mut ConstrainMap<'a>,
+        arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         if let DataTyKind::Ident(ty_id) = &self.dty {
             if ty_id == ident {
@@ -120,42 +130,46 @@ impl<'a> DataTy<'a> {
         constr_map
             .dty_unifier
             .values_mut()
-            .for_each(|dty| SubstIdent::new(ident, self).visit_dty(dty));
+            .for_each(|dty| SubstIdent::new(ident, self).visit_dty(arena, dty));
         Ok(())
     }
 }
 
 pub(super) trait Substitutable<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>);
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump);
 }
 
 pub(super) trait Constrainable<'a>: Visitable<'a> + Substitutable<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()>;
-    fn occurs_check<S: Constrainable<'a>>(ident_kinded: &'a IdentKinded<'a>, s: &S) -> bool {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()>;
+
+    fn occurs_check<S: Constrainable<'a>>(ident_kinded: &IdentKinded<'a>, s: &S) -> bool {
         utils::free_kinded_idents(s).contains(ident_kinded)
     }
 }
 
 impl<'a> Constrainable<'a> for FnTy<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &mut ConstrainMap<'a>,
-        prv_rels: &mut Vec<PrvConstr<'a>>,
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         assert!(self.generics.is_empty());
         assert!(other.generics.is_empty());
         assert!(self.generic_exec.is_none());
         assert!(other.generic_exec.is_none());
 
-        self.exec.constrain(&mut other.exec, constr_map, prv_rels)?;
-        substitute(constr_map, self);
-        substitute(constr_map, other);
+        self.exec
+            .constrain(&mut other.exec, constr_map, prv_rels, arena)?;
+        substitute(constr_map, self, arena);
+        substitute(constr_map, other, arena);
 
         if self.param_sigs.len() != other.param_sigs.len() {
             return Err(UnifyError::CannotUnify);
@@ -168,63 +182,66 @@ impl<'a> Constrainable<'a> for FnTy<'a> {
         while let (Some((next_lhs, _)), Some((next_rhs, _))) =
             (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
         {
-            next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
-            substitute(constr_map, self);
-            substitute(constr_map, other);
+            next_lhs.constrain(next_rhs, constr_map, prv_rels, arena)?;
+            substitute(constr_map, self, arena);
+            substitute(constr_map, other, arena);
 
             i += 1;
             remain_lhs = &mut self.param_sigs[i..];
             remain_rhs = &mut other.param_sigs[i..];
         }
         self.ret_ty
-            .constrain(&mut other.ret_ty, constr_map, prv_rels)?;
-        substitute(constr_map, self);
-        substitute(constr_map, other);
+            .constrain(&mut other.ret_ty, constr_map, prv_rels, arena)?;
+        substitute(constr_map, self, arena);
+        substitute(constr_map, other, arena);
         Ok(())
     }
 }
 
 impl<'a> Substitutable<'a> for FnTy<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_fn_ty(self);
+        apply_subst.visit_fn_ty(arena, self);
     }
 }
 
 impl<'a> Constrainable<'a> for ParamSig<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         self.exec_expr
-            .constrain(&mut other.exec_expr, constr_map, prv_rels)?;
-        substitute(constr_map, self);
-        substitute(constr_map, other);
-        self.ty.constrain(&mut other.ty, constr_map, prv_rels)?;
-        substitute(constr_map, self);
-        substitute(constr_map, other);
+            .constrain(&mut other.exec_expr, constr_map, prv_rels, arena)?;
+        substitute(constr_map, self, arena);
+        substitute(constr_map, other, arena);
+        self.ty
+            .constrain(&mut other.ty, constr_map, prv_rels, arena)?;
+        substitute(constr_map, self, arena);
+        substitute(constr_map, other, arena);
         Ok(())
     }
 }
 
 impl<'a> Substitutable<'a> for ParamSig<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_param_sig(self);
+        apply_subst.visit_param_sig(arena, self);
     }
 }
 
 // TODO unification for exec expressions necessary for Nats? Can this be moved into a separate
 //  equality check?
 impl<'a> Constrainable<'a> for ExecExpr<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &mut ConstrainMap<'a>,
-        prv_rels: &mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         match (&mut self.exec.base, &mut other.exec.base) {
             (BaseExec::Ident(i1), BaseExec::Ident(i2)) => {
                 assert!(
@@ -243,8 +260,8 @@ impl<'a> Constrainable<'a> for ExecExpr<'a> {
             }
             (BaseExec::CpuThread, BaseExec::CpuThread) => {}
             (BaseExec::GpuGrid(gdim1, bdim1), BaseExec::GpuGrid(gdim2, bdim2)) => {
-                gdim1.constrain(gdim2, constr_map, prv_rels)?;
-                bdim1.constrain(bdim2, constr_map, prv_rels)?;
+                gdim1.constrain(gdim2, constr_map, prv_rels, arena)?;
+                bdim1.constrain(bdim2, constr_map, prv_rels, arena)?;
             }
             _ => return Err(UnifyError::CannotUnify),
         }
@@ -257,11 +274,11 @@ impl<'a> Constrainable<'a> for ExecExpr<'a> {
         {
             tail_lhs.iter_mut().for_each(|ep| {
                 let mut apply_subst = ApplySubst::new(constr_map);
-                apply_subst.visit_exec_path_elem(ep);
+                apply_subst.visit_exec_path_elem(arena, ep);
             });
             tail_rhs.iter_mut().for_each(|ep| {
                 let mut apply_subst = ApplySubst::new(constr_map);
-                apply_subst.visit_exec_path_elem(ep);
+                apply_subst.visit_exec_path_elem(arena, ep);
             });
 
             match (next_lhs, next_rhs) {
@@ -278,7 +295,7 @@ impl<'a> Constrainable<'a> for ExecExpr<'a> {
                     if rl.left_or_right != rr.left_or_right {
                         return Err(UnifyError::CannotUnify);
                     }
-                    rl.pos.constrain(&mut rr.pos, constr_map, prv_rels)?
+                    rl.pos.constrain(&mut rr.pos, constr_map, prv_rels, arena)?
                 }
                 (ExecPathElem::ToWarps, ExecPathElem::ToWarps) => {}
                 _ => return Err(UnifyError::CannotUnify),
@@ -293,64 +310,68 @@ impl<'a> Constrainable<'a> for ExecExpr<'a> {
 }
 
 impl<'a> Substitutable<'a> for ExecExpr<'a> {
-    fn substitute(&mut self, subst: &ConstrainMap) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_exec_expr(self);
+        apply_subst.visit_exec_expr(arena, self);
     }
 }
 
 impl<'a> Constrainable<'a> for Ty<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         match (&mut self.ty, &mut other.ty) {
             (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
-                fn_ty1.constrain(fn_ty2, constr_map, prv_rels)
+                fn_ty1.constrain(fn_ty2, constr_map, prv_rels, arena)
             }
-            (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
+            (TyKind::Data(dty1), TyKind::Data(dty2)) => {
+                dty1.constrain(dty2, constr_map, prv_rels, arena)
+            }
             _ => Err(UnifyError::CannotUnify),
         }
     }
 }
 
 impl<'a> Substitutable<'a> for Ty<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_ty(self);
+        apply_subst.visit_ty(arena, self);
     }
 }
 
 impl<'a> Constrainable<'a> for DataTy<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         match (&mut self.dty, &mut other.dty) {
             (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) => {
                 if i1.is_implicit {
-                    other.bind_to(i1, constr_map)?
+                    other.bind_to(i1, constr_map, arena)?
                 } else if i2.is_implicit {
-                    self.bind_to(i2, constr_map)?
+                    self.bind_to(i2, constr_map, arena)?
                 } else if i1 == i2 {
                     return Ok(());
                 } else {
                     return Err(UnifyError::CannotUnify);
                 }
-                substitute(constr_map, self);
-                substitute(constr_map, other);
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
             }
             (DataTyKind::Ident(i), _) if i.is_implicit => {
-                other.bind_to(i, constr_map)?;
-                substitute(constr_map, other);
+                other.bind_to(i, constr_map, arena)?;
+                substitute(constr_map, other, arena);
             }
             (_, DataTyKind::Ident(i)) if i.is_implicit => {
-                self.bind_to(i, constr_map)?;
-                substitute(constr_map, self);
+                self.bind_to(i, constr_map, arena)?;
+                substitute(constr_map, self, arena);
             }
             (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
                 if sty1 != sty2 {
@@ -376,17 +397,17 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                 if own1 != own2 {
                     return Err(UnifyError::CannotUnify);
                 }
-                rgn1.constrain(rgn2, constr_map, prv_rels)?;
-                substitute(constr_map, &mut **dty1);
-                substitute(constr_map, &mut **dty2);
-                mem1.constrain(mem2, constr_map, prv_rels)?;
-                substitute(constr_map, mem1);
-                substitute(constr_map, mem2);
-                substitute(constr_map, &mut **dty1);
-                substitute(constr_map, &mut **dty2);
-                dty1.constrain(dty2, constr_map, prv_rels)?;
-                substitute(constr_map, self);
-                substitute(constr_map, other);
+                rgn1.constrain(rgn2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, &mut **dty1, arena);
+                substitute(constr_map, &mut **dty2, arena);
+                mem1.constrain(mem2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, mem1, arena);
+                substitute(constr_map, mem2, arena);
+                substitute(constr_map, &mut **dty1, arena);
+                substitute(constr_map, &mut **dty2, arena);
+                dty1.constrain(dty2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
             }
             (DataTyKind::Tuple(elem_dtys1), DataTyKind::Tuple(elem_dtys2)) => {
                 // TODO figure out why the las three/two lines of the while loop enable borrowing
@@ -397,10 +418,10 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                 while let (Some((next_lhs, _)), Some((next_rhs, _))) =
                     (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
                 {
-                    next_lhs.constrain(next_rhs, constr_map, prv_rels)?;
+                    next_lhs.constrain(next_rhs, constr_map, prv_rels, arena)?;
                     for (dty1, dty2) in elem_dtys1.iter_mut().zip(elem_dtys2.iter_mut()) {
-                        substitute(constr_map, dty1);
-                        substitute(constr_map, dty2);
+                        substitute(constr_map, dty1, arena);
+                        substitute(constr_map, dty2, arena);
                     }
 
                     i += 1;
@@ -420,14 +441,14 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                     }
                     next_lhs
                         .1
-                        .constrain(&mut next_rhs.1, constr_map, prv_rels)?;
+                        .constrain(&mut next_rhs.1, constr_map, prv_rels, arena)?;
                     for ((_, dty1), (_, dty2)) in struct_decl1
                         .fields
                         .iter_mut()
                         .zip(struct_decl2.fields.iter_mut())
                     {
-                        substitute(constr_map, dty1);
-                        substitute(constr_map, dty2);
+                        substitute(constr_map, dty1, arena);
+                        substitute(constr_map, dty2, arena);
                     }
 
                     i += 1;
@@ -437,20 +458,20 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
             }
             (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2))
             | (DataTyKind::ArrayShape(dty1, n1), DataTyKind::ArrayShape(dty2, n2)) => {
-                dty1.constrain(dty2, constr_map, prv_rels)?;
-                substitute(constr_map, &mut **dty1);
-                substitute(constr_map, &mut **dty2);
-                n1.constrain(n2, constr_map, prv_rels)?;
-                substitute(constr_map, self);
-                substitute(constr_map, other);
+                dty1.constrain(dty2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, &mut **dty1, arena);
+                substitute(constr_map, &mut **dty2, arena);
+                n1.constrain(n2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
             }
             (DataTyKind::At(dty1, mem1), DataTyKind::At(dty2, mem2)) => {
-                dty1.constrain(dty2, constr_map, prv_rels)?;
-                substitute(constr_map, &mut **dty1);
-                substitute(constr_map, &mut **dty2);
-                mem1.constrain(mem2, constr_map, prv_rels)?;
-                substitute(constr_map, self);
-                substitute(constr_map, other);
+                dty1.constrain(dty2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, &mut **dty1, arena);
+                substitute(constr_map, &mut **dty2, arena);
+                mem1.constrain(mem2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
             }
             (DataTyKind::Atomic(sty1), DataTyKind::Atomic(sty2)) => {
                 if sty1 != sty2 {
@@ -466,9 +487,9 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                 panic!()
             }
             (dty1, DataTyKind::Dead(dty2)) if !matches!(dty1, DataTyKind::Dead(_)) => {
-                self.constrain(dty2, constr_map, prv_rels)?;
-                substitute(constr_map, self);
-                substitute(constr_map, other);
+                self.constrain(dty2, constr_map, prv_rels, arena)?;
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
             }
             _ => return Err(UnifyError::CannotUnify),
         }
@@ -477,31 +498,32 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
 }
 
 impl<'a> Substitutable<'a> for DataTy<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_dty(self);
+        apply_subst.visit_dty(arena, self);
     }
 }
 
 impl<'a> Constrainable<'a> for ExecTy<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         match (&mut self.ty, &mut other.ty) {
             (ExecTyKind::CpuThread, ExecTyKind::CpuThread)
             | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
             | (ExecTyKind::GpuWarp, ExecTyKind::GpuWarp)
             | (_, ExecTyKind::Any) => Ok(()),
             (ExecTyKind::GpuWarpGrp(nl), ExecTyKind::GpuWarpGrp(nr)) => {
-                nl.constrain(nr, constr_map, prv_rels)
+                nl.constrain(nr, constr_map, prv_rels, arena)
             }
             (ExecTyKind::GpuGrid(lgdim, lbdim), ExecTyKind::GpuGrid(rgdim, rbdim))
             | (ExecTyKind::GpuBlockGrp(lgdim, lbdim), ExecTyKind::GpuBlockGrp(rgdim, rbdim)) => {
-                lgdim.constrain(rgdim, constr_map, prv_rels)?;
-                lbdim.constrain(rbdim, constr_map, prv_rels)
+                lgdim.constrain(rgdim, constr_map, prv_rels, arena)?;
+                lbdim.constrain(rbdim, constr_map, prv_rels, arena)
             }
             (
                 ExecTyKind::GpuToThreads(ldim_compo, l_inner),
@@ -510,11 +532,11 @@ impl<'a> Constrainable<'a> for ExecTy<'a> {
                 if ldim_compo != rdim_compo {
                     return Err(UnifyError::CannotUnify);
                 }
-                l_inner.constrain(r_inner, constr_map, prv_rels)
+                l_inner.constrain(r_inner, constr_map, prv_rels, arena)
             }
             (ExecTyKind::GpuBlock(ldim), ExecTyKind::GpuBlock(rdim))
             | (ExecTyKind::GpuThreadGrp(ldim), ExecTyKind::GpuThreadGrp(rdim)) => {
-                ldim.constrain(rdim, constr_map, prv_rels)
+                ldim.constrain(rdim, constr_map, prv_rels, arena)
             }
             _ => Err(UnifyError::CannotUnify),
         }
@@ -522,33 +544,34 @@ impl<'a> Constrainable<'a> for ExecTy<'a> {
 }
 
 impl<'a> Substitutable<'a> for ExecTy<'a> {
-    fn substitute(&mut self, subst: &#a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, _arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_exec_ty(self);
     }
 }
 
 impl<'a> Constrainable<'a> for Dim<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         match (self, other) {
             (Dim::XYZ(ldim), Dim::XYZ(rdim)) => {
-                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
-                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)?;
-                ldim.2.constrain(&mut rdim.2, constr_map, prv_rels)
+                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels, arena)?;
+                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels, arena)?;
+                ldim.2.constrain(&mut rdim.2, constr_map, prv_rels, arena)
             }
             (Dim::XY(ldim), Dim::XY(rdim))
             | (Dim::XZ(ldim), Dim::XZ(rdim))
             | (Dim::YZ(ldim), Dim::YZ(rdim)) => {
-                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels)?;
-                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels)
+                ldim.0.constrain(&mut rdim.0, constr_map, prv_rels, arena)?;
+                ldim.1.constrain(&mut rdim.1, constr_map, prv_rels, arena)
             }
             (Dim::X(ld), Dim::X(rd)) | (Dim::Y(ld), Dim::Y(rd)) | (Dim::Z(ld), Dim::Z(rd)) => {
-                ld.0.constrain(&mut rd.0, constr_map, prv_rels)
+                ld.0.constrain(&mut rd.0, constr_map, prv_rels, arena)
             }
             _ => Err(UnifyError::CannotUnify),
         }
@@ -556,9 +579,9 @@ impl<'a> Constrainable<'a> for Dim<'a> {
 }
 
 impl<'a> Substitutable<'a> for Dim<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_dim(self);
+        apply_subst.visit_dim(arena, self);
     }
 }
 
@@ -567,7 +590,8 @@ impl<'a> Nat<'a> {
         &self,
         ident: &'a Ident<'a>,
         constr_map: &'a mut ConstrainMap<'a>,
-        _: &'a mut Vec<PrvConstr<'a>>,
+        _: &'a mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         // No occurs check.
         // Nats can be equal to an expression in which the nat appears again. E.g., a = a * 1
@@ -585,11 +609,15 @@ impl<'a> Nat<'a> {
         constr_map
             .nat_unifier
             .values_mut()
-            .for_each(|n| SubstIdent::new(ident, self).visit_nat(n));
+            .for_each(|n| SubstIdent::new(ident, self).visit_nat(arena, n));
         Ok(())
     }
 
-    fn unify<'a>(n1: &'a Nat<'a>, n2: &'a Nat<'a>, _constr_map: &'a mut ConstrainMap<'a>) -> UnifyResult<'a, ()> {
+    fn unify(
+        n1: &'a Nat<'a>,
+        n2: &'a Nat<'a>,
+        _constr_map: &'a mut ConstrainMap<'a>,
+    ) -> UnifyResult<'a, ()> {
         if n1 == n2 {
             Ok(())
         } else {
@@ -599,28 +627,33 @@ impl<'a> Nat<'a> {
 }
 
 impl<'a> Constrainable<'a> for Nat<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &mut ConstrainMap<'a>,
-        prv_rels: &mut Vec<PrvConstr<'a>>,
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         match (&mut *self, &mut *other) {
             (Nat::Ident(n1i), Nat::Ident(n2i)) if n1i.is_implicit || n2i.is_implicit => {
                 match (n1i.is_implicit, n2i.is_implicit) {
-                    (true, _) => other.bind_to(n1i, constr_map, prv_rels),
-                    (false, _) => self.bind_to(n2i, constr_map, prv_rels),
+                    (true, _) => other.bind_to(n1i, constr_map, prv_rels, arena),
+                    (false, _) => self.bind_to(n2i, constr_map, prv_rels, arena),
                 }
             }
-            (Nat::Ident(n1i), _) if n1i.is_implicit => other.bind_to(n1i, constr_map, prv_rels),
-            (_, Nat::Ident(n2i)) if n2i.is_implicit => self.bind_to(n2i, constr_map, prv_rels),
+            (Nat::Ident(n1i), _) if n1i.is_implicit => {
+                other.bind_to(n1i, constr_map, prv_rels, arena)
+            }
+            (_, Nat::Ident(n2i)) if n2i.is_implicit => {
+                self.bind_to(n2i, constr_map, prv_rels, arena)
+            }
             (Nat::BinOp(op1, n1l, n1r), Nat::BinOp(op2, n2l, n2r)) if op1 == op2 => {
-                n1l.constrain(n2l, constr_map, prv_rels)?;
-                n1r.constrain(n2r, constr_map, prv_rels)
+                n1l.constrain(n2l, constr_map, prv_rels, arena)?;
+                n1r.constrain(n2r, constr_map, prv_rels, arena)
             }
             (Nat::App(f1, ns1), Nat::App(f2, ns2)) if f1 == f2 => {
                 for (n1, n2) in ns1.iter_mut().zip(ns2.iter_mut()) {
-                    n1.constrain(n2, constr_map, prv_rels)?;
+                    n1.constrain(n2, constr_map, prv_rels, arena)?;
                 }
                 Ok(())
             }
@@ -630,14 +663,19 @@ impl<'a> Constrainable<'a> for Nat<'a> {
 }
 
 impl<'a> Substitutable<'a> for Nat<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_nat(self);
+        apply_subst.visit_nat(arena, self);
     }
 }
 
 impl<'a> Memory<'a> {
-    fn bind_to(&self, ident: &'a Ident<'a>, constr_map: &'a mut ConstrainMap<'a>) -> UnifyResult<'a, ()> {
+    fn bind_to(
+        &self,
+        ident: &'a Ident<'a>,
+        constr_map: &'a mut ConstrainMap<'a>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::Memory), self) {
             return Err(UnifyError::InfiniteType);
         }
@@ -662,26 +700,27 @@ impl<'a> Memory<'a> {
         constr_map
             .mem_unifier
             .values_mut()
-            .for_each(|m| SubstIdent::new(ident, self).visit_mem(m));
+            .for_each(|m| SubstIdent::new(ident, self).visit_mem(arena, m));
         Ok(())
     }
 }
 
 impl<'a> Constrainable<'a> for Memory<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        _prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        _prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         match (&*self, &*other) {
             (Memory::Ident(i1), Memory::Ident(i2)) if i1 == i2 => Ok(()),
             (Memory::Ident(i1), Memory::Ident(i2)) => match (i1.is_implicit, i2.is_implicit) {
-                (true, _) => other.bind_to(i1, constr_map),
-                (false, _) => self.bind_to(i2, constr_map),
+                (true, _) => other.bind_to(i1, constr_map, arena),
+                (false, _) => self.bind_to(i2, constr_map, arena),
             },
-            (Memory::Ident(i), o) => o.bind_to(i, constr_map),
-            (s, Memory::Ident(i)) => s.bind_to(i, constr_map),
+            (Memory::Ident(i), o) => o.bind_to(i, constr_map, arena),
+            (s, Memory::Ident(i)) => s.bind_to(i, constr_map, arena),
             (mem1, mem2) if mem1 == mem2 => Ok(()),
             _ => Err(UnifyError::CannotUnify),
         }
@@ -689,14 +728,19 @@ impl<'a> Constrainable<'a> for Memory<'a> {
 }
 
 impl<'a> Substitutable<'a> for Memory<'a> {
-    fn substitute<'a>(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_mem(self);
+        apply_subst.visit_mem(arena, self);
     }
 }
 
 impl<'a> Provenance<'a> {
-    fn bind_to(&self, ident: &'a Ident<'a>, constr_map: &'a mut ConstrainMap<'a>) -> UnifyResult<'a, ()> {
+    fn bind_to(
+        &self,
+        ident: &'a Ident<'a>,
+        constr_map: &'a mut ConstrainMap<'a>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         // TODO not necessary, since no recursion possible
         if Self::occurs_check(&IdentKinded::new(ident, Kind::Provenance), self) {
             return Err(UnifyError::InfiniteType);
@@ -722,23 +766,24 @@ impl<'a> Provenance<'a> {
         constr_map
             .prv_unifier
             .values_mut()
-            .for_each(|m| SubstIdent::new(ident, self).visit_prv(m));
+            .for_each(|m| SubstIdent::new(ident, self).visit_prv(arena, m));
         Ok(())
     }
 }
 
 impl<'a> Constrainable<'a> for Provenance<'a> {
-    fn constrain(
-        &mut self,
-        other: &mut Self,
-        constr_map: &'a mut ConstrainMap<'a>,
-        prv_rels: &'a mut Vec<PrvConstr<'a>>,
-    ) -> UnifyResult<()> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
         // TODO restructure cases for less?
         match (&*self, &*other) {
             (Provenance::Ident(i1), Provenance::Ident(i2)) if i1 == i2 => Ok(()),
             (Provenance::Ident(i), r) | (r, Provenance::Ident(i)) if i.is_implicit => {
-                r.bind_to(i, constr_map)
+                r.bind_to(i, constr_map, arena)
             }
             (Provenance::Ident(_), _) | (_, Provenance::Ident(_)) => {
                 prv_rels.push(PrvConstr(self.clone(), other.clone()));
@@ -753,67 +798,71 @@ impl<'a> Constrainable<'a> for Provenance<'a> {
 }
 
 impl<'a> Substitutable<'a> for Provenance<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_prv(self);
+        apply_subst.visit_prv(arena, self);
     }
 }
 
 impl<'a> Substitutable<'a> for View<'a> {
-    fn substitute(&mut self, subst: &'a ConstrainMap<'a>) {
+    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
-        apply_subst.visit_view(self);
+        apply_subst.visit_view(arena, self);
     }
 }
 
-pub(super) fn substitute<'a, S: Substitutable<'a>>(subst: &'a ConstrainMap<'a>, s: &mut S) {
-    s.substitute(subst)
-}
-
-pub(super) struct ApplySubst<'a> {
+pub(super) fn substitute<'a, S: Substitutable<'a>>(
     subst: &'a ConstrainMap<'a>,
+    s: &mut S,
+    arena: &'a Bump,
+) {
+    s.substitute(subst, arena)
 }
 
-impl<'a> ApplySubst<'a> {
-    pub(super) fn new(subst: &'a ConstrainMap<'a>) -> Self {
+pub(super) struct ApplySubst<'s, 'a> {
+    subst: &'s ConstrainMap<'a>,
+}
+
+impl<'s, 'a> ApplySubst<'s, 'a> {
+    pub(super) fn new(subst: &'s ConstrainMap<'a>) -> Self {
         ApplySubst { subst }
     }
 }
 
-impl<'a> VisitMut<'a> for ApplySubst<'a> {
-    fn visit_nat(&mut self, nat: &mut Nat<'a>) {
+impl<'s, 'a> VisitMut<'a> for ApplySubst<'s, 'a> {
+    fn visit_nat(&mut self, arena: &'a Bump, nat: &mut Nat<'a>) {
         match nat {
             Nat::Ident(ident) if self.subst.nat_unifier.contains_key(&ident.name) => {
                 *nat = self.subst.nat_unifier.get(&ident.name).unwrap().clone();
             }
-            _ => visit_mut::walk_nat(self, nat),
+            _ => visit_mut::walk_nat(self, arena, nat),
         }
     }
 
-    fn visit_mem(&mut self, mem: & mut Memory<'a>) {
+    fn visit_mem(&mut self, arena: &'a Bump, mem: &mut Memory<'a>) {
         match mem {
             Memory::Ident(ident) if self.subst.mem_unifier.contains_key(&ident.name) => {
                 *mem = self.subst.mem_unifier.get(&ident.name).unwrap().clone();
             }
-            _ => visit_mut::walk_mem(self, mem),
+            _ => visit_mut::walk_mem(self, arena, mem),
         }
     }
 
-    fn visit_prv(&mut self, prv: &mut Provenance<'a>) {
+    fn visit_prv(&mut self, arena: &'a Bump, prv: &mut Provenance<'a>) {
         match prv {
             Provenance::Ident(ident) if self.subst.prv_unifier.contains_key(&ident.name) => {
                 *prv = self.subst.prv_unifier.get(&ident.name).unwrap().clone()
             }
-            _ => visit_mut::walk_prv(self, prv),
+            _ => visit_mut::walk_prv(self, arena, prv),
         }
     }
 
-    fn visit_dty(&mut self, dty: &mut DataTy<'a>) {
+    fn visit_dty(&mut self, arena: &'a Bump, dty: &mut DataTy<'a>) {
         match &mut dty.dty {
             DataTyKind::Ident(ident) if self.subst.dty_unifier.contains_key(&ident.name) => {
                 *dty = self.subst.dty_unifier.get(&ident.name).unwrap().clone()
             }
-            _ => visit_mut::walk_dty(self, dty),
+            _ => visit_mut::walk_dty(self, arena, dty),
         }
     }
 }
@@ -830,43 +879,43 @@ impl<'a, S: Constrainable<'a>> SubstIdent<'a, S> {
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, Nat<'a>> {
-    fn visit_nat(&mut self, nat: &mut Nat<'a>) {
+    fn visit_nat(&mut self, arena: &'a Bump, nat: &mut Nat<'a>) {
         match nat {
             Nat::Ident(ident) if ident.name == self.ident.name => *nat = self.term.clone(),
-            _ => visit_mut::walk_nat(self, nat),
+            _ => visit_mut::walk_nat(self, arena, nat),
         }
     }
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, Memory<'a>> {
-    fn visit_mem(&mut self, mem: &mut Memory<'a>) {
+    fn visit_mem(&mut self, arena: &'a Bump, mem: &mut Memory<'a>) {
         match mem {
             Memory::Ident(ident) if ident.name == self.ident.name => *mem = self.term.clone(),
-            _ => visit_mut::walk_mem(self, mem),
+            _ => visit_mut::walk_mem(self, arena, mem),
         }
     }
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, Provenance<'a>> {
-    fn visit_prv(&mut self, prv: &mut Provenance<'a>) {
+    fn visit_prv(&mut self, arena: &'a Bump, prv: &mut Provenance<'a>) {
         match prv {
             Provenance::Ident(ident) if ident.name == self.ident.name => *prv = self.term.clone(),
-            _ => visit_mut::walk_prv(self, prv),
+            _ => visit_mut::walk_prv(self, arena, prv),
         }
     }
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, DataTy<'a>> {
-    fn visit_dty(&mut self, dty: &mut DataTy<'a>) {
+    fn visit_dty(&mut self, arena: &'a Bump, dty: &mut DataTy<'a>) {
         match &mut dty.dty {
             DataTyKind::Ident(ident) if ident.name == self.ident.name => *dty = self.term.clone(),
-            _ => visit_mut::walk_dty(self, dty),
+            _ => visit_mut::walk_dty(self, arena, dty),
         }
     }
 }
 
 impl<'a> VisitMut<'a> for SubstIdent<'a, ExecExpr<'a>> {
-    fn visit_exec_expr(&mut self, exec: &mut ExecExpr<'a>) {
+    fn visit_exec_expr(&mut self, arena: &'a Bump, exec: &mut ExecExpr<'a>) {
         if let BaseExec::Ident(i) = &exec.exec.base {
             if i.name == self.ident.name {
                 let mut subst_exec = self.term.clone();

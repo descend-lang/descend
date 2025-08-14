@@ -29,8 +29,8 @@ pub(super) fn check<'m, 'a>(
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
         (sub, sup) if sub == sup => Ok(()),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
-        (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size))
-        | (ArrayShape(sub_elem_ty, sub_size), ArrayShape(sup_elem_ty, sup_size)) => {
+        (Array(sub_elem_ty, _sub_size), Array(sup_elem_ty, _sup_size))
+        | (ArrayShape(sub_elem_ty, _sub_size), ArrayShape(sup_elem_ty, _sup_size)) => {
             check(kind_ctx, ty_ctx, sub_elem_ty, sup_elem_ty, arena)
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′
@@ -239,9 +239,8 @@ pub(super) fn multiple_outlives<'m, 'a, I>(
 where
     I: IntoIterator<Item = (&'a Provenance<'a>, &'a Provenance<'a>)>,
 {
-    for prv_rel in prv_rels {
-        let (longer, shorter) = prv_rel;
-        outlives(kind_ctx, ty_ctx, longer, shorter, arena)?;
+    for (p1, p2) in prv_rels {
+        outlives(kind_ctx, ty_ctx, p1, p2, arena)?;
     }
     Ok(())
 }
