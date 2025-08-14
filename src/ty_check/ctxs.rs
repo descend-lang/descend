@@ -700,7 +700,6 @@ impl<'a> GlobalCtx<'a> {
                     // because `struct_decl` lives inside `compil_unit` for 'a.
                     decls.push(GlobalDecl::StructDecl(struct_decl));
                 }
-                _ => {}
             }
         }
 
