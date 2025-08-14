@@ -3,6 +3,7 @@ use crate::arena_ast::{
     ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident,
     Memory, Nat, ParamSig, Provenance, Ty, TyKind,
 };
+use bumpalo::collections::Vec as BumpVec;
 use std::collections::HashMap;
 
 // mono_ty is function type,
@@ -13,27 +14,24 @@ use std::collections::HashMap;
 pub fn infer_kinded_args<'a>(
     poly_fn_ty: &'a FnTy<'a>,
     mono_fn_ty: &'a FnTy<'a>,
-) -> TyResult<'a, Vec<ArgKinded<'a>>> {
+    arena: &'a bumpalo::Bump,
+) -> TyResult<'a, BumpVec<'a, ArgKinded<'a>>> {
     if poly_fn_ty.param_sigs.len() != mono_fn_ty.param_sigs.len() {
         panic!("Unexpected difference in amount of parameters.");
     }
 
-    // Map each generic Ident -> inferred ArgKinded
     let mut res_map: HashMap<&'a Ident<'a>, ArgKinded<'a>> = HashMap::new();
 
-    // 1) from param sigs
     for (subst_ps, mono_ps) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
         infer_kargs_param_sig(&mut res_map, subst_ps, mono_ps);
     }
 
-    // 2) from exec expr
     infer_kargs_exec_expr(&mut res_map, &poly_fn_ty.exec, &mono_fn_ty.exec);
-
-    // 3) from return type
     infer_kargs_tys(&mut res_map, poly_fn_ty.ret_ty, mono_fn_ty.ret_ty);
 
-    // 4) build result vector in the order of generics
-    let mut res_vec = Vec::with_capacity(poly_fn_ty.generics.len());
+    let mut res_vec = BumpVec::new_in(arena);
+    res_vec.reserve(poly_fn_ty.generics.len());
+
     for g in &poly_fn_ty.generics {
         match res_map.remove(&g.ident) {
             Some(arg) => {

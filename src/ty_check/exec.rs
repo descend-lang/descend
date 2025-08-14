@@ -27,7 +27,7 @@ pub(super) fn ty_check<'a>(
             }
         }
         BaseExec::CpuThread => ExecTyKind::CpuThread,
-        BaseExec::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid(gdim.clone(), bdim.clone()),
+        BaseExec::GpuGrid(gdim, bdim) => ExecTyKind::GpuGrid((**gdim).clone(), (**bdim).clone()),
     };
 
     // 2) Bump‐allocate that base kind so we have &'a ExecTyKind

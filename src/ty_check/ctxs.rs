@@ -164,6 +164,18 @@ impl<'a> TyCtx<'a> {
         }
     }
 
+    /// Return an arena-owned snapshot of the loans for `prv_val_name`.
+    pub fn loans_in_prv_snapshot(
+        &self,
+        prv_val_name: &str,
+        arena: &'a bumpalo::Bump,
+    ) -> CtxResult<'a, bumpalo::collections::Vec<'a, Loan<'a>>> {
+        let set = self.loans_in_prv(prv_val_name)?;
+        let mut out = bumpalo::collections::Vec::new_in(arena);
+        out.extend(set.iter().cloned());
+        Ok(out)
+    }
+
     pub fn loans_for_prv_mut(
         &mut self,
         prv_val_name: &str,

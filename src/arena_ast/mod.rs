@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::arena_ast::internal::PathElem;
-use bumpalo::{boxed::Box as BumpBox, collections::Vec as BumpVec, Bump};
+use bumpalo::{collections::Vec as BumpVec, Bump};
 use descend_derive::span_derive;
 
 use crate::ast::Span;
@@ -12,6 +12,8 @@ pub mod printer;
 pub mod utils;
 pub mod visit;
 pub mod visit_mut;
+
+use std::cell::OnceCell;
 
 #[derive(Debug)]
 pub struct CompilUnit<'a> {
@@ -154,6 +156,14 @@ impl<'a> IdentExec<'a> {
         IdentExec {
             ident,
             ty: bump.alloc(exec_ty),
+        }
+    }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        let cloned = self.ty.clone_in(arena); // ExecTy<'a>
+        IdentExec {
+            ident: self.ident.clone(), // shallow clone of Ident<'a> is fine
+            ty: arena.alloc(cloned),   // store &'a ExecTy<'a>
         }
     }
 }
@@ -653,6 +663,16 @@ impl<'a> ArgKinded<'a> {
             _ => Ok(false),
         }
     }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+        match self {
+            ArgKinded::Ident(i) => ArgKinded::Ident(i.clone()),
+            ArgKinded::Nat(n) => ArgKinded::Nat(n.clone_in(arena)),
+            ArgKinded::Memory(m) => ArgKinded::Memory(m.clone_in(arena)),
+            ArgKinded::DataTy(d) => ArgKinded::DataTy(d.clone_in(arena)),
+            ArgKinded::Provenance(p) => ArgKinded::Provenance(p.clone_in(arena)),
+        }
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -661,7 +681,7 @@ pub struct PlaceExpr<'a> {
     pub pl_expr: PlaceExprKind<'a>,
     // FIXME misusing span_derive_ignore to ignore type on equality checks
     #[span_derive_ignore]
-    pub ty: Option<&'a Ty<'a>>,
+    pub ty: OnceCell<&'a Ty<'a>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
@@ -704,6 +724,22 @@ impl<'a> View<'a> {
         }
 
         Ok(true)
+    }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+        // Clone generic arguments into the arena
+        let mut gen_args = bumpalo::collections::Vec::new_in(arena);
+        gen_args.extend(self.gen_args.iter().map(|ga| ga.clone_in(arena)));
+
+        // Clone nested views into the arena
+        let mut args = bumpalo::collections::Vec::new_in(arena);
+        args.extend(self.args.iter().map(|v| v.clone_in(arena)));
+
+        View {
+            name: self.name.clone(),
+            gen_args,
+            args,
+        }
     }
 }
 
@@ -752,7 +788,7 @@ impl<'a> PlaceExpr<'a> {
     pub fn new(pl_expr: PlaceExprKind<'a>) -> Self {
         PlaceExpr {
             pl_expr,
-            ty: None,
+            ty: OnceCell::new(),
             span: None,
         }
     }
@@ -760,9 +796,21 @@ impl<'a> PlaceExpr<'a> {
     pub fn with_span(pl_expr: PlaceExprKind<'a>, span: Span) -> Self {
         PlaceExpr {
             pl_expr,
-            ty: None,
+            ty: OnceCell::new(),
             span: Some(span),
         }
+    }
+
+    pub fn set_ty(&self, arena: &'a bumpalo::Bump, ty: Ty<'a>) {
+        let ty_ref = arena.alloc(ty);
+        // Ignore the error if already set, or assert if you prefer:
+        let _ = self.ty.set(ty_ref);
+        // or: self.ty.get_or_init(|| arena.alloc(ty));
+    }
+
+    /// Read-only access to the inferred type (if already set).
+    pub fn get_ty(&self) -> Option<&'a Ty<'a>> {
+        self.ty.get().copied()
     }
 
     pub fn is_place(&self) -> bool {
@@ -1060,6 +1108,14 @@ impl<'a> TakeRange<'a> {
             left_or_right: proj,
         }
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> &'a TakeRange<'a> {
+        arena.alloc(TakeRange::new(
+            self.split_dim,
+            self.pos.clone_in(arena),
+            self.left_or_right,
+        ))
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1076,14 +1132,14 @@ impl<'a> ExecExprKind<'a> {
         }
     }
 
-    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        let mut new_path = BumpVec::new_in(arena);
+        for e in self.path.iter() {
+            new_path.push(e.clone_in(arena));
+        }
         ExecExprKind {
-            base: self.base.clone(),
-            path: {
-                let mut new_path = BumpVec::new_in(arena);
-                new_path.extend(self.path.iter().cloned());
-                new_path
-            },
+            base: self.base.clone_in(arena),
+            path: new_path,
         }
     }
 
@@ -1130,7 +1186,21 @@ impl<'a> ExecExprKind<'a> {
 pub enum BaseExec<'a> {
     Ident(Ident<'a>),
     CpuThread,
-    GpuGrid(Dim<'a>, Dim<'a>),
+    GpuGrid(&'a Dim<'a>, &'a Dim<'a>),
+}
+
+impl<'a> BaseExec<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match self {
+            BaseExec::Ident(ie) => BaseExec::Ident(ie.clone()),
+            BaseExec::CpuThread => BaseExec::CpuThread,
+            BaseExec::GpuGrid(gdim, bdim) => {
+                let ng = arena.alloc(gdim.clone_in(arena));
+                let nb = arena.alloc(bdim.clone_in(arena));
+                BaseExec::GpuGrid(ng, nb)
+            } // add other variants here if you have them
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1139,6 +1209,17 @@ pub enum ExecPathElem<'a> {
     ForAll(DimCompo),
     ToWarps,
     ToThreads(DimCompo),
+}
+
+impl<'a> ExecPathElem<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match self {
+            ExecPathElem::TakeRange(tr) => ExecPathElem::TakeRange(tr.clone_in(arena)),
+            ExecPathElem::ForAll(d) => ExecPathElem::ForAll(*d),
+            ExecPathElem::ToWarps => ExecPathElem::ToWarps,
+            ExecPathElem::ToThreads(d) => ExecPathElem::ToThreads(*d),
+        }
+    }
 }
 
 // ExecTy
@@ -1201,6 +1282,16 @@ impl<'a> ParamSig<'a> {
     pub fn new(exec_expr: ExecExpr<'a>, ty: &'a Ty<'a>) -> Self {
         ParamSig { exec_expr, ty }
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        ParamSig {
+            exec_expr: self.exec_expr.clone_in(arena),
+            ty: {
+                let t = self.ty.clone_in(arena);
+                arena.alloc(t)
+            },
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -1241,6 +1332,67 @@ impl<'a> FnTy<'a> {
             nat_constrs: nat_vec,
         }
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> FnTy<'a> {
+        // generics
+        let mut generics = BumpVec::new_in(arena);
+        generics.extend(self.generics.iter().cloned());
+
+        // optional generic exec
+        let generic_exec = self.generic_exec.as_ref().map(|ge| ge.clone_in(arena));
+
+        // param sigs
+        let mut param_sigs = BumpVec::new_in(arena);
+        for ps in self.param_sigs.iter() {
+            param_sigs.push(ps.clone_in(arena));
+        }
+
+        // exec expression
+        let exec = self.exec.clone_in(arena);
+
+        // return type (allocate cloned Ty in the arena and store the &'a Ty)
+        let ret_ty_ref: &'a Ty<'a> = {
+            let ret = self.ret_ty.clone_in(arena);
+            arena.alloc(ret)
+        };
+
+        // nat constraints
+        let mut nat_constrs = BumpVec::new_in(arena);
+        for c in self.nat_constrs.iter() {
+            nat_constrs.push(c.clone_in(arena));
+        }
+
+        FnTy {
+            generics,
+            generic_exec,
+            param_sigs,
+            exec,
+            ret_ty: ret_ty_ref,
+            nat_constrs,
+        }
+    }
+}
+
+impl<'a> Clone for FnTy<'a> {
+    fn clone(&self) -> Self {
+        let mut generics = BumpVec::new_in(self.generics.bump());
+        generics.extend(self.generics.iter().cloned());
+
+        let mut param_sigs = BumpVec::new_in(self.param_sigs.bump());
+        param_sigs.extend(self.param_sigs.iter().cloned());
+
+        let mut nat_constrs = BumpVec::new_in(self.nat_constrs.bump());
+        nat_constrs.extend(self.nat_constrs.iter().cloned());
+
+        FnTy {
+            generics,
+            generic_exec: self.generic_exec.clone(),
+            param_sigs,
+            exec: self.exec.clone(),
+            ret_ty: self.ret_ty,
+            nat_constrs,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1251,6 +1403,39 @@ pub enum NatConstr<'a> {
     And(&'a NatConstr<'a>, &'a NatConstr<'a>),
     Or(&'a NatConstr<'a>, &'a NatConstr<'a>),
 }
+
+impl<'a> NatConstr<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> NatConstr<'a> {
+        match self {
+            NatConstr::True => NatConstr::True,
+
+            NatConstr::Eq(l, r) => {
+                let l2 = arena.alloc((*l).clone_in(arena));
+                let r2 = arena.alloc((*r).clone_in(arena));
+                NatConstr::Eq(l2, r2)
+            }
+
+            NatConstr::Lt(l, r) => {
+                let l2 = arena.alloc((*l).clone_in(arena));
+                let r2 = arena.alloc((*r).clone_in(arena));
+                NatConstr::Lt(l2, r2)
+            }
+
+            NatConstr::And(a, b) => {
+                let a2 = arena.alloc((*a).clone_in(arena));
+                let b2 = arena.alloc((*b).clone_in(arena));
+                NatConstr::And(a2, b2)
+            }
+
+            NatConstr::Or(a, b) => {
+                let a2 = arena.alloc((*a).clone_in(arena));
+                let b2 = arena.alloc((*b).clone_in(arena));
+                NatConstr::Or(a2, b2)
+            }
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind<'a> {
     Data(&'a DataTy<'a>),
@@ -1309,6 +1494,13 @@ impl<'a> Ty<'a> {
             }
         }
     }
+
+    pub fn clone_in(&self, _arena: &'a bumpalo::Bump) -> Ty<'a> {
+        Ty {
+            ty: self.ty.clone(),
+            span: self.span,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1360,6 +1552,18 @@ impl<'a> Dim<'a> {
                 Ok(d.0.eval(nat_ctx)? == o.0.eval(nat_ctx)?)
             }
             _ => Ok(false),
+        }
+    }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match *self {
+            Dim::XYZ(d) => Dim::new_3d(arena, d.0.clone(), d.1.clone(), d.2.clone()),
+            Dim::XY(d) => Dim::new_2d(arena, Dim::XY, d.0.clone(), d.1.clone()),
+            Dim::XZ(d) => Dim::new_2d(arena, Dim::XZ, d.0.clone(), d.1.clone()),
+            Dim::YZ(d) => Dim::new_2d(arena, Dim::YZ, d.0.clone(), d.1.clone()),
+            Dim::X(d) => Dim::new_1d(arena, Dim::X, d.0.clone()),
+            Dim::Y(d) => Dim::new_1d(arena, Dim::Y, d.0.clone()),
+            Dim::Z(d) => Dim::new_1d(arena, Dim::Z, d.0.clone()),
         }
     }
 }
@@ -1546,6 +1750,70 @@ impl<'a> DataTy<'a> {
             _ => Ok(false),
         }
     }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> DataTy<'a> {
+        use DataTyKind::*;
+
+        let dty: DataTyKind<'a> = match &self.dty {
+            // leaf cases (Copy/Clone-by-value)
+            Scalar(s) => Scalar(*s),
+            Atomic(a) => Atomic(*a),
+            Ident(id) => Ident(id.clone()),
+
+            // pointer-carrying cases: clone payloads, allocate where needed
+            RawPtr(elem) => {
+                let cloned = elem.clone_in(arena);
+                RawPtr(arena.alloc(cloned))
+            }
+
+            Array(elem, n) => {
+                let cloned_e = elem.clone_in(arena);
+                let cloned_n = n.clone_in(arena);
+                Array(arena.alloc(cloned_e), cloned_n)
+            }
+
+            ArrayShape(elem, n) => {
+                let cloned_e = elem.clone_in(arena);
+                let cloned_n = n.clone_in(arena);
+                ArrayShape(arena.alloc(cloned_e), cloned_n)
+            }
+
+            At(elem, mem) => {
+                let cloned_e = elem.clone_in(arena);
+                let mem_val = (*mem).clone();
+                At(arena.alloc(cloned_e), mem_val)
+            }
+
+            Ref(r) => {
+                let inner = r.dty.clone_in(arena);
+                let reff = RefDty::new(arena, r.rgn.clone(), r.own, r.mem.clone(), inner);
+                Ref(arena.alloc(reff))
+            }
+
+            Tuple(elems) => {
+                let mut out = bumpalo::collections::Vec::new_in(arena);
+                out.extend(elems.iter().map(|e| e.clone_in(arena)));
+                Tuple(out)
+            }
+
+            Struct(sd) => Struct(*sd),
+
+            Dead(inner) => {
+                let cloned = inner.clone_in(arena);
+                Dead(arena.alloc(cloned))
+            }
+        };
+
+        // clone constraints into this arena
+        let mut constraints = bumpalo::collections::Vec::new_in(arena);
+        constraints.extend(self.constraints.iter().cloned());
+
+        DataTy {
+            dty,
+            constraints,
+            span: self.span,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1558,7 +1826,7 @@ pub struct RefDty<'a> {
 
 impl<'a> RefDty<'a> {
     pub fn new(
-        bump: &'a Bump,
+        arena: &'a Bump,
         rgn: Provenance<'a>,
         own: Ownership,
         mem: Memory<'a>,
@@ -1568,7 +1836,18 @@ impl<'a> RefDty<'a> {
             rgn,
             own,
             mem,
-            dty: bump.alloc(dty),
+            dty: arena.alloc(dty),
+        }
+    }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+        let cloned_dty: &'a DataTy<'a> = arena.alloc(self.dty.clone_in(arena));
+
+        RefDty {
+            rgn: self.rgn.clone_in(arena),
+            own: self.own, // Copy
+            mem: self.mem.clone_in(arena),
+            dty: cloned_dty,
         }
     }
 }
@@ -1617,6 +1896,15 @@ pub enum Provenance<'a> {
     Ident(Ident<'a>),
 }
 
+impl<'a> Provenance<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match self {
+            Provenance::Value(s) => Provenance::Value(arena.alloc_str(s)),
+            Provenance::Ident(id) => Provenance::Ident(id.clone()),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Memory<'a> {
     CpuMem,
@@ -1624,6 +1912,18 @@ pub enum Memory<'a> {
     GpuShared,
     GpuLocal,
     Ident(Ident<'a>),
+}
+
+impl<'a> Memory<'a> {
+    pub fn clone_in(&self, _arena: &'a Bump) -> Self {
+        match self {
+            Memory::CpuMem => Memory::CpuMem,
+            Memory::GpuGlobal => Memory::GpuGlobal,
+            Memory::GpuShared => Memory::GpuShared,
+            Memory::GpuLocal => Memory::GpuLocal,
+            Memory::Ident(id) => Memory::Ident(id.clone()),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -1829,6 +2129,33 @@ impl<'a> Nat<'a> {
         let r_ref = arena.alloc(rhs);
         Nat::BinOp(op, l_ref, r_ref)
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Nat<'a> {
+        match self {
+            Nat::Ident(id) => Nat::Ident(id.clone()),
+            Nat::Lit(n) => Nat::Lit(*n),
+
+            Nat::ThreadIdx(c) => Nat::ThreadIdx(*c),
+            Nat::BlockIdx(c) => Nat::BlockIdx(*c),
+            Nat::BlockDim(c) => Nat::BlockDim(*c),
+            Nat::WarpGrpIdx => Nat::WarpGrpIdx,
+            Nat::WarpIdx => Nat::WarpIdx,
+            Nat::LaneIdx => Nat::LaneIdx,
+            Nat::GridIdx => Nat::GridIdx,
+
+            Nat::BinOp(op, l, r) => {
+                let lc: &'a Nat<'a> = arena.alloc(l.clone_in(arena));
+                let rc: &'a Nat<'a> = arena.alloc(r.clone_in(arena));
+                Nat::BinOp(*op, lc, rc)
+            }
+
+            Nat::App(id, args) => {
+                let mut new_args: BumpVec<'a, Nat<'a>> = BumpVec::new_in(arena);
+                new_args.extend(args.iter().map(|a| a.clone_in(arena)));
+                Nat::App(id.clone(), new_args)
+            }
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -1858,7 +2185,7 @@ mod size_asserts {
     static_assert_size!(DataTy, 128);
     static_assert_size!(DataTyKind, 80);
     static_assert_size!(ExecExpr, 32);
-    static_assert_size!(ExecExprKind, 72);
+    static_assert_size!(ExecExprKind, 64);
     static_assert_size!(ExecPathElem, 16);
     static_assert_size!(ExecTy, 80);
     static_assert_size!(ExecTyKind, 64);
