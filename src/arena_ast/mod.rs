@@ -156,6 +156,14 @@ impl<'a> IdentExec<'a> {
             ty: bump.alloc(exec_ty),
         }
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        let cloned = self.ty.clone_in(arena); // ExecTy<'a>
+        IdentExec {
+            ident: self.ident.clone(), // shallow clone of Ident<'a> is fine
+            ty: arena.alloc(cloned),   // store &'a ExecTy<'a>
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1201,6 +1209,16 @@ impl<'a> ParamSig<'a> {
     pub fn new(exec_expr: ExecExpr<'a>, ty: &'a Ty<'a>) -> Self {
         ParamSig { exec_expr, ty }
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        ParamSig {
+            exec_expr: self.exec_expr.clone_in(arena),
+            ty: {
+                let t = self.ty.clone_in(arena);
+                arena.alloc(t)
+            },
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -1241,6 +1259,45 @@ impl<'a> FnTy<'a> {
             nat_constrs: nat_vec,
         }
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> FnTy<'a> {
+        // generics
+        let mut generics = BumpVec::new_in(arena);
+        generics.extend(self.generics.iter().cloned());
+
+        // optional generic exec
+        let generic_exec = self.generic_exec.as_ref().map(|ge| ge.clone_in(arena));
+
+        // param sigs
+        let mut param_sigs = BumpVec::new_in(arena);
+        for ps in self.param_sigs.iter() {
+            param_sigs.push(ps.clone_in(arena));
+        }
+
+        // exec expression
+        let exec = self.exec.clone_in(arena);
+
+        // return type (allocate cloned Ty in the arena and store the &'a Ty)
+        let ret_ty_ref: &'a Ty<'a> = {
+            let ret = self.ret_ty.clone_in(arena);
+            arena.alloc(ret)
+        };
+
+        // nat constraints
+        let mut nat_constrs = BumpVec::new_in(arena);
+        for c in self.nat_constrs.iter() {
+            nat_constrs.push(c.clone_in(arena));
+        }
+
+        FnTy {
+            generics,
+            generic_exec,
+            param_sigs,
+            exec,
+            ret_ty: ret_ty_ref,
+            nat_constrs,
+        }
+    }
 }
 
 impl<'a> Clone for FnTy<'a> {
@@ -1273,6 +1330,39 @@ pub enum NatConstr<'a> {
     And(&'a NatConstr<'a>, &'a NatConstr<'a>),
     Or(&'a NatConstr<'a>, &'a NatConstr<'a>),
 }
+
+impl<'a> NatConstr<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> NatConstr<'a> {
+        match self {
+            NatConstr::True => NatConstr::True,
+
+            NatConstr::Eq(l, r) => {
+                let l2 = arena.alloc((*l).clone_in(arena));
+                let r2 = arena.alloc((*r).clone_in(arena));
+                NatConstr::Eq(l2, r2)
+            }
+
+            NatConstr::Lt(l, r) => {
+                let l2 = arena.alloc((*l).clone_in(arena));
+                let r2 = arena.alloc((*r).clone_in(arena));
+                NatConstr::Lt(l2, r2)
+            }
+
+            NatConstr::And(a, b) => {
+                let a2 = arena.alloc((*a).clone_in(arena));
+                let b2 = arena.alloc((*b).clone_in(arena));
+                NatConstr::And(a2, b2)
+            }
+
+            NatConstr::Or(a, b) => {
+                let a2 = arena.alloc((*a).clone_in(arena));
+                let b2 = arena.alloc((*b).clone_in(arena));
+                NatConstr::Or(a2, b2)
+            }
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind<'a> {
     Data(&'a DataTy<'a>),
@@ -1331,6 +1421,13 @@ impl<'a> Ty<'a> {
             }
         }
     }
+
+    pub fn clone_in(&self, _arena: &'a bumpalo::Bump) -> Ty<'a> {
+        Ty {
+            ty: self.ty.clone(),
+            span: self.span,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1382,6 +1479,18 @@ impl<'a> Dim<'a> {
                 Ok(d.0.eval(nat_ctx)? == o.0.eval(nat_ctx)?)
             }
             _ => Ok(false),
+        }
+    }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match *self {
+            Dim::XYZ(d) => Dim::new_3d(arena, d.0.clone(), d.1.clone(), d.2.clone()),
+            Dim::XY(d) => Dim::new_2d(arena, Dim::XY, d.0.clone(), d.1.clone()),
+            Dim::XZ(d) => Dim::new_2d(arena, Dim::XZ, d.0.clone(), d.1.clone()),
+            Dim::YZ(d) => Dim::new_2d(arena, Dim::YZ, d.0.clone(), d.1.clone()),
+            Dim::X(d) => Dim::new_1d(arena, Dim::X, d.0.clone()),
+            Dim::Y(d) => Dim::new_1d(arena, Dim::Y, d.0.clone()),
+            Dim::Z(d) => Dim::new_1d(arena, Dim::Z, d.0.clone()),
         }
     }
 }
@@ -1566,6 +1675,70 @@ impl<'a> DataTy<'a> {
             (DataTyKind::Atomic(aty), DataTyKind::Atomic(atyo)) => Ok(aty == atyo),
             (DataTyKind::Scalar(sty), DataTyKind::Scalar(styo)) => Ok(sty == styo),
             _ => Ok(false),
+        }
+    }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> DataTy<'a> {
+        use DataTyKind::*;
+
+        let dty: DataTyKind<'a> = match &self.dty {
+            // leaf cases (Copy/Clone-by-value)
+            Scalar(s) => Scalar(*s),
+            Atomic(a) => Atomic(*a),
+            Ident(id) => Ident(id.clone()),
+
+            // pointer-carrying cases: clone payloads, allocate where needed
+            RawPtr(elem) => {
+                let cloned = elem.clone_in(arena);
+                RawPtr(arena.alloc(cloned))
+            }
+
+            Array(elem, n) => {
+                let cloned_e = elem.clone_in(arena);
+                let cloned_n = n.clone_in(arena);
+                Array(arena.alloc(cloned_e), cloned_n)
+            }
+
+            ArrayShape(elem, n) => {
+                let cloned_e = elem.clone_in(arena);
+                let cloned_n = n.clone_in(arena);
+                ArrayShape(arena.alloc(cloned_e), cloned_n)
+            }
+
+            At(elem, mem) => {
+                let cloned_e = elem.clone_in(arena);
+                let mem_val = (*mem).clone();
+                At(arena.alloc(cloned_e), mem_val)
+            }
+
+            Ref(r) => {
+                let inner = r.dty.clone_in(arena);
+                let reff = RefDty::new(arena, r.rgn.clone(), r.own, r.mem.clone(), inner);
+                Ref(arena.alloc(reff))
+            }
+
+            Tuple(elems) => {
+                let mut out = bumpalo::collections::Vec::new_in(arena);
+                out.extend(elems.iter().map(|e| e.clone_in(arena)));
+                Tuple(out)
+            }
+
+            Struct(sd) => Struct(*sd),
+
+            Dead(inner) => {
+                let cloned = inner.clone_in(arena);
+                Dead(arena.alloc(cloned))
+            }
+        };
+
+        // clone constraints into this arena
+        let mut constraints = bumpalo::collections::Vec::new_in(arena);
+        constraints.extend(self.constraints.iter().cloned());
+
+        DataTy {
+            dty,
+            constraints,
+            span: self.span,
         }
     }
 }
@@ -1850,6 +2023,33 @@ impl<'a> Nat<'a> {
         let l_ref = arena.alloc(lhs);
         let r_ref = arena.alloc(rhs);
         Nat::BinOp(op, l_ref, r_ref)
+    }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> Nat<'a> {
+        match self {
+            Nat::Ident(id) => Nat::Ident(id.clone()),
+            Nat::Lit(n) => Nat::Lit(*n),
+
+            Nat::ThreadIdx(c) => Nat::ThreadIdx(*c),
+            Nat::BlockIdx(c) => Nat::BlockIdx(*c),
+            Nat::BlockDim(c) => Nat::BlockDim(*c),
+            Nat::WarpGrpIdx => Nat::WarpGrpIdx,
+            Nat::WarpIdx => Nat::WarpIdx,
+            Nat::LaneIdx => Nat::LaneIdx,
+            Nat::GridIdx => Nat::GridIdx,
+
+            Nat::BinOp(op, l, r) => {
+                let lc: &'a Nat<'a> = arena.alloc(l.clone_in(arena));
+                let rc: &'a Nat<'a> = arena.alloc(r.clone_in(arena));
+                Nat::BinOp(*op, lc, rc)
+            }
+
+            Nat::App(id, args) => {
+                let mut new_args: BumpVec<'a, Nat<'a>> = BumpVec::new_in(arena);
+                new_args.extend(args.iter().map(|a| a.clone_in(arena)));
+                Nat::App(id.clone(), new_args)
+            }
+        }
     }
 }
 

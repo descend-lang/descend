@@ -8,6 +8,11 @@ use crate::ty_check::subty;
 use bumpalo::{collections::Vec as BumpVec, Bump};
 use std::collections::HashMap;
 
+#[inline]
+fn arena_slice<'a, T>(v: &bumpalo::collections::Vec<'a, T>) -> &'a [T] {
+    unsafe { std::slice::from_raw_parts(v.as_ptr(), v.len()) }
+}
+
 type UnifyResult<'a, T> = Result<T, UnifyError<'a>>;
 
 pub(super) fn unify<'a, C: Constrainable<'a>>(
@@ -47,6 +52,7 @@ pub(super) fn constrain<'a, S: Constrainable<'a>>(
     Ok((constr_map, prv_rels))
 }
 
+/**
 pub(super) fn inst_fn_ty_scheme<'a>(fn_ty: &'a FnTy<'a>, arena: &'a Bump) -> FnTy<'a> {
     assert!(
         fn_ty.generic_exec.is_none(),
@@ -69,10 +75,56 @@ pub(super) fn inst_fn_ty_scheme<'a>(fn_ty: &'a FnTy<'a>, arena: &'a Bump) -> FnT
             }
         })
         .collect();
+
     let mut inst_fn_ty = fn_ty.clone();
     let generics = inst_fn_ty.generics.drain(..).collect::<Vec<_>>();
     utils::subst_idents_kinded(arena, generics.iter(), mono_idents.iter(), &mut inst_fn_ty);
     inst_fn_ty
+}
+*/
+
+pub(super) fn inst_fn_ty_scheme<'a>(fn_ty: &'a FnTy<'a>, arena: &'a bumpalo::Bump) -> FnTy<'a> {
+    assert!(
+        fn_ty.generic_exec.is_none(),
+        "exec must be substituted before instantiation to make sure that it has the correct type"
+    );
+
+    // 1) Build arena-resident args (so the *elements* live for 'a)
+    let mut mono_args = bumpalo::collections::Vec::new_in(arena);
+    for g in fn_ty.generics.iter() {
+        let arg = match g.kind {
+            Kind::DataTy => {
+                let dk = utils::fresh_ident(arena, &g.ident.name, |id| DataTyKind::Ident(id));
+                ArgKinded::DataTy(DataTy::new(arena, dk))
+            }
+            Kind::Nat => ArgKinded::Nat(utils::fresh_ident(arena, &g.ident.name, |id| {
+                Nat::Ident(id)
+            })),
+            Kind::Memory => ArgKinded::Memory(utils::fresh_ident(arena, &g.ident.name, |id| {
+                Memory::Ident(id)
+            })),
+            Kind::Provenance => {
+                ArgKinded::Provenance(utils::fresh_ident(arena, &g.ident.name, |id| {
+                    Provenance::Ident(id)
+                }))
+            }
+        };
+        mono_args.push(arg);
+    }
+
+    // 2) Convert to a slice with lifetime 'a (elements are arena-owned)
+    let args_a: &'a [ArgKinded<'a>] = arena_slice(&mono_args);
+
+    // 3) Make a working copy (whatever “clone” mechanism you have)
+    let mut inst = fn_ty.clone(); // or your `clone_in(arena)`/rebuild
+
+    // 4) Substitute: domain = original generics (already 'a), codomain = args_a
+    utils::subst_idents_kinded(arena, fn_ty.generics.iter(), args_a.iter(), &mut inst);
+
+    // 5) Monomorphic result has no generics/exec param
+    inst.generics.clear();
+    inst.generic_exec = None;
+    inst
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -136,7 +188,7 @@ impl<'a> DataTy<'a> {
 }
 
 pub(super) trait Substitutable<'a> {
-    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump);
+    fn substitute<'s>(&mut self, subst: &'s ConstrainMap<'a>, arena: &'a Bump);
 }
 
 pub(super) trait Constrainable<'a>: Visitable<'a> + Substitutable<'a> {
@@ -168,8 +220,8 @@ impl<'a> Constrainable<'a> for FnTy<'a> {
 
         self.exec
             .constrain(&mut other.exec, constr_map, prv_rels, arena)?;
-        substitute(constr_map, self, arena);
-        substitute(constr_map, other, arena);
+        substitute(&*constr_map, self, arena);
+        substitute(&*constr_map, other, arena);
 
         if self.param_sigs.len() != other.param_sigs.len() {
             return Err(UnifyError::CannotUnify);
@@ -183,23 +235,32 @@ impl<'a> Constrainable<'a> for FnTy<'a> {
             (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
         {
             next_lhs.constrain(next_rhs, constr_map, prv_rels, arena)?;
-            substitute(constr_map, self, arena);
-            substitute(constr_map, other, arena);
+            substitute(&*constr_map, self, arena);
+            substitute(&*constr_map, other, arena);
 
             i += 1;
             remain_lhs = &mut self.param_sigs[i..];
             remain_rhs = &mut other.param_sigs[i..];
         }
-        self.ret_ty
-            .constrain(&mut other.ret_ty, constr_map, prv_rels, arena)?;
-        substitute(constr_map, self, arena);
-        substitute(constr_map, other, arena);
+
+        // self.ret_ty.constrain(&mut other.ret_ty, constr_map, prv_rels, arena)?;
+
+        let mut lhs_ret = self.ret_ty.clone_in(arena);
+        let mut rhs_ret = other.ret_ty.clone_in(arena);
+
+        lhs_ret.constrain(&mut rhs_ret, constr_map, prv_rels, arena)?;
+
+        self.ret_ty = arena.alloc(lhs_ret);
+        other.ret_ty = arena.alloc(rhs_ret);
+
+        substitute(&*constr_map, self, arena);
+        substitute(&*constr_map, other, arena);
         Ok(())
     }
 }
 
 impl<'a> Substitutable<'a> for FnTy<'a> {
-    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
+    fn substitute<'s>(&mut self, subst: &'s ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_fn_ty(arena, self);
     }
@@ -217,8 +278,17 @@ impl<'a> Constrainable<'a> for ParamSig<'a> {
             .constrain(&mut other.exec_expr, constr_map, prv_rels, arena)?;
         substitute(constr_map, self, arena);
         substitute(constr_map, other, arena);
-        self.ty
-            .constrain(&mut other.ty, constr_map, prv_rels, arena)?;
+
+        {
+            let mut lhs = self.ty.clone_in(arena);
+            let mut rhs = other.ty.clone_in(arena);
+
+            lhs.constrain(&mut rhs, constr_map, prv_rels, arena)?;
+
+            self.ty = arena.alloc(lhs);
+            other.ty = arena.alloc(rhs);
+        }
+
         substitute(constr_map, self, arena);
         substitute(constr_map, other, arena);
         Ok(())
@@ -226,7 +296,7 @@ impl<'a> Constrainable<'a> for ParamSig<'a> {
 }
 
 impl<'a> Substitutable<'a> for ParamSig<'a> {
-    fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
+    fn substitute<'s>(&mut self, subst: &'s ConstrainMap<'a>, arena: &'a Bump) {
         let mut apply_subst = ApplySubst::new(subst);
         apply_subst.visit_param_sig(arena, self);
     }
@@ -242,69 +312,77 @@ impl<'a> Constrainable<'a> for ExecExpr<'a> {
         prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
         arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
-        match (&mut self.exec.base, &mut other.exec.base) {
-            (BaseExec::Ident(i1), BaseExec::Ident(i2)) => {
+        use BaseExec as BE;
+        use ExecPathElem as EPE;
+
+        match (&self.exec.base, &other.exec.base) {
+            (BE::Ident(i1), BE::Ident(i2)) => {
                 assert!(
-                    !i1.is_implicit,
+                    !i1.is_implicit && !i2.is_implicit,
                     "Implicit identifier for exec expression should not exist"
                 );
-                assert!(
-                    !i2.is_implicit,
-                    "Implicit identifier for exec expression should not exist"
-                );
-                if i1 == i2 {
-                    return Ok(());
-                } else {
+                if i1 != i2 {
                     return Err(UnifyError::CannotUnify);
                 }
             }
-            (BaseExec::CpuThread, BaseExec::CpuThread) => {}
-            (BaseExec::GpuGrid(gdim1, bdim1), BaseExec::GpuGrid(gdim2, bdim2)) => {
-                gdim1.constrain(gdim2, constr_map, prv_rels, arena)?;
-                bdim1.constrain(bdim2, constr_map, prv_rels, arena)?;
+            (BE::CpuThread, BE::CpuThread) => { /* ok */ }
+
+            (BE::GpuGrid(gd1, bd1), BE::GpuGrid(gd2, bd2)) => {
+                let mut lg = gd1.clone_in(arena);
+                let mut rg = gd2.clone_in(arena);
+                lg.constrain(&mut rg, constr_map, prv_rels, arena)?;
+
+                let mut lb = bd1.clone_in(arena);
+                let mut rb = bd2.clone_in(arena);
+                lb.constrain(&mut rb, constr_map, prv_rels, arena)?;
             }
+
             _ => return Err(UnifyError::CannotUnify),
         }
 
-        let mut i = 0;
-        let mut remain_lhs = &mut self.exec.path[i..];
-        let mut remain_rhs = &mut other.exec.path[i..];
-        while let (Some((next_lhs, tail_lhs)), Some((next_rhs, tail_rhs))) =
-            (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
-        {
-            tail_lhs.iter_mut().for_each(|ep| {
-                let mut apply_subst = ApplySubst::new(constr_map);
-                apply_subst.visit_exec_path_elem(arena, ep);
-            });
-            tail_rhs.iter_mut().for_each(|ep| {
-                let mut apply_subst = ApplySubst::new(constr_map);
-                apply_subst.visit_exec_path_elem(arena, ep);
-            });
+        let l_len = self.exec.path.len();
+        let r_len = other.exec.path.len();
+        if l_len != r_len {
+            return Err(UnifyError::CannotUnify);
+        }
 
-            match (next_lhs, next_rhs) {
-                (ExecPathElem::ForAll(dl), ExecPathElem::ForAll(dr))
-                | (ExecPathElem::ToThreads(dl), ExecPathElem::ToThreads(dr)) => {
+        for i in 0..l_len {
+            let mut le = self.exec.path[i].clone();
+            let mut re = other.exec.path[i].clone();
+
+            {
+                let mut ap = ApplySubst::new(constr_map);
+                ap.visit_exec_path_elem(arena, &mut le);
+                ap.visit_exec_path_elem(arena, &mut re);
+            }
+
+            match (&mut le, &mut re) {
+                (EPE::ForAll(dl), EPE::ForAll(dr)) | (EPE::ToThreads(dl), EPE::ToThreads(dr)) => {
                     if dl != dr {
                         return Err(UnifyError::CannotUnify);
                     }
                 }
-                (ExecPathElem::TakeRange(rl), ExecPathElem::TakeRange(rr)) => {
-                    if rl.split_dim != rr.split_dim {
+
+                (EPE::TakeRange(rl), EPE::TakeRange(rr)) => {
+                    if rl.split_dim != rr.split_dim || rl.left_or_right != rr.left_or_right {
                         return Err(UnifyError::CannotUnify);
                     }
-                    if rl.left_or_right != rr.left_or_right {
-                        return Err(UnifyError::CannotUnify);
-                    }
-                    rl.pos.constrain(&mut rr.pos, constr_map, prv_rels, arena)?
+                    let mut lp = rl.pos.clone_in(arena);
+                    let mut rp = rr.pos.clone_in(arena);
+                    lp.constrain(&mut rp, constr_map, prv_rels, arena)?;
                 }
-                (ExecPathElem::ToWarps, ExecPathElem::ToWarps) => {}
+
+                (EPE::ToWarps, EPE::ToWarps) => { /* ok */ }
+
                 _ => return Err(UnifyError::CannotUnify),
             }
-
-            i += 1;
-            remain_lhs = &mut self.exec.path[i..];
-            remain_rhs = &mut other.exec.path[i..];
         }
+
+        // Optional: normalize by applying the final substitution to the whole exprs.
+        // (This rebuilds nodes in the arena and updates the &-fields atomically.)
+        substitute(constr_map, self, arena);
+        substitute(constr_map, other, arena);
+
         Ok(())
     }
 }
@@ -326,10 +404,24 @@ impl<'a> Constrainable<'a> for Ty<'a> {
     ) -> UnifyResult<'a, ()> {
         match (&mut self.ty, &mut other.ty) {
             (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
-                fn_ty1.constrain(fn_ty2, constr_map, prv_rels, arena)
+                {
+                    let mut f1 = (*fn_ty1).clone_in(arena);
+                    let mut f2 = (*fn_ty2).clone_in(arena);
+                    f1.constrain(&mut f2, constr_map, prv_rels, arena)?;
+                }
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
+                Ok(())
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => {
-                dty1.constrain(dty2, constr_map, prv_rels, arena)
+                {
+                    let mut d1 = (*dty1).clone_in(arena);
+                    let mut d2 = (*dty2).clone_in(arena);
+                    d1.constrain(&mut d2, constr_map, prv_rels, arena)?;
+                }
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
+                Ok(())
             }
             _ => Err(UnifyError::CannotUnify),
         }
@@ -634,7 +726,7 @@ impl<'a> Constrainable<'a> for Nat<'a> {
         prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
         arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
-        match (&mut *self, &mut *other) {
+        match (&*self, &*other) {
             (Nat::Ident(n1i), Nat::Ident(n2i)) if n1i.is_implicit || n2i.is_implicit => {
                 match (n1i.is_implicit, n2i.is_implicit) {
                     (true, _) => other.bind_to(n1i, constr_map, prv_rels, arena),
@@ -811,8 +903,8 @@ impl<'a> Substitutable<'a> for View<'a> {
     }
 }
 
-pub(super) fn substitute<'a, S: Substitutable<'a>>(
-    subst: &'a ConstrainMap<'a>,
+pub(super) fn substitute<'a, 's, S: Substitutable<'a>>(
+    subst: &'s ConstrainMap<'a>,
     s: &mut S,
     arena: &'a Bump,
 ) {

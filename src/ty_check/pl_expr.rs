@@ -10,7 +10,7 @@ use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 use crate::ty_check::unify;
 use crate::ty_check::unify::ConstrainMap;
 use crate::ty_check::{exec, ExprTyCtx};
-
+use bumpalo::Bump;
 pub(super) struct PlExprTyCtx<'a> {
     gl_ctx: &'a GlobalCtx<'a>,
     nat_ctx: &'a NatCtx<'a>,
@@ -54,61 +54,68 @@ impl<'a> From<&'a BorrowCheckCtx<'a>> for PlExprTyCtx<'a> {
 
 // Δ; Γ ⊢ω p:τ
 // p in an ω context has type τ under Δ and Γ
-pub(super) fn ty_check<'a>(ctx: &PlExprTyCtx, pl_expr: &'a mut PlaceExpr<'a>) -> TyResult<'a, ()> {
-    let _mem = ty_check_and_passed_mems(ctx, pl_expr)?;
+pub(super) fn ty_check<'a>(
+    ctx: &'a PlExprTyCtx<'a>,
+    pl_expr: &'a mut PlaceExpr<'a>,
+    arena: &'a Bump,
+) -> TyResult<'a, ()> {
+    let _mem = ty_check_and_passed_mems(ctx, pl_expr, arena)?;
     Ok(())
 }
 
 pub(super) fn ty_check_and_passed_mems<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     pl_expr: &'a mut PlaceExpr<'a>,
+    arena: &'a Bump,
 ) -> TyResult<'a, Vec<Memory<'a>>> {
-    let (mem, _) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
+    let (mem, _) = ty_check_and_passed_mems_prvs(ctx, pl_expr, arena)?;
     Ok(mem)
 }
 
 // Δ; Γ ⊢ω p:τ,{ρ}
 // p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
 fn ty_check_and_passed_mems_prvs<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     pl_expr: &'a mut PlaceExpr<'a>,
+    arena: &'a Bump,
 ) -> TyResult<'a, (Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (ty, mem, prvs) = match &mut pl_expr.pl_expr {
         // TC-Var
         PlaceExprKind::Ident(ident) => ty_check_ident(ctx, ident)?,
         // TC-Proj
-        PlaceExprKind::Proj(tuple_expr, n) => ty_check_proj(ctx, tuple_expr, *n)?,
+        PlaceExprKind::Proj(tuple_expr, n) => ty_check_proj(ctx, tuple_expr, *n, arena)?,
         // TC-Field
         PlaceExprKind::FieldProj(struct_expr, ident) => {
-            ty_check_field_proj(ctx, struct_expr, ident)?
+            ty_check_field_proj(ctx, struct_expr, ident, arena)?
         }
         // TC-Deref
-        PlaceExprKind::Deref(borr_expr) => ty_check_deref(ctx, borr_expr)?,
+        PlaceExprKind::Deref(borr_expr) => ty_check_deref(ctx, borr_expr, arena)?,
         // TC-Select
-        PlaceExprKind::Select(p, select_exec) => ty_check_select(ctx, p, select_exec)?,
-        PlaceExprKind::View(pl_expr, view) => ty_check_view_pl_expr(ctx, pl_expr, view)?,
-        PlaceExprKind::Idx(pl_expr, idx) => ty_check_index(ctx, pl_expr, idx)?,
+        PlaceExprKind::Select(p, select_exec) => ty_check_select(ctx, p, select_exec, arena)?,
+        PlaceExprKind::View(pl_expr, view) => ty_check_view_pl_expr(ctx, pl_expr, view, arena)?,
+        PlaceExprKind::Idx(pl_expr, idx) => ty_check_index(ctx, pl_expr, idx, arena)?,
     };
-    pl_expr.ty = Some(Box::new(ty));
+    pl_expr.ty = Some(arena.alloc(ty));
     Ok((mem, prvs))
 }
 
 fn ty_check_view_pl_expr<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     pl_expr: &'a mut PlaceExpr<'a>,
     view: &'a mut View<'a>,
+    arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
-    let view_fn_ty = ty_check_view(ctx, view)?;
+    let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr, arena)?;
+    let view_fn_ty = ty_check_view(ctx, view, arena)?;
     let in_dty = pl_expr.ty.as_ref().unwrap().dty().clone();
     let (res_dty, constr_map) = ty_check_app_view_fn_ty(ctx, &in_dty, view_fn_ty)?;
     // substitute implicit identifiers in view, that were inferred from the input data type
-    unify::substitute(&constr_map, view);
-    Ok((Ty::new(TyKind::Data(Box::new(res_dty))), mems, prvs))
+    unify::substitute(&constr_map, view, arena);
+    Ok((Ty::new(TyKind::Data(arena.alloc(res_dty))), mems, prvs))
 }
 
 fn ty_check_app_view_fn_ty<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     in_dty: &'a DataTy<'a>,
     mut view_fn_ty: FnTy<'a>,
 ) -> TyResult<'a, (DataTy<'a>, ConstrainMap<'a>)> {
@@ -125,16 +132,24 @@ fn ty_check_app_view_fn_ty<'a>(
         ))))),
         vec![],
     );
-    let (constr_map, _) = unify::constrain(&mut arg_dty_fn_ty, &mut view_fn_ty)?;
+    let (constr_map, _) = unify::constrain(&mut arg_dty_fn_ty, &mut view_fn_ty, arena)?;
     let res_dty = arg_dty_fn_ty.ret_ty.dty().clone();
     Ok((res_dty, constr_map))
 }
 
-fn ty_check_view<'a>(ctx: &PlExprTyCtx, view: &'a mut View<'a>) -> TyResult<'a, FnTy<'a>> {
+fn ty_check_view<'a>(
+    ctx: &'a PlExprTyCtx<'a>,
+    view: &'a mut View<'a>,
+    arena: &'a Bump,
+) -> TyResult<'a, FnTy<'a>> {
     let arg_tys = view
         .args
         .iter_mut()
-        .map(|v| Ok(Ty::new(TyKind::FnTy(Box::new(ty_check_view(ctx, v)?)))))
+        .map(|v| {
+            Ok(Ty::new(TyKind::FnTy(
+                arena.alloc(ty_check_view(ctx, v, arena)?),
+            )))
+        })
         .collect::<TyResult<Vec<_>>>()?;
     let view_fn_ty = ctx.gl_ctx.fn_ty_by_ident(&view.name)?;
     let partially_applied_view_fn_ty = super::apply_gen_args_to_fn_ty_checked(
@@ -143,11 +158,12 @@ fn ty_check_view<'a>(ctx: &PlExprTyCtx, view: &'a mut View<'a>) -> TyResult<'a, 
         view_fn_ty,
         &view.gen_args,
     )?;
-    let mut actual_view_fn_ty = create_view_ty_with_input_view_and_free_ret(&ctx.exec, arg_tys);
-    let mut mono_fn_ty = unify::inst_fn_ty_scheme(&partially_applied_view_fn_ty);
-    let (constr_map, _) = unify::constrain(&mut actual_view_fn_ty, &mut mono_fn_ty)?;
+    let mut actual_view_fn_ty =
+        create_view_ty_with_input_view_and_free_ret(&ctx.exec, arg_tys, arena);
+    let mut mono_fn_ty = unify::inst_fn_ty_scheme(&partially_applied_view_fn_ty, arena);
+    let (constr_map, _) = unify::constrain(&mut actual_view_fn_ty, &mut mono_fn_ty, arena)?;
     // substitute implicit identifiers in view, that were inferred without the input data type
-    unify::substitute(&constr_map, view);
+    unify::substitute(&constr_map, view, arena);
     let mut inferred_k_args =
         super::infer_kinded_args::infer_kinded_args(&partially_applied_view_fn_ty, &mono_fn_ty)?;
     view.gen_args.append(&mut inferred_k_args);
@@ -156,7 +172,7 @@ fn ty_check_view<'a>(ctx: &PlExprTyCtx, view: &'a mut View<'a>) -> TyResult<'a, 
         actual_view_fn_ty.generic_exec.clone(),
         vec![actual_view_fn_ty.param_sigs.pop().unwrap()],
         actual_view_fn_ty.exec.clone(),
-        actual_view_fn_ty.ret_ty.as_ref().clone(),
+        actual_view_fn_ty.ret_ty.clone(),
         vec![],
     );
     Ok(res_view_ty)
@@ -165,11 +181,14 @@ fn ty_check_view<'a>(ctx: &PlExprTyCtx, view: &'a mut View<'a>) -> TyResult<'a, 
 fn create_view_ty_with_input_view_and_free_ret<'a>(
     exec: &ExecExpr,
     mut arg_tys: Vec<Ty<'a>>,
+    arena: &'a Bump,
 ) -> FnTy<'a> {
     arg_tys.push(Ty::new(TyKind::Data(Box::new(DataTy::new(
-        utils::fresh_ident("in_view_dty", DataTyKind::Ident),
+        arena,
+        utils::fresh_ident(arena, "in_view_dty", DataTyKind::Ident),
     )))));
     FnTy::new(
+        arena,
         vec![],
         None,
         arg_tys
@@ -178,6 +197,7 @@ fn create_view_ty_with_input_view_and_free_ret<'a>(
             .collect(),
         exec.clone(),
         Ty::new(TyKind::Data(Box::new(DataTy::new(utils::fresh_ident(
+            arena,
             "view_out_dty",
             DataTyKind::Ident,
         ))))),
@@ -186,7 +206,7 @@ fn create_view_ty_with_input_view_and_free_ret<'a>(
 }
 
 fn ty_check_ident<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     ident: &'a Ident<'a>,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     // if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
@@ -232,11 +252,12 @@ fn default_mem_by_exec<'a>(exec_ty: &'a ExecTyKind<'a>) -> Option<Memory<'a>> {
 
 // TODO refactor by fusing with ty_check_field_proj
 fn ty_check_proj<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     tuple_expr: &'a mut PlaceExpr<'a>,
     n: usize,
+    arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, tuple_expr)?;
+    let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, tuple_expr, arena)?;
     let tuple_dty = match &tuple_expr.ty.as_ref().unwrap().ty {
         TyKind::Data(dty) => dty,
         ty_kind => {
@@ -250,7 +271,7 @@ fn ty_check_proj<'a>(
         DataTyKind::Tuple(elem_dtys) => {
             if let Some(dty) = elem_dtys.get(n) {
                 Ok((
-                    Ty::new(TyKind::Data(Box::new(dty.clone()))),
+                    Ty::new(TyKind::Data(arena.alloc(dty.clone()))),
                     mem,
                     passed_prvs,
                 ))
@@ -261,18 +282,19 @@ fn ty_check_proj<'a>(
             }
         }
         dty_kind => Err(TyError::ExpectedTupleType(
-            TyKind::Data(Box::new(DataTy::new(dty_kind.clone()))),
+            TyKind::Data(arena.alloc(DataTy::new(arena, dty_kind.clone()))),
             tuple_expr.clone(),
         )),
     }
 }
 
 fn ty_check_field_proj<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     struct_expr: &'a mut PlaceExpr<'a>,
     ident: &'a Ident<'a>,
+    arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, struct_expr)?;
+    let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, struct_expr, arena)?;
     let struct_dty = match &struct_expr.ty.as_ref().unwrap().ty {
         TyKind::Data(dty) => dty,
         ty_kind => {
@@ -287,7 +309,7 @@ fn ty_check_field_proj<'a>(
         DataTyKind::Struct(struct_decl) => {
             if let Some(field) = struct_decl.fields.iter().find(|f| &f.0 == ident) {
                 Ok((
-                    Ty::new(TyKind::Data(Box::new(field.1.clone()))),
+                    Ty::new(TyKind::Data(arena.alloc(field.1.clone()))),
                     mem,
                     passed_prvs,
                 ))
@@ -298,17 +320,18 @@ fn ty_check_field_proj<'a>(
             }
         }
         dty_kind => Err(TyError::ExpectedTupleType(
-            TyKind::Data(Box::new(DataTy::new(dty_kind.clone()))),
+            TyKind::Data(arena.alloc(DataTy::new(arena, dty_kind.clone()))),
             struct_expr.clone(),
         )),
     }
 }
 
 fn ty_check_deref<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     borr_expr: &'a mut PlaceExpr<'a>,
+    arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    let (mut inner_mem, mut passed_prvs) = ty_check_and_passed_mems_prvs(ctx, borr_expr)?;
+    let (mut inner_mem, mut passed_prvs) = ty_check_and_passed_mems_prvs(ctx, borr_expr, arena)?;
     let borr_dty = if let TyKind::Data(dty) = &borr_expr.ty.as_ref().unwrap().ty {
         dty
     } else {
@@ -326,7 +349,7 @@ fn ty_check_deref<'a>(
             passed_prvs.push(reff.rgn.clone());
             inner_mem.push(reff.mem.clone());
             Ok((
-                Ty::new(TyKind::Data(Box::new(reff.dty.as_ref().clone()))),
+                Ty::new(TyKind::Data(arena.alloc(reff.dty.clone()))),
                 inner_mem,
                 passed_prvs,
             ))
@@ -334,7 +357,7 @@ fn ty_check_deref<'a>(
         DataTyKind::RawPtr(dty) => {
             // TODO is anything of this correct?
             Ok((
-                Ty::new(TyKind::Data(Box::new(dty.as_ref().clone()))),
+                Ty::new(TyKind::Data(arena.alloc(dty.clone()))),
                 inner_mem,
                 passed_prvs,
             ))
@@ -346,11 +369,12 @@ fn ty_check_deref<'a>(
 }
 
 fn ty_check_select<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     p: &'a mut PlaceExpr<'a>,
     select_exec: &'a mut ExecExpr<'a>,
+    arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, select_exec)?;
+    exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, select_exec, arena)?;
     // FIXME this check is required for uniq accesses, but not for shared accesses because there
     //  the duplication of accesses is fine. Move this check into ownership/borrow checking?
     //    if &ctx.exec != select_exec {
@@ -358,8 +382,14 @@ fn ty_check_select<'a>(
     //            "Trying select memory for illegal combination of excution resources.".to_string(),
     //        ));
     //    }
-    let mut outer_exec = select_exec.remove_last_distrib();
-    exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, &mut outer_exec)?;
+    let mut outer_exec = select_exec.remove_last_distrib(arena);
+    exec::ty_check(
+        ctx.nat_ctx,
+        ctx.ty_ctx,
+        ctx.ident_exec,
+        &mut outer_exec,
+        arena,
+    )?;
     let outer_ctx = PlExprTyCtx {
         gl_ctx: ctx.gl_ctx,
         nat_ctx: ctx.nat_ctx,
@@ -370,7 +400,7 @@ fn ty_check_select<'a>(
         exec_borrow_ctx: ctx.exec_borrow_ctx,
         own: ctx.own,
     };
-    let (mems, prvs) = ty_check_and_passed_mems_prvs(&outer_ctx, p)?;
+    let (mems, prvs) = ty_check_and_passed_mems_prvs(&outer_ctx, p, arena)?;
     let mut p_dty = p.ty.as_ref().unwrap().dty().clone();
     match p_dty.dty {
         DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
@@ -385,15 +415,16 @@ fn ty_check_select<'a>(
             return Err(TyError::String("Expected an array or view.".to_string()));
         }
     }
-    Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
+    Ok((Ty::new(TyKind::Data(arena.alloc(p_dty))), mems, prvs))
 }
 
 fn ty_check_index<'a>(
-    ctx: &PlExprTyCtx,
+    ctx: &'a PlExprTyCtx<'a>,
     pl_expr: &'a mut PlaceExpr<'a>,
     idx: &'a mut Nat<'a>,
+    arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr)?;
+    let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr, arena)?;
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
         dty
     } else {
@@ -405,7 +436,7 @@ fn ty_check_index<'a>(
         DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => (*elem_dty, n),
         DataTyKind::At(arr_dty, _) => {
             if let DataTyKind::Array(elem_ty, n) = &arr_dty.dty {
-                (elem_ty.as_ref().clone(), n.clone())
+                (*elem_ty.clone(), n.clone())
             } else {
                 return Err(TyError::String(
                     "Trying to index into non array type.".to_string(),
@@ -425,5 +456,9 @@ fn ty_check_index<'a>(
         ));
     }
 
-    Ok((Ty::new(TyKind::Data(Box::new(elem_dty))), mems, passed_prvs))
+    Ok((
+        Ty::new(TyKind::Data(arena.alloc(elem_dty))),
+        mems,
+        passed_prvs,
+    ))
 }
