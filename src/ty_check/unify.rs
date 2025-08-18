@@ -153,9 +153,9 @@ impl<'a> ConstrainMap<'a> {
 
 impl<'a> DataTy<'a> {
     fn bind_to(
-        &'a self,
+        &self,
         ident: &'a Ident<'a>,
-        constr_map: &'a mut ConstrainMap<'a>,
+        constr_map: &mut ConstrainMap<'a>,
         arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         if let DataTyKind::Ident(ty_id) = &self.dty {
@@ -179,10 +179,12 @@ impl<'a> DataTy<'a> {
                 );
             }
         }
+
+        let term_ref: &'a DataTy<'a> = arena.alloc(self.clone_in(arena));
         constr_map
             .dty_unifier
             .values_mut()
-            .for_each(|dty| SubstIdent::new(ident, self).visit_dty(arena, dty));
+            .for_each(|dty| SubstIdent::new(ident, term_ref).visit_dty(arena, dty));
         Ok(())
     }
 }
@@ -446,9 +448,11 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
         match (&mut self.dty, &mut other.dty) {
             (DataTyKind::Ident(i1), DataTyKind::Ident(i2)) => {
                 if i1.is_implicit {
-                    other.bind_to(i1, constr_map, arena)?
+                    let i1_ref: &'a Ident<'a> = arena.alloc(i1.clone());
+                    other.bind_to(i1_ref, constr_map, arena)?
                 } else if i2.is_implicit {
-                    self.bind_to(i2, constr_map, arena)?
+                    let i2_ref: &'a Ident<'a> = arena.alloc(i2.clone());
+                    self.bind_to(i2_ref, constr_map, arena)?
                 } else if i1 == i2 {
                     return Ok(());
                 } else {
@@ -458,11 +462,13 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                 substitute(constr_map, other, arena);
             }
             (DataTyKind::Ident(i), _) if i.is_implicit => {
-                other.bind_to(i, constr_map, arena)?;
+                let i_ref: &'a Ident<'a> = arena.alloc(i.clone());
+                other.bind_to(i_ref, constr_map, arena)?;
                 substitute(constr_map, other, arena);
             }
             (_, DataTyKind::Ident(i)) if i.is_implicit => {
-                self.bind_to(i, constr_map, arena)?;
+                let i_ref: &'a Ident<'a> = arena.alloc(i.clone());
+                self.bind_to(i_ref, constr_map, arena)?;
                 substitute(constr_map, self, arena);
             }
             (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
@@ -478,26 +484,40 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                     own: own1,
                     mem: mem1,
                     dty: dty1,
-                } = ref1.as_mut();
+                } = (**ref1).clone_in(arena);
+
                 let RefDty {
                     rgn: rgn2,
                     own: own2,
                     mem: mem2,
                     dty: dty2,
-                } = ref2.as_mut();
+                } = (**ref2).clone_in(arena);
 
                 if own1 != own2 {
                     return Err(UnifyError::CannotUnify);
                 }
-                rgn1.constrain(rgn2, constr_map, prv_rels, arena)?;
-                substitute(constr_map, &mut **dty1, arena);
-                substitute(constr_map, &mut **dty2, arena);
-                mem1.constrain(mem2, constr_map, prv_rels, arena)?;
-                substitute(constr_map, mem1, arena);
-                substitute(constr_map, mem2, arena);
-                substitute(constr_map, &mut **dty1, arena);
-                substitute(constr_map, &mut **dty2, arena);
-                dty1.constrain(dty2, constr_map, prv_rels, arena)?;
+
+                let mut rgn1 = rgn1;
+                let mut rgn2 = rgn2;
+                rgn1.constrain(&mut rgn2, constr_map, prv_rels, arena)?;
+
+                let mut dty1_mut = (*dty1).clone();
+                let mut dty2_mut = (*dty2).clone();
+
+                substitute(constr_map, &mut dty1_mut, arena);
+                substitute(constr_map, &mut dty2_mut, arena);
+
+                let mut mem1 = mem1;
+                let mut mem2 = mem2;
+                mem1.constrain(&mut mem2, constr_map, prv_rels, arena)?;
+
+                substitute(constr_map, &mut mem1, arena);
+                substitute(constr_map, &mut mem2, arena);
+                substitute(constr_map, &mut dty1_mut, arena);
+                substitute(constr_map, &mut dty1_mut, arena);
+
+                dty1_mut.constrain(&mut dty2_mut, constr_map, prv_rels, arena)?;
+
                 substitute(constr_map, self, arena);
                 substitute(constr_map, other, arena);
             }
@@ -522,6 +542,27 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                 }
             }
             (DataTyKind::Struct(struct_decl1), DataTyKind::Struct(struct_decl2)) => {
+                if struct_decl1.fields.len() != struct_decl2.fields.len() {
+                    return Err(UnifyError::CannotUnify);
+                }
+
+                for ((lname, lty_ref), (rname, rty_ref)) in
+                    struct_decl1.fields.iter().zip(struct_decl2.fields.iter())
+                {
+                    if lname != rname {
+                        return Err(UnifyError::CannotUnify);
+                    }
+
+                    let mut lty = lty_ref.clone_in(arena);
+                    let mut rty = rty_ref.clone_in(arena);
+
+                    lty.constrain(&mut rty, constr_map, prv_rels, arena)?;
+                }
+
+                substitute(constr_map, self, arena);
+                substitute(constr_map, other, arena);
+
+                /*
                 let mut i = 0;
                 let mut remain_lhs = &mut struct_decl1.fields[i..];
                 let mut remain_rhs = &mut struct_decl2.fields[i..];
@@ -547,20 +588,30 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                     remain_lhs = &mut struct_decl1.fields[i..];
                     remain_rhs = &mut struct_decl2.fields[i..];
                 }
+                */
             }
             (DataTyKind::Array(dty1, n1), DataTyKind::Array(dty2, n2))
             | (DataTyKind::ArrayShape(dty1, n1), DataTyKind::ArrayShape(dty2, n2)) => {
-                dty1.constrain(dty2, constr_map, prv_rels, arena)?;
-                substitute(constr_map, &mut **dty1, arena);
-                substitute(constr_map, &mut **dty2, arena);
+                let mut dty1_owned = (**dty1).clone();
+                let mut dty2_owned = (**dty2).clone();
+                dty1_owned.constrain(&mut dty2_owned, constr_map, prv_rels, arena)?;
+                substitute(constr_map, &mut dty1_owned, arena);
+                substitute(constr_map, &mut dty2_owned, arena);
+                *dty1 = arena.alloc(dty1_owned);
+                *dty2 = arena.alloc(dty2_owned);
+
                 n1.constrain(n2, constr_map, prv_rels, arena)?;
                 substitute(constr_map, self, arena);
                 substitute(constr_map, other, arena);
             }
             (DataTyKind::At(dty1, mem1), DataTyKind::At(dty2, mem2)) => {
-                dty1.constrain(dty2, constr_map, prv_rels, arena)?;
-                substitute(constr_map, &mut **dty1, arena);
-                substitute(constr_map, &mut **dty2, arena);
+                let mut dty1_owned = (**dty1).clone();
+                let mut dty2_owned = (**dty2).clone();
+                dty1_owned.constrain(&mut dty2_owned, constr_map, prv_rels, arena)?;
+                substitute(constr_map, &mut dty1_owned, arena);
+                substitute(constr_map, &mut dty2_owned, arena);
+                *dty1 = arena.alloc(dty1_owned);
+                *dty2 = arena.alloc(dty2_owned);
                 mem1.constrain(mem2, constr_map, prv_rels, arena)?;
                 substitute(constr_map, self, arena);
                 substitute(constr_map, other, arena);
@@ -579,7 +630,9 @@ impl<'a> Constrainable<'a> for DataTy<'a> {
                 panic!()
             }
             (dty1, DataTyKind::Dead(dty2)) if !matches!(dty1, DataTyKind::Dead(_)) => {
-                self.constrain(dty2, constr_map, prv_rels, arena)?;
+                let mut dty2_owned = (**dty2).clone();
+                self.constrain(&mut dty2_owned, constr_map, prv_rels, arena)?;
+                *dty2 = arena.alloc(dty2_owned);
                 substitute(constr_map, self, arena);
                 substitute(constr_map, other, arena);
             }
@@ -609,27 +662,40 @@ impl<'a> Constrainable<'a> for ExecTy<'a> {
             | (ExecTyKind::GpuThread, ExecTyKind::GpuThread)
             | (ExecTyKind::GpuWarp, ExecTyKind::GpuWarp)
             | (_, ExecTyKind::Any) => Ok(()),
-            (ExecTyKind::GpuWarpGrp(nl), ExecTyKind::GpuWarpGrp(nr)) => {
-                nl.constrain(nr, constr_map, prv_rels, arena)
+
+            (ExecTyKind::GpuWarpGrp(ln), ExecTyKind::GpuWarpGrp(rn)) => {
+                let mut l = (*ln).clone_in(arena);
+                let mut r = (*rn).clone_in(arena);
+                l.constrain(&mut r, constr_map, prv_rels, arena)
             }
-            (ExecTyKind::GpuGrid(lgdim, lbdim), ExecTyKind::GpuGrid(rgdim, rbdim))
-            | (ExecTyKind::GpuBlockGrp(lgdim, lbdim), ExecTyKind::GpuBlockGrp(rgdim, rbdim)) => {
-                lgdim.constrain(rgdim, constr_map, prv_rels, arena)?;
-                lbdim.constrain(rbdim, constr_map, prv_rels, arena)
+
+            (ExecTyKind::GpuGrid(lg, lb), ExecTyKind::GpuGrid(rg, rb))
+            | (ExecTyKind::GpuBlockGrp(lg, lb), ExecTyKind::GpuBlockGrp(rg, rb)) => {
+                let mut lgc = (*lg).clone_in(arena);
+                let mut rgc = (*rg).clone_in(arena);
+                lgc.constrain(&mut rgc, constr_map, prv_rels, arena)?;
+
+                let mut lbc = (*lb).clone_in(arena);
+                let mut rbc = (*rb).clone_in(arena);
+                lbc.constrain(&mut rbc, constr_map, prv_rels, arena)
             }
-            (
-                ExecTyKind::GpuToThreads(ldim_compo, l_inner),
-                ExecTyKind::GpuToThreads(rdim_compo, r_inner),
-            ) => {
-                if ldim_compo != rdim_compo {
+
+            (ExecTyKind::GpuToThreads(ldc, l_inner), ExecTyKind::GpuToThreads(rdc, r_inner)) => {
+                if ldc != rdc {
                     return Err(UnifyError::CannotUnify);
                 }
-                l_inner.constrain(r_inner, constr_map, prv_rels, arena)
+                let mut li = (*l_inner).clone_in(arena);
+                let mut ri = (*r_inner).clone_in(arena);
+                li.constrain(&mut ri, constr_map, prv_rels, arena)
             }
-            (ExecTyKind::GpuBlock(ldim), ExecTyKind::GpuBlock(rdim))
-            | (ExecTyKind::GpuThreadGrp(ldim), ExecTyKind::GpuThreadGrp(rdim)) => {
-                ldim.constrain(rdim, constr_map, prv_rels, arena)
+
+            (ExecTyKind::GpuBlock(ld), ExecTyKind::GpuBlock(rd))
+            | (ExecTyKind::GpuThreadGrp(ld), ExecTyKind::GpuThreadGrp(rd)) => {
+                let mut lc = (*ld).clone_in(arena);
+                let mut rc = (*rd).clone_in(arena);
+                lc.constrain(&mut rc, constr_map, prv_rels, arena)
             }
+
             _ => Err(UnifyError::CannotUnify),
         }
     }
@@ -642,6 +708,7 @@ impl<'a> Substitutable<'a> for ExecTy<'a> {
     }
 }
 
+/**
 impl<'a> Constrainable<'a> for Dim<'a> {
     fn constrain<'m>(
         &'m mut self,
@@ -669,6 +736,57 @@ impl<'a> Constrainable<'a> for Dim<'a> {
         }
     }
 }
+*/
+
+impl<'a> Constrainable<'a> for Dim<'a> {
+    fn constrain<'m>(
+        &'m mut self,
+        other: &'m mut Self,
+        constr_map: &'m mut ConstrainMap<'a>,
+        prv_rels: &'m mut BumpVec<'a, PrvConstr<'a>>,
+        arena: &'a Bump,
+    ) -> UnifyResult<'a, ()> {
+        use Dim::*;
+
+        match (self, other) {
+            (XYZ(ld), XYZ(rd)) => {
+                let mut lx = ld.0.clone_in(arena);
+                let mut rx = rd.0.clone_in(arena);
+                lx.constrain(&mut rx, constr_map, prv_rels, arena)?;
+
+                let mut ly = ld.1.clone_in(arena);
+                let mut ry = rd.1.clone_in(arena);
+                ly.constrain(&mut ry, constr_map, prv_rels, arena)?;
+
+                let mut lz = ld.2.clone_in(arena);
+                let mut rz = rd.2.clone_in(arena);
+                lz.constrain(&mut rz, constr_map, prv_rels, arena)?;
+
+                Ok(())
+            }
+
+            (XY(ld), XY(rd)) | (XZ(ld), XZ(rd)) | (YZ(ld), YZ(rd)) => {
+                let mut l0 = ld.0.clone_in(arena);
+                let mut r0 = rd.0.clone_in(arena);
+                l0.constrain(&mut r0, constr_map, prv_rels, arena)?;
+
+                let mut l1 = ld.1.clone_in(arena);
+                let mut r1 = rd.1.clone_in(arena);
+                l1.constrain(&mut r1, constr_map, prv_rels, arena)?;
+
+                Ok(())
+            }
+
+            (X(ld), X(rd)) | (Y(ld), Y(rd)) | (Z(ld), Z(rd)) => {
+                let mut ln = ld.0.clone_in(arena);
+                let mut rn = rd.0.clone_in(arena);
+                ln.constrain(&mut rn, constr_map, prv_rels, arena)
+            }
+
+            _ => Err(UnifyError::CannotUnify),
+        }
+    }
+}
 
 impl<'a> Substitutable<'a> for Dim<'a> {
     fn substitute(&mut self, subst: &ConstrainMap<'a>, arena: &'a Bump) {
@@ -679,10 +797,9 @@ impl<'a> Substitutable<'a> for Dim<'a> {
 
 impl<'a> Nat<'a> {
     fn bind_to(
-        &'a self,
+        &self,
         ident: &'a Ident<'a>,
-        constr_map: &'a mut ConstrainMap<'a>,
-        _: &'a mut BumpVec<'a, PrvConstr<'a>>,
+        constr_map: &mut ConstrainMap<'a>,
         arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         // No occurs check.
@@ -698,18 +815,15 @@ impl<'a> Nat<'a> {
                 )
             }
         }
+        let term_ref: &'a Nat<'a> = arena.alloc(self.clone_in(arena));
         constr_map
             .nat_unifier
             .values_mut()
-            .for_each(|n| SubstIdent::new(ident, self).visit_nat(arena, n));
+            .for_each(|n| SubstIdent::new(ident, term_ref).visit_nat(arena, n));
         Ok(())
     }
 
-    fn unify(
-        n1: &'a Nat<'a>,
-        n2: &'a Nat<'a>,
-        _constr_map: &'a mut ConstrainMap<'a>,
-    ) -> UnifyResult<'a, ()> {
+    fn unify<'m>(n1: &'m Nat<'a>, n2: &'m Nat<'a>) -> UnifyResult<'a, ()> {
         if n1 == n2 {
             Ok(())
         } else {
@@ -729,27 +843,39 @@ impl<'a> Constrainable<'a> for Nat<'a> {
         match (&*self, &*other) {
             (Nat::Ident(n1i), Nat::Ident(n2i)) if n1i.is_implicit || n2i.is_implicit => {
                 match (n1i.is_implicit, n2i.is_implicit) {
-                    (true, _) => other.bind_to(n1i, constr_map, prv_rels, arena),
-                    (false, _) => self.bind_to(n2i, constr_map, prv_rels, arena),
+                    (true, _) => other.bind_to(arena.alloc(n1i.clone()), constr_map, arena),
+                    (false, _) => self.bind_to(arena.alloc(n2i.clone()), constr_map, arena),
                 }
             }
             (Nat::Ident(n1i), _) if n1i.is_implicit => {
-                other.bind_to(n1i, constr_map, prv_rels, arena)
+                other.bind_to(arena.alloc(n1i.clone()), constr_map, arena)
             }
             (_, Nat::Ident(n2i)) if n2i.is_implicit => {
-                self.bind_to(n2i, constr_map, prv_rels, arena)
+                self.bind_to(arena.alloc(n2i.clone()), constr_map, arena)
             }
             (Nat::BinOp(op1, n1l, n1r), Nat::BinOp(op2, n2l, n2r)) if op1 == op2 => {
-                n1l.constrain(n2l, constr_map, prv_rels, arena)?;
-                n1r.constrain(n2r, constr_map, prv_rels, arena)
+                let mut l_left = (*n1l).clone_in(arena);
+                let mut r_left = (*n2l).clone_in(arena);
+                l_left.constrain(&mut r_left, constr_map, prv_rels, arena)?;
+
+                let mut l_right = (*n1r).clone_in(arena);
+                let mut r_right = (*n2r).clone_in(arena);
+                l_right.constrain(&mut r_right, constr_map, prv_rels, arena)?;
+
+                Ok(())
             }
             (Nat::App(f1, ns1), Nat::App(f2, ns2)) if f1 == f2 => {
-                for (n1, n2) in ns1.iter_mut().zip(ns2.iter_mut()) {
-                    n1.constrain(n2, constr_map, prv_rels, arena)?;
+                if ns1.len() != ns2.len() {
+                    return Err(UnifyError::CannotUnify);
+                }
+                for (n1, n2) in ns1.iter().zip(ns2.iter()) {
+                    let mut l = n1.clone_in(arena);
+                    let mut r = n2.clone_in(arena);
+                    l.constrain(&mut r, constr_map, prv_rels, arena)?;
                 }
                 Ok(())
             }
-            _ => Self::unify(self, other, constr_map),
+            _ => Self::unify(self, other),
         }
     }
 }
@@ -763,9 +889,9 @@ impl<'a> Substitutable<'a> for Nat<'a> {
 
 impl<'a> Memory<'a> {
     fn bind_to(
-        &'a self,
+        &self,
         ident: &'a Ident<'a>,
-        constr_map: &'a mut ConstrainMap<'a>,
+        constr_map: &mut ConstrainMap<'a>,
         arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         if Self::occurs_check(&IdentKinded::new(ident, Kind::Memory), self) {
@@ -789,10 +915,11 @@ impl<'a> Memory<'a> {
                 )
             }
         }
+        let term_ref: &'a Memory<'a> = arena.alloc(self.clone_in(arena));
         constr_map
             .mem_unifier
             .values_mut()
-            .for_each(|m| SubstIdent::new(ident, self).visit_mem(arena, m));
+            .for_each(|m| SubstIdent::new(ident, term_ref).visit_mem(arena, m));
         Ok(())
     }
 }
@@ -808,11 +935,11 @@ impl<'a> Constrainable<'a> for Memory<'a> {
         match (&*self, &*other) {
             (Memory::Ident(i1), Memory::Ident(i2)) if i1 == i2 => Ok(()),
             (Memory::Ident(i1), Memory::Ident(i2)) => match (i1.is_implicit, i2.is_implicit) {
-                (true, _) => other.bind_to(i1, constr_map, arena),
-                (false, _) => self.bind_to(i2, constr_map, arena),
+                (true, _) => other.bind_to(arena.alloc(i1.clone()), constr_map, arena),
+                (false, _) => self.bind_to(arena.alloc(i2.clone()), constr_map, arena),
             },
-            (Memory::Ident(i), o) => o.bind_to(i, constr_map, arena),
-            (s, Memory::Ident(i)) => s.bind_to(i, constr_map, arena),
+            (Memory::Ident(i), o) => o.bind_to(arena.alloc(i.clone()), constr_map, arena),
+            (s, Memory::Ident(i)) => s.bind_to(arena.alloc(i.clone()), constr_map, arena),
             (mem1, mem2) if mem1 == mem2 => Ok(()),
             _ => Err(UnifyError::CannotUnify),
         }
@@ -828,9 +955,9 @@ impl<'a> Substitutable<'a> for Memory<'a> {
 
 impl<'a> Provenance<'a> {
     fn bind_to(
-        &'a self,
+        &self,
         ident: &'a Ident<'a>,
-        constr_map: &'a mut ConstrainMap<'a>,
+        constr_map: &mut ConstrainMap<'a>,
         arena: &'a Bump,
     ) -> UnifyResult<'a, ()> {
         // TODO not necessary, since no recursion possible
@@ -855,10 +982,11 @@ impl<'a> Provenance<'a> {
                 )
             }
         }
+        let term_ref: &'a Provenance<'a> = arena.alloc(self.clone_in(arena));
         constr_map
             .prv_unifier
             .values_mut()
-            .for_each(|m| SubstIdent::new(ident, self).visit_prv(arena, m));
+            .for_each(|m| SubstIdent::new(ident, term_ref).visit_prv(arena, m));
         Ok(())
     }
 }
@@ -875,14 +1003,19 @@ impl<'a> Constrainable<'a> for Provenance<'a> {
         match (&*self, &*other) {
             (Provenance::Ident(i1), Provenance::Ident(i2)) if i1 == i2 => Ok(()),
             (Provenance::Ident(i), r) | (r, Provenance::Ident(i)) if i.is_implicit => {
-                r.bind_to(i, constr_map, arena)
+                let i_ref: &'a Ident<'a> = arena.alloc(i.clone());
+                r.bind_to(i_ref, constr_map, arena)
             }
             (Provenance::Ident(_), _) | (_, Provenance::Ident(_)) => {
-                prv_rels.push(PrvConstr(self.clone(), other.clone()));
+                let l_ref: &'a Provenance<'a> = arena.alloc(self.clone_in(arena));
+                let r_ref: &'a Provenance<'a> = arena.alloc(other.clone_in(arena));
+                prv_rels.push(PrvConstr(l_ref, r_ref));
                 Ok(())
             }
             (Provenance::Value(_), Provenance::Value(_)) => {
-                prv_rels.push(PrvConstr(self.clone(), other.clone()));
+                let l_ref: &'a Provenance<'a> = arena.alloc(self.clone_in(arena));
+                let r_ref: &'a Provenance<'a> = arena.alloc(other.clone_in(arena));
+                prv_rels.push(PrvConstr(l_ref, r_ref));
                 Ok(())
             }
         }
@@ -1006,6 +1139,7 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, DataTy<'a>> {
     }
 }
 
+/**
 impl<'a> VisitMut<'a> for SubstIdent<'a, ExecExpr<'a>> {
     fn visit_exec_expr(&mut self, arena: &'a Bump, exec: &mut ExecExpr<'a>) {
         if let BaseExec::Ident(i) = &exec.exec.base {
@@ -1013,6 +1147,39 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, ExecExpr<'a>> {
                 let mut subst_exec = self.term.clone();
                 subst_exec.exec.path.append(&mut exec.exec.path);
                 *exec = subst_exec;
+            }
+        }
+    }
+}
+*/
+
+impl<'a> VisitMut<'a> for SubstIdent<'a, ExecExpr<'a>> {
+    fn visit_exec_expr(&mut self, arena: &'a Bump, exec: &mut ExecExpr<'a>) {
+        use crate::arena_ast::{BaseExec, ExecExpr, ExecExprKind};
+
+        if let BaseExec::Ident(i) = &exec.exec.base {
+            if i.name == self.ident.name {
+                let mut merged = bumpalo::collections::Vec::new_in(arena);
+
+                for e in self.term.exec.path.iter() {
+                    merged.push(e.clone_in(arena));
+                }
+                for e in exec.exec.path.iter() {
+                    merged.push(e.clone_in(arena));
+                }
+
+                let new_kind = arena.alloc(ExecExprKind {
+                    base: self.term.exec.base.clone_in(arena),
+                    path: merged,
+                });
+
+                *exec = ExecExpr {
+                    exec: new_kind,
+                    ty: exec.ty,
+                    span: exec.span,
+                };
+
+                return;
             }
         }
     }

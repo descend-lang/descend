@@ -1560,9 +1560,10 @@ impl BaseExec {
         match self {
             Ident(ident) => arena_ast::BaseExec::Ident(ident.into_arena(arena)),
             CpuThread => arena_ast::BaseExec::CpuThread,
-            GpuGrid(d1, d2) => {
-                arena_ast::BaseExec::GpuGrid(d1.into_arena(arena), d2.into_arena(arena))
-            }
+            GpuGrid(d1, d2) => arena_ast::BaseExec::GpuGrid(
+                arena.alloc(d1.into_arena(arena)),
+                arena.alloc(d2.into_arena(arena)),
+            ),
         }
     }
 }

@@ -1068,6 +1068,14 @@ impl<'a> TakeRange<'a> {
             left_or_right: proj,
         }
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> &'a TakeRange<'a> {
+        arena.alloc(TakeRange::new(
+            self.split_dim,
+            self.pos.clone_in(arena),
+            self.left_or_right,
+        ))
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1084,14 +1092,14 @@ impl<'a> ExecExprKind<'a> {
         }
     }
 
-    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        let mut new_path = BumpVec::new_in(arena);
+        for e in self.path.iter() {
+            new_path.push(e.clone_in(arena));
+        }
         ExecExprKind {
-            base: self.base.clone(),
-            path: {
-                let mut new_path = BumpVec::new_in(arena);
-                new_path.extend(self.path.iter().cloned());
-                new_path
-            },
+            base: self.base.clone_in(arena),
+            path: new_path,
         }
     }
 
@@ -1138,7 +1146,21 @@ impl<'a> ExecExprKind<'a> {
 pub enum BaseExec<'a> {
     Ident(Ident<'a>),
     CpuThread,
-    GpuGrid(Dim<'a>, Dim<'a>),
+    GpuGrid(&'a Dim<'a>, &'a Dim<'a>),
+}
+
+impl<'a> BaseExec<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match self {
+            BaseExec::Ident(ie) => BaseExec::Ident(ie.clone()),
+            BaseExec::CpuThread => BaseExec::CpuThread,
+            BaseExec::GpuGrid(gdim, bdim) => {
+                let ng = arena.alloc(gdim.clone_in(arena));
+                let nb = arena.alloc(bdim.clone_in(arena));
+                BaseExec::GpuGrid(ng, nb)
+            } // add other variants here if you have them
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1147,6 +1169,17 @@ pub enum ExecPathElem<'a> {
     ForAll(DimCompo),
     ToWarps,
     ToThreads(DimCompo),
+}
+
+impl<'a> ExecPathElem<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match self {
+            ExecPathElem::TakeRange(tr) => ExecPathElem::TakeRange(tr.clone_in(arena)),
+            ExecPathElem::ForAll(d) => ExecPathElem::ForAll(*d),
+            ExecPathElem::ToWarps => ExecPathElem::ToWarps,
+            ExecPathElem::ToThreads(d) => ExecPathElem::ToThreads(*d),
+        }
+    }
 }
 
 // ExecTy
@@ -1753,7 +1786,7 @@ pub struct RefDty<'a> {
 
 impl<'a> RefDty<'a> {
     pub fn new(
-        bump: &'a Bump,
+        arena: &'a Bump,
         rgn: Provenance<'a>,
         own: Ownership,
         mem: Memory<'a>,
@@ -1763,7 +1796,18 @@ impl<'a> RefDty<'a> {
             rgn,
             own,
             mem,
-            dty: bump.alloc(dty),
+            dty: arena.alloc(dty),
+        }
+    }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+        let cloned_dty: &'a DataTy<'a> = arena.alloc(self.dty.clone_in(arena));
+
+        RefDty {
+            rgn: self.rgn.clone_in(arena),
+            own: self.own, // Copy
+            mem: self.mem.clone_in(arena),
+            dty: cloned_dty,
         }
     }
 }
@@ -1812,6 +1856,15 @@ pub enum Provenance<'a> {
     Ident(Ident<'a>),
 }
 
+impl<'a> Provenance<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match self {
+            Provenance::Value(s) => Provenance::Value(arena.alloc_str(s)),
+            Provenance::Ident(id) => Provenance::Ident(id.clone()),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Memory<'a> {
     CpuMem,
@@ -1819,6 +1872,18 @@ pub enum Memory<'a> {
     GpuShared,
     GpuLocal,
     Ident(Ident<'a>),
+}
+
+impl<'a> Memory<'a> {
+    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+        match self {
+            Memory::CpuMem => Memory::CpuMem,
+            Memory::GpuGlobal => Memory::GpuGlobal,
+            Memory::GpuShared => Memory::GpuShared,
+            Memory::GpuLocal => Memory::GpuLocal,
+            Memory::Ident(id) => Memory::Ident(id.clone()),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -2080,7 +2145,7 @@ mod size_asserts {
     static_assert_size!(DataTy, 128);
     static_assert_size!(DataTyKind, 80);
     static_assert_size!(ExecExpr, 32);
-    static_assert_size!(ExecExprKind, 72);
+    static_assert_size!(ExecExprKind, 64);
     static_assert_size!(ExecPathElem, 16);
     static_assert_size!(ExecTy, 80);
     static_assert_size!(ExecTyKind, 64);

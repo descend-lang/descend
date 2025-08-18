@@ -330,7 +330,10 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
                                 arena,
                                 ArenaExecExprKind::new(
                                     arena,
-                                    ArenaBaseExec::GpuGrid(gdim.clone(), bdim.clone()),
+                                    ArenaBaseExec::GpuGrid(
+                                        arena.alloc(gdim.clone()),
+                                        arena.alloc(bdim.clone()),
+                                    ),
                                 ),
                             ),
                         ));
