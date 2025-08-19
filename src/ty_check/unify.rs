@@ -41,9 +41,9 @@ pub(super) fn sub_unify<'a, C: Constrainable<'a>>(
     Ok(())
 }
 
-pub(super) fn constrain<'a, S: Constrainable<'a>>(
-    t1: &'a mut S,
-    t2: &'a mut S,
+pub(super) fn constrain<'a, 'm, S: Constrainable<'a>>(
+    t1: &'m mut S,
+    t2: &'m mut S,
     arena: &'a Bump,
 ) -> UnifyResult<'a, (ConstrainMap<'a>, BumpVec<'a, PrvConstr<'a>>)> {
     let mut constr_map = ConstrainMap::new();

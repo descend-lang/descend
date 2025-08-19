@@ -15,6 +15,7 @@ mod span;
 pub mod utils;
 pub mod visit;
 pub mod visit_mut;
+use std::cell::OnceCell;
 
 #[derive(Clone, Debug)]
 pub struct CompilUnit<'a> {
@@ -1064,12 +1065,20 @@ pub struct PlaceExpr {
 }
 
 impl PlaceExpr {
-    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::PlaceExpr<'a> {
-        arena_ast::PlaceExpr {
+    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::PlaceExpr<'a> {
+        let out = arena_ast::PlaceExpr {
             pl_expr: self.pl_expr.into_arena(arena),
-            ty: self.ty.map(|t| &*arena.alloc(t.into_arena(arena))),
+            ty: OnceCell::new(),
             span: self.span,
+        };
+
+        if let Some(t) = self.ty {
+            let t_arena = t.into_arena(arena);
+            let t_ref: &'a arena_ast::Ty<'a> = arena.alloc(t_arena);
+            let _ = out.ty.set(t_ref);
         }
+
+        out
     }
 }
 

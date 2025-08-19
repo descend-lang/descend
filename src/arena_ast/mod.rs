@@ -13,6 +13,8 @@ pub mod utils;
 pub mod visit;
 pub mod visit_mut;
 
+use std::cell::OnceCell;
+
 #[derive(Debug)]
 pub struct CompilUnit<'a> {
     pub items: BumpVec<'a, Item<'a>>,
@@ -661,6 +663,16 @@ impl<'a> ArgKinded<'a> {
             _ => Ok(false),
         }
     }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+        match self {
+            ArgKinded::Ident(i) => ArgKinded::Ident(i.clone()),
+            ArgKinded::Nat(n) => ArgKinded::Nat(n.clone_in(arena)),
+            ArgKinded::Memory(m) => ArgKinded::Memory(m.clone_in(arena)),
+            ArgKinded::DataTy(d) => ArgKinded::DataTy(d.clone_in(arena)),
+            ArgKinded::Provenance(p) => ArgKinded::Provenance(p.clone_in(arena)),
+        }
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -669,7 +681,7 @@ pub struct PlaceExpr<'a> {
     pub pl_expr: PlaceExprKind<'a>,
     // FIXME misusing span_derive_ignore to ignore type on equality checks
     #[span_derive_ignore]
-    pub ty: Option<&'a Ty<'a>>,
+    pub ty: OnceCell<&'a Ty<'a>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
 }
@@ -712,6 +724,22 @@ impl<'a> View<'a> {
         }
 
         Ok(true)
+    }
+
+    pub fn clone_in(&self, arena: &'a bumpalo::Bump) -> Self {
+        // Clone generic arguments into the arena
+        let mut gen_args = bumpalo::collections::Vec::new_in(arena);
+        gen_args.extend(self.gen_args.iter().map(|ga| ga.clone_in(arena)));
+
+        // Clone nested views into the arena
+        let mut args = bumpalo::collections::Vec::new_in(arena);
+        args.extend(self.args.iter().map(|v| v.clone_in(arena)));
+
+        View {
+            name: self.name.clone(),
+            gen_args,
+            args,
+        }
     }
 }
 
@@ -760,7 +788,7 @@ impl<'a> PlaceExpr<'a> {
     pub fn new(pl_expr: PlaceExprKind<'a>) -> Self {
         PlaceExpr {
             pl_expr,
-            ty: None,
+            ty: OnceCell::new(),
             span: None,
         }
     }
@@ -768,9 +796,21 @@ impl<'a> PlaceExpr<'a> {
     pub fn with_span(pl_expr: PlaceExprKind<'a>, span: Span) -> Self {
         PlaceExpr {
             pl_expr,
-            ty: None,
+            ty: OnceCell::new(),
             span: Some(span),
         }
+    }
+
+    pub fn set_ty(&self, arena: &'a bumpalo::Bump, ty: Ty<'a>) {
+        let ty_ref = arena.alloc(ty);
+        // Ignore the error if already set, or assert if you prefer:
+        let _ = self.ty.set(ty_ref);
+        // or: self.ty.get_or_init(|| arena.alloc(ty));
+    }
+
+    /// Read-only access to the inferred type (if already set).
+    pub fn get_ty(&self) -> Option<&'a Ty<'a>> {
+        self.ty.get().copied()
     }
 
     pub fn is_place(&self) -> bool {
@@ -1875,7 +1915,7 @@ pub enum Memory<'a> {
 }
 
 impl<'a> Memory<'a> {
-    pub fn clone_in(&self, arena: &'a Bump) -> Self {
+    pub fn clone_in(&self, _arena: &'a Bump) -> Self {
         match self {
             Memory::CpuMem => Memory::CpuMem,
             Memory::GpuGlobal => Memory::GpuGlobal,

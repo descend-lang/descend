@@ -36,7 +36,7 @@ pub trait VisitMut<'a>: Sized {
     fn visit_own(&mut self, _own: &mut Ownership) {}
     fn visit_mutability(&mut self, _mutbl: &mut Mutability) {}
     fn visit_lit(&mut self, _lit: &mut Lit) {}
-    fn visit_ident(&mut self, arena: &'a Bump, _ident: &mut Ident<'a>) {}
+    fn visit_ident(&mut self, _arena: &'a Bump, _ident: &mut Ident<'a>) {}
     fn visit_pattern(&mut self, arena: &'a Bump, pattern: &mut Pattern<'a>) { walk_pattern(self, arena, pattern) }
     fn visit_split(&mut self, arena: &'a Bump, split: &mut Split<'a>) { walk_split(self, arena, split) }
     fn visit_sched(&mut self, arena: &'a Bump, sched: &mut Sched<'a>) { walk_sched(self, arena, sched) }

@@ -8,16 +8,15 @@ use crate::arena_ast::internal::Loan;
 use super::error::{CtxError, SubTyError};
 use crate::arena_ast::*;
 use bumpalo::Bump;
-use std::collections::HashSet;
 
 type SubTyResult<'a, T> = Result<T, SubTyError<'a>>;
 
 // FIXME respect memory always, somehow provenances can be different is this correct?
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
-pub(super) fn check<'m, 'a>(
+pub(super) fn check<'a>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'m mut TyCtx<'a>,
+    ty_ctx: &mut TyCtx<'a>,
     sub_dty: &'a DataTy<'a>,
     super_dty: &'a DataTy<'a>,
     arena: &'a Bump,
@@ -72,9 +71,9 @@ pub(super) fn check<'m, 'a>(
 
 // ρ1 outlives ρ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ ρ1 :> ρ2 ⇒ Γ′
-pub(super) fn outlives<'m, 'a>(
+pub(super) fn outlives<'a>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'m mut TyCtx<'a>,
+    ty_ctx: &mut TyCtx<'a>,
     longer_prv: &'a Provenance<'a>,
     shorter_prv: &'a Provenance<'a>,
     arena: &'a Bump,
@@ -112,8 +111,8 @@ pub(super) fn outlives<'m, 'a>(
 
 // OL-LocalProvenances
 // Δ; Γ ⊢ r1 :> r2 ⇒ Γ[r2 ↦→ { Γ(r1) ∪ Γ(r2) }]
-fn outl_check_val_prvs<'m, 'a>(
-    ty_ctx: &'m mut TyCtx<'a>,
+fn outl_check_val_prvs<'tcx, 'a>(
+    ty_ctx: &'tcx mut TyCtx<'a>,
     longer: &str,
     shorter: &str,
     arena: &'a Bump,
@@ -142,8 +141,8 @@ fn outl_check_val_prvs<'m, 'a>(
     Ok(())
 }
 
-fn longer_occurs_before_shorter<'m, 'a>(
-    ty_ctx: &'m TyCtx<'a>,
+fn longer_occurs_before_shorter<'tcx, 'a>(
+    ty_ctx: &'tcx TyCtx<'a>,
     longer: &str,
     shorter: &str,
 ) -> bool {
@@ -160,7 +159,7 @@ fn longer_occurs_before_shorter<'m, 'a>(
     panic!("Neither provenance found in typing context")
 }
 
-fn exists_deref_loan_with_prv<'m, 'a>(ty_ctx: &'m TyCtx<'a>, prv: &str, arena: &'a Bump) -> bool {
+fn exists_deref_loan_with_prv<'a>(ty_ctx: &TyCtx<'a>, prv: &str, arena: &'a bumpalo::Bump) -> bool {
     ty_ctx
         .all_places(arena)
         .into_iter()
@@ -171,48 +170,51 @@ fn exists_deref_loan_with_prv<'m, 'a>(ty_ctx: &'m TyCtx<'a>, prv: &str, arena: &
             },
             _ => false,
         })
-        .any(|(place, _)| {
-            ty_ctx.prv_mappings().into_iter().any(|prv_mapping| {
-                for loan in prv_mapping.loans.iter() {
-                    if let PlaceExprKind::Deref(pl_expr) = &loan.place_expr.pl_expr {
-                        return pl_expr.equiv(arena, &place);
-                    }
-                }
-                false
+        .any(|(place_owned, _)| {
+            let place_ref = arena.alloc(place_owned);
+            ty_ctx.prv_mappings().into_iter().any(|pm| {
+                pm.loans.iter().any(|loan| match &loan.place_expr.pl_expr {
+                    PlaceExprKind::Deref(pl_expr) => pl_expr.equiv(arena, place_ref),
+                    _ => false,
+                })
             })
         })
 }
 
-fn outl_check_val_ident_prv<'m, 'a>(
-    ty_ctx: &'m TyCtx<'a>,
+fn outl_check_val_ident_prv<'a>(
+    ty_ctx: &TyCtx<'a>,
     longer_val: &str,
     arena: &'a Bump,
 ) -> SubTyResult<'a, ()> {
     // TODO how could the set ever be empty?
-    let loan_set = ty_ctx.loans_in_prv(longer_val)?;
-    if loan_set.is_empty() {
+    let loan_snapshot = arena.alloc(ty_ctx.loans_in_prv_snapshot(longer_val, arena)?);
+    if loan_snapshot.is_empty() {
         return Err(SubTyError::PrvNotUsedInBorrow(longer_val.to_string()));
     }
 
-    borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx, loan_set, arena);
+    borrowed_pl_expr_no_ref_to_existing_pl(ty_ctx, loan_snapshot.as_slice(), arena);
     panic!("Not yet implemented.")
 }
 
 // FIXME Makes no sense!
-fn borrowed_pl_expr_no_ref_to_existing_pl<'m, 'a>(
-    ty_ctx: &'m TyCtx<'a>,
-    loan_set: &HashSet<Loan<'a>>,
-    arena: &'a Bump,
+fn borrowed_pl_expr_no_ref_to_existing_pl<'a>(
+    ty_ctx: &TyCtx<'a>,
+    loans: &'a [Loan<'a>],
+    arena: &'a bumpalo::Bump,
 ) -> bool {
-    ty_ctx
-        .all_places(arena)
-        .iter()
-        .any(|(pl, _)| loan_set.iter().any(|loan| loan.place_expr.equiv(arena, pl)))
+    let places = ty_ctx.all_places(arena);
+
+    places.into_iter().any(|(pl_owned, _)| {
+        let pl_ref: &'a internal::Place<'a> = arena.alloc(pl_owned);
+        loans
+            .iter()
+            .any(|loan| loan.place_expr.equiv(arena, pl_ref))
+    })
 }
 
-fn outl_check_ident_val_prv<'m, 'a>(
+fn outl_check_ident_val_prv<'tcx, 'a>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'m TyCtx<'a>,
+    ty_ctx: &'tcx TyCtx<'a>,
     longer_ident: &'a Ident<'a>,
     shorter_val: &str,
 ) -> SubTyResult<'a, ()> {
@@ -230,9 +232,9 @@ fn outl_check_ident_val_prv<'m, 'a>(
 }
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
-pub(super) fn multiple_outlives<'m, 'a, I>(
+pub(super) fn multiple_outlives<'a, I>(
     kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'m mut TyCtx<'a>,
+    ty_ctx: &'a mut TyCtx<'a>,
     prv_rels: I,
     arena: &'a Bump,
 ) -> SubTyResult<'a, ()>
