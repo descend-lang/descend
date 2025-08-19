@@ -1188,79 +1188,122 @@ impl<'a> VisitMut<'a> for SubstIdent<'a, ExecExpr<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bumpalo::Bump;
 
-    fn shrd_ref_ty<'a>() -> DataTy<'a> {
-        Dim::X(Box::new(Dim1d(Nat::Lit(32))));
-        DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-            Provenance::Value("r".to_string()),
+    fn shrd_ref_ty<'a>(arena: &'a Bump) -> DataTy<'a> {
+        //Dim::X(Box::new(Dim1d(Nat::Lit(32))));
+        let elem = DataTy::new(arena, DataTyKind::Scalar(ScalarTy::I32));
+        let arr = DataTy::new(
+            arena,
+            DataTyKind::Array(arena.alloc(elem), Nat::Ident(Ident::new(arena, "n"))),
+        );
+
+        let ref_dty = RefDty::new(
+            arena,
+            Provenance::Value("r"),
             Ownership::Shrd,
             Memory::GpuGlobal,
-            DataTy::new(DataTyKind::Array(
-                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::I32))),
-                Nat::Ident(Ident::new("n")),
-            )),
-        ))))
+            arr,
+        );
+
+        DataTy::new(arena, DataTyKind::Ref(arena.alloc(ref_dty)))
     }
 
     #[test]
     fn scalar<'a>() -> UnifyResult<'a, ()> {
-        let mut i32 = DataTy::new(DataTyKind::Scalar(ScalarTy::I32));
-        let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
-        let (subst, _) = constrain(&mut i32, &mut t)?;
-        substitute(&subst, &mut i32);
-        substitute(&subst, &mut t);
-        assert_eq!(i32, t);
+        let arena = Bump::new();
+
+        let mut i32_ty = DataTy::new(&arena, DataTyKind::Scalar(ScalarTy::I32));
+        let mut t = DataTy::new(&arena, DataTyKind::Ident(Ident::new_impli(&arena, "t")));
+
+        let lhs = arena.alloc(i32_ty.clone_in(&arena));
+        let rhs = arena.alloc(t.clone_in(&arena));
+        let (subst, _prv) = constrain(lhs, rhs, &arena).unwrap();
+
+        substitute(&subst, &mut i32_ty, &arena);
+        substitute(&subst, &mut t, &arena);
+
+        assert_eq!(i32_ty, t);
         Ok(())
     }
 
-    #[test]
     fn shrd_reft<'a>() -> UnifyResult<'a, ()> {
-        let mut t = DataTy::new(DataTyKind::Ident(Ident::new_impli("t")));
-        let mut shrd_ref = shrd_ref_ty();
-        let (subst, _) = constrain(&mut shrd_ref, &mut t)?;
-        substitute(&subst, &mut shrd_ref);
-        substitute(&subst, &mut t);
+        let arena = Bump::new();
+
+        let mut t = DataTy::new(&arena, DataTyKind::Ident(Ident::new_impli(&arena, "t")));
+        let mut shrd_ref = shrd_ref_ty(&arena);
+
+        let lhs = arena.alloc(shrd_ref.clone_in(&arena));
+        let rhs = arena.alloc(t.clone_in(&arena));
+        let (subst, _prv) = constrain(lhs, rhs, &arena).unwrap();
+
+        substitute(&subst, &mut shrd_ref, &arena);
+        substitute(&subst, &mut t, &arena);
+
         assert_eq!(shrd_ref, t);
         Ok(())
     }
 
     #[test]
     fn shrd_ref_inner_var<'a>() -> UnifyResult<'a, ()> {
-        let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-            Provenance::Value("r".to_string()),
+        use bumpalo::Bump;
+
+        let arena = Bump::new();
+
+        let inner_t = DataTy::new(&arena, DataTyKind::Ident(Ident::new_impli(&arena, "t")));
+        let ref_t = RefDty::new(
+            &arena,
+            Provenance::Value("r"),
             Ownership::Shrd,
             Memory::GpuGlobal,
-            DataTy::new(DataTyKind::Ident(Ident::new_impli("t"))),
-        ))));
-        let mut shrd_ref = shrd_ref_ty();
-        let (subst, _) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
+            inner_t,
+        );
+        let mut shrd_ref_t = DataTy::new(&arena, DataTyKind::Ref(arena.alloc(ref_t)));
+
+        let mut shrd_ref = shrd_ref_ty(&arena);
+
+        let lhs = arena.alloc(shrd_ref.clone_in(&arena));
+        let rhs = arena.alloc(shrd_ref_t.clone_in(&arena));
+        let (subst, _prv) = constrain(lhs, rhs, &arena).unwrap();
         println!("{:?}", subst);
-        substitute(&subst, &mut shrd_ref);
-        substitute(&subst, &mut shrd_ref_t);
+
+        substitute(&subst, &mut shrd_ref, &arena);
+        substitute(&subst, &mut shrd_ref_t, &arena);
+
         assert_eq!(shrd_ref, shrd_ref_t);
         Ok(())
     }
 
     #[test]
     fn prv_val_ident<'a>() -> UnifyResult<'a, ()> {
-        let mut shrd_ref_t = DataTy::new(DataTyKind::Ref(Box::new(RefDty::new(
-            Provenance::Ident(Ident::new("a")),
+        use bumpalo::Bump;
+
+        let arena = Bump::new();
+
+        let inner_t = DataTy::new(&arena, DataTyKind::Ident(Ident::new_impli(&arena, "t")));
+        let ref_t = RefDty::new(
+            &arena,
+            Provenance::Ident(Ident::new(&arena, "a")),
             Ownership::Shrd,
             Memory::GpuGlobal,
-            DataTy::new(DataTyKind::Ident(Ident::new_impli("t"))),
-        ))));
-        let mut shrd_ref = shrd_ref_ty();
-        let (subst, prv_rels) = constrain(&mut shrd_ref, &mut shrd_ref_t)?;
-        println!("{:?}", subst);
-        substitute(&subst, &mut shrd_ref);
-        substitute(&subst, &mut shrd_ref_t);
-        assert_eq!(
-            prv_rels[0],
-            PrvConstr(
-                Provenance::Value("r".to_string()),
-                Provenance::Ident(Ident::new("a"))
-            )
+            inner_t,
         );
+        let mut shrd_ref_t = DataTy::new(&arena, DataTyKind::Ref(arena.alloc(ref_t)));
+
+        let mut shrd_ref = shrd_ref_ty(&arena);
+
+        let lhs = arena.alloc(shrd_ref.clone_in(&arena));
+        let rhs = arena.alloc(shrd_ref_t.clone_in(&arena));
+        let (subst, prv_rels) = constrain(lhs, rhs, &arena).unwrap();
+
+        substitute(&subst, &mut shrd_ref, &arena);
+        substitute(&subst, &mut shrd_ref_t, &arena);
+
+        let expected = PrvConstr(
+            arena.alloc(Provenance::Value("r")),
+            arena.alloc(Provenance::Ident(Ident::new(&arena, "a"))),
+        );
+        assert_eq!(prv_rels[0], expected);
         Ok(())
     }
 }
