@@ -1,7 +1,10 @@
 use super::Ty;
 use crate::ast::internal::Place;
 use crate::ast::printer::PrintState;
-use crate::ast::{BaseExec, DataTy, Expr, Ident, NatEvalError, Ownership, PlaceExpr, TyKind};
+use crate::ast::{
+    BaseExec, BinOp, DataTy, DataTyKind, DimCompo, ExecTy, ExecTyKind, Expr, FnTy, Ident, Memory,
+    NatEvalError, Ownership, PlaceExpr, RefDty, TyKind,
+};
 use crate::error;
 use crate::error::{default_format, ErrorReported};
 use crate::parser::SourceCode;
@@ -36,6 +39,7 @@ pub enum TyError {
     SplittingNonViewArray,
     // Expected a different type
     ExpectedTupleType(TyKind, PlaceExpr),
+    ExpectedStructType(TyKind, PlaceExpr),
     // Trying to borrow uniquely but place is not mutable
     ConstBorrow(PlaceExpr),
     // The borrowed view type is at least paritally dead
@@ -50,7 +54,9 @@ pub enum TyError {
     CouldNotInferProvenance,
     // The annotated or inferred type of the pattern does not fit the pattern.
     PatternAndTypeDoNotMatch,
-    UnexpectedType,
+    UnexpectedType(Ty),
+    UnexpectedFnTy(FnTy),
+    UnexpectedDataType(DataTy),
     // The thread hierarchy dimension referred to does not exist
     IllegalDimension,
     UnifyError(UnifyError),
@@ -60,13 +66,102 @@ pub enum TyError {
     UnsafeRequired,
     // TODO remove as soon as possible
     String(String),
+
+    // Newly added errors
+    // Index, Array/Tuplegit Length
+    IndexOutOfBounds(usize, usize),
+    // The indexed expression is not an array or a tuple
+    CannotIndex,
+    // The expression is not a reference
+    CannotDereference(DereferenceError),
+    // Struct does not have given field
+    FieldProjError(Ident),
+    // Select must be applied to an array or a view.
+    SelectError(PlaceExpr),
+    ExecError(ExecError),
+    SyncError(SyncError),
+    InvalidIterable(RefDty),
+    NotCopyable,
+    Moved(PlaceExpr, Moved),
+    LoopError(LoopError),
+    IfElseError(IfElseError),
+    ArrayError(ArrayError),
+    BinOpError(BinOp, Ty, Ty),
+    // Cannot cast from [0] to [1]
+    CastError(CastError),
 }
 
-impl<'a> FromIterator<TyError> for TyError {
-    fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
-        TyError::MultiError(iter.into_iter().collect())
-    }
+#[derive(Debug)]
+pub enum Moved {
+    Partially,
+    Entirely,
 }
+
+#[derive(Debug)]
+pub enum SyncError {
+    InvalidResourceType,
+    SplitResource,
+    NothingToSync,
+}
+
+#[derive(Debug)]
+pub enum ExecError {
+    UnexpectedResourceType(ExecTyKind),
+    DimensionNotFound(DimCompo, ExecTyKind),
+    ExecToWarpError(ExecToWarpError),
+    InvalidSplit(ExecTyKind),
+}
+
+#[derive(Debug)]
+pub enum ExecToWarpError {
+    MultipleDimensions(ExecTyKind),
+    DimNotDivBy32(ExecTyKind),
+    InvalidResourceType(ExecTyKind),
+}
+
+#[derive(Debug)]
+pub enum DereferenceError {
+    // Trying to dereference a function (that is the only case).
+    InvalidTyKind(TyKind),
+    // Trying to dereference something that is not a reference
+    InvalidDataTyKind(DataTyKind),
+    // Trying to dereference a shrd reference
+    InvalidOwnership,
+    // Trying to dereference something that is not in the current resource
+    NotInExecRes(Memory, ExecTyKind),
+}
+
+#[derive(Debug)]
+pub enum LoopError {
+    InvalidBlockType(DataTy),
+    InvalidConditionType(Ty),
+    ScopeError,
+}
+
+#[derive(Debug)]
+pub enum IfElseError {
+    InvalidConditionType(Ty),
+    InvalidIfBlockType(Ty),
+    InvalidElseBlockType(Ty),
+}
+
+#[derive(Debug)]
+pub enum ArrayError {
+    DifferentTypes(Ty, Ty),
+}
+
+#[derive(Debug)]
+pub enum CastError {
+    FromTo(Ty, DataTy),
+    From(Ty),
+}
+
+// TODO: use this
+// impl<'a> FromIterator<TyError> for TyError {
+//     fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
+//         TyError::MultiError(iter.into_iter().collect())
+//     }
+// }
 
 impl TyError {
     pub fn emit(&self, source: &SourceCode) -> ErrorReported {
@@ -181,7 +276,8 @@ impl TyError {
                             eprintln!("{:?}", conflict)
                         }
                         BorrowingError::ConflictingOwnership => eprintln!("{:?}", conflict),
-                        BorrowingError::ConflictingAccess => eprintln!("{:?}", conflict),
+                        // TODO: better error message for conflicting access
+                        BorrowingError::ConflictingAccess(_, _) => eprintln!("{:?}", conflict),
                         BorrowingError::CtxError(ctx_err) => eprintln!("{:?}", ctx_err),
                         BorrowingError::WrongDevice(under, from) => {
                             eprintln!("error: wrong device\nunder:{:?}\nfrom:{:?}", under, from)
@@ -317,7 +413,7 @@ pub enum BorrowingError {
     //     loan with {} capability.",
     // checked_own, ref_own
     ConflictingOwnership,
-    ConflictingAccess,
+    ConflictingAccess(Ownership, Ownership),
     // The borrowing place is not in the reborrow list
     BorrowNotInReborrowList(Place),
     TemporaryConflictingBorrow(String),

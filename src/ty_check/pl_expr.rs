@@ -1,5 +1,5 @@
 use super::borrow_check::BorrowCheckCtx;
-use super::error::TyError;
+use super::error::{BorrowingError, DereferenceError, TyError};
 use super::TyResult;
 use crate::ast::{
     utils, DataTy, DataTyKind, ExecExpr, ExecTyKind, FnTy, Ident, IdentExec, Memory, Nat, NatCtx,
@@ -191,10 +191,11 @@ fn ty_check_ident(
     // if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
     let tty = ctx.ty_ctx.ty_of_ident(ident)?;
     if !&tty.is_fully_alive() {
-        return Err(TyError::String(format!(
-            "The value in `{}` has been moved out.",
-            ident
-        )));
+        // return Err(TyError::String(format!(
+        //     "The value in `{}` has been moved out.",
+        //     ident
+        // )));
+        return Err(TyError::DeadTy);
     }
     // FIXME Should throw an error if thread local memory is accessed by a block
     //  for example.
@@ -254,9 +255,7 @@ fn ty_check_proj(
                     passed_prvs,
                 ))
             } else {
-                Err(TyError::String(
-                    "Trying to access non existing tuple element.".to_string(),
-                ))
+                Err(TyError::IndexOutOfBounds(n, elem_dtys.len()))
             }
         }
         dty_kind => Err(TyError::ExpectedTupleType(
@@ -275,7 +274,8 @@ fn ty_check_field_proj(
     let struct_dty = match &struct_expr.ty.as_ref().unwrap().ty {
         TyKind::Data(dty) => dty,
         ty_kind => {
-            return Err(TyError::ExpectedTupleType(
+            // FUCK
+            return Err(TyError::ExpectedStructType(
                 ty_kind.clone(),
                 struct_expr.clone(),
             ));
@@ -291,9 +291,7 @@ fn ty_check_field_proj(
                     passed_prvs,
                 ))
             } else {
-                Err(TyError::String(
-                    "Trying to access non existing struct field.".to_string(),
-                ))
+                Err(TyError::FieldProjError(ident.clone()))
             }
         }
         dty_kind => Err(TyError::ExpectedTupleType(
@@ -311,15 +309,19 @@ fn ty_check_deref(
     let borr_dty = if let TyKind::Data(dty) = &borr_expr.ty.as_ref().unwrap().ty {
         dty
     } else {
-        return Err(TyError::String(
-            "Trying to dereference non reference type.".to_string(),
-        ));
+        // return Err(TyError::String(
+        //     "Trying to dereference a function.".to_string(),
+        // ));
+        return Err(TyError::CannotDereference(DereferenceError::InvalidTyKind(
+            (&borr_expr).ty.as_ref().unwrap().ty.to_owned(),
+        )));
     };
     match &borr_dty.dty {
         DataTyKind::Ref(reff) => {
             if reff.own < ctx.own {
-                return Err(TyError::String(
-                    "Trying to dereference and mutably use a shrd reference.".to_string(),
+                // if the expression dereferences a shared reference
+                return Err(TyError::CannotDereference(
+                    DereferenceError::InvalidOwnership,
                 ));
             }
             passed_prvs.push(reff.rgn.clone());
@@ -331,15 +333,15 @@ fn ty_check_deref(
             ))
         }
         DataTyKind::RawPtr(dty) => {
-            // TODO is anything of this correct?
+            // TODO is any of this correct?
             Ok((
                 Ty::new(TyKind::Data(Box::new(dty.as_ref().clone()))),
                 inner_mem,
                 passed_prvs,
             ))
         }
-        _ => Err(TyError::String(
-            "Trying to dereference non reference type.".to_string(),
+        invalid_type => Err(TyError::CannotDereference(
+            DereferenceError::InvalidDataTyKind(invalid_type.clone()),
         )),
     }
 }
@@ -376,12 +378,14 @@ fn ty_check_select(
             // TODO check sizes
             // if n != distrib_exec.active_distrib_size() {
             //     return Err(TyError::String("There must be as many elements in the view
-            //  as there exist execution resources that select from it.".to_string()));
+            //  as there exist execution rces that select from it.".to_string()));
             // }
             p_dty = *elem_dty;
         }
         _ => {
-            return Err(TyError::String("Expected an array or view.".to_string()));
+            // Select distributes ownership for an array or a view.
+            // return Err(TyError::String("Expected an array or view.".to_string()));
+            return Err(TyError::SelectError(p.clone()));
         }
     }
     Ok((Ty::new(TyKind::Data(Box::new(p_dty))), mems, prvs))
@@ -396,9 +400,7 @@ fn ty_check_index(
     let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
         dty
     } else {
-        return Err(TyError::String(
-            "Trying to index into non array type.".to_string(),
-        ));
+        return Err(TyError::CannotIndex);
     };
     let (elem_dty, n) = match pl_expr_dty.dty.clone() {
         DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => (*elem_dty, n),
@@ -406,22 +408,18 @@ fn ty_check_index(
             if let DataTyKind::Array(elem_ty, n) = &arr_dty.dty {
                 (elem_ty.as_ref().clone(), n.clone())
             } else {
-                return Err(TyError::String(
-                    "Trying to index into non array type.".to_string(),
-                ));
+                return Err(TyError::CannotIndex);
             }
         }
         _ => {
-            return Err(TyError::String(
-                "Trying to index into non array type.".to_string(),
-            ))
+            return Err(TyError::CannotIndex);
         }
     };
 
-    if n.eval(ctx.nat_ctx)? <= idx.eval(ctx.nat_ctx)? {
-        return Err(TyError::String(
-            "Trying to access array out-of-bounds.".to_string(),
-        ));
+    let n_val = n.eval(ctx.nat_ctx)?;
+    let idx_val = idx.eval(ctx.nat_ctx)?;
+    if n_val <= idx_val {
+        return Err(TyError::IndexOutOfBounds(idx_val, n_val));
     }
 
     Ok((Ty::new(TyKind::Data(Box::new(elem_dty))), mems, passed_prvs))

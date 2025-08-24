@@ -255,25 +255,25 @@ fn ty_check_sync(ctx: &mut ExprTyCtx, exec: &mut Option<ExecExpr>) -> TyResult<T
 }
 
 // assumes fully typed ExecExpr as input
+// T-Sync
 fn syncable_under_exec(synced: &ExecExpr, under: &ExecExpr) -> TyResult<()> {
+    // y : ε ⊢ e′ : ε′
     if !syncable_exec_ty(synced.ty.as_ref().unwrap()) {
-        return Err(TyError::String(
-            "trying to synchronize non-synchronizable execution resource".to_string(),
-        ));
+        // ε′∉{ gpu.Block d, gpu.Warp }
+        return Err(TyError::SyncError(SyncError::InvalidResourceType));
     }
     if under.is_sub_exec_of(synced) || under == synced {
         for ep in &under.exec.path[synced.exec.path.len()..] {
             if matches!(ep, ExecPathElem::TakeRange(_)) {
-                return Err(TyError::String(
-                    "tyring to synchronize on split execution resource".to_string(),
-                ));
+                // return Err(TyError::String(
+                //     "trying to synchronize on split execution resource".to_string(),
+                // ));
+                return Err(TyError::SyncError(SyncError::SplitResource));
             }
         }
         Ok(())
     } else {
-        Err(TyError::String(
-            "cannot call sync from this execution resource".to_string(),
-        ))
+        Err(TyError::SyncError(SyncError::NothingToSync))
     }
 }
 
@@ -308,26 +308,33 @@ fn ty_check_for_nat(
     // TODO make this a block
     body: &mut Expr,
 ) -> TyResult<Ty> {
+    // We probably can remove this vec clone.
     let compare_ty_ctx = ctx.ty_ctx.clone();
     let lifted_range = range.lift(ctx.nat_ctx)?;
 
     for i in lifted_range {
+        // Attach a new context frame and add the loop variable for the type checking within the loop.
         ctx.ty_ctx.push_empty_frame();
         ctx.nat_ctx.push_empty_frame();
-        ctx.nat_ctx.append(&ident.name, i);
 
+        // Add the loop variable to the body context and typecheck
+        ctx.nat_ctx.append(&ident.name, i);
         ty_check_expr(ctx, body)?;
 
+        // Remove the context frames used within the body.
         ctx.nat_ctx.pop_frame();
         ctx.ty_ctx.pop_frame();
+
         if let DataTyKind::Scalar(ScalarTy::Unit) = &body.ty.as_ref().unwrap().dty().dty {
             if ctx.ty_ctx != &compare_ty_ctx {
-                return Err(TyError::String(
-                    "Using a data type in loop that can only be used once.".to_string(),
-                ));
+                // At this point, the type context outside of the loop was mutated while type checking the for body.
+                // Using a data type in loop body that can only be used once.
+                // TODO: actually track exactly where it happens.
+                return Err(TyError::LoopError(LoopError::ScopeError));
             }
         } else {
-            return Err(TyError::UnexpectedType);
+            let body_type = body.ty.as_ref().unwrap().dty().clone();
+            return Err(TyError::LoopError(LoopError::InvalidBlockType(body_type)));
         }
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
@@ -335,6 +342,7 @@ fn ty_check_for_nat(
     )))))
 }
 
+// TODO This doesn't exist in the type formalization.
 fn ty_check_for(
     ctx: &mut ExprTyCtx,
     ident: &Ident,
@@ -342,13 +350,9 @@ fn ty_check_for(
     body: &mut Expr,
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, collec)?;
-    let collec_dty = if let TyKind::Data(collec_dty) = &collec.ty.as_ref().unwrap().ty {
-        collec_dty.as_ref()
-    } else {
-        return Err(TyError::String(format!(
-            "Expected array data type or reference to array data type, but found {:?}",
-            collec.ty.as_ref().unwrap()
-        )));
+    let collec_dty = match &collec.ty.as_ref().unwrap().ty {
+        TyKind::Data(collec_dty) => collec_dty.as_ref(),
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
 
     let ident_dty = match &collec_dty.dty {
@@ -368,18 +372,12 @@ fn ty_check_for(
                 elem_dty.as_ref().clone(),
             ))),
             _ => {
-                return Err(TyError::String(format!(
-                    "Expected reference to array data type, but found {:?}",
-                    reff.dty.as_ref(),
-                )))
+                return Err(TyError::InvalidIterable((**reff).clone()));
             }
         },
         // DataTyKind::Range => DataTyKind::Scalar(ScalarTy::I32),
         _ => {
-            return Err(TyError::String(format!(
-                "Expected array data type or reference to array data type, but found {:?}",
-                collec.ty.as_ref().unwrap()
-            )));
+            return Err(TyError::UnexpectedDataType((*collec_dty).clone()));
         }
     };
     let compare_ty_ctx = ctx.ty_ctx.clone();
@@ -394,9 +392,7 @@ fn ty_check_for(
     ty_check_expr(ctx, body)?;
     ctx.ty_ctx.pop_frame();
     if ctx.ty_ctx != &compare_ty_ctx {
-        return Err(TyError::String(
-            "Using a data type in loop that can only be used once.".to_string(),
-        ));
+        return Err(TyError::LoopError(LoopError::ScopeError));
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
@@ -412,17 +408,13 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
     // Is it better/more correct to push and pop scope around this as well?
     ty_check_expr(ctx, cond)?;
     if ctx.ty_ctx != &compare_ty_ctx {
-        return Err(TyError::String(
-            "Context should have stayed the same".to_string(),
-        ));
+        return Err(TyError::LoopError(LoopError::ScopeError));
     }
     ctx.ty_ctx.push_empty_frame();
     ty_check_expr(ctx, body)?;
     ctx.ty_ctx.pop_frame();
     if ctx.ty_ctx != &compare_ty_ctx {
-        return Err(TyError::String(
-            "Context should have stayed the same".to_string(),
-        ));
+        return Err(TyError::LoopError(LoopError::ScopeError));
     }
 
     let cond_ty = cond.ty.as_ref().unwrap();
@@ -435,9 +427,8 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Expected condition in while loop, instead got {:?}",
-            cond_ty
+        return Err(TyError::LoopError(LoopError::InvalidConditionType(
+            (**cond_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -447,10 +438,16 @@ fn ty_check_while(ctx: &mut ExprTyCtx, cond: &mut Expr, body: &mut Expr) -> TyRe
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of while loop is not of unit type, instead got {:?}",
-            body_ty
-        )));
+        match &body_ty.ty {
+            TyKind::Data(dty) => {
+                return Err(TyError::LoopError(LoopError::InvalidBlockType(
+                    (**dty).clone(),
+                )))
+            }
+            TyKind::FnTy(_) => {
+                unreachable!("while body is a function")
+            }
+        }
     }
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
@@ -493,9 +490,8 @@ fn ty_check_if_else(
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Expected condition in if case, instead got {:?}",
-            cond_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidConditionType(
+            (**cond_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -505,9 +501,8 @@ fn ty_check_if_else(
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of the true case is not of unit type, instead got {:?}",
-            case_true_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidIfBlockType(
+            (**case_true_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -517,9 +512,8 @@ fn ty_check_if_else(
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of the false case is not of unit type, instead got {:?}",
-            case_false_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidElseBlockType(
+            (**case_false_ty).clone(),
         )));
     }
 
@@ -545,9 +539,8 @@ fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> Ty
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Expected condition in if case, instead got {:?}",
-            cond_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidConditionType(
+            (**cond_ty).clone(),
         )));
     }
     if !matches_dty!(
@@ -557,9 +550,8 @@ fn ty_check_if(ctx: &mut ExprTyCtx, cond: &mut Expr, case_true: &mut Expr) -> Ty
             ..
         }
     ) {
-        return Err(TyError::String(format!(
-            "Body of the true case is not of unit type, instead got {:?}",
-            case_true_ty
+        return Err(TyError::IfElseError(IfElseError::InvalidIfBlockType(
+            (**case_true_ty).clone(),
         )));
     }
 
@@ -728,7 +720,7 @@ fn ty_check_assign_place(
     check_mutable(ctx.ty_ctx, &pl)?;
 
     // If the place is not dead, check that it is safe to use, otherwise it is safe to use anyway.
-    if !matches!(&place_ty.dty, DataTyKind::Dead(_),) {
+    if !matches!(&place_ty.dty, DataTyKind::Dead(_)) {
         borrow_check::borrow_check(&BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq), pl_expr)
             .map_err(|err| {
                 TyError::ConflictingBorrow(Box::new(pl_expr.clone()), Ownership::Uniq, err)
@@ -738,7 +730,7 @@ fn ty_check_assign_place(
     let e_dty = if let TyKind::Data(dty) = &mut e.ty.as_mut().unwrap().as_mut().ty {
         dty.as_mut()
     } else {
-        return Err(TyError::UnexpectedType);
+        return Err(TyError::UnexpectedType((**e.ty.as_ref().unwrap()).clone()));
     };
     let err = unify::sub_unify(ctx.kind_ctx, ctx.ty_ctx, e_dty, &mut place_ty);
     if let Err(err) = err {
@@ -808,12 +800,9 @@ fn ty_check_idx_assign(
 ) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
     pl_expr::ty_check(&PlExprTyCtx::new(ctx, Ownership::Uniq), pl_expr)?;
-    let pl_expr_dty = if let TyKind::Data(dty) = &pl_expr.ty.as_ref().unwrap().ty {
-        dty
-    } else {
-        return Err(TyError::String(
-            "Trying to index into non array type.".to_string(),
-        ));
+    let pl_expr_dty = match &pl_expr.ty.as_ref().unwrap().ty {
+        TyKind::Data(dty) => dty,
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
     let (n, own, mem, dty) = match &pl_expr_dty.dty {
         DataTyKind::Array(elem_dty, n) => unimplemented!(), //(Ty::Data(*elem_ty), n),
@@ -825,9 +814,7 @@ fn ty_check_idx_assign(
             {
                 unimplemented!() //(Ty::Data(*elem_ty), n)
             } else {
-                return Err(TyError::String(
-                    "Trying to index into non array type.".to_string(),
-                ));
+                return Err(TyError::UnexpectedDataType((**arr_dty).clone()));
             }
         }
         // FIXME is this allowed? There is no reborrow but this leaks the lifetime and does not
@@ -843,11 +830,7 @@ fn ty_check_idx_assign(
                 ))
             }
         },
-        _ => {
-            return Err(TyError::String(
-                "Trying to index into non array type.".to_string(),
-            ))
-        }
+        _ => return Err(TyError::CannotIndex),
     };
     if !dty.is_fully_alive() {
         return Err(TyError::String(
@@ -860,10 +843,10 @@ fn ty_check_idx_assign(
             "Cannot assign through shared references.".to_string(),
         ));
     }
-    if n.eval(ctx.nat_ctx)? <= idx.eval(ctx.nat_ctx)? {
-        return Err(TyError::String(
-            "Trying to access array out-of-bounds.".to_string(),
-        ));
+    let n_val = n.eval(ctx.nat_ctx)?;
+    let idx_val = idx.eval(ctx.nat_ctx)?;
+    if n_val <= idx_val {
+        return Err(TyError::IndexOutOfBounds(idx_val, n_val));
     }
     let potential_accesses = borrow_check::access_safety_check(
         &BorrowCheckCtx::new(ctx, vec![], Ownership::Uniq),
@@ -914,80 +897,62 @@ fn ty_check_binary_op(
     };
     match bin_op {
         // Shift operators only allow integer values (lhs_ty and rhs_ty can differ!)
-        BinOp::Shl
-        | BinOp::Shr => match (&lhs_ty.ty, &rhs_ty.ty) {
+        BinOp::Shl | BinOp::Shr => match (&lhs_ty.ty, &rhs_ty.ty) {
             (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
                 (
                     DataTyKind::Scalar(ScalarTy::U8)
                     | DataTyKind::Scalar(ScalarTy::U32)
                     | DataTyKind::Scalar(ScalarTy::U64)
-                    | DataTyKind::Scalar(ScalarTy::I32)
-                    ,
+                    | DataTyKind::Scalar(ScalarTy::I32),
                     DataTyKind::Scalar(ScalarTy::U8)
                     | DataTyKind::Scalar(ScalarTy::U32)
                     | DataTyKind::Scalar(ScalarTy::U64)
                     | DataTyKind::Scalar(ScalarTy::I32),
                 ) => Ok(ret_dty),
-                _ => Err(TyError::String(format!(
-                    "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                    bin_op, lhs, rhs
-                )))
-            }
-            _ => Err(TyError::String(format!(
-                "Expected integer types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                bin_op, lhs, rhs
-            ))),
-        }
+                _ => Err(TyError::BinOpError(
+                    *bin_op,
+                    (**lhs_ty).clone(),
+                    (**rhs_ty).clone(),
+                )),
+            },
+            _ => Err(TyError::BinOpError(
+                *bin_op,
+                (**lhs_ty).clone(),
+                (**rhs_ty).clone(),
+            )),
+        },
         _ => match (&lhs_ty.ty, &rhs_ty.ty) {
             (TyKind::Data(dty1), TyKind::Data(dty2)) => match (&dty1.dty, &dty2.dty) {
-                (
-                    DataTyKind::Scalar(ScalarTy::F32),
-                    DataTyKind::Scalar(ScalarTy::F32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U8),
-                    DataTyKind::Scalar(ScalarTy::U8),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U32),
-                    DataTyKind::Scalar(ScalarTy::U32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::U64),
-                    DataTyKind::Scalar(ScalarTy::U64),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::F64),
-                    DataTyKind::Scalar(ScalarTy::F64)
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::I32),
-                    DataTyKind::Scalar(ScalarTy::I32),
-                ) |
-                (
-                    DataTyKind::Scalar(ScalarTy::Bool),
-                    DataTyKind::Scalar(ScalarTy::Bool),
-                ) => Ok(ret_dty),
-                _ => Err(TyError::String(format!(
-                    "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                    bin_op, dty1, dty2
-                )))
-            }
-            _ => Err(TyError::String(format!(
-                "Expected the same number types for operator {}, instead got\n Lhs: {:?}\n Rhs: {:?}",
-                bin_op, lhs, rhs
-            ))),
-        }
+                (DataTyKind::Scalar(ScalarTy::F32), DataTyKind::Scalar(ScalarTy::F32))
+                | (DataTyKind::Scalar(ScalarTy::U8), DataTyKind::Scalar(ScalarTy::U8))
+                | (DataTyKind::Scalar(ScalarTy::U32), DataTyKind::Scalar(ScalarTy::U32))
+                | (DataTyKind::Scalar(ScalarTy::U64), DataTyKind::Scalar(ScalarTy::U64))
+                | (DataTyKind::Scalar(ScalarTy::F64), DataTyKind::Scalar(ScalarTy::F64))
+                | (DataTyKind::Scalar(ScalarTy::I32), DataTyKind::Scalar(ScalarTy::I32))
+                | (DataTyKind::Scalar(ScalarTy::Bool), DataTyKind::Scalar(ScalarTy::Bool)) => {
+                    Ok(ret_dty)
+                }
+                _ => Err(TyError::BinOpError(
+                    *bin_op,
+                    (**lhs_ty).clone(),
+                    (**rhs_ty).clone(),
+                )),
+            },
+            _ => Err(TyError::BinOpError(
+                *bin_op,
+                (**lhs_ty).clone(),
+                (**rhs_ty).clone(),
+            )),
+        },
     }
 }
 
 fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResult<Ty> {
     ty_check_expr(ctx, e)?;
     let e_ty = e.ty.as_ref().unwrap();
-    let e_dty = if let TyKind::Data(dty) = &e_ty.ty {
-        dty.as_ref()
-    } else {
-        return Err(TyError::String("expected data type, but found".to_string()));
+    let e_dty = match &e_ty.ty {
+        TyKind::Data(dty) => dty.as_ref(),
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
     match &e_dty.dty {
         DataTyKind::Scalar(ScalarTy::F32)
@@ -996,10 +961,7 @@ fn ty_check_unary_op(ctx: &mut ExprTyCtx, un_op: &UnOp, e: &mut Expr) -> TyResul
         | DataTyKind::Scalar(ScalarTy::U8)
         | DataTyKind::Scalar(ScalarTy::U32)
         | DataTyKind::Scalar(ScalarTy::U64) => Ok(e_ty.as_ref().clone()),
-        _ => Err(TyError::String(format!(
-            "Exected a number type (i.e., f32 or i32), but found {:?}",
-            e_ty
-        ))),
+        _ => Err(TyError::UnexpectedDataType((*e_dty).clone())),
     }
 }
 
@@ -1012,34 +974,29 @@ fn ty_check_cast(ctx: &mut ExprTyCtx, e: &mut Expr, dty: &DataTy) -> TyResult<Ty
         | DataTyKind::Scalar(ScalarTy::I32)
         | DataTyKind::Scalar(ScalarTy::U8)
         | DataTyKind::Scalar(ScalarTy::U32)
-        | DataTyKind::Scalar(ScalarTy::U64)
-        => match dty.dty {
+        | DataTyKind::Scalar(ScalarTy::U64) => match dty.dty {
             DataTyKind::Scalar(ScalarTy::I32)
             | DataTyKind::Scalar(ScalarTy::U8)
             | DataTyKind::Scalar(ScalarTy::U32)
             | DataTyKind::Scalar(ScalarTy::U64)
             | DataTyKind::Scalar(ScalarTy::F32)
             | DataTyKind::Scalar(ScalarTy::F64) => Ok(Ty::new(TyKind::Data(Box::new(dty.clone())))),
-            _ => Err(TyError::String(format!(
-                "Exected a number type (i.e. i32 or f32) to cast to from {:?}, but found {:?}",
-                e_ty, dty
+            _ => Err(TyError::CastError(CastError::FromTo(
+                (**e_ty).clone(),
+                (*dty).clone(),
             ))),
         },
-        DataTyKind::Scalar(ScalarTy::Bool)
-        => match dty.dty {
+        DataTyKind::Scalar(ScalarTy::Bool) => match dty.dty {
             DataTyKind::Scalar(ScalarTy::I32)
             | DataTyKind::Scalar(ScalarTy::U8)
             | DataTyKind::Scalar(ScalarTy::U32)
             | DataTyKind::Scalar(ScalarTy::U64) => Ok(Ty::new(TyKind::Data(Box::new(dty.clone())))),
-            _ => Err(TyError::String(format!(
-                "Exected an integer type (i.e. i32 or u32) to cast to from a bool, but found {:?}",
-                dty
+            _ => Err(TyError::CastError(CastError::FromTo(
+                (**e_ty).clone(),
+                (*dty).clone(),
             ))),
         },
-        _ => Err(TyError::String(format!(
-            "Exected a number type (i.e. f32 or i32) or bool as a type to cast from, but found {:?}",
-            e_ty
-        ))),
+        _ => Err(TyError::CastError(CastError::From((**e_ty).clone()))),
     }
 }
 
@@ -1395,7 +1352,7 @@ fn ty_check_proj(ctx: &mut ExprTyCtx, e: &mut Expr, i: usize) -> TyResult<Ty> {
     let e_dty = if let TyKind::Data(dty) = &e.ty.as_ref().unwrap().ty {
         dty.as_ref()
     } else {
-        return Err(TyError::UnexpectedType);
+        return Err(TyError::UnexpectedType((**e.ty.as_ref().unwrap()).clone()));
     };
     let elem_ty = proj_elem_dty(e_dty, i);
     Ok(Ty::new(TyKind::Data(Box::new(elem_ty?))))
@@ -1412,18 +1369,21 @@ fn ty_check_array(ctx: &mut ExprTyCtx, elems: &mut Vec<Expr>) -> TyResult<Ty> {
             "Array elements cannot be views.".to_string(),
         ));
     }
-    if elems.iter().any(|elem| ty != elem.ty.as_ref()) {
-        Err(TyError::String(
-            "Not all provided elements have the same type.".to_string(),
-        ))
-    } else {
-        Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
-            DataTyKind::Array(
-                Box::new(ty.as_ref().unwrap().dty().clone()),
-                Nat::Lit(elems.len()),
-            ),
-        )))))
+    for elem in elems.iter() {
+        if ty != elem.ty.as_ref() {
+            return Err(TyError::ArrayError(ArrayError::DifferentTypes(
+                (**ty.unwrap()).clone(),
+                *elem.ty.clone().unwrap(),
+            )));
+        }
     }
+
+    Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
+        DataTyKind::Array(
+            Box::new(ty.as_ref().unwrap().dty().clone()),
+            Nat::Lit(elems.len()),
+        ),
+    )))))
 }
 
 fn ty_check_literal(l: &mut Lit) -> Ty {
@@ -1450,7 +1410,7 @@ fn infer_pattern_ident_tys(
     let pattern_dty = if let TyKind::Data(dty) = &pattern_ty.ty {
         dty.as_ref()
     } else {
-        return Err(TyError::UnexpectedType);
+        return Err(TyError::UnexpectedType((*pattern_ty).clone()));
     };
     match (pattern, &pattern_dty.dty) {
         (Pattern::Ident(mutbl, ident), _) => {
@@ -1567,7 +1527,7 @@ fn ty_check_non_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<
     if pl_expr.ty.as_ref().unwrap().copyable() {
         Ok(pl_expr.ty.as_ref().unwrap().as_ref().clone())
     } else {
-        Err(TyError::String("Data type is not copyable.".to_string()))
+        Err(TyError::NotCopyable)
     }
 }
 
@@ -1576,10 +1536,7 @@ fn ty_check_place(ctx: &mut ExprTyCtx, pl_expr: &mut PlaceExpr) -> TyResult<Ty> 
     let place = pl_expr.clone().to_place().unwrap();
     let pl_ty = ctx.ty_ctx.place_dty(&place)?;
     if !pl_ty.is_fully_alive() {
-        return Err(TyError::String(format!(
-            "Part of Place {:?} was moved before.",
-            pl_expr
-        )));
+        return Err(TyError::Moved(pl_expr.clone(), Moved::Partially));
     }
     if pl_ty.copyable() {
         // TODO refactor
@@ -1626,13 +1583,11 @@ fn ty_check_borrow(
         .try_for_each(|mem| accessible_memory(ctx.exec.ty.as_ref().unwrap().as_ref(), mem))?;
     let pl_expr_ty = pl_expr.ty.as_ref().unwrap();
     if !pl_expr_ty.is_fully_alive() {
-        return Err(TyError::String(
-            "The place was at least partially moved before.".to_string(),
-        ));
+        return Err(TyError::Moved(pl_expr.clone(), Moved::Partially));
     }
     let (reffed_ty, rmem) = match &pl_expr_ty.ty {
         TyKind::Data(dty) => match &dty.dty {
-            DataTyKind::Dead(_) => panic!("Cannot happen because of the alive check."),
+            DataTyKind::Dead(_) => return Err(TyError::DeadTy),
             DataTyKind::At(inner_ty, m) => (inner_ty.as_ref().clone(), m.clone()),
             _ => (
                 dty.as_ref().clone(),
@@ -1648,7 +1603,7 @@ fn ty_check_borrow(
                 },
             ),
         },
-        TyKind::FnTy(_) => return Err(TyError::String("Trying to borrow a function.".to_string())),
+        TyKind::FnTy(fnty) => return Err(TyError::UnexpectedFnTy((**fnty).clone())),
     };
     if rmem == Memory::GpuLocal {
         return Err(TyError::String(
@@ -1686,9 +1641,9 @@ pub fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
     if allowed_mem_for_exec(&exec_ty.ty).contains(mem) {
         Ok(())
     } else {
-        Err(TyError::String(format!(
-            "Trying to dereference pointer to `{:?}` from execution resource `{:?}`",
-            mem, &exec_ty.ty
+        Err(TyError::CannotDereference(DereferenceError::NotInExecRes(
+            mem.clone(),
+            exec_ty.ty.clone(),
         )))
     }
 }
@@ -1893,14 +1848,8 @@ pub fn proj_elem_dty(dty: &DataTy, i: usize) -> TyResult<DataTy> {
     match &dty.dty {
         DataTyKind::Tuple(dtys) => match dtys.get(i) {
             Some(dty) => Ok(dty.clone()),
-            None => Err(TyError::String(format!(
-                "Cannot project element `{}` from tuple with {} elements.",
-                i,
-                dtys.len()
-            ))),
+            None => Err(TyError::IndexOutOfBounds(i, dtys.len())),
         },
-        _ => Err(TyError::String(
-            "Cannot project from non tuple type.".to_string(),
-        )),
+        _ => Err(TyError::CannotIndex),
     }
 }

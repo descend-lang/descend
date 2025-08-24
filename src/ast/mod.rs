@@ -1216,6 +1216,7 @@ impl Dim {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Hash, Debug, Copy, Clone)]
+// Dimension Component
 pub enum DimCompo {
     X,
     Y,
