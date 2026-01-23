@@ -15,10 +15,10 @@ type SubTyResult<'a, T> = Result<T, SubTyError<'a>>;
 // τ1 is subtype of τ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ τ1 ≲ τ2 ⇒ Γ′
 pub(super) fn check<'a>(
-    kind_ctx: &'a KindCtx<'a>,
+    kind_ctx: &KindCtx<'a>,
     ty_ctx: &mut TyCtx<'a>,
-    sub_dty: &'a DataTy<'a>,
-    super_dty: &'a DataTy<'a>,
+    sub_dty: &DataTy<'a>,
+    super_dty: &DataTy<'a>,
     arena: &'a Bump,
 ) -> SubTyResult<'a, ()> {
     use super::Ownership::*;
@@ -28,8 +28,11 @@ pub(super) fn check<'a>(
         // Δ; Γ ⊢ τ ≲ τ ⇒ Γ
         (sub, sup) if sub == sup => Ok(()),
         // Δ; Γ ⊢ [τ 1 ; n] ≲ [τ2 ; n] ⇒ Γ′
-        (Array(sub_elem_ty, _sub_size), Array(sup_elem_ty, _sup_size))
-        | (ArrayShape(sub_elem_ty, _sub_size), ArrayShape(sup_elem_ty, _sup_size)) => {
+        (Array(sub_elem_ty, sub_size), Array(sup_elem_ty, sup_size))
+        | (ArrayShape(sub_elem_ty, sub_size), ArrayShape(sup_elem_ty, sup_size)) => {
+            if sub_size != sup_size {
+                return Err(SubTyError::SizesNoMatch);
+            }
             check(kind_ctx, ty_ctx, sub_elem_ty, sup_elem_ty, arena)
         }
         // Δ; Γ ⊢ &B ρ1 shrd τ1 ≲ &B ρ2 shrd τ2 ⇒ Γ′′
@@ -72,10 +75,10 @@ pub(super) fn check<'a>(
 // ρ1 outlives ρ2 under Δ and Γ, producing Γ′
 // Δ; Γ ⊢ ρ1 :> ρ2 ⇒ Γ′
 pub(super) fn outlives<'a>(
-    kind_ctx: &'a KindCtx<'a>,
+    kind_ctx: &KindCtx<'a>,
     ty_ctx: &mut TyCtx<'a>,
-    longer_prv: &'a Provenance<'a>,
-    shorter_prv: &'a Provenance<'a>,
+    longer_prv: &Provenance<'a>,
+    shorter_prv: &Provenance<'a>,
     arena: &'a Bump,
 ) -> SubTyResult<'a, ()> {
     use Provenance::*;
@@ -213,9 +216,9 @@ fn borrowed_pl_expr_no_ref_to_existing_pl<'a>(
 }
 
 fn outl_check_ident_val_prv<'tcx, 'a>(
-    kind_ctx: &'a KindCtx<'a>,
+    kind_ctx: &KindCtx<'a>,
     ty_ctx: &'tcx TyCtx<'a>,
-    longer_ident: &'a Ident<'a>,
+    longer_ident: &Ident<'a>,
     shorter_val: &str,
 ) -> SubTyResult<'a, ()> {
     if !kind_ctx.ident_of_kind_exists(longer_ident, Kind::Provenance) {
@@ -233,8 +236,8 @@ fn outl_check_ident_val_prv<'tcx, 'a>(
 
 // Δ; Γ ⊢ List[ρ1 :> ρ2] ⇒ Γ′
 pub(super) fn multiple_outlives<'a, I>(
-    kind_ctx: &'a KindCtx<'a>,
-    ty_ctx: &'a mut TyCtx<'a>,
+    kind_ctx: &KindCtx<'a>,
+    ty_ctx: &mut TyCtx<'a>,
     prv_rels: I,
     arena: &'a Bump,
 ) -> SubTyResult<'a, ()>

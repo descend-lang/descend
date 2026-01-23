@@ -141,7 +141,7 @@ fn replace_arg_kinded_idents<'a>(fun_def: &mut ArenaFunDef<'a>, arena: &'a Bump)
                     let added_keys: Vec<Box<str>> = src
                         .prvs
                         .iter()
-                        .map(|p| p.clone().into_boxed_str())
+                        .map(|prv| (*prv).to_owned().into_boxed_str())
                         .collect();
                     for k in &added_keys {
                         self.ident_names_to_kinds
@@ -263,7 +263,11 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
     impl<'a> ArenaVisitMut<'a> for ReplaceExecIdents<'a> {
         fn visit_split(&mut self, arena: &'a Bump, indep: &mut ArenaSplit<'a>) {
             // manually expand to keep scopes for different branches of split
-            expand_exec_expr(arena, &self.ident_names_to_exec_expr, &mut indep.split_exec);
+            indep.split_exec = arena.alloc(expand_exec_expr(
+                arena,
+                &self.ident_names_to_exec_expr,
+                indep.split_exec,
+            ));
             for (i, (ident, branch)) in indep
                 .branch_idents
                 .iter()
@@ -294,7 +298,11 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
 
         fn visit_sched(&mut self, arena: &'a Bump, sched: &mut ArenaSched<'a>) {
             // manually expand to map inner_exec_ident to expanded exec
-            expand_exec_expr(arena, &self.ident_names_to_exec_expr, &mut sched.sched_exec);
+            sched.sched_exec = arena.alloc(expand_exec_expr(
+                arena,
+                &self.ident_names_to_exec_expr,
+                sched.sched_exec,
+            ));
             let body_exec =
                 ArenaExecExpr::new(arena, sched.sched_exec.exec.clone().forall(sched.dim));
             if let Some(ident) = &sched.inner_exec_ident {
@@ -307,7 +315,7 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
         }
 
         fn visit_exec_expr(&mut self, arena: &'a Bump, exec_expr: &mut ArenaExecExpr<'a>) {
-            expand_exec_expr(arena, &self.ident_names_to_exec_expr, exec_expr);
+            *exec_expr = expand_exec_expr(arena, &self.ident_names_to_exec_expr, exec_expr);
         }
 
         fn visit_fun_def(&mut self, arena: &'a Bump, fun_def: &mut ArenaFunDef<'a>) {
@@ -367,7 +375,7 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
 
     fn expand_exec_expr<'a>(
         arena: &'a bumpalo::Bump,
-        exec_mapping: &'a [(Box<str>, ArenaExecExpr<'a>)],
+        exec_mapping: &[(Box<str>, ArenaExecExpr<'a>)],
         exec_expr: &ArenaExecExpr<'a>,
     ) -> ArenaExecExpr<'a> {
         match &exec_expr.exec.base {
@@ -388,8 +396,8 @@ fn replace_exec_idents_with_specific_execs<'a>(arena: &'a Bump, fun_def: &mut Ar
     }
 
     fn get_exec_expr<'a>(
-        exec_mapping: &'a [(Box<str>, ArenaExecExpr)],
-        ident: &'a ArenaIdent<'a>,
+        exec_mapping: &[(Box<str>, ArenaExecExpr<'a>)],
+        ident: &ArenaIdent<'a>,
     ) -> Option<ArenaExecExpr<'a>> {
         for (i, exec) in exec_mapping.iter().rev() {
             if i.as_ref() == ident.name {

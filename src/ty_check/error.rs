@@ -189,6 +189,7 @@ impl<'a> TyError<'a> {
 
                         BorrowingError::CannotNarrow
                         | BorrowingError::Conflict { .. }
+                        | BorrowingError::ConflictPrevAccess { .. }
                         | BorrowingError::NatEvalError(_)
                         | BorrowingError::DivergingExec
                         | BorrowingError::MultipleDistribs => eprintln!("{:?}", conflict),
@@ -262,6 +263,7 @@ pub enum SubTyError<'a> {
     MemoryKindsNoMatch,
     // Subtyping checks fail if the ownership of supposedly subtyped references do not match
     OwnershipNoMatch,
+    SizesNoMatch,
     // TODO remove asap
     Dummy,
 }
@@ -271,6 +273,8 @@ pub enum SubTyError<'a> {
 pub enum UnifyError<'a> {
     // Cannot unify the two terms
     CannotUnify,
+    CannotUnifyTy(Ty<'a>, Ty<'a>),
+    CannotUnifyDataTy(DataTy<'a>, DataTy<'a>),
     // A type variable has to be equal to a term that is referring to the same type variable
     InfiniteType,
     SubTyError(SubTyError<'a>),
@@ -309,6 +313,10 @@ impl<'a> From<CtxError<'a>> for SubTyError<'a> {
 #[derive(Debug)]
 pub enum BorrowingError<'a> {
     Conflict {
+        checked: PlaceExpr<'a>,
+        existing: PlaceExpr<'a>,
+    },
+    ConflictPrevAccess {
         checked: PlaceExpr<'a>,
         existing: PlaceExpr<'a>,
     },

@@ -6,9 +6,9 @@ use crate::arena_ast::{ExecExprKind, LeftOrRight, NatCtx};
 use bumpalo::{collections::Vec as BumpVec, Bump};
 
 pub(super) fn ty_check<'a>(
-    nat_ctx: &'a NatCtx<'a>,
-    ty_ctx: &'a TyCtx<'a>,
-    ident_exec: Option<&'a IdentExec<'a>>,
+    nat_ctx: &NatCtx<'a>,
+    ty_ctx: &TyCtx<'a>,
+    ident_exec: Option<&IdentExec<'a>>,
     exec_expr: &mut ExecExpr<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, ()> {
@@ -133,7 +133,7 @@ fn ty_check_exec_to_warps<'a>(
 */
 
 fn ty_check_exec_to_warps<'a>(
-    nat_ctx: &'a NatCtx<'a>,
+    nat_ctx: &NatCtx<'a>,
     exec_ty: &'a ExecTyKind<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, ExecTyKind<'a>> {

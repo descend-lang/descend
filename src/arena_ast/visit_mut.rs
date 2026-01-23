@@ -92,29 +92,9 @@ pub fn walk_nat_ref<'a, V: VisitMut<'a>>(
     arena: &'a bumpalo::Bump,
     slot: &mut &'a Nat<'a>,
 ) {
-    match &*(*slot) {
-        Nat::BinOp(op, l, r) => {
-            let mut l_slot: &'a Nat<'a> = *l;
-            let mut r_slot: &'a Nat<'a> = *r;
-
-            v.visit_nat_ref(arena, &mut l_slot);
-            v.visit_nat_ref(arena, &mut r_slot);
-
-            let new = arena.alloc(Nat::BinOp(*op, l_slot, r_slot));
-            *slot = new;
-        }
-        Nat::App(func, args) => {
-            let mut rebuilt = bumpalo::collections::Vec::new_in(arena);
-            rebuilt.reserve(args.len());
-            for a in args.iter() {
-                let mut owned = a.clone();
-                v.visit_nat(arena, &mut owned);
-                rebuilt.push(owned);
-            }
-            *slot = arena.alloc(Nat::App(func.clone(), rebuilt));
-        }
-        _ => {}
-    }
+    let mut owned = (**slot).clone();
+    v.visit_nat(arena, &mut owned);
+    *slot = arena.alloc(owned);
 }
 
 pub fn walk_nat_range<'a, V: VisitMut<'a>>(
@@ -742,36 +722,9 @@ pub fn walk_expr<'a, V: VisitMut<'a>>(visitor: &mut V, arena: &'a Bump, expr: &m
             *body_ref = arena.alloc(body);
         }
         ExprKind::Split(split_ref) => {
-            let src: &Split<'a> = *split_ref;
-
-            let mut dim = src.dim_compo;
-            visitor.visit_dim_compo(&mut dim);
-
-            let mut pos = src.pos.clone();
-            visitor.visit_nat(arena, &mut pos);
-
-            let mut exec_owned = (*src.split_exec).clone();
-            visitor.visit_exec_expr(arena, &mut exec_owned);
-            let exec_ref: &'a ExecExpr<'a> = arena.alloc(exec_owned);
-
-            let mut branch_idents = src.branch_idents.clone();
-            for id in branch_idents.iter_mut() {
-                visitor.visit_ident(arena, id);
-            }
-
-            let mut branch_bodies = src.branch_bodies.clone();
-            for body in branch_bodies.iter_mut() {
-                visitor.visit_expr(arena, body);
-            }
-
-            let new_split = Split {
-                dim_compo: dim,
-                pos,
-                split_exec: exec_ref,
-                branch_idents,
-                branch_bodies,
-            };
-            *split_ref = arena.alloc(new_split);
+            let mut split_owned = (**split_ref).clone();
+            visitor.visit_split(arena, &mut split_owned);
+            *split_ref = arena.alloc(split_owned);
         }
         ExprKind::Sched(sched) => {
             let mut sched_owned = (**sched).clone();

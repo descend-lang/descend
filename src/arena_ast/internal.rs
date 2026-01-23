@@ -115,7 +115,7 @@ impl<'a> Place<'a> {
         Place { ident, path }
     }
 
-    pub fn to_place_expr(&self, arena: &'a bumpalo::Bump) -> PlaceExpr {
+    pub fn to_place_expr(&self, arena: &'a bumpalo::Bump) -> PlaceExpr<'a> {
         self.path.iter().fold(
             PlaceExpr::new(PlaceExprKind::Ident(self.ident.clone())),
             |pl_expr, path_entry| match path_entry {

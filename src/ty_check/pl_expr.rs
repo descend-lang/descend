@@ -13,19 +13,19 @@ use crate::ty_check::{exec, ExprTyCtx};
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 
-pub(super) struct PlExprTyCtx<'a> {
-    gl_ctx: &'a GlobalCtx<'a>,
-    nat_ctx: &'a NatCtx<'a>,
-    kind_ctx: &'a KindCtx<'a>,
-    ident_exec: Option<&'a IdentExec<'a>>,
+pub(super) struct PlExprTyCtx<'ctx, 'a> {
+    gl_ctx: &'ctx GlobalCtx<'a>,
+    nat_ctx: &'ctx NatCtx<'a>,
+    kind_ctx: &'ctx KindCtx<'a>,
+    ident_exec: Option<&'ctx IdentExec<'a>>,
     exec: ExecExpr<'a>,
-    ty_ctx: &'a TyCtx<'a>,
-    exec_borrow_ctx: &'a AccessCtx<'a>,
+    ty_ctx: &'ctx TyCtx<'a>,
+    exec_borrow_ctx: &'ctx AccessCtx<'a>,
     own: Ownership,
 }
 
-impl<'a> PlExprTyCtx<'a> {
-    pub(super) fn new(expr_ty_ctx: &'a ExprTyCtx<'a>, own: Ownership) -> Self {
+impl<'ctx, 'a> PlExprTyCtx<'ctx, 'a> {
+    pub(super) fn new(expr_ty_ctx: &'ctx ExprTyCtx<'_, 'a>, own: Ownership) -> Self {
         PlExprTyCtx {
             gl_ctx: &*expr_ty_ctx.gl_ctx,
             nat_ctx: &*expr_ty_ctx.nat_ctx,
@@ -39,8 +39,8 @@ impl<'a> PlExprTyCtx<'a> {
     }
 }
 
-impl<'a> From<&'a BorrowCheckCtx<'a>> for PlExprTyCtx<'a> {
-    fn from(ctx: &'a BorrowCheckCtx<'a>) -> Self {
+impl<'ctx, 'a> From<&'ctx BorrowCheckCtx<'_, 'a>> for PlExprTyCtx<'ctx, 'a> {
+    fn from(ctx: &'ctx BorrowCheckCtx<'_, 'a>) -> Self {
         PlExprTyCtx {
             gl_ctx: ctx.gl_ctx,
             nat_ctx: ctx.nat_ctx,
@@ -57,8 +57,8 @@ impl<'a> From<&'a BorrowCheckCtx<'a>> for PlExprTyCtx<'a> {
 // Δ; Γ ⊢ω p:τ
 // p in an ω context has type τ under Δ and Γ
 pub(super) fn ty_check<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    pl_expr: &'a mut PlaceExpr<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    pl_expr: &mut PlaceExpr<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, ()> {
     let _mem = ty_check_and_passed_mems(ctx, pl_expr, arena)?;
@@ -66,8 +66,8 @@ pub(super) fn ty_check<'a>(
 }
 
 pub(super) fn ty_check_and_passed_mems<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    pl_expr: &'a mut PlaceExpr<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    pl_expr: &mut PlaceExpr<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, Vec<Memory<'a>>> {
     let (mem, _) = ty_check_and_passed_mems_prvs(ctx, pl_expr, arena)?;
@@ -77,27 +77,57 @@ pub(super) fn ty_check_and_passed_mems<'a>(
 // Δ; Γ ⊢ω p:τ,{ρ}
 // p in an ω context has type τ under Δ and Γ, passing through provenances in Vec<ρ>
 fn ty_check_and_passed_mems_prvs<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    pl_expr: &'a PlaceExpr<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    pl_expr: &mut PlaceExpr<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, (Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    let (ty, mem, prvs) = match &pl_expr.pl_expr {
+    let (ty, mem, prvs) = match &mut pl_expr.pl_expr {
         // TC-Var
         PlaceExprKind::Ident(ident) => ty_check_ident(ctx, ident)?,
         // TC-Proj
-        PlaceExprKind::Proj(tuple_expr, n) => ty_check_proj(ctx, *tuple_expr, *n, arena)?,
+        PlaceExprKind::Proj(tuple_expr, n) => {
+            let mut owned = (**tuple_expr).clone();
+            let result = ty_check_proj(ctx, &mut owned, *n, arena)?;
+            *tuple_expr = arena.alloc(owned);
+            result
+        }
         // TC-Field
         PlaceExprKind::FieldProj(struct_expr, ident) => {
-            ty_check_field_proj(ctx, *struct_expr, ident, arena)?
+            let mut owned = (**struct_expr).clone();
+            let result = ty_check_field_proj(ctx, &mut owned, ident, arena)?;
+            *struct_expr = arena.alloc(owned);
+            result
         }
         // TC-Deref
-        PlaceExprKind::Deref(borr_expr) => ty_check_deref(ctx, *borr_expr, arena)?,
+        PlaceExprKind::Deref(borr_expr) => {
+            let mut owned = (**borr_expr).clone();
+            let result = ty_check_deref(ctx, &mut owned, arena)?;
+            *borr_expr = arena.alloc(owned);
+            result
+        }
         // TC-Select
         PlaceExprKind::Select(pl_expr, select_exec) => {
-            ty_check_select(ctx, *pl_expr, *select_exec, arena)?
+            let mut owned_place = (**pl_expr).clone();
+            let mut owned_exec = (**select_exec).clone_in(arena);
+            let result = ty_check_select(ctx, &mut owned_place, &mut owned_exec, arena)?;
+            *pl_expr = arena.alloc(owned_place);
+            *select_exec = arena.alloc(owned_exec);
+            result
         }
-        PlaceExprKind::View(pl_expr, view) => ty_check_view_pl_expr(ctx, *pl_expr, *view, arena)?,
-        PlaceExprKind::Idx(pl_expr, idx) => ty_check_index(ctx, *pl_expr, *idx, arena)?,
+        PlaceExprKind::View(pl_expr, view) => {
+            let mut owned_place = (**pl_expr).clone();
+            let mut owned_view = (**view).clone_in(arena);
+            let result = ty_check_view_pl_expr(ctx, &mut owned_place, &mut owned_view, arena)?;
+            *pl_expr = arena.alloc(owned_place);
+            *view = arena.alloc(owned_view);
+            result
+        }
+        PlaceExprKind::Idx(pl_expr, idx) => {
+            let mut owned_place = (**pl_expr).clone();
+            let result = ty_check_index(ctx, &mut owned_place, idx, arena)?;
+            *pl_expr = arena.alloc(owned_place);
+            result
+        }
     };
 
     let _ = pl_expr.ty.set(arena.alloc(ty));
@@ -105,26 +135,25 @@ fn ty_check_and_passed_mems_prvs<'a>(
 }
 
 fn ty_check_view_pl_expr<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    pl_expr: &'a PlaceExpr<'a>,
-    view: &'a View<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    pl_expr: &mut PlaceExpr<'a>,
+    view: &mut View<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mems, prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr, arena)?;
-    let mut v_tmp = (*view).clone_in(arena);
-    let view_fn_ty = ty_check_view(ctx, &mut v_tmp, arena)?;
+    let view_fn_ty = ty_check_view(ctx, view, arena)?;
     let in_dty_ref: &'a DataTy<'a> = {
         let tmp = pl_expr.ty.get().unwrap().dty().clone_in(arena);
         arena.alloc(tmp)
     };
     let (res_dty, constr_map) = ty_check_app_view_fn_ty(ctx, in_dty_ref, view_fn_ty, arena)?;
-    unify::substitute(&constr_map, &mut v_tmp, arena);
+    unify::substitute(&constr_map, view, arena);
     Ok((Ty::new(TyKind::Data(arena.alloc(res_dty))), mems, prvs))
 }
 
 fn ty_check_app_view_fn_ty<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    in_dty: &'a DataTy<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    in_dty: &DataTy<'a>,
     view_fn_ty: FnTy<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, (DataTy<'a>, ConstrainMap<'a>)> {
@@ -156,7 +185,7 @@ fn ty_check_app_view_fn_ty<'a>(
 }
 
 fn ty_check_view<'a, 'm>(
-    ctx: &'a PlExprTyCtx<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
     view: &'m mut View<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, FnTy<'a>> {
@@ -182,6 +211,7 @@ fn ty_check_view<'a, 'm>(
         &ctx.exec,
         view_fn_ty,
         gen_args_ref,
+        arena,
     )?);
 
     let actual_view_fn_ty = arena.alloc(create_view_ty_with_input_view_and_free_ret(
@@ -250,8 +280,8 @@ fn create_view_ty_with_input_view_and_free_ret<'a>(
 }
 
 fn ty_check_ident<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    ident: &'a Ident<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    ident: &Ident<'a>,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     // if let Ok(tty) = ctx.ty_ctx.ty_of_ident(ident) {
     let tty = ctx.ty_ctx.ty_of_ident(ident)?;
@@ -279,7 +309,7 @@ fn ty_check_ident<'a>(
     // }
 }
 
-fn default_mem_by_exec<'a>(exec_ty: &'a ExecTyKind<'a>) -> Option<Memory<'a>> {
+fn default_mem_by_exec<'a>(exec_ty: &ExecTyKind<'a>) -> Option<Memory<'a>> {
     match exec_ty {
         ExecTyKind::CpuThread => Some(Memory::CpuMem),
         ExecTyKind::GpuThread => Some(Memory::GpuLocal),
@@ -296,8 +326,8 @@ fn default_mem_by_exec<'a>(exec_ty: &'a ExecTyKind<'a>) -> Option<Memory<'a>> {
 
 // TODO refactor by fusing with ty_check_field_proj
 fn ty_check_proj<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    tuple_expr: &'a PlaceExpr<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    tuple_expr: &mut PlaceExpr<'a>,
     n: usize,
     arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
@@ -333,9 +363,9 @@ fn ty_check_proj<'a>(
 }
 
 fn ty_check_field_proj<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    struct_expr: &'a PlaceExpr<'a>,
-    ident: &'a Ident<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    struct_expr: &mut PlaceExpr<'a>,
+    ident: &Ident<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mem, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, struct_expr, arena)?;
@@ -371,8 +401,8 @@ fn ty_check_field_proj<'a>(
 }
 
 fn ty_check_deref<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    borr_expr: &'a PlaceExpr<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    borr_expr: &mut PlaceExpr<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mut inner_mem, mut passed_prvs) = ty_check_and_passed_mems_prvs(ctx, borr_expr, arena)?;
@@ -413,19 +443,12 @@ fn ty_check_deref<'a>(
 }
 
 fn ty_check_select<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    p: &'a PlaceExpr<'a>,
-    select_exec: &'a ExecExpr<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    p: &mut PlaceExpr<'a>,
+    select_exec: &mut ExecExpr<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
-    let mut select_exec_cloned = select_exec.clone_in(arena);
-    exec::ty_check(
-        ctx.nat_ctx,
-        ctx.ty_ctx,
-        ctx.ident_exec,
-        &mut select_exec_cloned,
-        arena,
-    )?;
+    exec::ty_check(ctx.nat_ctx, ctx.ty_ctx, ctx.ident_exec, select_exec, arena)?;
     // FIXME this check is required for uniq accesses, but not for shared accesses because there
     //  the duplication of accesses is fine. Move this check into ownership/borrow checking?
     //    if &ctx.exec != select_exec {
@@ -441,7 +464,7 @@ fn ty_check_select<'a>(
         &mut outer_exec,
         arena,
     )?;
-    let outer_ctx = arena.alloc(PlExprTyCtx {
+    let outer_ctx = PlExprTyCtx {
         gl_ctx: ctx.gl_ctx,
         nat_ctx: ctx.nat_ctx,
         kind_ctx: ctx.kind_ctx,
@@ -450,8 +473,8 @@ fn ty_check_select<'a>(
         ty_ctx: ctx.ty_ctx,
         exec_borrow_ctx: ctx.exec_borrow_ctx,
         own: ctx.own,
-    });
-    let (mems, prvs) = ty_check_and_passed_mems_prvs(outer_ctx, p, arena)?;
+    };
+    let (mems, prvs) = ty_check_and_passed_mems_prvs(&outer_ctx, p, arena)?;
     let mut p_dty = p.ty.get().unwrap().dty().clone_in(arena);
     match p_dty.dty {
         DataTyKind::Array(elem_dty, _n) | DataTyKind::ArrayShape(elem_dty, _n) => {
@@ -470,9 +493,9 @@ fn ty_check_select<'a>(
 }
 
 fn ty_check_index<'a>(
-    ctx: &'a PlExprTyCtx<'a>,
-    pl_expr: &'a PlaceExpr<'a>,
-    idx: &'a Nat<'a>,
+    ctx: &PlExprTyCtx<'_, 'a>,
+    pl_expr: &mut PlaceExpr<'a>,
+    idx: &Nat<'a>,
     arena: &'a Bump,
 ) -> TyResult<'a, (Ty<'a>, Vec<Memory<'a>>, Vec<Provenance<'a>>)> {
     let (mems, passed_prvs) = ty_check_and_passed_mems_prvs(ctx, pl_expr, arena)?;

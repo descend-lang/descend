@@ -153,7 +153,10 @@ impl<'a> TyCtx<'a> {
         Ok(self)
     }
 
-    pub fn loans_in_prv(&self, prv_val_name: &str) -> CtxResult<'a, &HashSet<Loan<'a>>> {
+    pub fn loans_in_prv<'ctx>(
+        &'ctx self,
+        prv_val_name: &str,
+    ) -> CtxResult<'a, &'ctx HashSet<Loan<'a>>> {
         match self
             .prv_mappings()
             .rev()
@@ -176,10 +179,10 @@ impl<'a> TyCtx<'a> {
         Ok(out)
     }
 
-    pub fn loans_for_prv_mut(
-        &mut self,
+    pub fn loans_for_prv_mut<'ctx>(
+        &'ctx mut self,
         prv_val_name: &str,
-    ) -> CtxResult<'a, &mut HashSet<Loan<'a>>> {
+    ) -> CtxResult<'a, &'ctx mut HashSet<Loan<'a>>> {
         match self
             .prv_mappings_mut()
             .rev()
@@ -453,30 +456,25 @@ impl<'a> TyCtx<'a> {
 }
 
 pub(super) struct AccessCtx<'a> {
-    ctx: BumpVec<'a, Loan<'a>>,
+    ctx: HashSet<Loan<'a>>,
 }
 
 impl<'a> AccessCtx<'a> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(_arena: &'a Bump) -> Self {
         AccessCtx {
-            ctx: BumpVec::new_in(arena),
+            ctx: HashSet::new(),
         }
     }
 
-    pub fn insert(&mut self, loans: BumpVec<Loan<'a>>) {
-        self.ctx.extend(loans.into_iter())
+    pub fn insert(&mut self, loans: HashSet<Loan<'a>>) {
+        self.ctx.extend(loans)
     }
 
-    pub fn hash_set(&self) -> &BumpVec<Loan<'a>> {
+    pub fn hash_set(&self) -> &HashSet<Loan<'a>> {
         &self.ctx
     }
 
-    pub fn clear_sync_for(
-        &mut self,
-        ty_ctx: &'a TyCtx<'a>,
-        exec: &'a ExecExpr<'a>,
-        arena: &'a Bump,
-    ) {
+    pub fn clear_sync_for(&mut self, ty_ctx: &TyCtx<'a>, exec: &ExecExpr<'a>, _arena: &'a Bump) {
         self.ctx = self
             .ctx
             .iter()
@@ -486,49 +484,27 @@ impl<'a> AccessCtx<'a> {
                     place_expr,
                 })
             })
-            .collect_in(arena);
+            .collect();
     }
 
-    // a tiny helper that drills down a PlaceExpr to its `Ident`
-    // and returns it by value (i.e. clones the Box<str> inside Ident)
-    // maybe move this one out ?
-    fn root_ident_of_expr(pe: &PlaceExpr<'a>) -> Ident<'a> {
-        match &pe.pl_expr {
-            PlaceExprKind::Ident(id) => id.clone(),
-            PlaceExprKind::Select(inner, _)
-            | PlaceExprKind::View(inner, _)
-            | PlaceExprKind::Proj(inner, _)
-            | PlaceExprKind::FieldProj(inner, _)
-            | PlaceExprKind::Idx(inner, _)
-            | PlaceExprKind::Deref(inner) => {
-                // recursive descent
-                Self::root_ident_of_expr(inner)
-            }
-        }
-    }
-
-    pub fn garbage_collect(&mut self, ty_ctx: &TyCtx<'a>, arena: &'a Bump) {
-        // 1) take ownership of the old loans
-        let old_loans = std::mem::replace(&mut self.ctx, BumpVec::new_in(arena));
-
-        // 2) build a fresh vec of only the “alive” loans
-        let mut new_loans = BumpVec::new_in(arena);
-        for loan in old_loans.into_iter() {
-            // extract root ident by *value* (no long‐lived borrow)
-            let ident = Self::root_ident_of_expr(&loan.place_expr);
+    pub fn garbage_collect(&mut self, ty_ctx: &TyCtx<'a>, _arena: &'a Bump) {
+        let mut cleaned_up_set = HashSet::new();
+        for loan in &self.ctx {
+            let ident = loan.place_expr.as_ident_and_path().0;
             if ty_ctx.contains(&ident) {
-                new_loans.push(loan);
+                // Loans are immutable here, so retaining their existing arena references is
+                // sufficient. Re-homing every nested node would keep a complete duplicate alive
+                // until the compilation arena is dropped.
+                cleaned_up_set.insert(loan.clone());
             }
         }
-
-        // 3) store it back
-        self.ctx = new_loans;
+        self.ctx = cleaned_up_set;
     }
 }
 
 fn trim_after_select_of<'a>(
-    ty_ctx: &'a TyCtx<'a>,
-    exec: &'a ExecExpr<'a>,
+    ty_ctx: &TyCtx<'a>,
+    exec: &ExecExpr<'a>,
     pl_expr: PlaceExpr<'a>,
 ) -> Option<PlaceExpr<'a>> {
     match pl_expr.pl_expr {
@@ -639,7 +615,10 @@ impl<'a> KindCtx<'a> {
         Ok(())
     }
 
-    pub fn get_idents(&'a self, kind: Kind) -> impl Iterator<Item = &'a Ident<'a>> + 'a {
+    pub fn get_idents<'ctx>(
+        &'ctx self,
+        kind: Kind,
+    ) -> impl Iterator<Item = &'ctx Ident<'a>> + 'ctx {
         self.ctx.iter().flatten().filter_map(move |entry| {
             if let KindingCtxEntry::Ident(IdentKinded { ident, kind: k }) = entry {
                 if k == &kind {
@@ -653,11 +632,11 @@ impl<'a> KindCtx<'a> {
         })
     }
 
-    pub fn ident_of_kind_exists(&self, ident: &'a Ident<'a>, kind: Kind) -> bool {
+    pub fn ident_of_kind_exists(&self, ident: &Ident<'a>, kind: Kind) -> bool {
         self.get_idents(kind).any(|id| ident == id)
     }
 
-    pub fn outlives(&self, l: &'a Ident<'a>, s: &'a Ident<'a>) -> CtxResult<'a, ()> {
+    pub fn outlives(&self, l: &Ident<'a>, s: &Ident<'a>) -> CtxResult<'a, ()> {
         if self.ctx.iter().flatten().any(|entry| match entry {
             KindingCtxEntry::PrvRel(PrvRel { longer, shorter }) => longer == l && shorter == s,
             _ => false,
@@ -677,47 +656,35 @@ pub(super) enum GlobalDecl<'a> {
 
 #[derive(Debug)]
 pub(super) struct GlobalCtx<'a> {
-    compil_unit: &'a mut CompilUnit<'a>,
     checked_funs: BumpVec<'a, (&'a str, &'a [usize])>,
     decls: BumpVec<'a, GlobalDecl<'a>>,
 }
 
 impl<'a> GlobalCtx<'a> {
     pub fn new(
-        compil_unit: &'a mut CompilUnit<'a>,
+        compil_unit: &CompilUnit<'a>,
         mut decls: BumpVec<'a, GlobalDecl<'a>>,
         arena: &'a Bump,
     ) -> Self {
-        // 1) grab a raw pointer + length; this does NOT borrow.
-        let items_ptr = compil_unit.items.as_ptr();
-        let len = compil_unit.items.len();
-
-        // 2) iterate by pointer offets
-        for i in 0..len {
-            // SAFETY: `i < len` so ptr.add(i) is in-bounds, and we never touch compil_unit.items mutably.
-            let item: &Item<'a> = unsafe { &*items_ptr.add(i) };
+        for item in &compil_unit.items {
             match item {
                 Item::FunDef(fun_def) => {
-                    let name: &str = &fun_def.ident.name;
+                    let name = fun_def.ident.name;
                     let ty_ref: &FnTy<'a> = arena.alloc(fun_def.fn_ty(arena));
                     decls.push(GlobalDecl::FnDecl(name, ty_ref));
                 }
                 Item::FunDecl(fun_decl) => {
-                    let name: &str = &fun_decl.ident.name;
+                    let name = fun_decl.ident.name;
                     let ty_ref: &FnTy<'a> = arena.alloc(fun_decl.fn_ty(arena));
                     decls.push(GlobalDecl::FnDecl(name, ty_ref));
                 }
                 Item::StructDecl(struct_decl) => {
-                    // We can safely store the reference here,
-                    // because `struct_decl` lives inside `compil_unit` for 'a.
                     decls.push(GlobalDecl::StructDecl(struct_decl));
                 }
             }
         }
 
-        // 3) now that we never held any &borrows of items, we can store the &mut
         GlobalCtx {
-            compil_unit,
             checked_funs: BumpVec::new_in(arena),
             decls,
         }
@@ -731,18 +698,31 @@ impl<'a> GlobalCtx<'a> {
 
     pub fn push_fun_checked_under_nats(
         &mut self,
-        arena: &'a bumpalo::Bump,
-        fun_def_owned: FunDef<'a>, // take by value
-        nat_vals: &'a [usize],
+        compil_unit: &mut CompilUnit<'a>,
+        arena: &'a Bump,
+        fun_def_owned: FunDef<'a>,
+        nat_vals: &[usize],
     ) {
-        let fun_name = fun_def_owned.ident.name.clone();
+        let fun_name = fun_def_owned.ident.name;
         let fd_ref: &'a FunDef<'a> = arena.alloc(fun_def_owned);
-        self.compil_unit.items.push(Item::FunDef(fd_ref));
+        compil_unit.items.push(Item::FunDef(fd_ref));
+        let nat_vals = arena.alloc_slice_copy(nat_vals);
         self.checked_funs.push((fun_name, nat_vals));
     }
 
-    pub fn pop_fun_def(&mut self, name: &'a str) -> Option<&'a FunDef<'a>> {
-        let index = self.compil_unit.items.iter().position(|item| {
+    pub fn push_fun_def(
+        &self,
+        compil_unit: &mut CompilUnit<'a>,
+        arena: &'a Bump,
+        fun_def_owned: FunDef<'a>,
+    ) {
+        compil_unit
+            .items
+            .push(Item::FunDef(arena.alloc(fun_def_owned)));
+    }
+
+    pub fn pop_fun_def(&self, compil_unit: &mut CompilUnit<'a>, name: &str) -> Option<FunDef<'a>> {
+        let index = compil_unit.items.iter().position(|item| {
             if let Item::FunDef(fun_def) = item {
                 fun_def.ident.name == name
             } else {
@@ -750,8 +730,8 @@ impl<'a> GlobalCtx<'a> {
             }
         });
         if let Some(i) = index {
-            if let Item::FunDef(fun_def) = self.compil_unit.items.remove(i) {
-                Some(fun_def)
+            if let Item::FunDef(fun_def) = compil_unit.items.remove(i) {
+                Some((*fun_def).clone())
             } else {
                 None
             }
@@ -760,7 +740,7 @@ impl<'a> GlobalCtx<'a> {
         }
     }
 
-    pub fn fn_ty_by_ident(&self, ident: &'a Ident<'a>) -> CtxResult<'a, &'a FnTy<'a>> {
+    pub fn fn_ty_by_ident(&self, ident: &Ident<'a>) -> CtxResult<'a, &'a FnTy<'a>> {
         if let Some(fn_ty) = self.decls.iter().find_map(|decl| match decl {
             GlobalDecl::FnDecl(name, fn_ty) if name == &ident.name => Some(fn_ty),
             GlobalDecl::FnDecl(_, _) | GlobalDecl::StructDecl(_) => None,

@@ -10,31 +10,18 @@ use crate::arena_ast::{
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI32, Ordering};
 
-static mut COUNTER: AtomicI32 = AtomicI32::new(0);
+static COUNTER: AtomicI32 = AtomicI32::new(0);
 
-/**
 pub(crate) fn fresh_ident<'a, F, R>(arena: &'a bumpalo::Bump, name: &str, ident_constr: F) -> R
-where
-    F: Fn(Ident) -> R,
-{
-    ident_constr(Ident::new_impli(&arena, &fresh_name(name)))
-}
-*/
-
-pub(crate) fn fresh_ident<'a, F, R>(arena: &'a bumpalo::Bump, name: &'a str, ident_constr: F) -> R
 where
     F: FnOnce(Ident<'a>) -> R,
 {
-    let id = Ident::new(arena, name);
-    ident_constr(id)
+    ident_constr(Ident::new_impli(arena, &fresh_name(name)))
 }
 
 pub(crate) fn fresh_name(name: &str) -> String {
     let prefix = format!("${}", name);
-    let i;
-    unsafe {
-        i = COUNTER.fetch_add(1, Ordering::SeqCst);
-    }
+    let i = COUNTER.fetch_add(1, Ordering::SeqCst);
     format!("{}_{}", prefix, i)
 }
 
@@ -84,16 +71,16 @@ visitable_mut!(FnTy, visit_fn_ty);
  * gen_args: the kinded expressions that are substituting the generic identifiers
  * t: the term to substitute in
  */
-pub fn subst_idents_kinded<'a, I, J, T: VisitableMut<'a>>(
+pub fn subst_idents_kinded<'a: 'm, 'm, I, J, T: VisitableMut<'a>>(
     arena: &'a bumpalo::Bump,
     gen_idents: I,
     gen_args: J,
     t: &mut T,
 ) where
-    I: IntoIterator<Item = &'a IdentKinded<'a>>,
-    J: IntoIterator<Item = &'a ArgKinded<'a>>,
+    I: IntoIterator<Item = &'m IdentKinded<'a>>,
+    J: IntoIterator<Item = &'m ArgKinded<'a>>,
 {
-    let subst_map: HashMap<&'a str, &'a ArgKinded<'a>> = gen_idents
+    let subst_map: HashMap<&'a str, &'m ArgKinded<'a>> = gen_idents
         .into_iter()
         .map(|p| p.ident.name.as_ref())
         .zip(gen_args)
@@ -103,10 +90,10 @@ pub fn subst_idents_kinded<'a, I, J, T: VisitableMut<'a>>(
     t.visit_mut(&mut v, arena);
 }
 
-pub fn subst_ident_exec<'a, T: VisitableMut<'a>>(
+pub fn subst_ident_exec<'a, 'm, T: VisitableMut<'a>>(
     arena: &'a bumpalo::Bump,
-    ident: &'a Ident<'a>,
-    exec: &'a ExecExpr<'a>,
+    ident: &'m Ident<'a>,
+    exec: &'m ExecExpr<'a>,
     t: &mut T,
 ) {
     let mut subst_ident_exec = SubstIdentExec::new(ident, exec);
@@ -120,13 +107,13 @@ pub fn subst_ident_exec<'a, T: VisitableMut<'a>>(
  * bound. In order to substitute generic identifiers with their arguments, the relevant generic
  * identifiers must be removed from the list, first.
  */
-struct SubstIdentsKinded<'a, 'm> {
-    pub subst_map: &'m HashMap<&'a str, &'a ArgKinded<'a>>,
+struct SubstIdentsKinded<'a: 'm, 'm> {
+    pub subst_map: &'m HashMap<&'a str, &'m ArgKinded<'a>>,
     pub bound_idents: HashSet<IdentKinded<'a>>,
 }
 
-impl<'a, 'm> SubstIdentsKinded<'a, 'm> {
-    fn new(subst_map: &'m HashMap<&'a str, &'a ArgKinded<'a>>) -> Self {
+impl<'a: 'm, 'm> SubstIdentsKinded<'a, 'm> {
+    fn new(subst_map: &'m HashMap<&'a str, &'m ArgKinded<'a>>) -> Self {
         Self {
             subst_map,
             bound_idents: HashSet::new(),
@@ -141,7 +128,7 @@ impl<'a, 'm> SubstIdentsKinded<'a, 'm> {
     }
 }
 
-impl<'a, 'm> VisitMut<'a> for SubstIdentsKinded<'a, 'm> {
+impl<'a: 'm, 'm> VisitMut<'a> for SubstIdentsKinded<'a, 'm> {
     fn visit_nat(&mut self, arena: &'a bumpalo::Bump, nat: &mut Nat<'a>) {
         match nat {
             Nat::Ident(ident) => {
@@ -286,18 +273,18 @@ impl<'a, 'm> VisitMut<'a> for SubstIdentsKinded<'a, 'm> {
  * Substitue a generic exec identifier with specific exec.
  * This substitution ignores whehter an execution identifier is bound by a function type.
  */
-struct SubstIdentExec<'a> {
-    pub ident: &'a Ident<'a>,
-    pub exec: &'a ExecExpr<'a>,
+struct SubstIdentExec<'m, 'a> {
+    pub ident: &'m Ident<'a>,
+    pub exec: &'m ExecExpr<'a>,
 }
 
-impl<'a> SubstIdentExec<'a> {
-    fn new(ident: &'a Ident<'a>, exec: &'a ExecExpr<'a>) -> Self {
+impl<'m, 'a> SubstIdentExec<'m, 'a> {
+    fn new(ident: &'m Ident<'a>, exec: &'m ExecExpr<'a>) -> Self {
         SubstIdentExec { ident, exec }
     }
 }
 
-impl<'a> VisitMut<'a> for SubstIdentExec<'a> {
+impl<'m, 'a> VisitMut<'a> for SubstIdentExec<'m, 'a> {
     fn visit_exec_expr(&mut self, arena: &'a bumpalo::Bump, exec_expr: &mut ExecExpr<'a>) {
         insert_for_ident(arena, self.exec, self.ident, exec_expr)
     }
@@ -322,14 +309,10 @@ fn insert_for_ident<'a>(
                 path: merged,
             });
 
-            // Keep or drop the cached type
-            // let new_ty = in_exec.ty;         // keep it (may be stale)
-            let new_ty = None; // safer: force re-tycheck later
-
             *in_exec = ExecExpr {
                 exec: new_kind,
-                ty: new_ty,
-                span: in_exec.span,
+                ty: exec.ty,
+                span: exec.span,
             };
         }
     }

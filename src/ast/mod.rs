@@ -492,7 +492,11 @@ impl Block {
     }
 
     pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Block<'a> {
-        let prvs: bumpalo::collections::Vec<'a, String> = self.prvs.into_iter().collect_in(arena);
+        let prvs = self
+            .prvs
+            .into_iter()
+            .map(|prv| &*arena.alloc_str(&prv))
+            .collect_in(arena);
 
         arena_ast::Block {
             prvs,
@@ -532,7 +536,7 @@ impl AppKernel {
             shared_mem_prvs: self
                 .shared_mem_prvs
                 .iter()
-                .map(|s| arena.alloc_str(s).to_string())
+                .map(|prv| &*arena.alloc_str(prv))
                 .collect_in(arena),
             fun_ident: arena.alloc(self.fun_ident.clone().into_arena(arena)),
             gen_args: self
@@ -628,9 +632,11 @@ impl ExprKind {
                 }
                 arena_ast::ExprKind::Tuple(bump_vec)
             }
-            Ref(ann, own, pl) => {
-                arena_ast::ExprKind::Ref(ann, own.into_arena(), arena.alloc(pl.into_arena(arena)))
-            }
+            Ref(ann, own, pl) => arena_ast::ExprKind::Ref(
+                ann.map(|prv| &*arena.alloc_str(&prv)),
+                own.into_arena(),
+                arena.alloc(pl.into_arena(arena)),
+            ),
             Block(b) => {
                 let b_ref = arena.alloc(b.into_arena(arena));
                 arena_ast::ExprKind::Block(b_ref)
@@ -2474,6 +2480,7 @@ pub enum Nat {
     App(Ident, Box<[Nat]>),
 }
 
+#[derive(Clone, Debug)]
 pub struct NatCtx {
     frames: Vec<Vec<(Box<str>, usize)>>,
 }
@@ -2526,13 +2533,26 @@ impl NatCtx {
 
 #[derive(Debug)]
 pub struct NatEvalError {
-    pub unevaluable: Nat,
+    _unevaluable: Nat,
+    _nat_ctx: NatCtx,
 }
 
 impl NatEvalError {
     pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::NatEvalError<'a> {
+        let frames = self
+            ._nat_ctx
+            .frames
+            .iter()
+            .map(|frame| {
+                frame
+                    .iter()
+                    .map(|(name, value)| (&*arena.alloc_str(name), *value))
+                    .collect_in(arena)
+            })
+            .collect_in(arena);
         arena_ast::NatEvalError {
-            unevaluable: self.unevaluable.clone().into_arena(arena),
+            _unevaluable: self._unevaluable.clone().into_arena(arena),
+            _nat_ctx: arena_ast::NatCtx { frames },
         }
     }
 }
@@ -2588,14 +2608,16 @@ impl Nat {
             | Nat::WarpGrpIdx
             | Nat::WarpIdx
             | Nat::LaneIdx => Err(NatEvalError {
-                unevaluable: self.clone(),
+                _unevaluable: self.clone(),
+                _nat_ctx: nat_ctx.clone(),
             }),
             Nat::Ident(i) => {
                 if let Some(n) = nat_ctx.find(&i.name) {
                     Ok(n)
                 } else {
                     Err(NatEvalError {
-                        unevaluable: self.clone(),
+                        _unevaluable: self.clone(),
+                        _nat_ctx: nat_ctx.clone(),
                     })
                 }
             }

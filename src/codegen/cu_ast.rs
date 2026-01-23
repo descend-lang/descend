@@ -114,13 +114,6 @@ pub(super) enum Expr<'a> {
         lhs: Box<Expr<'a>>,
         rhs: Box<Expr<'a>>,
     },
-    Lambda {
-        captures: Vec<crate::arena_ast::Ident<'a>>,
-        params: Vec<ParamDecl<'a>>,
-        body: Box<Stmt<'a>>,
-        ret_ty: Ty<'a>,
-        is_dev_fun: bool,
-    },
     FnCall(FnCall<'a>),
     UnOp {
         op: UnOp,
