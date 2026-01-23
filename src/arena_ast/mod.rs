@@ -143,6 +143,28 @@ impl<'a> FunDef<'a> {
             [],
         )
     }
+
+    pub fn clone_in(&self, arena: &'a Bump) -> FunDef<'a> {
+        let mut generic_params = BumpVec::new_in(arena);
+        generic_params.extend(self.generic_params.iter().cloned());
+
+        let mut param_decls = BumpVec::new_in(arena);
+        param_decls.extend(self.param_decls.iter().cloned());
+
+        let mut prv_rels = BumpVec::new_in(arena);
+        prv_rels.extend(self.prv_rels.iter().cloned());
+
+        FunDef {
+            ident: self.ident.clone(),
+            generic_params,
+            generic_exec: self.generic_exec.clone(),
+            param_decls,
+            ret_dty: arena.alloc(self.ret_dty.clone_in(arena)),
+            exec: self.exec.clone_in(arena),
+            prv_rels,
+            body: arena.alloc(self.body.clone_in(arena)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

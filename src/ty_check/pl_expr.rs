@@ -182,6 +182,7 @@ fn ty_check_view<'a, 'm>(
         &ctx.exec,
         view_fn_ty,
         gen_args_ref,
+        arena,
     )?);
 
     let actual_view_fn_ty = arena.alloc(create_view_ty_with_input_view_and_free_ret(

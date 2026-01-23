@@ -677,7 +677,7 @@ pub(super) enum GlobalDecl<'a> {
 
 #[derive(Debug)]
 pub(super) struct GlobalCtx<'a> {
-    compil_unit: &'a mut CompilUnit<'a>,
+    pub compil_unit: &'a mut CompilUnit<'a>,
     checked_funs: BumpVec<'a, (&'a str, &'a [usize])>,
     decls: BumpVec<'a, GlobalDecl<'a>>,
 }
@@ -732,7 +732,7 @@ impl<'a> GlobalCtx<'a> {
     pub fn push_fun_checked_under_nats(
         &mut self,
         arena: &'a bumpalo::Bump,
-        fun_def_owned: FunDef<'a>, // take by value
+        fun_def_owned: FunDef<'a>,
         nat_vals: &'a [usize],
     ) {
         let fun_name = fun_def_owned.ident.name.clone();
@@ -741,7 +741,7 @@ impl<'a> GlobalCtx<'a> {
         self.checked_funs.push((fun_name, nat_vals));
     }
 
-    pub fn pop_fun_def(&mut self, name: &'a str) -> Option<&'a FunDef<'a>> {
+    pub fn pop_fun_def(&mut self, name: &'a str) -> Option<FunDef<'a>> {
         let index = self.compil_unit.items.iter().position(|item| {
             if let Item::FunDef(fun_def) = item {
                 fun_def.ident.name == name
@@ -751,7 +751,7 @@ impl<'a> GlobalCtx<'a> {
         });
         if let Some(i) = index {
             if let Item::FunDef(fun_def) = self.compil_unit.items.remove(i) {
-                Some(fun_def)
+                Some((*fun_def).clone())
             } else {
                 None
             }
