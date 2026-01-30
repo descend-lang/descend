@@ -1,8 +1,9 @@
 use super::{TyError, TyResult};
-use crate::ast::{
+use crate::arena_ast::{
     ArgKinded, BaseExec, DataTy, DataTyKind, Dim, ExecExpr, ExecTy, ExecTyKind, FnTy, Ident,
     Memory, Nat, ParamSig, Provenance, Ty, TyKind,
 };
+use bumpalo::collections::Vec as BumpVec;
 use std::collections::HashMap;
 
 // mono_ty is function type,
@@ -10,30 +11,41 @@ use std::collections::HashMap;
 //  introduced by the polymorphic function, therefore finding an identifier on the poly type
 //  means that it was introduced by the polymorphic function (even though the identifier may be an
 //  instantiation of a bound identifier
-pub fn infer_kinded_args(poly_fn_ty: &FnTy, mono_fn_ty: &FnTy) -> TyResult<Vec<ArgKinded>> {
+pub fn infer_kinded_args<'a>(
+    poly_fn_ty: &'a FnTy<'a>,
+    mono_fn_ty: &'a FnTy<'a>,
+    arena: &'a bumpalo::Bump,
+) -> TyResult<'a, BumpVec<'a, ArgKinded<'a>>> {
     if poly_fn_ty.param_sigs.len() != mono_fn_ty.param_sigs.len() {
-        panic!("Unexpected difference in amount of paramters.")
+        panic!("Unexpected difference in amount of parameters.");
     }
-    let mut res_map = HashMap::new();
-    for (subst_ty, mono_ty) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
-        infer_kargs_param_sig(&mut res_map, subst_ty, mono_ty)
+
+    let mut res_map: HashMap<&'a Ident<'a>, ArgKinded<'a>> = HashMap::new();
+
+    for (subst_ps, mono_ps) in poly_fn_ty.param_sigs.iter().zip(&mono_fn_ty.param_sigs) {
+        infer_kargs_param_sig(&mut res_map, subst_ps, mono_ps);
     }
+
     infer_kargs_exec_expr(&mut res_map, &poly_fn_ty.exec, &mono_fn_ty.exec);
-    infer_kargs_tys(&mut res_map, &poly_fn_ty.ret_ty, &mono_fn_ty.ret_ty);
-    let mut res_vec = Vec::new();
-    for gen_arg in &poly_fn_ty.generics {
-        // FIXME unwrap leads to panic when the value for ident could not be inferred
-        //  as does happen when the identifier is not used in the argument type or part of
-        //  an expression in the case of nats
-        if let Some(res_karg) = res_map.get(&gen_arg.ident) {
-            if gen_arg.kind != res_karg.kind() {
-                panic!("Unexpected: Kinds of identifier and argument do not match.")
+    infer_kargs_tys(&mut res_map, poly_fn_ty.ret_ty, mono_fn_ty.ret_ty);
+
+    let mut res_vec = BumpVec::new_in(arena);
+    res_vec.reserve(poly_fn_ty.generics.len());
+
+    for g in &poly_fn_ty.generics {
+        match res_map.remove(&g.ident) {
+            Some(arg) => {
+                if g.kind != arg.kind() {
+                    panic!("Unexpected: Kinds of identifier and argument do not match.");
+                }
+                res_vec.push(arg);
             }
-            res_vec.push(res_karg.clone());
-        } else {
-            return Err(TyError::CannotInferGenericArg(gen_arg.ident.clone()));
+            None => {
+                return Err(TyError::CannotInferGenericArg(g.ident.clone()));
+            }
         }
     }
+
     Ok(res_vec)
 }
 
@@ -48,7 +60,7 @@ macro_rules! infer_from_lists {
 macro_rules! insert_checked {
     ($map: expr, $constr: path, $id_ref: expr, $mono_ref: expr) => {{
         let arg_kinded = $constr($mono_ref.clone());
-        if let Some(old) = $map.insert($id_ref.clone(), arg_kinded.clone()) {
+        if let Some(old) = $map.insert($id_ref, arg_kinded.clone()) {
             if old != arg_kinded {
                 println!("old: {:?}", old);
                 println!("new: {:?}", arg_kinded);
@@ -63,6 +75,7 @@ macro_rules! panic_no_inst {
         panic!("Unexpected: mono type is not an instantiation of poly type")
     };
 }
+
 macro_rules! panic_if_neq {
     ($lhs: expr, $rhs: expr) => {
         if $lhs != $rhs {
@@ -71,7 +84,11 @@ macro_rules! panic_if_neq {
     };
 }
 
-fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &Ty) {
+fn infer_kargs_tys<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_ty: &'a Ty<'a>,
+    mono_ty: &'a Ty<'a>,
+) {
     match (&poly_ty.ty, &mono_ty.ty) {
         (TyKind::Data(dty1), TyKind::Data(dty2)) => infer_kargs_dtys(map, dty1, dty2),
         (TyKind::FnTy(fn_ty1), TyKind::FnTy(fn_ty2)) => {
@@ -94,19 +111,19 @@ fn infer_kargs_tys(map: &mut HashMap<Ident, ArgKinded>, poly_ty: &Ty, mono_ty: &
     }
 }
 
-fn infer_kargs_param_sig(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_param_sig: &ParamSig,
-    mono_param_sig: &ParamSig,
+fn infer_kargs_param_sig<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_param_sig: &'a ParamSig<'a>,
+    mono_param_sig: &'a ParamSig<'a>,
 ) {
     infer_kargs_exec_expr(map, &poly_param_sig.exec_expr, &mono_param_sig.exec_expr);
     infer_kargs_tys(map, &poly_param_sig.ty, &mono_param_sig.ty);
 }
 
-fn infer_kargs_exec_expr(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_exec_expr: &ExecExpr,
-    mono_exec_expr: &ExecExpr,
+fn infer_kargs_exec_expr<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_exec_expr: &'a ExecExpr<'a>,
+    mono_exec_expr: &'a ExecExpr<'a>,
 ) {
     match (&poly_exec_expr.exec.base, &mono_exec_expr.exec.base) {
         (BaseExec::Ident(i1), BaseExec::Ident(i2)) if i1 == i2 => (),
@@ -119,10 +136,10 @@ fn infer_kargs_exec_expr(
     }
 }
 
-fn infer_kargs_exec_level(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_exec_level: &ExecTy,
-    mono_exec_level: &ExecTy,
+fn infer_kargs_exec_level<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_exec_level: &'a ExecTy<'a>,
+    mono_exec_level: &'a ExecTy<'a>,
 ) {
     match (&poly_exec_level.ty, &mono_exec_level.ty) {
         (ExecTyKind::GpuGrid(gdim1, bdim1), ExecTyKind::GpuGrid(gdim2, bdim2))
@@ -141,7 +158,11 @@ fn infer_kargs_exec_level(
     }
 }
 
-fn infer_kargs_dims(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_dim: &Dim) {
+fn infer_kargs_dims<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_dim: &'a Dim<'a>,
+    mono_dim: &'a Dim<'a>,
+) {
     match (poly_dim, mono_dim) {
         (Dim::XYZ(d3d1), Dim::XYZ(d3d2)) => {
             infer_kargs_nats(map, &d3d1.0, &d3d2.0);
@@ -163,15 +184,19 @@ fn infer_kargs_dims(map: &mut HashMap<Ident, ArgKinded>, poly_dim: &Dim, mono_di
     }
 }
 
-fn infer_kargs_field(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_field: &(Ident, DataTy),
-    mono_field: &(Ident, DataTy),
+fn infer_kargs_field<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_field: &'a (Ident<'a>, DataTy<'a>),
+    mono_field: &'a (Ident<'a>, DataTy<'a>),
 ) {
     infer_kargs_dtys(map, &poly_field.1, &mono_field.1)
 }
 
-fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono_dty: &DataTy) {
+fn infer_kargs_dtys<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_dty: &'a DataTy<'a>,
+    mono_dty: &'a DataTy<'a>,
+) {
     match (&poly_dty.dty, &mono_dty.dty) {
         (DataTyKind::Ident(id), _) => insert_checked!(map, ArgKinded::DataTy, id, mono_dty),
         (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
@@ -215,12 +240,14 @@ fn infer_kargs_dtys(map: &mut HashMap<Ident, ArgKinded>, poly_dty: &DataTy, mono
     }
 }
 
-fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_nat: &Nat) {
+fn infer_kargs_nats<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_nat: &'a Nat<'a>,
+    mono_nat: &'a Nat<'a>,
+) {
     match (poly_nat, mono_nat) {
         (Nat::Ident(id), _) => {
-            if let Some(ArgKinded::Nat(old)) =
-                map.insert(id.clone(), ArgKinded::Nat(mono_nat.clone()))
-            {
+            if let Some(ArgKinded::Nat(old)) = map.insert(id, ArgKinded::Nat(mono_nat.clone())) {
                 if &old != mono_nat {
                     panic!(
                         "not able to check equality of Nats `{}` and `{}`",
@@ -243,17 +270,21 @@ fn infer_kargs_nats(map: &mut HashMap<Ident, ArgKinded>, poly_nat: &Nat, mono_na
     }
 }
 
-fn infer_kargs_mems(map: &mut HashMap<Ident, ArgKinded>, poly_mem: &Memory, mono_mem: &Memory) {
+fn infer_kargs_mems<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_mem: &'a Memory<'a>,
+    mono_mem: &'a Memory<'a>,
+) {
     match (poly_mem, mono_mem) {
         (Memory::Ident(id), _) => insert_checked!(map, ArgKinded::Memory, id, mono_mem),
         _ => panic_if_neq!(poly_mem, mono_mem),
     }
 }
 
-fn infer_kargs_prvs(
-    map: &mut HashMap<Ident, ArgKinded>,
-    poly_prv: &Provenance,
-    mono_prv: &Provenance,
+fn infer_kargs_prvs<'m, 'a>(
+    map: &'m mut HashMap<&'a Ident<'a>, ArgKinded<'a>>,
+    poly_prv: &'a Provenance<'a>,
+    mono_prv: &'a Provenance<'a>,
 ) {
     match (poly_prv, mono_prv) {
         (Provenance::Ident(id), _) => insert_checked!(map, ArgKinded::Provenance, id, mono_prv),

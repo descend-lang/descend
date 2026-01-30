@@ -4,7 +4,9 @@ use crate::ast::internal::PathElem;
 use descend_derive::span_derive;
 pub use span::*;
 
+use crate::arena_ast;
 use crate::parser::SourceCode;
+use bumpalo::{collections::CollectIn, collections::Vec as BumpVec, Bump};
 
 pub mod internal;
 
@@ -13,6 +15,7 @@ mod span;
 pub mod utils;
 pub mod visit;
 pub mod visit_mut;
+use std::cell::OnceCell;
 
 #[derive(Clone, Debug)]
 pub struct CompilUnit<'a> {
@@ -31,6 +34,25 @@ pub enum Item {
     FunDef(Box<FunDef>),
     FunDecl(Box<FunDecl>),
     StructDecl(Box<StructDecl>),
+}
+
+impl Item {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Item<'a> {
+        match self {
+            Item::FunDef(f) => {
+                let arena_f = f.into_arena(arena);
+                arena_ast::Item::FunDef(arena.alloc(arena_f))
+            }
+            Item::FunDecl(f) => {
+                let arena_fd = f.into_arena(arena);
+                arena_ast::Item::FunDecl(arena.alloc(arena_fd))
+            }
+            Item::StructDecl(s) => {
+                let arena_s = s.into_arena(arena);
+                arena_ast::Item::StructDecl(arena.alloc(arena_s))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +87,36 @@ impl FunDecl {
             nat_constrs: vec![],
         }
     }
+
+    pub fn into_arena<'a>(self: Box<Self>, arena: &'a Bump) -> arena_ast::FunDecl<'a> {
+        let generic_params = self
+            .generic_params
+            .into_iter()
+            .map(|g| g.into_arena(arena))
+            .collect_in(arena);
+
+        let param_decls = self
+            .param_decls
+            .into_iter()
+            .map(|p| p.into_arena(arena))
+            .collect_in(arena);
+
+        let prv_rels = self
+            .prv_rels
+            .into_iter()
+            .map(|r| r.into_arena(arena))
+            .collect_in(arena);
+
+        arena_ast::FunDecl {
+            ident: self.ident.into_arena(arena),
+            generic_params,
+            generic_exec: self.generic_exec.map(|g| g.into_arena(arena)),
+            param_decls,
+            ret_dty: arena.alloc(self.ret_dty.into_arena(arena)),
+            exec: self.exec.into_arena(arena),
+            prv_rels,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
@@ -72,6 +124,28 @@ pub struct StructDecl {
     pub ident: Ident,
     pub generic_params: Vec<IdentKinded>,
     pub fields: Vec<(Ident, DataTy)>,
+}
+
+impl StructDecl {
+    pub fn into_arena<'a>(self: Box<Self>, arena: &'a Bump) -> arena_ast::StructDecl<'a> {
+        let generic_params = self
+            .generic_params
+            .into_iter()
+            .map(|gp| gp.into_arena(arena))
+            .collect_in(arena);
+
+        let fields = self
+            .fields
+            .into_iter()
+            .map(|(i, dty)| (i.into_arena(arena), dty.into_arena(arena)))
+            .collect_in(arena);
+
+        arena_ast::StructDecl {
+            ident: self.ident.into_arena(arena),
+            generic_params,
+            fields,
+        }
+    }
 }
 
 // TODO refactor to make use of FunDecl
@@ -108,6 +182,43 @@ impl FunDef {
             nat_constrs: vec![],
         }
     }
+
+    pub fn into_arena<'a>(self: Box<Self>, arena: &'a Bump) -> arena_ast::FunDef<'a> {
+        let generic_params = self
+            .generic_params
+            .into_iter()
+            .map(|g| g.into_arena(arena))
+            .collect_in(arena);
+
+        let generic_exec = self.generic_exec.map(|g| g.into_arena(arena));
+
+        let param_decls = self
+            .param_decls
+            .into_iter()
+            .map(|p| p.into_arena(arena))
+            .collect_in(arena);
+
+        let ret_dty = arena.alloc(self.ret_dty.into_arena(arena));
+
+        let prv_rels = self
+            .prv_rels
+            .into_iter()
+            .map(|r| r.into_arena(arena))
+            .collect_in(arena);
+
+        let body = arena.alloc(self.body.into_arena(arena));
+
+        arena_ast::FunDef {
+            ident: self.ident.into_arena(arena),
+            generic_params,
+            generic_exec,
+            param_decls,
+            ret_dty,
+            exec: self.exec.into_arena(arena),
+            prv_rels,
+            body,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -123,6 +234,13 @@ impl IdentExec {
             ty: Box::new(exec_ty),
         }
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::IdentExec<'a> {
+        arena_ast::IdentExec {
+            ident: self.ident.into_arena(arena),
+            ty: arena.alloc(self.ty.into_arena(arena)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +249,22 @@ pub struct ParamDecl {
     pub ty: Option<Ty>,
     pub mutbl: Mutability,
     pub exec_expr: Option<ExecExpr>,
+}
+
+impl ParamDecl {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ParamDecl<'a> {
+        let ty = self.ty.map(|t| &*arena.alloc(t.into_arena(arena)));
+        let exec_expr = self
+            .exec_expr
+            .map(|e| arena.alloc(e.into_arena(arena)).clone());
+
+        arena_ast::ParamDecl {
+            ident: self.ident.into_arena(arena),
+            ty,
+            mutbl: self.mutbl.into_arena(),
+            exec_expr,
+        }
+    }
 }
 
 #[span_derive(PartialEq)]
@@ -166,6 +300,14 @@ impl Expr {
             expr,
             ty: Some(Box::new(ty)),
             span: None,
+        }
+    }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Expr<'a> {
+        arena_ast::Expr {
+            expr: self.expr.into_arena(arena),
+            ty: self.ty.map(|t| &*arena.alloc(t.into_arena(arena))),
+            span: self.span,
         }
     }
 
@@ -273,6 +415,15 @@ impl Sched {
             body: Box::new(body),
         }
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Sched<'a> {
+        arena_ast::Sched {
+            dim: self.dim.into_arena(),
+            inner_exec_ident: self.inner_exec_ident.map(|id| id.into_arena(arena)),
+            sched_exec: arena.alloc(self.sched_exec.into_arena(arena)),
+            body: arena.alloc(self.body.into_arena(arena)),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -300,6 +451,30 @@ impl Split {
             branch_bodies,
         }
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Split<'a> {
+        let mut branch_idents = bumpalo::collections::Vec::new_in(arena);
+        branch_idents.extend(
+            self.branch_idents
+                .into_iter()
+                .map(|ident| ident.into_arena(arena)),
+        );
+
+        let mut branch_bodies = bumpalo::collections::Vec::new_in(arena);
+        branch_bodies.extend(
+            self.branch_bodies
+                .into_iter()
+                .map(|expr| expr.into_arena(arena)),
+        );
+
+        arena_ast::Split {
+            dim_compo: self.dim_compo.into_arena(),
+            pos: self.pos.into_arena(arena),
+            split_exec: arena.alloc(self.split_exec.into_arena(arena)),
+            branch_idents,
+            branch_bodies,
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -313,6 +488,15 @@ impl Block {
         Block {
             prvs: vec![],
             body: Box::new(body),
+        }
+    }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Block<'a> {
+        let prvs: bumpalo::collections::Vec<'a, String> = self.prvs.into_iter().collect_in(arena);
+
+        arena_ast::Block {
+            prvs,
+            body: arena.alloc(self.body.into_arena(arena)),
         }
     }
 
@@ -333,6 +517,36 @@ pub struct AppKernel {
     pub fun_ident: Box<Ident>,
     pub gen_args: Vec<ArgKinded>,
     pub args: Vec<Expr>,
+}
+
+impl AppKernel {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::AppKernel<'a> {
+        arena_ast::AppKernel {
+            grid_dim: self.grid_dim.into_arena(arena),
+            block_dim: self.block_dim.into_arena(arena),
+            shared_mem_dtys: self
+                .shared_mem_dtys
+                .iter()
+                .map(|dty| dty.clone().into_arena(arena))
+                .collect_in(arena),
+            shared_mem_prvs: self
+                .shared_mem_prvs
+                .iter()
+                .map(|s| arena.alloc_str(s).to_string())
+                .collect_in(arena),
+            fun_ident: arena.alloc(self.fun_ident.clone().into_arena(arena)),
+            gen_args: self
+                .gen_args
+                .iter()
+                .map(|arg| arg.into_arena(arena))
+                .collect_in(arena),
+            args: self
+                .args
+                .iter()
+                .map(|arg| arg.clone().into_arena(arena))
+                .collect_in(arena),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -393,6 +607,125 @@ pub enum ExprKind {
     Range(Box<Expr>, Box<Expr>),
 }
 
+impl ExprKind {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExprKind<'a> {
+        use ExprKind::*;
+        match self {
+            Hole => arena_ast::ExprKind::Hole,
+            Lit(l) => arena_ast::ExprKind::Lit(l.into_arena(arena)), // assuming `Lit` is Copy or doesn't need arena
+            PlaceExpr(p) => arena_ast::ExprKind::PlaceExpr(arena.alloc(p.into_arena(arena))),
+            Array(exprs) => {
+                let mut bump_vec = bumpalo::collections::Vec::new_in(arena);
+                for e in exprs {
+                    bump_vec.push(e.into_arena(arena));
+                }
+                arena_ast::ExprKind::Array(bump_vec)
+            }
+            Tuple(exprs) => {
+                let mut bump_vec = bumpalo::collections::Vec::new_in(arena);
+                for e in exprs {
+                    bump_vec.push(e.into_arena(arena));
+                }
+                arena_ast::ExprKind::Tuple(bump_vec)
+            }
+            Ref(ann, own, pl) => {
+                arena_ast::ExprKind::Ref(ann, own.into_arena(), arena.alloc(pl.into_arena(arena)))
+            }
+            Block(b) => {
+                let b_ref = arena.alloc(b.into_arena(arena));
+                arena_ast::ExprKind::Block(b_ref)
+            }
+            LetUninit(exec, ident, ty) => arena_ast::ExprKind::LetUninit(
+                exec.map(|e| &*arena.alloc(e.into_arena(arena))),
+                ident.into_arena(arena),
+                arena.alloc(ty.into_arena(arena)),
+            ),
+            Let(pat, ty, expr) => arena_ast::ExprKind::Let(
+                pat.into_arena(arena),
+                ty.map(|t| &*arena.alloc(t.into_arena(arena))),
+                arena.alloc(expr.into_arena(arena)),
+            ),
+            Assign(pl, val) => arena_ast::ExprKind::Assign(
+                arena.alloc(pl.into_arena(arena)),
+                arena.alloc(val.into_arena(arena)),
+            ),
+            IdxAssign(pl, nat, val) => arena_ast::ExprKind::IdxAssign(
+                arena.alloc(pl.into_arena(arena)),
+                nat.into_arena(arena),
+                arena.alloc(val.into_arena(arena)),
+            ),
+            Seq(exprs) => arena_ast::ExprKind::Seq(
+                exprs
+                    .into_iter()
+                    .map(|e| e.into_arena(arena))
+                    .collect_in(arena),
+            ),
+            App(ident, args, exprs) => arena_ast::ExprKind::App(
+                arena.alloc(ident.into_arena(arena)),
+                args.into_iter()
+                    .map(|a| a.into_arena(arena))
+                    .collect_in(arena),
+                exprs
+                    .into_iter()
+                    .map(|e| e.into_arena(arena))
+                    .collect_in(arena),
+            ),
+            DepApp(ident, args) => arena_ast::ExprKind::DepApp(
+                ident.into_arena(arena),
+                args.into_iter()
+                    .map(|a| a.into_arena(arena))
+                    .collect_in(arena),
+            ),
+            ExprKind::AppKernel(kern) => {
+                arena_ast::ExprKind::AppKernel(arena.alloc(kern.into_arena(arena)))
+            }
+            IfElse(cond, then_, else_) => arena_ast::ExprKind::IfElse(
+                arena.alloc(cond.into_arena(arena)),
+                arena.alloc(then_.into_arena(arena)),
+                arena.alloc(else_.into_arena(arena)),
+            ),
+            If(cond, body) => arena_ast::ExprKind::If(
+                arena.alloc(cond.into_arena(arena)),
+                arena.alloc(body.into_arena(arena)),
+            ),
+            For(ident, iter, body) => arena_ast::ExprKind::For(
+                ident.into_arena(arena),
+                arena.alloc(iter.into_arena(arena)),
+                arena.alloc(body.into_arena(arena)),
+            ),
+            ForNat(ident, range, body) => arena_ast::ExprKind::ForNat(
+                ident.into_arena(arena),
+                arena.alloc(range.into_arena(arena)),
+                arena.alloc(body.into_arena(arena)),
+            ),
+            While(cond, body) => arena_ast::ExprKind::While(
+                arena.alloc(cond.into_arena(arena)),
+                arena.alloc(body.into_arena(arena)),
+            ),
+            BinOp(op, lhs, rhs) => arena_ast::ExprKind::BinOp(
+                op.into_arena(),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
+            ),
+            UnOp(op, expr) => {
+                arena_ast::ExprKind::UnOp(op.into_arena(), arena.alloc(expr.into_arena(arena)))
+            }
+            Cast(expr, dty) => arena_ast::ExprKind::Cast(
+                arena.alloc(expr.into_arena(arena)),
+                arena.alloc(dty.into_arena(arena)),
+            ),
+            Split(split) => arena_ast::ExprKind::Split(arena.alloc(split.into_arena(arena))),
+            Sched(sched) => arena_ast::ExprKind::Sched(arena.alloc(sched.into_arena(arena))),
+            Sync(exec_opt) => arena_ast::ExprKind::Sync(exec_opt.map(|e| e.into_arena(arena))),
+            Unsafe(expr) => arena_ast::ExprKind::Unsafe(arena.alloc(expr.into_arena(arena))),
+            Range(start, end) => arena_ast::ExprKind::Range(
+                arena.alloc(start.into_arena(arena)),
+                arena.alloc(end.into_arena(arena)),
+            ),
+        }
+    }
+}
+
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Clone, Debug)]
 pub struct Ident {
@@ -428,6 +761,14 @@ impl Ident {
             is_implicit: false,
         }
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Ident<'a> {
+        arena_ast::Ident {
+            name: arena.alloc_str(&self.name),
+            span: self.span,
+            is_implicit: self.is_implicit,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -435,6 +776,23 @@ pub enum Pattern {
     Ident(Mutability, Ident),
     Tuple(Vec<Pattern>),
     Wildcard,
+}
+
+impl Pattern {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Pattern<'a> {
+        use Pattern::*;
+        match self {
+            Ident(mutability, ident) => {
+                arena_ast::Pattern::Ident(mutability.into_arena(), ident.clone().into_arena(arena))
+            }
+            Tuple(pats) => {
+                let arena_vec: bumpalo::collections::Vec<'a, _> =
+                    pats.iter().map(|p| p.into_arena(arena)).collect_in(arena);
+                arena_ast::Pattern::Tuple(arena_vec)
+            }
+            Wildcard => arena_ast::Pattern::Wildcard,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -447,6 +805,24 @@ pub enum Lit {
     U64(u64),
     F32(f32),
     F64(f64),
+}
+
+impl Lit {
+    pub fn into_arena<'a>(&self, _arena: &'a Bump) -> arena_ast::Lit {
+        use arena_ast::Lit as ALit;
+        use Lit::*;
+
+        match self {
+            Unit => ALit::Unit,
+            Bool(b) => ALit::Bool(*b),
+            I32(i) => ALit::I32(*i),
+            U8(u) => ALit::U8(*u),
+            U32(u) => ALit::U32(*u),
+            U64(u) => ALit::U64(*u),
+            F32(f) => ALit::F32(*f),
+            F64(f) => ALit::F64(*f),
+        }
+    }
 }
 
 // impl PartialEq for Lit{
@@ -483,6 +859,15 @@ pub enum Mutability {
     Mut,
 }
 
+impl Mutability {
+    pub fn into_arena(&self) -> arena_ast::Mutability {
+        match self {
+            Mutability::Mut => arena_ast::Mutability::Mut,
+            Mutability::Const => arena_ast::Mutability::Const,
+        }
+    }
+}
+
 impl fmt::Display for Mutability {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let str = match self {
@@ -499,10 +884,28 @@ pub enum Ownership {
     Uniq,
 }
 
+impl Ownership {
+    pub fn into_arena(&self) -> arena_ast::Ownership {
+        match self {
+            Ownership::Shrd => arena_ast::Ownership::Shrd,
+            Ownership::Uniq => arena_ast::Ownership::Uniq,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Not,
     Neg,
+}
+
+impl UnOp {
+    pub fn into_arena(&self) -> arena_ast::UnOp {
+        match self {
+            UnOp::Not => arena_ast::UnOp::Not,
+            UnOp::Neg => arena_ast::UnOp::Neg,
+        }
+    }
 }
 
 impl fmt::Display for UnOp {
@@ -534,6 +937,30 @@ pub enum BinOp {
     Shr,
     BitOr,
     BitAnd,
+}
+
+impl BinOp {
+    pub fn into_arena(&self) -> arena_ast::BinOp {
+        match self {
+            BinOp::Add => arena_ast::BinOp::Add,
+            BinOp::Sub => arena_ast::BinOp::Sub,
+            BinOp::Mul => arena_ast::BinOp::Mul,
+            BinOp::Div => arena_ast::BinOp::Div,
+            BinOp::Mod => arena_ast::BinOp::Mod,
+            BinOp::And => arena_ast::BinOp::And,
+            BinOp::Or => arena_ast::BinOp::Or,
+            BinOp::Eq => arena_ast::BinOp::Eq,
+            BinOp::Lt => arena_ast::BinOp::Lt,
+            BinOp::Le => arena_ast::BinOp::Le,
+            BinOp::Gt => arena_ast::BinOp::Gt,
+            BinOp::Ge => arena_ast::BinOp::Ge,
+            BinOp::Neq => arena_ast::BinOp::Neq,
+            BinOp::Shl => arena_ast::BinOp::Shl,
+            BinOp::Shr => arena_ast::BinOp::Shr,
+            BinOp::BitOr => arena_ast::BinOp::BitOr,
+            BinOp::BitAnd => arena_ast::BinOp::BitAnd,
+        }
+    }
 }
 
 impl fmt::Display for BinOp {
@@ -569,6 +996,17 @@ pub enum Kind {
     Provenance,
 }
 
+impl Kind {
+    pub fn into_arena(&self, _arena: &Bump) -> arena_ast::Kind {
+        match self {
+            Kind::Nat => arena_ast::Kind::Nat,
+            Kind::Memory => arena_ast::Kind::Memory,
+            Kind::DataTy => arena_ast::Kind::DataTy,
+            Kind::Provenance => arena_ast::Kind::Provenance,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArgKinded {
     Ident(Ident),
@@ -601,6 +1039,18 @@ impl ArgKinded {
             _ => Ok(false),
         }
     }
+
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::ArgKinded<'a> {
+        use ArgKinded::*;
+
+        match self {
+            Ident(ident) => arena_ast::ArgKinded::Ident(ident.clone().into_arena(arena)),
+            Nat(nat) => arena_ast::ArgKinded::Nat(nat.into_arena(arena)),
+            Memory(mem) => arena_ast::ArgKinded::Memory(mem.into_arena(arena)),
+            DataTy(dty) => arena_ast::ArgKinded::DataTy(dty.clone().into_arena(arena)),
+            Provenance(prv) => arena_ast::ArgKinded::Provenance(prv.into_arena(arena)),
+        }
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -612,6 +1062,24 @@ pub struct PlaceExpr {
     pub ty: Option<Box<Ty>>,
     #[span_derive_ignore]
     pub span: Option<Span>,
+}
+
+impl PlaceExpr {
+    pub fn into_arena<'a>(self, arena: &'a bumpalo::Bump) -> arena_ast::PlaceExpr<'a> {
+        let out = arena_ast::PlaceExpr {
+            pl_expr: self.pl_expr.into_arena(arena),
+            ty: OnceCell::new(),
+            span: self.span,
+        };
+
+        if let Some(t) = self.ty {
+            let t_arena = t.into_arena(arena);
+            let t_ref: &'a arena_ast::Ty<'a> = arena.alloc(t_arena);
+            let _ = out.ty.set(t_ref);
+        }
+
+        out
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -644,6 +1112,26 @@ impl View {
         }
         Ok(true)
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::View<'a> {
+        let gen_args = self
+            .gen_args
+            .into_iter()
+            .map(|g| g.into_arena(arena))
+            .collect_in(arena);
+
+        let args = self
+            .args
+            .into_iter()
+            .map(|v| v.into_arena(arena))
+            .collect_in(arena);
+
+        arena_ast::View {
+            name: self.name.into_arena(arena),
+            gen_args,
+            args,
+        }
+    }
 }
 
 // TODO create generic View struct to enable easier extensibility by introducing only
@@ -674,6 +1162,34 @@ pub enum PlaceExprKind {
     Idx(Box<PlaceExpr>, Box<Nat>),
     // x
     Ident(Ident),
+}
+
+impl PlaceExprKind {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::PlaceExprKind<'a> {
+        use PlaceExprKind::*;
+
+        match self {
+            View(pl, view) => arena_ast::PlaceExprKind::View(
+                arena.alloc(pl.into_arena(arena)),
+                arena.alloc(view.into_arena(arena)),
+            ),
+            Select(pl, exec) => arena_ast::PlaceExprKind::Select(
+                arena.alloc(pl.into_arena(arena)),
+                arena.alloc(exec.into_arena(arena)),
+            ),
+            Proj(pl, idx) => arena_ast::PlaceExprKind::Proj(arena.alloc(pl.into_arena(arena)), idx),
+            FieldProj(pl, ident) => arena_ast::PlaceExprKind::FieldProj(
+                arena.alloc(pl.into_arena(arena)),
+                arena.alloc(ident.into_arena(arena)),
+            ),
+            Deref(pl) => arena_ast::PlaceExprKind::Deref(arena.alloc(pl.into_arena(arena))),
+            Idx(pl, nat) => arena_ast::PlaceExprKind::Idx(
+                arena.alloc(pl.into_arena(arena)),
+                arena.alloc(nat.into_arena(arena)),
+            ),
+            Ident(ident) => arena_ast::PlaceExprKind::Ident(ident.into_arena(arena)),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -844,6 +1360,17 @@ impl ExecExpr {
         }
     }
 
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecExpr<'a> {
+        arena_ast::ExecExpr {
+            exec: arena.alloc(self.exec.into_arena(arena)),
+            ty: self.ty.map(|t| {
+                let tmp: &mut arena_ast::ExecTy<'a> = arena.alloc(t.into_arena(arena));
+                &*tmp
+            }),
+            span: self.span,
+        }
+    }
+
     // TODO how does this relate to is_prefix_of. Refactor.
     pub fn is_sub_exec_of(&self, exec: &ExecExpr) -> bool {
         if self.exec.path.len() > exec.exec.path.len() {
@@ -936,6 +1463,15 @@ pub enum LeftOrRight {
     Right,
 }
 
+impl LeftOrRight {
+    pub fn into_arena(self) -> crate::arena_ast::LeftOrRight {
+        match self {
+            LeftOrRight::Left => crate::arena_ast::LeftOrRight::Left,
+            LeftOrRight::Right => crate::arena_ast::LeftOrRight::Right,
+        }
+    }
+}
+
 impl fmt::Display for LeftOrRight {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -958,6 +1494,14 @@ impl TakeRange {
             split_dim,
             pos,
             left_or_right: proj,
+        }
+    }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::TakeRange<'a> {
+        arena_ast::TakeRange {
+            split_dim: self.split_dim.into_arena(),
+            pos: self.pos.into_arena(arena),
+            left_or_right: self.left_or_right.into_arena(),
         }
     }
 }
@@ -998,6 +1542,18 @@ impl ExecExprKind {
         }
         None
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecExprKind<'a> {
+        let path = bumpalo::collections::Vec::from_iter_in(
+            self.path.into_iter().map(|elem| elem.into_arena(arena)),
+            arena,
+        );
+
+        arena_ast::ExecExprKind {
+            base: self.base.into_arena(arena),
+            path,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1007,12 +1563,42 @@ pub enum BaseExec {
     GpuGrid(Dim, Dim),
 }
 
+impl BaseExec {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::BaseExec<'a> {
+        use BaseExec::*;
+        match self {
+            Ident(ident) => arena_ast::BaseExec::Ident(ident.into_arena(arena)),
+            CpuThread => arena_ast::BaseExec::CpuThread,
+            GpuGrid(d1, d2) => arena_ast::BaseExec::GpuGrid(
+                arena.alloc(d1.into_arena(arena)),
+                arena.alloc(d2.into_arena(arena)),
+            ),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum ExecPathElem {
     TakeRange(Box<TakeRange>),
     ForAll(DimCompo),
     ToWarps,
     ToThreads(DimCompo),
+}
+
+impl ExecPathElem {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecPathElem<'a> {
+        use ExecPathElem::*;
+
+        match self {
+            TakeRange(take_range) => {
+                let arena_take_range = arena.alloc(take_range.clone().into_arena(arena));
+                arena_ast::ExecPathElem::TakeRange(arena_take_range)
+            }
+            ForAll(dim_compo) => arena_ast::ExecPathElem::ForAll(dim_compo.into_arena()),
+            ToWarps => arena_ast::ExecPathElem::ToWarps,
+            ToThreads(dim_compo) => arena_ast::ExecPathElem::ToThreads(dim_compo.into_arena()),
+        }
+    }
 }
 
 // ExecTy
@@ -1034,6 +1620,13 @@ impl ExecTy {
             span: None,
         }
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ExecTy<'a> {
+        arena_ast::ExecTy {
+            ty: self.ty.into_arena(arena),
+            span: self.span,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1050,12 +1643,47 @@ pub enum ExecTyKind {
     Any,
 }
 
+impl ExecTyKind {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::ExecTyKind<'a> {
+        use ExecTyKind::*;
+
+        match self {
+            CpuThread => arena_ast::ExecTyKind::CpuThread,
+            GpuThread => arena_ast::ExecTyKind::GpuThread,
+            GpuWarp => arena_ast::ExecTyKind::GpuWarp,
+            GpuBlock(dim) => arena_ast::ExecTyKind::GpuBlock(dim.into_arena(arena)),
+            GpuGrid(d1, d2) => {
+                arena_ast::ExecTyKind::GpuGrid(d1.into_arena(arena), d2.into_arena(arena))
+            }
+            GpuToThreads(dim, inner) => arena_ast::ExecTyKind::GpuToThreads(
+                dim.into_arena(arena),
+                arena.alloc(inner.clone().into_arena(arena)),
+            ),
+            GpuThreadGrp(dim) => arena_ast::ExecTyKind::GpuThreadGrp(dim.into_arena(arena)),
+            GpuWarpGrp(nat) => arena_ast::ExecTyKind::GpuWarpGrp(nat.into_arena(arena)),
+            GpuBlockGrp(d1, d2) => {
+                arena_ast::ExecTyKind::GpuBlockGrp(d1.into_arena(arena), d2.into_arena(arena))
+            }
+            Any => arena_ast::ExecTyKind::Any,
+        }
+    }
+}
+
 #[span_derive(PartialEq, Eq, Hash)]
 #[derive(Debug, Clone)]
 pub struct Ty {
     pub ty: TyKind,
     #[span_derive_ignore]
     pub span: Option<Span>,
+}
+
+impl Ty {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::Ty<'a> {
+        arena_ast::Ty {
+            ty: self.ty.into_arena(arena),
+            span: self.span,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1067,6 +1695,14 @@ pub struct ParamSig {
 impl ParamSig {
     pub fn new(exec_expr: ExecExpr, ty: Ty) -> Self {
         ParamSig { exec_expr, ty }
+    }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::ParamSig<'a> {
+        let ty = self.ty.into_arena(arena);
+        arena_ast::ParamSig {
+            exec_expr: self.exec_expr.into_arena(arena),
+            ty: arena.alloc(ty),
+        }
     }
 }
 
@@ -1098,6 +1734,37 @@ impl FnTy {
             nat_constrs,
         }
     }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::FnTy<'a> {
+        let generics = self
+            .generics
+            .into_iter()
+            .map(|g| g.into_arena(arena))
+            .collect_in(arena);
+
+        let generic_exec = self.generic_exec.map(|g| g.into_arena(arena));
+
+        let param_sigs = self
+            .param_sigs
+            .into_iter()
+            .map(|p| p.into_arena(arena))
+            .collect_in(arena);
+
+        let nat_constrs = self
+            .nat_constrs
+            .into_iter()
+            .map(|c| c.into_arena(arena))
+            .collect_in(arena);
+
+        arena_ast::FnTy {
+            generics,
+            generic_exec,
+            param_sigs,
+            exec: self.exec.into_arena(arena),
+            ret_ty: arena.alloc(self.ret_ty.into_arena(arena)),
+            nat_constrs,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1109,6 +1776,32 @@ pub enum NatConstr {
     Or(Box<NatConstr>, Box<NatConstr>),
 }
 
+impl NatConstr {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::NatConstr<'a> {
+        use NatConstr::*;
+
+        match self {
+            True => arena_ast::NatConstr::True,
+            Eq(lhs, rhs) => arena_ast::NatConstr::Eq(
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
+            ),
+            Lt(lhs, rhs) => arena_ast::NatConstr::Lt(
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
+            ),
+            And(lhs, rhs) => arena_ast::NatConstr::And(
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
+            ),
+            Or(lhs, rhs) => arena_ast::NatConstr::Or(
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
+            ),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum TyKind {
     Data(Box<DataTy>),
@@ -1116,10 +1809,33 @@ pub enum TyKind {
     FnTy(Box<FnTy>),
 }
 
+impl TyKind {
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::TyKind<'a> {
+        match self {
+            TyKind::Data(dty) => {
+                let boxed = bumpalo::boxed::Box::new_in(dty.into_arena(arena), arena);
+                arena_ast::TyKind::Data(arena.alloc(boxed))
+            }
+            TyKind::FnTy(fn_ty) => {
+                let boxed = bumpalo::boxed::Box::new_in(fn_ty.into_arena(arena), arena);
+                arena_ast::TyKind::FnTy(arena.alloc(boxed))
+            }
+        }
+    }
+}
+
 // TODO remove
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Constraint {
     Copyable,
+}
+
+impl Constraint {
+    pub fn into_arena(&self) -> arena_ast::Constraint {
+        match self {
+            Constraint::Copyable => arena_ast::Constraint::Copyable,
+        }
+    }
 }
 
 impl Ty {
@@ -1213,6 +1929,33 @@ impl Dim {
             _ => Ok(false),
         }
     }
+
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Dim<'a> {
+        use Dim::*;
+
+        match self {
+            XYZ(boxed) => arena_ast::Dim::XYZ(arena.alloc(arena_ast::Dim3d(
+                boxed.0.into_arena(arena),
+                boxed.1.into_arena(arena),
+                boxed.2.into_arena(arena),
+            ))),
+            XY(boxed) => arena_ast::Dim::XY(arena.alloc(arena_ast::Dim2d(
+                boxed.0.into_arena(arena),
+                boxed.1.into_arena(arena),
+            ))),
+            XZ(boxed) => arena_ast::Dim::XZ(arena.alloc(arena_ast::Dim2d(
+                boxed.0.into_arena(arena),
+                boxed.1.into_arena(arena),
+            ))),
+            YZ(boxed) => arena_ast::Dim::YZ(arena.alloc(arena_ast::Dim2d(
+                boxed.0.into_arena(arena),
+                boxed.1.into_arena(arena),
+            ))),
+            X(boxed) => arena_ast::Dim::X(arena.alloc(arena_ast::Dim1d(boxed.0.into_arena(arena)))),
+            Y(boxed) => arena_ast::Dim::Y(arena.alloc(arena_ast::Dim1d(boxed.0.into_arena(arena)))),
+            Z(boxed) => arena_ast::Dim::Z(arena.alloc(arena_ast::Dim1d(boxed.0.into_arena(arena)))),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Hash, Debug, Copy, Clone)]
@@ -1220,6 +1963,16 @@ pub enum DimCompo {
     X,
     Y,
     Z,
+}
+
+impl DimCompo {
+    pub fn into_arena(self) -> crate::arena_ast::DimCompo {
+        match self {
+            DimCompo::X => crate::arena_ast::DimCompo::X,
+            DimCompo::Y => crate::arena_ast::DimCompo::Y,
+            DimCompo::Z => crate::arena_ast::DimCompo::Z,
+        }
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -1238,6 +1991,18 @@ impl DataTy {
             dty,
             constraints: vec![],
             span: None,
+        }
+    }
+
+    pub fn into_arena<'a>(self, arena: &'a Bump) -> arena_ast::DataTy<'a> {
+        arena_ast::DataTy {
+            dty: self.dty.into_arena(arena),
+            constraints: self
+                .constraints
+                .into_iter()
+                .map(|c| c.into_arena())
+                .collect_in(arena),
+            span: self.span,
         }
     }
 
@@ -1410,6 +2175,15 @@ impl RefDty {
             dty: Box::new(dty),
         }
     }
+
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::RefDty<'a> {
+        arena_ast::RefDty {
+            rgn: self.rgn.into_arena(arena),
+            own: self.own.into_arena(),
+            mem: self.mem.into_arena(arena),
+            dty: arena.alloc(self.dty.clone().into_arena(arena)),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1431,6 +2205,56 @@ pub enum DataTyKind {
     Dead(Box<DataTy>),
 }
 
+impl DataTyKind {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::DataTyKind<'a> {
+        use DataTyKind::*;
+
+        match self {
+            Ident(ident) => arena_ast::DataTyKind::Ident(ident.clone().into_arena(arena)),
+            Scalar(sty) => arena_ast::DataTyKind::Scalar(sty.into_arena()),
+            Atomic(aty) => arena_ast::DataTyKind::Atomic(aty.into_arena()),
+
+            Array(dty, nat) => arena_ast::DataTyKind::Array(
+                arena.alloc(dty.clone().into_arena(arena)),
+                nat.into_arena(arena),
+            ),
+
+            ArrayShape(dty, nat) => arena_ast::DataTyKind::ArrayShape(
+                arena.alloc(dty.clone().into_arena(arena)),
+                nat.into_arena(arena),
+            ),
+
+            Tuple(elem_dtys) => {
+                let arena_vec = bumpalo::collections::Vec::from_iter_in(
+                    elem_dtys.iter().map(|dty| dty.clone().into_arena(arena)),
+                    arena,
+                );
+                arena_ast::DataTyKind::Tuple(arena_vec)
+            }
+
+            Struct(decl) => {
+                arena_ast::DataTyKind::Struct(arena.alloc(decl.clone().into_arena(arena)))
+            }
+
+            At(dty, mem) => arena_ast::DataTyKind::At(
+                arena.alloc(dty.clone().into_arena(arena)),
+                mem.into_arena(arena),
+            ),
+
+            Ref(refdty) => {
+                let refdty_in = arena.alloc(refdty.into_arena(arena));
+                arena_ast::DataTyKind::Ref(refdty_in)
+            }
+
+            RawPtr(dty) => {
+                arena_ast::DataTyKind::RawPtr(arena.alloc(dty.clone().into_arena(arena)))
+            }
+
+            Dead(dty) => arena_ast::DataTyKind::Dead(arena.alloc(dty.clone().into_arena(arena))),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum ScalarTy {
     Unit,
@@ -1445,16 +2269,53 @@ pub enum ScalarTy {
     Gpu,
 }
 
+impl ScalarTy {
+    pub fn into_arena(self) -> arena_ast::ScalarTy {
+        match self {
+            ScalarTy::Unit => arena_ast::ScalarTy::Unit,
+            ScalarTy::U8 => arena_ast::ScalarTy::U8,
+            ScalarTy::U32 => arena_ast::ScalarTy::U32,
+            ScalarTy::U64 => arena_ast::ScalarTy::U64,
+            ScalarTy::I32 => arena_ast::ScalarTy::I32,
+            ScalarTy::I64 => arena_ast::ScalarTy::I64,
+            ScalarTy::F32 => arena_ast::ScalarTy::F32,
+            ScalarTy::F64 => arena_ast::ScalarTy::F64,
+            ScalarTy::Bool => arena_ast::ScalarTy::Bool,
+            ScalarTy::Gpu => arena_ast::ScalarTy::Gpu,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub enum AtomicTy {
     AtomicU32,
     AtomicI32,
 }
 
+impl AtomicTy {
+    pub fn into_arena(self) -> arena_ast::AtomicTy {
+        match self {
+            AtomicTy::AtomicU32 => arena_ast::AtomicTy::AtomicU32,
+            AtomicTy::AtomicI32 => arena_ast::AtomicTy::AtomicI32,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Provenance {
     Value(String),
     Ident(Ident),
+}
+
+impl Provenance {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Provenance<'a> {
+        match self {
+            Provenance::Value(s) => arena_ast::Provenance::Value(arena.alloc_str(s)),
+            Provenance::Ident(ident) => {
+                arena_ast::Provenance::Ident(ident.clone().into_arena(arena))
+            }
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1466,10 +2327,31 @@ pub enum Memory {
     Ident(Ident),
 }
 
+impl Memory {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Memory<'a> {
+        match self {
+            Memory::CpuMem => arena_ast::Memory::CpuMem,
+            Memory::GpuGlobal => arena_ast::Memory::GpuGlobal,
+            Memory::GpuShared => arena_ast::Memory::GpuShared,
+            Memory::GpuLocal => arena_ast::Memory::GpuLocal,
+            Memory::Ident(ident) => arena_ast::Memory::Ident(ident.clone().into_arena(arena)),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct PrvRel {
     pub longer: Ident,
     pub shorter: Ident,
+}
+
+impl PrvRel {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::PrvRel<'a> {
+        arena_ast::PrvRel {
+            longer: self.longer.clone().into_arena(arena),
+            shorter: self.shorter.clone().into_arena(arena),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -1483,6 +2365,13 @@ impl IdentKinded {
         IdentKinded {
             ident: ident.clone(),
             kind,
+        }
+    }
+
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::IdentKinded<'a> {
+        arena_ast::IdentKinded {
+            ident: self.ident.clone().into_arena(arena),
+            kind: self.kind.into_arena(arena),
         }
     }
 }
@@ -1512,6 +2401,23 @@ impl NatRange {
             }
         };
         Ok(range_iter)
+    }
+
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::NatRange<'a> {
+        use NatRange::*;
+
+        match self {
+            Simple { lower, upper } => arena_ast::NatRange::Simple {
+                lower: lower.into_arena(arena),
+                upper: upper.into_arena(arena),
+            },
+            Halved { upper } => arena_ast::NatRange::Halved {
+                upper: upper.into_arena(arena),
+            },
+            Doubled { upper } => arena_ast::NatRange::Doubled {
+                upper: upper.into_arena(arena),
+            },
+        }
     }
 }
 
@@ -1620,12 +2526,59 @@ impl NatCtx {
 
 #[derive(Debug)]
 pub struct NatEvalError {
-    unevaluable: Nat,
+    pub unevaluable: Nat,
+}
+
+impl NatEvalError {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::NatEvalError<'a> {
+        arena_ast::NatEvalError {
+            unevaluable: self.unevaluable.clone().into_arena(arena),
+        }
+    }
 }
 
 pub type NatEvalResult<T> = Result<T, NatEvalError>;
 
+fn convert_result<'a>(
+    result: NatEvalResult<usize>,
+    arena: &'a Bump,
+) -> arena_ast::NatEvalResult<'a, usize> {
+    result.map_err(|e| e.into_arena(arena))
+}
+
 impl Nat {
+    pub fn into_arena<'a>(&self, arena: &'a Bump) -> arena_ast::Nat<'a> {
+        use Nat::*;
+
+        match self {
+            Ident(ident) => arena_ast::Nat::Ident(ident.clone().into_arena(arena)),
+
+            Lit(n) => arena_ast::Nat::Lit(*n),
+
+            ThreadIdx(dc) => arena_ast::Nat::ThreadIdx((*dc).into_arena()),
+            BlockIdx(dc) => arena_ast::Nat::BlockIdx((*dc).into_arena()),
+            BlockDim(dc) => arena_ast::Nat::BlockDim((*dc).into_arena()),
+
+            WarpGrpIdx => arena_ast::Nat::WarpGrpIdx,
+            WarpIdx => arena_ast::Nat::WarpIdx,
+            LaneIdx => arena_ast::Nat::LaneIdx,
+            GridIdx => arena_ast::Nat::GridIdx,
+
+            BinOp(op, lhs, rhs) => arena_ast::Nat::BinOp(
+                op.clone().into_arena(),
+                arena.alloc(lhs.into_arena(arena)),
+                arena.alloc(rhs.into_arena(arena)),
+            ),
+
+            App(ident, args) => {
+                let arena_args: BumpVec<'a, arena_ast::Nat<'a>> =
+                    BumpVec::from_iter_in(args.iter().map(|n| n.into_arena(arena)), arena);
+
+                arena_ast::Nat::App(ident.clone().into_arena(arena), arena_args)
+            }
+        }
+    }
+
     pub fn eval(&self, nat_ctx: &NatCtx) -> NatEvalResult<usize> {
         match self {
             Nat::GridIdx
@@ -1666,6 +2619,18 @@ pub enum BinOpNat {
     Mul,
     Div,
     Mod,
+}
+
+impl BinOpNat {
+    pub fn into_arena(self) -> crate::arena_ast::BinOpNat {
+        match self {
+            BinOpNat::Add => crate::arena_ast::BinOpNat::Add,
+            BinOpNat::Sub => crate::arena_ast::BinOpNat::Sub,
+            BinOpNat::Mul => crate::arena_ast::BinOpNat::Mul,
+            BinOpNat::Div => crate::arena_ast::BinOpNat::Div,
+            BinOpNat::Mod => crate::arena_ast::BinOpNat::Mod,
+        }
+    }
 }
 
 // When changing the AST, the types can quickly grow and lead to stack overflows in the different

@@ -2,7 +2,7 @@ use super::cu_ast::{
     BinOp, BufferKind, ExecKind, Expr, FnDef, FnSig, GpuAddrSpace, Item, Lit, ParamDecl, ScalarTy,
     Stmt, TemplParam, TemplateArg, Ty, UnOp,
 };
-use crate::ast::{BinOpNat, DimCompo, Ident, Nat};
+use crate::arena_ast::{BinOpNat, DimCompo, Ident, Nat};
 use std::env;
 use std::fmt::Formatter;
 
@@ -60,7 +60,7 @@ impl<'a> std::fmt::Display for Item<'a> {
     }
 }
 
-impl std::fmt::Display for FnSig {
+impl<'a> std::fmt::Display for FnSig<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let FnSig {
             name,
@@ -81,7 +81,7 @@ impl std::fmt::Display for FnSig {
     }
 }
 
-impl std::fmt::Display for FnDef {
+impl<'a> std::fmt::Display for FnDef<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let FnDef { fn_sig, body } = self;
         write!(f, "{}", fn_sig)?;
@@ -89,7 +89,7 @@ impl std::fmt::Display for FnDef {
     }
 }
 
-impl std::fmt::Display for Ident {
+impl<'a> std::fmt::Display for Ident<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
@@ -105,7 +105,7 @@ impl std::fmt::Display for ExecKind {
     }
 }
 
-impl std::fmt::Display for Stmt {
+impl<'a> std::fmt::Display for Stmt<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Stmt::*;
         match self {
@@ -201,7 +201,7 @@ impl std::fmt::Display for Stmt {
     }
 }
 
-impl std::fmt::Display for Expr {
+impl<'a> std::fmt::Display for Expr<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Expr::*;
         match self {
@@ -293,13 +293,13 @@ impl std::fmt::Display for Lit {
     }
 }
 
-impl std::fmt::Display for ParamDecl {
+impl<'a> std::fmt::Display for ParamDecl<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.ty, self.name)
     }
 }
 
-impl std::fmt::Display for TemplateArg {
+impl<'a> std::fmt::Display for TemplateArg<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TemplateArg::Expr(expr) => write!(f, "{}", expr),
@@ -308,7 +308,7 @@ impl std::fmt::Display for TemplateArg {
     }
 }
 
-impl std::fmt::Display for TemplParam {
+impl<'a> std::fmt::Display for TemplParam<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TemplParam::Value { param_name, ty } => write!(f, "{} {}", ty, param_name),
@@ -361,7 +361,7 @@ impl std::fmt::Display for GpuAddrSpace {
     }
 }
 
-impl std::fmt::Display for Ty {
+impl<'a> std::fmt::Display for Ty<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use Ty::*;
         match self {
@@ -415,7 +415,7 @@ impl std::fmt::Display for ScalarTy {
     }
 }
 
-impl std::fmt::Display for Nat {
+impl<'a> std::fmt::Display for Nat<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ident(ident) => write!(f, "{}", ident),
