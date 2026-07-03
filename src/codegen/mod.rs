@@ -8,13 +8,12 @@ use crate::ty_check;
 use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicI32, Ordering};
 
 pub(crate) static WARP_IDENT: &str = "$warp";
 
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
-pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
+pub fn gen(comp_unit: &desc::CompilUnit) -> String {
     let mut initial_fns_to_generate = collect_initial_fns_to_generate(comp_unit);
     let mut codegen_ctx = CodegenCtx::new(
         // CpuThread is only a dummy and will be set according to the generated function.
@@ -45,7 +44,7 @@ pub fn gen(comp_unit: &desc::CompilUnit, idx_checks: bool) -> String {
     let cu_fn_defs = codegen_ctx
         .inst_fn_ctx
         .into_values()
-        .chain(generated_initial_fns.into_iter())
+        .chain(generated_initial_fns)
         // mark kernel functions global
         .map(|mut f| {
             if let Some(ki) = codegen_ctx
@@ -152,7 +151,6 @@ fn mv_shrd_mem_params_into_decls(
             .fn_sig
             .params
             .drain(f.fn_sig.params.len() - num_shared_mem_decls..)
-            .into_iter()
             .map(|p| p.name)
             .collect::<Vec<_>>();
         let decl_seq = unnamed_shrd_mem_decls(&shrd_mem_params);
@@ -210,9 +208,11 @@ impl<'a> CodegenCtx<'a> {
     }
 }
 
+type AbstractStmt = dyn Fn(&[String]) -> cu::Stmt;
+
 struct KernelInfo {
     name: String,
-    unnamed_shrd_mem_decls: Box<dyn Fn(&[String]) -> cu::Stmt>,
+    unnamed_shrd_mem_decls: Box<AbstractStmt>,
     num_shrd_mem_decls: usize,
 }
 
@@ -263,7 +263,7 @@ impl<T: Debug + Clone> ScopeCtx<T> {
     }
 
     fn drop_scope(&mut self) {
-        if let None = self.map.pop() {
+        if self.map.pop().is_none() {
             panic!("There is no scope to remove.")
         }
     }
@@ -317,10 +317,10 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
     match &expr.expr {
         Let(pattern, _, e) => {
             // Let View
-            gen_let(pattern, &e, codegen_ctx)
+            gen_let(pattern, e, codegen_ctx)
         }
         LetUninit(_, ident, ty) => {
-            let (ty, addr_space) = match &ty.ty {
+            let (ty, _addr_space) = match &ty.ty {
                 desc::TyKind::Data(dty) => {
                     if let desc::DataTyKind::At(ddty, desc::Memory::GpuShared) = &dty.dty {
                         (
@@ -460,7 +460,8 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             cond: gen_expr(cond, codegen_ctx),
             stmt: Box::new(gen_stmt(body, false, codegen_ctx)),
         },
-        For(ident, coll_expr, body) => {
+        // FIXME
+        For(_ident, _coll_expr, _body) => {
             // if matches_dty!(
             //     coll_expr.ty.as_ref().unwrap(),
             //     desc::DataTy {
@@ -483,16 +484,17 @@ fn gen_stmt(expr: &desc::Expr, return_value: bool, codegen_ctx: &mut CodegenCtx)
             gen_if_else(gen_expr(cond, codegen_ctx), e_tt, e_ff, codegen_ctx)
         }
         If(cond, e_tt) => gen_if(gen_expr(cond, codegen_ctx), e_tt, codegen_ctx),
-        Sync(exec) => cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall::new(
+        // TODO not just block sync
+        Sync(_exec) => cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall::new(
             cu::Expr::Ident("__syncthreads".to_string()),
             vec![],
             vec![],
         ))),
         _ => {
             if return_value {
-                cu::Stmt::Return(Some(gen_expr(&expr, codegen_ctx)))
+                cu::Stmt::Return(Some(gen_expr(expr, codegen_ctx)))
             } else {
-                cu::Stmt::Expr(gen_expr(&expr, codegen_ctx))
+                cu::Stmt::Expr(gen_expr(expr, codegen_ctx))
             }
         }
     }
@@ -502,7 +504,7 @@ fn gen_let(pattern: &desc::Pattern, e: &desc::Expr, codegen_ctx: &mut CodegenCtx
     match pattern {
         desc::Pattern::Tuple(tuple_elems) => {
             let tuple_ident = desc::Ident::new(&desc::utils::fresh_name("tuple"));
-            let tuple_exec = desc::ExecExpr::new(desc::ExecExprKind::new(desc::BaseExec::Ident(
+            let _tuple_exec = desc::ExecExpr::new(desc::ExecExprKind::new(desc::BaseExec::Ident(
                 desc::Ident::new(&desc::utils::fresh_name("tuple_exec")),
             )));
             let tuple_bind = gen_let(
@@ -527,7 +529,7 @@ fn gen_let(pattern: &desc::Pattern, e: &desc::Expr, codegen_ctx: &mut CodegenCtx
                             ))),
                             match ty_check::proj_elem_dty(e.ty.as_ref().unwrap().dty(), i) {
                                 Ok(dty) => desc::Ty::new(desc::TyKind::Data(Box::new(dty))),
-                                Err(err) => {
+                                Err(_) => {
                                     panic!("Cannot project tuple element type at {}", i)
                                 }
                             },
@@ -625,7 +627,7 @@ fn gen_if_else(
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Stmt {
     cu::Stmt::IfElse {
-        cond: cond,
+        cond,
         true_body: Box::new(gen_stmt(e_tt, false, codegen_ctx)),
         false_body: Box::new(gen_stmt(e_ff, false, codegen_ctx)),
     }
@@ -633,105 +635,105 @@ fn gen_if_else(
 
 fn gen_if(cond: cu_ast::Expr, e_tt: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     cu::Stmt::If {
-        cond: cond,
+        cond,
         body: Box::new(gen_stmt(e_tt, false, codegen_ctx)),
     }
 }
 
-fn gen_for_each(
-    ident: &desc::Ident,
-    coll_expr: &desc::Expr,
-    body: &desc::Block,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Stmt {
-    todo!();
-    let i_name = crate::ast::utils::fresh_name("i__");
-    let i_decl = cu::Stmt::VarDecl {
-        name: i_name.clone(),
-        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-        addr_space: None,
-        expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
-        is_extern: false,
-    };
-    let i = cu::Expr::Ident(i_name.to_string());
-    codegen_ctx.push_scope();
-    // let let_i = gen_let(
-    //     &desc::Pattern::Ident(desc::Mutability::Mut, ident.clone()),
-    //     &desc::Expr::new(desc::ExprKind::PlaceExpr(Box::new(desc::PlaceExpr::new(
-    //         desc::PlaceExprKind::Idx(
-    //             Box::new(coll_expr.clone()),
-    //             Box::new(desc::Nat::Ident(desc::Ident::new(&i_name))),
-    //         ),
-    //     )))),
-    //     codegen_ctx,
-    // );
-    // let body = gen_expr(&body.body, codegen_ctx).expr();
-    // let cu_body = cu::Stmt::Seq(vec![let_i, cu::Stmt::Expr(body)]);
-    // let for_loop = cu::Stmt::ForLoop {
-    //     init: Box::new(i_decl),
-    //     cond: cu::Expr::BinOp {
-    //         op: cu::BinOp::Lt,
-    //         lhs: Box::new(i.clone()),
-    //         rhs: Box::new(cu::Expr::Nat(
-    //             extract_size(coll_expr.ty.as_ref().unwrap()).unwrap(),
-    //         )),
-    //     },
-    //     iter: cu::Expr::Assign {
-    //         lhs: Box::new(i.clone()),
-    //         rhs: Box::new(cu::Expr::BinOp {
-    //             op: cu::BinOp::Add,
-    //             lhs: Box::new(i),
-    //             rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
-    //         }),
-    //     },
-    //     stmt: Box::new(cu::Stmt::Block(Box::new(cu_body))),
-    // };
-    //
-    // codegen_ctx.view_ctx.drop_scope();
-    // for_loop
-}
+//fn gen_for_each(
+//    ident: &desc::Ident,
+//    coll_expr: &desc::Expr,
+//    body: &desc::Block,
+//    codegen_ctx: &mut CodegenCtx,
+//) -> cu::Stmt {
+//    todo!();
+//    let i_name = crate::ast::utils::fresh_name("i__");
+//    let i_decl = cu::Stmt::VarDecl {
+//        name: i_name.clone(),
+//        ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+//        addr_space: None,
+//        expr: Some(cu::Expr::Lit(cu::Lit::I32(0))),
+//        is_extern: false,
+//    };
+//    let i = cu::Expr::Ident(i_name.to_string());
+//    codegen_ctx.push_scope();
+//    // let let_i = gen_let(
+//    //     &desc::Pattern::Ident(desc::Mutability::Mut, ident.clone()),
+//    //     &desc::Expr::new(desc::ExprKind::PlaceExpr(Box::new(desc::PlaceExpr::new(
+//    //         desc::PlaceExprKind::Idx(
+//    //             Box::new(coll_expr.clone()),
+//    //             Box::new(desc::Nat::Ident(desc::Ident::new(&i_name))),
+//    //         ),
+//    //     )))),
+//    //     codegen_ctx,
+//    // );
+//    // let body = gen_expr(&body.body, codegen_ctx).expr();
+//    // let cu_body = cu::Stmt::Seq(vec![let_i, cu::Stmt::Expr(body)]);
+//    // let for_loop = cu::Stmt::ForLoop {
+//    //     init: Box::new(i_decl),
+//    //     cond: cu::Expr::BinOp {
+//    //         op: cu::BinOp::Lt,
+//    //         lhs: Box::new(i.clone()),
+//    //         rhs: Box::new(cu::Expr::Nat(
+//    //             extract_size(coll_expr.ty.as_ref().unwrap()).unwrap(),
+//    //         )),
+//    //     },
+//    //     iter: cu::Expr::Assign {
+//    //         lhs: Box::new(i.clone()),
+//    //         rhs: Box::new(cu::Expr::BinOp {
+//    //             op: cu::BinOp::Add,
+//    //             lhs: Box::new(i),
+//    //             rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
+//    //         }),
+//    //     },
+//    //     stmt: Box::new(cu::Stmt::Block(Box::new(cu_body))),
+//    // };
+//    //
+//    // codegen_ctx.view_ctx.drop_scope();
+//    // for_loop
+//}
 
-fn gen_for_range(
-    ident: &desc::Ident,
-    range: &desc::Expr,
-    body: &desc::Expr,
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Stmt {
-    if let desc::ExprKind::Range(l, u) = &range.expr {
-        let lower = gen_expr(l, codegen_ctx);
-        let upper = gen_expr(u, codegen_ctx);
-
-        let i_name = ident.name.clone();
-        let i_decl = cu::Stmt::VarDecl {
-            name: i_name.to_string(),
-            ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
-            addr_space: None,
-            expr: Some(lower.clone()),
-            is_extern: false,
-        };
-        let i = cu::Expr::Ident(i_name.to_string());
-
-        cu::Stmt::ForLoop {
-            init: Box::new(i_decl),
-            cond: cu::Expr::BinOp {
-                op: cu::BinOp::Lt,
-                lhs: Box::new(i.clone()),
-                rhs: Box::new(upper.clone()),
-            },
-            iter: cu::Expr::Assign {
-                lhs: Box::new(i.clone()),
-                rhs: Box::new(cu::Expr::BinOp {
-                    op: cu::BinOp::Add,
-                    lhs: Box::new(i),
-                    rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
-                }),
-            },
-            stmt: Box::new(gen_stmt(body, false, codegen_ctx)),
-        }
-    } else {
-        panic!("Expected range expression")
-    }
-}
+// fn gen_for_range(
+//     ident: &desc::Ident,
+//     range: &desc::Expr,
+//     body: &desc::Expr,
+//     codegen_ctx: &mut CodegenCtx,
+// ) -> cu::Stmt {
+//     if let desc::ExprKind::Range(l, u) = &range.expr {
+//         let lower = gen_expr(l, codegen_ctx);
+//         let upper = gen_expr(u, codegen_ctx);
+//
+//         let i_name = ident.name.clone();
+//         let i_decl = cu::Stmt::VarDecl {
+//             name: i_name.to_string(),
+//             ty: cu::Ty::Scalar(cu::ScalarTy::SizeT),
+//             addr_space: None,
+//             expr: Some(lower.clone()),
+//             is_extern: false,
+//         };
+//         let i = cu::Expr::Ident(i_name.to_string());
+//
+//         cu::Stmt::ForLoop {
+//             init: Box::new(i_decl),
+//             cond: cu::Expr::BinOp {
+//                 op: cu::BinOp::Lt,
+//                 lhs: Box::new(i.clone()),
+//                 rhs: Box::new(upper.clone()),
+//             },
+//             iter: cu::Expr::Assign {
+//                 lhs: Box::new(i.clone()),
+//                 rhs: Box::new(cu::Expr::BinOp {
+//                     op: cu::BinOp::Add,
+//                     lhs: Box::new(i),
+//                     rhs: Box::new(cu::Expr::Lit(cu::Lit::I32(1))),
+//                 }),
+//             },
+//             stmt: Box::new(gen_stmt(body, false, codegen_ctx)),
+//         }
+//     } else {
+//         panic!("Expected range expression")
+//     }
+// }
 
 fn gen_app_kernel(app_kernel: &desc::AppKernel, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     let tmp_global_fn_call = gen_global_fn_call(
@@ -766,7 +768,7 @@ fn convert_to_fn_name(f_expr: &cu::Expr) -> String {
     }
 }
 
-fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) -> cu::Stmt> {
+fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<AbstractStmt> {
     // Multiple shared memory arrays and Alignments:
     // Memory accesses require that the address be aligned to a multiple of the access size.
     // The access size of a memory instruction is the total number of bytes accessed in memory.
@@ -804,7 +806,7 @@ fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<dyn Fn(&[String]) ->
             .iter()
             .zip(&dtys)
             .map(|(name, dty)| {
-                let (elem_ty, amount) = get_elem_ty_and_amount(&dty);
+                let (elem_ty, amount) = get_elem_ty_and_amount(dty);
                 let size_of_elem_dty = size_of_dty(elem_ty.dty());
                 (size_of_elem_dty, name, elem_ty, amount)
             })
@@ -871,7 +873,7 @@ fn get_elem_ty_and_amount(dty: &desc::DataTy) -> (desc::Ty, desc::Nat) {
             nat_1,
         ),
         desc::DataTyKind::Array(arr_elem_dty, n) => {
-            let (elem_ty, amount) = get_elem_ty_and_amount(&arr_elem_dty);
+            let (elem_ty, amount) = get_elem_ty_and_amount(arr_elem_dty);
             let multiplied_amount =
                 desc::Nat::BinOp(desc::BinOpNat::Mul, Box::new(amount), Box::new(n.clone()));
             (elem_ty, multiplied_amount)
@@ -945,31 +947,6 @@ fn gen_indep(indep: &desc::Split, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
     } else {
         branches
     }
-}
-
-fn gen_sync_stmt(exec: &desc::ExecExpr) -> cu::Stmt {
-    let sync = cu::Stmt::Expr(cu::Expr::FnCall(cu::FnCall::new(
-        cu::Expr::Ident("__syncthreads".to_string()),
-        vec![],
-        vec![],
-    )));
-    unimplemented!()
-    // match exec {
-    //     ParallelityCollec::Split { parall_collec, .. } => gen_sync_stmt(parall_collec),
-    //     ParallelityCollec::Grid(_, _) | ParallelityCollec::ToThreadGrp(_) => cu::Stmt::Skip,
-    //     ParallelityCollec::Block(_) => sync,
-    //     ParallelityCollec::Proj { parall_expr, .. } => {
-    //         if let ParallelityCollec::Split { parall_collec, .. } = parall_expr.as_ref() {
-    //             match parall_collec.as_ref() {
-    //                 ParallelityCollec::Block(_) => sync,
-    //                 _ => cu::Stmt::Skip,
-    //             }
-    //         } else {
-    //             panic!("this should never happen")
-    //         }
-    //     }
-    //     _ => unimplemented!(),
-    // }
 }
 
 fn gen_sched(sched: &desc::Sched, codegen_ctx: &mut CodegenCtx) -> cu::Stmt {
@@ -1180,7 +1157,8 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
             // },
             // _ => gen_lambda_call(fun, args, codegen_ctx),
         //},
-        DepApp(fun, kinded_args) => {
+        // TODO is this even required?
+        DepApp(_fun, _kinded_args) => {
             // let ident = extract_fn_ident(fun);
             // let fun_def = codegen_ctx
             //     .comp_unit
@@ -1234,18 +1212,6 @@ fn gen_expr(expr: &desc::Expr, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
     }
 }
 
-fn gen_lambda_call(
-    fun: &desc::Expr,
-    args: &[desc::Expr],
-    codegen_ctx: &mut CodegenCtx,
-) -> cu::Expr {
-    unimplemented!(
-        "The only case for which this would have to be generated is, when a lambda is called right\
-    where it is created. There is no way to bind a lambda with let.\
-    And no way for users to write a function that has function parameters."
-    )
-}
-
 fn gen_global_fn_call(
     fun_ident: &desc::Ident,
     gen_args: &[desc::ArgKinded],
@@ -1290,7 +1256,8 @@ fn gen_fn_call_args(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> Vec<cu
 }
 
 // Assumption: view_expr is fully expanded/inlined
-fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
+// TODO still needed?
+fn _basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
     let mut bref = view_expr.clone();
     let mut current = view_expr.clone();
     while !matches!(&current.pl_expr, desc::PlaceExprKind::Ident(_)) {
@@ -1312,7 +1279,8 @@ fn basis_ref(view_expr: &desc::PlaceExpr) -> desc::PlaceExpr {
     bref
 }
 
-fn view_exprs_in_args(args: &[desc::Expr]) -> Vec<&desc::Expr> {
+// TODO still needed?
+fn _view_exprs_in_args(args: &[desc::Expr]) -> Vec<&desc::Expr> {
     let (views, _): (Vec<_>, Vec<_>) = args
         .iter()
         .partition(|a| is_view_dty(a.ty.as_ref().unwrap()));
@@ -1332,7 +1300,8 @@ fn view_exprs_in_args(args: &[desc::Expr]) -> Vec<&desc::Expr> {
 //     }
 // }
 
-fn separate_view_params_with_args_from_rest<'a>(
+// TODO still needed?
+fn _separate_view_params_with_args_from_rest<'a>(
     param_decls: &'a [desc::ParamDecl],
     args: &'a [desc::Expr],
 ) -> Vec<(&'a desc::ParamDecl, &'a desc::Expr)> {
@@ -1356,34 +1325,35 @@ fn separate_view_params_with_args_from_rest<'a>(
 //     }
 // }
 
-fn stringify_exec(exec: &desc::ExecExpr) -> String {
-    let mut str = String::with_capacity(10);
-    for e in &exec.exec.path {
-        match e {
-            desc::ExecPathElem::ForAll(dim) => {
-                str.push('D');
-                str.push_str(&format!("{}", dim));
-                str.push('_');
-            }
-            desc::ExecPathElem::TakeRange(split_proj) => {
-                let s = format!(
-                    "P{}S{}{}_",
-                    split_proj.left_or_right, split_proj.split_dim, &split_proj.pos,
-                );
-                str.push_str(&s);
-            }
-            desc::ExecPathElem::ToWarps => {
-                str.push_str("to_warps");
-            }
-            desc::ExecPathElem::ToThreads(dim) => {
-                str.push('T');
-                str.push_str(&format!("{}", dim));
-                str.push('_');
-            }
-        }
-    }
-    str
-}
+//
+//fn stringify_exec(exec: &desc::ExecExpr) -> String {
+//    let mut str = String::with_capacity(10);
+//    for e in &exec.exec.path {
+//        match e {
+//            desc::ExecPathElem::ForAll(dim) => {
+//                str.push('D');
+//                str.push_str(&format!("{}", dim));
+//                str.push('_');
+//            }
+//            desc::ExecPathElem::TakeRange(split_proj) => {
+//                let s = format!(
+//                    "P{}S{}{}_",
+//                    split_proj.left_or_right, split_proj.split_dim, &split_proj.pos,
+//                );
+//                str.push_str(&s);
+//            }
+//            desc::ExecPathElem::ToWarps => {
+//                str.push_str("to_warps");
+//            }
+//            desc::ExecPathElem::ToThreads(dim) => {
+//                str.push('T');
+//                str.push_str(&format!("{}", dim));
+//                str.push('_');
+//            }
+//        }
+//    }
+//    str
+//}
 //
 // fn stringify_views(views: &[&[desc::View]]) -> String {
 //     let mut str = String::with_capacity(16);
@@ -1494,22 +1464,10 @@ fn gen_bin_op_expr(
     }
 }
 
-fn extract_fn_ident(ident: &desc::Expr) -> desc::Ident {
-    if let desc::ExprKind::PlaceExpr(pl_expr) = &ident.expr {
-        if let desc::PlaceExprKind::Ident(ident) = &pl_expr.pl_expr {
-            ident.clone()
-        } else {
-            panic!("Function cannot be a place expression besides identifier.")
-        }
-    } else {
-        panic!("Generic function must be global and therefore be identifier place expression.")
-    }
-}
-
-fn contains_shape_expr(pl_expr: &desc::PlaceExpr, shape_ctx: &ViewCtx) -> bool {
-    let (_, pl) = pl_expr.to_pl_ctx_and_most_specif_pl();
-    shape_ctx.contains_key(&pl.ident.name)
-}
+//fn contains_shape_expr(pl_expr: &desc::PlaceExpr, shape_ctx: &ViewCtx) -> bool {
+//    let (_, pl) = pl_expr.to_pl_ctx_and_most_specif_pl();
+//    shape_ctx.contains_key(&pl.ident.name)
+//}
 
 // fn gen_idx_into_shape(
 //     pl_expr: &desc::PlaceExpr,
@@ -1541,11 +1499,6 @@ fn gen_lit(l: desc::Lit) -> cu::Expr {
         desc::Lit::F64(d) => cu::Expr::Lit(cu::Lit::F64(d)),
         desc::Lit::Unit => cu::Expr::Empty,
     }
-}
-
-enum IdxOrProj {
-    Idx(desc::Nat),
-    Proj(usize),
 }
 
 fn flattened_elem_counts_per_dim(
@@ -1748,23 +1701,6 @@ fn transform_path_with_view(view: &desc::View, path: &mut Vec<desc::Nat>) -> boo
         } else {
             panic!("Cannot create `select_range` from the provided arguments.")
         }
-        // TODO remove. deprecated. superseeded by select_range
-        // } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_LEFT {
-        //     if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
-        //         if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Left) {
-        //             return false;
-        //         }
-        //     } else {
-        //         panic!("Cannot create `take_left` from the provided arguments.");
-        //     }
-        // } else if view.name.name.as_ref() == ty_check::pre_decl::TAKE_RIGHT {
-        //     if let desc::ArgKinded::Nat(k) = &view.gen_args[0] {
-        //         if !transform_path_with_take(k, path, ty_check::pre_decl::TakeSide::Right) {
-        //             return false;
-        //         }
-        //     } else {
-        //         panic!("Cannot create `take_right` from the provided arguments.");
-        //     }
     } else if view.name.name.as_ref() == ty_check::pre_decl::MAP {
         if let Some(f) = view.args.first() {
             if !transform_path_with_map(f, path) {
@@ -1874,32 +1810,6 @@ fn transform_path_with_select_range(lower_bound: &desc::Nat, path: &mut Vec<desc
     }
 }
 
-// TODO remove. depricated. superseded by range
-fn transform_path_with_take(
-    split_pos: &desc::Nat,
-    path: &mut Vec<desc::Nat>,
-    take_side: ty_check::pre_decl::TakeSide,
-) -> bool {
-    let idx = path.pop();
-    match idx {
-        Some(i) => match take_side {
-            ty_check::pre_decl::TakeSide::Left => {
-                path.push(i);
-                true
-            }
-            ty_check::pre_decl::TakeSide::Right => {
-                path.push(desc::Nat::BinOp(
-                    desc::BinOpNat::Add,
-                    Box::new(i),
-                    Box::new(split_pos.clone()),
-                ));
-                true
-            }
-        },
-        _ => false,
-    }
-}
-
 fn transform_path_with_map(f: &desc::View, path: &mut Vec<desc::Nat>) -> bool {
     let i = path.pop();
     match i {
@@ -1986,24 +1896,20 @@ fn gen_args_kinded(templ_args: &[desc::ArgKinded]) -> Vec<cu::TemplateArg> {
 
 fn gen_nat_as_u64(templ_args: &[desc::ArgKinded]) -> cu::Expr {
     let generated_arg_expr = gen_arg_kinded(&templ_args[0]);
-    if let Some(e) = generated_arg_expr {
-        if let cu::TemplateArg::Expr(expr) = e {
-            expr
-        } else {
-            panic!("This should never happen!")
-        }
+    if let Some(cu::TemplateArg::Expr(expr)) = generated_arg_expr {
+        expr
     } else {
         panic!("This should never happen!")
     }
 }
 
-fn gen_to_atomic_array(args: &Vec<desc::Expr>, codegen_ctx: &mut CodegenCtx) -> cu::Expr {
+fn gen_to_atomic_array(args: &[desc::Expr], codegen_ctx: &mut CodegenCtx) -> cu::Expr {
     gen_fn_call_args(args, codegen_ctx)[0].clone()
 }
 
 fn gen_shfl_up(
-    args: &Vec<desc::Expr>,
-    kinded_args: &Vec<desc::ArgKinded>,
+    args: &[desc::Expr],
+    kinded_args: &[desc::ArgKinded],
     codegen_ctx: &mut CodegenCtx,
 ) -> cu::Expr {
     cu::Expr::FnCall(create_fn_call(
@@ -2097,7 +2003,7 @@ fn gen_ty(ty: &desc::TyKind, mutbl: desc::Mutability) -> cu::Ty {
                     let tty = Box::new(gen_ty(
                         &Data(match &reff.dty.dty {
                             // Pointers to arrays point to the base element type.
-                            d::Array(elem_ty, _) => Box::new(base_dty(&reff.dty)),
+                            d::Array(_elem_ty, _) => Box::new(base_dty(&reff.dty)),
                             _ => reff.dty.clone(),
                         }),
                         m,
@@ -2169,7 +2075,7 @@ fn expand_exec_expr(codegen_ctx: &CodegenCtx, exec_expr: &desc::ExecExpr) -> des
             let new_base = inner_exec_expr.exec.base.clone();
             let mut new_exec_path = inner_exec_expr.exec.path.clone();
             new_exec_path.append(&mut exec_expr.exec.path.clone());
-            let mut expanded_exec_expr: desc::ExecExpr =
+            let expanded_exec_expr: desc::ExecExpr =
                 desc::ExecExpr::new(desc::ExecExprKind::with_path(new_base, new_exec_path));
             expanded_exec_expr
         }
@@ -2349,17 +2255,3 @@ fn is_view_dty(ty: &desc::Ty) -> bool {
     }
 }
 
-static mut LABEL_COUNTER: AtomicI32 = AtomicI32::new(0);
-static mut IDX_CHECK_COUNTER: AtomicI32 = AtomicI32::new(0);
-
-fn incr_idx_check_counter() -> i32 {
-    incr_atomic_counter(unsafe { &IDX_CHECK_COUNTER })
-}
-
-fn incr_label_counter() -> i32 {
-    incr_atomic_counter(unsafe { &LABEL_COUNTER })
-}
-
-fn incr_atomic_counter(counter: &AtomicI32) -> i32 {
-    counter.fetch_add(1, Ordering::SeqCst)
-}

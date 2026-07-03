@@ -114,13 +114,6 @@ pub(super) enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
-    Lambda {
-        captures: Vec<crate::ast::Ident>,
-        params: Vec<ParamDecl>,
-        body: Box<Stmt>,
-        ret_ty: Ty,
-        is_dev_fun: bool,
-    },
     FnCall(FnCall),
     UnOp {
         op: UnOp,

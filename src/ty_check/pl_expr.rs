@@ -201,8 +201,8 @@ fn ty_check_ident(
     let mem = default_mem_by_exec(&ctx.exec.ty.as_ref().unwrap().ty);
     Ok((
         tty.clone(),
-        if mem.is_some() {
-            vec![mem.unwrap()]
+        if let Some(mem) = mem {
+            vec![mem]
         } else {
             vec![]
         },
@@ -372,8 +372,8 @@ fn ty_check_select(
     let (mems, prvs) = ty_check_and_passed_mems_prvs(&outer_ctx, p)?;
     let mut p_dty = p.ty.as_ref().unwrap().dty().clone();
     match p_dty.dty {
-        DataTyKind::Array(elem_dty, n) | DataTyKind::ArrayShape(elem_dty, n) => {
-            // TODO check sizes
+        // FIXME check sizes
+        DataTyKind::Array(elem_dty, _n) | DataTyKind::ArrayShape(elem_dty, _n) => {
             // if n != distrib_exec.active_distrib_size() {
             //     return Err(TyError::String("There must be as many elements in the view
             //  as there exist execution resources that select from it.".to_string()));

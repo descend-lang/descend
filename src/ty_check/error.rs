@@ -62,7 +62,7 @@ pub enum TyError {
     String(String),
 }
 
-impl<'a> FromIterator<TyError> for TyError {
+impl FromIterator<TyError> for TyError {
     fn from_iter<T: IntoIterator<Item = TyError>>(iter: T) -> Self {
         TyError::MultiError(iter.into_iter().collect())
     }
@@ -262,6 +262,7 @@ pub enum SubTyError {
     MemoryKindsNoMatch,
     // Subtyping checks fail if the ownership of supposedly subtyped references do not match
     OwnershipNoMatch,
+    SizesNoMatch,
     // TODO remove asap
     Dummy,
 }

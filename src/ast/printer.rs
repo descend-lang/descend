@@ -27,6 +27,8 @@ macro_rules! print_static_list {
     };
 }
 
+// TODO output warning again when functions should be actively in use
+#[allow(unused)]
 impl PrintState {
     pub fn new() -> Self {
         PrintState {
@@ -315,7 +317,7 @@ impl PrintState {
 
     fn print_prv(&mut self, prv: &Provenance) {
         match prv {
-            Provenance::Value(name) => self.string.push_str(&name),
+            Provenance::Value(name) => self.string.push_str(name),
             Provenance::Ident(ident) => self.print_ident(ident),
         }
     }

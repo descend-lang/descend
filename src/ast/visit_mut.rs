@@ -78,7 +78,7 @@ pub fn walk_nat<V: VisitMut>(visitor: &mut V, n: &mut Nat) {
         | Nat::Lit(_) => {}
         Nat::App(func, args) => {
             visitor.visit_ident(func);
-            walk_list!(visitor, visit_nat, args.as_mut())
+            walk_list!(visitor, visit_nat, args)
         }
     }
 }
@@ -202,7 +202,7 @@ pub fn walk_fn_ty<V: VisitMut>(visitor: &mut V, fn_ty: &mut FnTy) {
         nat_constrs,
     } = fn_ty;
     walk_list!(visitor, visit_ident_kinded, generics);
-    for exec_decl in generic_exec {
+    if let Some(exec_decl) = generic_exec {
         visitor.visit_ident_exec(exec_decl)
     }
     walk_list!(visitor, visit_param_sig, param_sigs);
@@ -322,7 +322,7 @@ pub fn walk_sched<V: VisitMut>(visitor: &mut V, sched: &mut Sched) {
         body,
     } = sched;
     visitor.visit_dim_compo(dim);
-    for ident in inner_exec_ident {
+    if let Some(ident) = inner_exec_ident {
         visitor.visit_ident(ident)
     }
     visitor.visit_exec_expr(sched_exec);
@@ -341,7 +341,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::Block(block) => visitor.visit_block(block),
         ExprKind::LetUninit(maybe_exec_expr, ident, ty) => {
-            for e in maybe_exec_expr {
+            if let Some(e) = maybe_exec_expr {
                 visitor.visit_exec_expr(e);
             }
             visitor.visit_ident(ident);
@@ -349,7 +349,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
         }
         ExprKind::Let(pattern, ty, e) => {
             visitor.visit_pattern(pattern);
-            for ty in ty.as_mut() {
+            if let Some(ty) = ty {
                 visitor.visit_ty(ty);
             }
             visitor.visit_expr(e);
@@ -429,7 +429,7 @@ pub fn walk_expr<V: VisitMut>(visitor: &mut V, expr: &mut Expr) {
             visitor.visit_expr(expr)
         }
         ExprKind::Sync(exec) => {
-            for e in exec {
+            if let Some(e) = exec {
                 visitor.visit_exec_expr(e)
             }
         }
@@ -483,7 +483,7 @@ pub fn walk_split_proj<V: VisitMut>(visitor: &mut V, split_proj: &mut TakeRange)
 
 pub fn walk_exec_expr<V: VisitMut>(visitor: &mut V, exec_expr: &mut ExecExpr) {
     visitor.visit_exec(&mut exec_expr.exec);
-    for t in &mut exec_expr.ty {
+    if let Some(t) = &mut exec_expr.ty {
         visitor.visit_exec_ty(t);
     }
 }
@@ -524,7 +524,7 @@ pub fn walk_param_decl<V: VisitMut>(visitor: &mut V, param_decl: &mut ParamDecl)
         visitor.visit_ty(tty);
     }
     visitor.visit_mutability(mutbl);
-    for ex in exec_expr {
+    if let Some(ex) = exec_expr {
         visitor.visit_exec_expr(ex);
     }
 }
@@ -541,7 +541,7 @@ pub fn walk_fun_def<V: VisitMut>(visitor: &mut V, fun_def: &mut FunDef) {
         body,
     } = fun_def;
     walk_list!(visitor, visit_ident_kinded, generic_params);
-    for exec_decl in generic_exec {
+    if let Some(exec_decl) = generic_exec {
         visitor.visit_ident_exec(exec_decl);
     }
     walk_list!(visitor, visit_param_decl, params);
@@ -562,7 +562,7 @@ pub fn walk_fun_decl<V: VisitMut>(visitor: &mut V, fun_decl: &mut FunDecl) {
         prv_rels,
     } = fun_decl;
     walk_list!(visitor, visit_ident_kinded, generic_params);
-    for exec_decl in generic_exec {
+    if let Some(exec_decl) = generic_exec {
         visitor.visit_ident_exec(exec_decl);
     }
     walk_list!(visitor, visit_param_decl, params);

@@ -213,21 +213,6 @@ impl std::fmt::Display for Expr {
                 lhs: l_val,
                 rhs: r_val,
             } => write!(f, "{} = {}", l_val, r_val),
-            Lambda {
-                captures,
-                params,
-                body,
-                ret_ty,
-                is_dev_fun,
-            } => {
-                let dev_qual = if *is_dev_fun { "__device__" } else { "" };
-                writeln!(f, "[")?;
-                fmt_vec(f, captures, ",")?;
-                writeln!(f, "] {} (", dev_qual)?;
-                fmt_vec(f, params, ",\n")?;
-                writeln!(f, ") -> {}", ret_ty)?;
-                write!(f, "{}", &body)
-            }
             FnCall(fn_call) => {
                 write!(f, "{}", fn_call.fun)?;
                 if !fn_call.template_args.is_empty() {
@@ -471,9 +456,9 @@ impl std::fmt::Display for BinOpNat {
 impl std::fmt::Display for DimCompo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            DimCompo::X => write!(f, "{}", 'x'),
-            DimCompo::Y => write!(f, "{}", 'y'),
-            DimCompo::Z => write!(f, "{}", 'z'),
+            DimCompo::X => write!(f, "x"),
+            DimCompo::Y => write!(f, "y"),
+            DimCompo::Z => write!(f, "z"),
         }
     }
 }

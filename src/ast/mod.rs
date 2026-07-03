@@ -11,6 +11,7 @@ pub mod internal;
 pub mod printer;
 mod span;
 pub mod utils;
+#[allow(unused)]
 pub mod visit;
 pub mod visit_mut;
 
@@ -1177,6 +1178,7 @@ pub struct Dim2d(pub Nat, pub Nat);
 pub struct Dim3d(pub Nat, pub Nat, pub Nat);
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub enum Dim {
+    #[allow(clippy::upper_case_acronyms)]
     XYZ(Box<Dim3d>),
     XY(Box<Dim2d>),
     XZ(Box<Dim2d>),
@@ -1268,9 +1270,10 @@ impl DataTy {
             At(_, _) => true,
             ArrayShape(_, _) => true,
             Tuple(elem_tys) => elem_tys.iter().any(|ty| ty.non_copyable()),
+            Struct(_struct_decl) => todo!(),
             Array(_, _) => false,
             RawPtr(_) => true,
-            Range => true,
+            // Range => true,
             Dead(_) => panic!(
                 "This case is not expected to mean anything.\
                 The type is dead. There is nothign we can do with it."
@@ -1311,7 +1314,7 @@ impl DataTy {
         match &dty.dty {
             DataTyKind::Scalar(_) | DataTyKind::Ident(_) => false,
             DataTyKind::Dead(_) => panic!("unexpected"),
-            DataTyKind::Atomic(aty) => &self.dty == &DataTyKind::Atomic(aty.clone()),
+            DataTyKind::Atomic(aty) => self.dty == DataTyKind::Atomic(*aty),
             DataTyKind::Ref(reff) => self.occurs_in(&reff.dty),
             DataTyKind::RawPtr(elem_dty) => self.occurs_in(elem_dty),
             DataTyKind::Tuple(elem_dtys) => {
@@ -1620,7 +1623,7 @@ impl NatCtx {
 
 #[derive(Debug)]
 pub struct NatEvalError {
-    unevaluable: Nat,
+    _unevaluable: Nat,
 }
 
 pub type NatEvalResult<T> = Result<T, NatEvalError>;
@@ -1635,14 +1638,14 @@ impl Nat {
             | Nat::WarpGrpIdx
             | Nat::WarpIdx
             | Nat::LaneIdx => Err(NatEvalError {
-                unevaluable: self.clone(),
+                _unevaluable: self.clone(),
             }),
             Nat::Ident(i) => {
                 if let Some(n) = nat_ctx.find(&i.name) {
                     Ok(n)
                 } else {
                     Err(NatEvalError {
-                        unevaluable: self.clone(),
+                        _unevaluable: self.clone(),
                     })
                 }
             }

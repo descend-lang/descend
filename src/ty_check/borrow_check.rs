@@ -1,7 +1,6 @@
 use super::ctxs::TyCtx;
 use crate::ast::internal::{Loan, PlaceCtx, PrvMapping};
 use crate::ast::*;
-use crate::parser::descend::nat;
 use crate::ty_check::ctxs::{AccessCtx, GlobalCtx, KindCtx};
 use crate::ty_check::error::BorrowingError;
 use crate::ty_check::exec::normalize;
@@ -51,12 +50,12 @@ impl<'gl, 'src, 'ctxt> BorrowCheckCtx<'gl, 'src, 'ctxt> {
         let mut extended_reborrows = self.reborrows.clone();
         extended_reborrows.extend(iter);
         BorrowCheckCtx {
-            gl_ctx: &*self.gl_ctx,
-            nat_ctx: &*self.nat_ctx,
-            kind_ctx: &*self.kind_ctx,
+            gl_ctx: self.gl_ctx,
+            nat_ctx: self.nat_ctx,
+            kind_ctx: self.kind_ctx,
             ident_exec: self.ident_exec,
-            ty_ctx: &*self.ty_ctx,
-            access_ctx: &*self.access_ctx,
+            ty_ctx: self.ty_ctx,
+            access_ctx: self.access_ctx,
             exec: self.exec.clone(),
             reborrows: extended_reborrows,
             own: self.own,
@@ -99,7 +98,7 @@ pub(super) fn borrow_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnResult<Has
             },
             DataTyKind::RawPtr(_) => ownership_safe_deref_raw(ctx, &pl_ctx_no_deref, &most_spec_pl),
             // TODO improve error message
-            t => ownership_safe_place(ctx, p), //panic!("Is the type dead? `{:?}`\n {:?}", t, p),
+            _ => ownership_safe_place(ctx, p), //panic!("Is the type dead? `{:?}`\n {:?}", t, p),
         }
     }
 }
@@ -460,17 +459,18 @@ fn conflicting_path(pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> bool 
                     &ivr.gen_args[1],
                 ) {
                     (
-                        ArgKinded::Nat(lower_left),
-                        ArgKinded::Nat(upper_left),
-                        ArgKinded::Nat(lower_right),
-                        ArgKinded::Nat(upper_right),
+                        ArgKinded::Nat(_lower_left),
+                        ArgKinded::Nat(_upper_left),
+                        ArgKinded::Nat(_lower_right),
+                        ArgKinded::Nat(_upper_right),
                     ) => {
                         // intersecting ranges
                         // TAKE CARE: the comparisons are partial and return false in case the
                         //  the values are not comparable
                         // return !((lower_left < lower_right && upper_left <= lower_right)
                         //     || (lower_left >= upper_right && upper_left > upper_right));
-                        return false;
+                        // FIXME
+                        // return false;
                     }
                     _ => panic!("expected nats"),
                 }

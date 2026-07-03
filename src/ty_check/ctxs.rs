@@ -336,7 +336,7 @@ impl TyCtx {
             }
         }
 
-        let mut ident_typed = self
+        let ident_typed = self
             .idents_typed_mut()
             .rev()
             .find(|ident_typed| ident_typed.ident == pl.ident)
@@ -382,9 +382,10 @@ impl TyCtx {
     }
 
     // Γ ▷- p = Γ′
-    pub(super) fn without_reborrow_loans(&mut self, pl_expr: &PlaceExpr) -> &mut Self {
+    // FIXME!
+    pub(super) fn without_reborrow_loans(&mut self, _pl_expr: &PlaceExpr) -> &mut Self {
         for frame_entry in self.flat_bindings_mut() {
-            if let FrameEntry::PrvMapping(PrvMapping { prv: _, loans }) = frame_entry {
+            if let FrameEntry::PrvMapping(PrvMapping { prv: _, loans: _ }) = frame_entry {
                 // FIXME not prefix_of but *x within p?
                 // let without_reborrow: HashSet<Loan> = loans
                 //     .iter()
@@ -400,7 +401,6 @@ impl TyCtx {
                 //     })
                 //     .collect();
                 // *loans = without_reborrow;
-                ()
             }
         }
         self
@@ -419,7 +419,7 @@ impl AccessCtx {
     }
 
     pub fn insert(&mut self, loans: HashSet<Loan>) {
-        self.ctx.extend(loans.into_iter())
+        self.ctx.extend(loans)
     }
 
     pub fn hash_set(&self) -> &HashSet<Loan> {
@@ -506,14 +506,14 @@ impl KindCtx {
         Ok(kind_ctx)
     }
 
-    pub fn push_empty_scope(&mut self) -> &mut Self {
-        self.ctx.push(vec![]);
-        self
-    }
-
-    pub fn drop_scope(&mut self) {
-        self.ctx.pop();
-    }
+    //    pub fn push_empty_scope(&mut self) -> &mut Self {
+    //        self.ctx.push(vec![]);
+    //        self
+    //    }
+    //
+    //    pub fn drop_scope(&mut self) {
+    //        self.ctx.pop();
+    //    }
 
     pub fn append_idents<I: IntoIterator<Item = IdentKinded>>(&mut self, idents: I) -> &mut Self {
         let entries = idents.into_iter().map(KindingCtxEntry::Ident);
@@ -586,6 +586,7 @@ impl KindCtx {
 #[derive(Debug, Clone)]
 pub(super) enum GlobalDecl {
     FnDecl(Box<str>, Box<FnTy>),
+    // FIXME StrctDecl not generated at the moment!
     StructDecl(Box<StructDecl>),
 }
 

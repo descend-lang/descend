@@ -12,7 +12,7 @@ pub use source::*;
 
 use crate::ast::visit_mut::VisitMut;
 
-pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit, ErrorReported> {
+pub fn parse<'a>(source: &'a SourceCode<'a>) -> Result<CompilUnit<'a>, ErrorReported> {
     let parser = Parser::new(source);
     let mut items = parser.parse().map_err(|err| err.emit())?;
     // TODO refactor to not require unnecessary copying out of items
@@ -263,6 +263,8 @@ fn replace_exec_idents_with_specific_execs(fun_def: &mut FunDef) {
     replace_exec_idents.visit_fun_def(fun_def);
 }
 
+// TODO this substitutes the struct type with the struct declaration on the parser level
+//   this seems wrong
 fn replace_struct_idents_with_specific_struct_dtys(struct_dtys: &[StructDecl], item: &mut Item) {
     struct ReplaceStructIdents<'a> {
         struct_dtys: &'a [StructDecl],
@@ -374,10 +376,7 @@ peg::parser! {
             "fn" __ ident:ident() _ generic_params:("<" _ t:(kind_parameter() ** (_ "," _)) _ ">" {t})? _
             "(" _ param_decls:(param_decl() ** (_ "," _)) _ ")" _
             "-" _ "[" _ ident_exec:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _ ";" {
-                 let generic_params = match generic_params {
-                    Some(generic_params) => generic_params,
-                    None => vec![]
-                };
+                let generic_params = generic_params.unwrap_or_default();
                 let exec = ExecExpr::new(
                     ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
                 FunDecl {
@@ -396,10 +395,7 @@ peg::parser! {
             "(" _ param_decls:(param_decl() ** (_ "," _)) _ ")" _
             "-" _ "[" _ ident_exec:ident_exec() _ "]" _ "-" _ ">" _ ret_dty:dty() _
             body:block() {
-                let generic_params = match generic_params {
-                    Some(generic_params) => generic_params,
-                    None => vec![]
-                };
+                let generic_params = generic_params.unwrap_or_default();
                 let exec = ExecExpr::new(
                     ExecExprKind::new(BaseExec::Ident(ident_exec.ident.clone())));
                 FunDef {
@@ -559,11 +555,10 @@ peg::parser! {
                 mkind_arg_list:(_ klist:kind_args() { klist })?
                 args:args() {
                     let (shared_mem_dtys, shared_mem_prvs) = if let Some((dtys, prvs)) = mshrd {
-                        let prvs = if let Some(prvs) = prvs { prvs } else { vec![] };
+                        let prvs = prvs.unwrap_or_default();
                         (dtys, prvs)
                     } else { (vec![], vec![]) };
-                    let gen_args = if let Some(gen_args) = mkind_arg_list { gen_args }
-                    else { vec![] };
+                    let gen_args = mkind_arg_list.unwrap_or_default();
                     Expr::new(ExprKind::AppKernel(Box::new(AppKernel {
                         grid_dim, block_dim, shared_mem_dtys, shared_mem_prvs,
                         fun_ident:
@@ -667,7 +662,7 @@ peg::parser! {
                 _ ty:ty() end:position!()
             {
                 Expr::with_span(
-                    ExprKind::LetUninit(maybe_exec_expr.map(|e| Box::new(e)), ident, Box::new(ty)),
+                    ExprKind::LetUninit(maybe_exec_expr.map(Box::new), ident, Box::new(ty)),
                     Span::new(begin, end)
                 )
             }
@@ -1062,7 +1057,6 @@ peg::parser! {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn nat_literal() {
@@ -2471,12 +2465,18 @@ mod tests {
     #[test]
     fn empty_annotate_snippet() {
         let source = SourceCode::new("fn\n".to_string());
-        assert!(parse(&source).is_err(), "Expected a parsing error and specifically not a panic!");
+        assert!(
+            parse(&source).is_err(),
+            "Expected a parsing error and specifically not a panic!"
+        );
     }
 
     #[test]
     fn empty_annotate_snippet2() {
         let source = SourceCode::new("fn ".to_string());
-        assert!(parse(&source).is_err(),  "Expected a parsing error and specifically not a panic!");
+        assert!(
+            parse(&source).is_err(),
+            "Expected a parsing error and specifically not a panic!"
+        );
     }
 }
