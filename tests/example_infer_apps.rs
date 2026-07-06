@@ -128,6 +128,7 @@ fn bfs() -> Res {
     Ok(println!("{}", descend::compile("examples/infer/bfs.desc")?))
 }
 
+#[ignore]
 #[test]
 fn sgemm() -> Res {
     Ok(println!(

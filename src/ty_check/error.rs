@@ -189,6 +189,7 @@ impl TyError {
 
                         BorrowingError::CannotNarrow
                         | BorrowingError::Conflict { .. }
+                        | BorrowingError::ConflictPrevAccess { .. }
                         | BorrowingError::NatEvalError(_)
                         | BorrowingError::DivergingExec
                         | BorrowingError::MultipleDistribs => eprintln!("{:?}", conflict),
@@ -272,6 +273,8 @@ pub enum SubTyError {
 pub enum UnifyError {
     // Cannot unify the two terms
     CannotUnify,
+    CannotUnifyTy(Ty, Ty),
+    CannotUnifyDataTy(DataTy, DataTy),
     // A type variable has to be equal to a term that is referring to the same type variable
     InfiniteType,
     SubTyError(SubTyError),
@@ -310,6 +313,10 @@ impl From<CtxError> for SubTyError {
 #[derive(Debug)]
 pub enum BorrowingError {
     Conflict {
+        checked: PlaceExpr,
+        existing: PlaceExpr,
+    },
+    ConflictPrevAccess {
         checked: PlaceExpr,
         existing: PlaceExpr,
     },

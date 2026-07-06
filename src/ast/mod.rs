@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ast::internal::PathElem;
+use crate::ast::{internal::PathElem, visit_mut::VisitMut};
 use descend_derive::span_derive;
 pub use span::*;
 
@@ -823,6 +823,33 @@ impl PlaceExpr {
         }
         as_ident_and_path_rec(self, vec![])
     }
+
+    pub fn eval_nat(&self, nat_ctx: &NatCtx) -> NatEvalResult<Self> {
+        struct NatEvalVisitor<'a> {
+            nat_ctx: &'a NatCtx,
+            err: NatEvalResult<()>,
+        }
+        impl<'a> VisitMut for NatEvalVisitor<'a> {
+            fn visit_nat(&mut self, n: &mut Nat) {
+                match n.eval(self.nat_ctx) {
+                    Ok(nn) => *n = Nat::Lit(nn),
+                    Err(err) => self.err = Err(err),
+                }
+            }
+
+            // TODO horrifically hacky: do not evaluate execution resouces because they are constant
+            //   and this would require evaluating execution resources at other places as well
+            fn visit_exec_expr(&mut self, _exec_expr: &mut ExecExpr) {}
+        }
+        let mut v = NatEvalVisitor {
+            nat_ctx,
+            err: Ok(()),
+        };
+        let mut p = self.clone();
+        v.visit_pl_expr(&mut p);
+        v.err?;
+        Ok(p)
+    }
 }
 
 #[span_derive(PartialEq, Eq, Hash)]
@@ -1571,6 +1598,40 @@ pub enum Nat {
     App(Ident, Box<[Nat]>),
 }
 
+impl PartialOrd for Nat {
+    // consistency with PartialEq: Since PartialEq is using the default implementation and is Eq
+    // every value must be equal to itself. We ensure this.
+    // Then, ordering is only defined literals which inherit their ordering from usize.
+    // The rest is not comparable. This is consistent with unequal in PartialEq
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Nat::Ident(i1), Nat::Ident(i2)) if i1 == i2 => Some(std::cmp::Ordering::Equal),
+            (Nat::Lit(l1), Nat::Lit(l2)) => l1.partial_cmp(l2),
+            (Nat::ThreadIdx(dc1), Nat::ThreadIdx(dc2))
+            | (Nat::BlockIdx(dc1), Nat::BlockIdx(dc2))
+            | (Nat::BlockDim(dc1), Nat::BlockDim(dc2))
+                if dc1 == dc2 =>
+            {
+                Some(std::cmp::Ordering::Equal)
+            }
+            (Nat::WarpGrpIdx, Nat::WarpGrpIdx)
+            | (Nat::WarpIdx, Nat::WarpIdx)
+            | (Nat::LaneIdx, Nat::LaneIdx)
+            | (Nat::GridIdx, Nat::GridIdx) => Some(std::cmp::Ordering::Equal),
+            (Nat::BinOp(bop1, nl1, nl2), Nat::BinOp(bop2, nr1, nr2))
+                if bop1 == bop2 && nl1 == nr1 && nl2 == nr2 =>
+            {
+                Some(std::cmp::Ordering::Equal)
+            }
+            (Nat::App(i1, nats1), Nat::App(i2, nats2)) if i1 == i2 && nats1 == nats2 => {
+                Some(std::cmp::Ordering::Equal)
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct NatCtx {
     frames: Vec<Vec<(Box<str>, usize)>>,
 }
@@ -1624,6 +1685,7 @@ impl NatCtx {
 #[derive(Debug)]
 pub struct NatEvalError {
     _unevaluable: Nat,
+    _nat_ctx: NatCtx,
 }
 
 pub type NatEvalResult<T> = Result<T, NatEvalError>;
@@ -1639,6 +1701,7 @@ impl Nat {
             | Nat::WarpIdx
             | Nat::LaneIdx => Err(NatEvalError {
                 _unevaluable: self.clone(),
+                _nat_ctx: nat_ctx.clone(),
             }),
             Nat::Ident(i) => {
                 if let Some(n) = nat_ctx.find(&i.name) {
@@ -1646,6 +1709,7 @@ impl Nat {
                 } else {
                     Err(NatEvalError {
                         _unevaluable: self.clone(),
+                        _nat_ctx: nat_ctx.clone(),
                     })
                 }
             }

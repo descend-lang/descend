@@ -674,6 +674,9 @@ fn ty_check_sched(ctx: &mut ExprTyCtx, sched: &mut Sched) -> TyResult<Ty> {
     }
     ty_check_expr(&mut schedule_body_ctx, &mut sched.body.body)?;
     schedule_body_ctx.ty_ctx.pop_frame();
+    schedule_body_ctx
+        .access_ctx
+        .garbage_collect(schedule_body_ctx.ty_ctx);
     Ok(Ty::new(TyKind::Data(Box::new(DataTy::new(
         DataTyKind::Scalar(ScalarTy::Unit),
     )))))
@@ -774,6 +777,7 @@ fn ty_check_assign_non_place(
         deref_expr,
     )
     .map_err(|err| {
+        println!("Conflicting borrow!!!");
         TyError::ConflictingBorrow(Box::new(deref_expr.clone()), Ownership::Uniq, err)
     })?;
     ctx.access_ctx.insert(potential_accesses);
@@ -1174,7 +1178,11 @@ fn apply_gen_args_checked(
 }
 
 // FIXME use kind_ctx?
-fn check_arg_has_correct_kind(_kind_ctx: &KindCtx, expected: &Kind, kv: &ArgKinded) -> TyResult<()> {
+fn check_arg_has_correct_kind(
+    _kind_ctx: &KindCtx,
+    expected: &Kind,
+    kv: &ArgKinded,
+) -> TyResult<()> {
     if expected == &kv.kind() {
         Ok(())
     } else {
@@ -1303,11 +1311,8 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
         }))
         .collect::<Vec<_>>();
     // type check function application for generic args and extended argument list
-    let partially_applied_dep_fn_ty = ty_check_dep_app(
-        &mut kernel_ctx,
-        &app_kernel.fun_ident,
-        &app_kernel.gen_args,
-    )?;
+    let partially_applied_dep_fn_ty =
+        ty_check_dep_app(&mut kernel_ctx, &app_kernel.fun_ident, &app_kernel.gen_args)?;
     // build expected type to unify with
     let unit_ty = Ty::new(TyKind::Data(Box::new(DataTy::new(DataTyKind::Scalar(
         ScalarTy::Unit,

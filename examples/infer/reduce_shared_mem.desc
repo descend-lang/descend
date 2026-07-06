@@ -17,46 +17,56 @@ fn reduce_shared_mem<gs: nat, bs: nat, a: prv, b: prv>(
 fn gpu_reduce<gs: nat, bs: nat, r1: prv, r2: prv, r3: prv>(
     vec: &r1 shrd gpu.global [i32; gs*bs],
     out_vec: &r2 uniq gpu.global [i32; gs],
-    tmp: &r3 uniq gpu.shared [i32; bs]
-) -[grid: gpu.grid<X<64>, X<1024>>]-> () {
-    let block_group = &shrd (*vec).to_view.grp::<1024>;
+    [grid.forall(X)] tmp: &r3 uniq gpu.shared [i32; bs]
+) -[grid: gpu.grid<X<gs>, X<bs>>]-> () {
+    let block_group = &shrd (*vec).to_view.grp::<bs>;
     let view_out = &uniq (*out_vec).to_view.grp::<1>;
     sched block in grid {
         let ib = &shrd (*block_group)[[block]];
         let out_elem = &uniq (*view_out)[[block]];
-        let tmp_view = to_view(&uniq *tmp);
+        let tmp_view = &uniq (*tmp).to_view;
         sched thread in block {
             let inp = &shrd (*ib)[[thread]];
-            let tmp_in = &uniq *tmp_view[[thread]];
+            let tmp_in = &uniq (*tmp_view)[[thread]];
             *tmp_in = *inp
         };
 
         for k in halved_range(bs/2) {
+            sync(block);
             let split_tmp_view = &uniq (*tmp_view)[0..2*k];
             let active_half0 = &uniq (*split_tmp_view)[0..k];
             let active_half1 = &uniq (*split_tmp_view)[k..2*k];
-
             // Fixme: At this point 's1 -> {tmp, split_tmp_view, tmp_view, tmp}
             indep(X) k block {
                 active =>
                     sched thread in active {
-                        let a = &uniq *active_half0[[thread]];
-                        let b = &shrd *active_half1[[thread]];
+                        let a = &uniq (*active_half0)[[thread]];
+                        let b = &shrd (*active_half1)[[thread]];
                         *a = *a + *b
                     },
                 inactive => { () }
             }
         };
 
-        let tmp_res = &uniq (*tmp_view)[0..1];
+        // FIXME this is a serious problem. The synchronization is superfluous from a correctness
+        // perspective, but required because otherwise there is still a conflciting previous access
+        // likely due to the difference in execution resources
+        sync(block);
         indep(X) 1 block {
             single_thread =>
                 sched thread in single_thread {
-                    let out = &uniq *out_elem[[thread]];
-                    let tmp_val = &shrd *tmp_res[[thread]];
+                    let out = &uniq (*out_elem)[[thread]];
+                    let tmp_val = &shrd (*tmp_view)[0..1][[thread]];
                     *out = *tmp_val
                 },
             rest => { () }
         }
     }
 }
+
+fn main() -[t:cpu.thread]-> () <'a, 'b, 'c>{
+    let ha_array: &'a shrd cpu.mem [i32; 128*512]  = unsafe _;
+    let h_output: &'b uniq cpu.mem [i32; 128] = unsafe _;
+    reduce_shared_mem(ha_array, h_output)
+}
+

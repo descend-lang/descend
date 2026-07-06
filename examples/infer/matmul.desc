@@ -38,8 +38,8 @@ fn gpu_matmul<bs: nat, m: nat, n: nat, k: nat, r: prv>(
 }
 
 fn main() -[t:cpu.thread]-> () <'a, 'b, 'c>{
-    let ha_mat: &'a shrd cpu.mem [i32; 8192*8192]  = unsafe _;
-    let hb_mat: &'b shrd cpu.mem [i32; 8192*4096] = unsafe _;
-    let hc_mat: &'c uniq cpu.mem [i32; 8192*4096] = unsafe _;
+    let ha_mat: &'a shrd cpu.mem [i32; 128*128]  = unsafe _;
+    let hb_mat: &'b shrd cpu.mem [i32; 128*64] = unsafe _;
+    let hc_mat: &'c uniq cpu.mem [i32; 128*64] = unsafe _;
     matmul::<16>(ha_mat, hb_mat, hc_mat)
 }

@@ -2254,4 +2254,3 @@ fn is_view_dty(ty: &desc::Ty) -> bool {
         _ => false,
     }
 }
-

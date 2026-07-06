@@ -305,7 +305,7 @@ impl Constrainable for Ty {
                 fn_ty1.constrain(fn_ty2, constr_map, prv_rels)
             }
             (TyKind::Data(dty1), TyKind::Data(dty2)) => dty1.constrain(dty2, constr_map, prv_rels),
-            _ => Err(UnifyError::CannotUnify),
+            _ => Err(UnifyError::CannotUnifyTy(self.clone(), other.clone())),
         }
     }
 }
@@ -333,7 +333,7 @@ impl Constrainable for DataTy {
                 } else if i1 == i2 {
                     return Ok(());
                 } else {
-                    return Err(UnifyError::CannotUnify);
+                    return Err(UnifyError::CannotUnifyDataTy(self.clone(), other.clone()));
                 }
                 substitute(constr_map, self);
                 substitute(constr_map, other);
@@ -348,7 +348,7 @@ impl Constrainable for DataTy {
             }
             (DataTyKind::Scalar(sty1), DataTyKind::Scalar(sty2)) => {
                 if sty1 != sty2 {
-                    return Err(UnifyError::CannotUnify);
+                    return Err(UnifyError::CannotUnifyDataTy(self.clone(), other.clone()));
                 } else {
                     return Ok(());
                 }
@@ -368,7 +368,7 @@ impl Constrainable for DataTy {
                 } = ref2.as_mut();
 
                 if own1 != own2 {
-                    return Err(UnifyError::CannotUnify);
+                    return Err(UnifyError::CannotUnifyDataTy(self.clone(), other.clone()));
                 }
                 rgn1.constrain(rgn2, constr_map, prv_rels)?;
                 substitute(constr_map, &mut **dty1);
@@ -410,7 +410,7 @@ impl Constrainable for DataTy {
                     (remain_lhs.split_first_mut(), remain_rhs.split_first_mut())
                 {
                     if next_lhs.0 != next_rhs.0 {
-                        return Err(UnifyError::CannotUnify);
+                        return Err(UnifyError::CannotUnifyDataTy(self.clone(), other.clone()));
                     }
                     next_lhs
                         .1
@@ -448,7 +448,7 @@ impl Constrainable for DataTy {
             }
             (DataTyKind::Atomic(sty1), DataTyKind::Atomic(sty2)) => {
                 if sty1 != sty2 {
-                    return Err(UnifyError::CannotUnify);
+                    return Err(UnifyError::CannotUnifyDataTy(self.clone(), other.clone()));
                 } else {
                     return Ok(());
                 }
@@ -464,7 +464,7 @@ impl Constrainable for DataTy {
                 substitute(constr_map, self);
                 substitute(constr_map, other);
             }
-            _ => return Err(UnifyError::CannotUnify),
+            _ => return Err(UnifyError::CannotUnifyDataTy(self.clone(), other.clone())),
         }
         Ok(())
     }
