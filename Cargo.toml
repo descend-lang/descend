@@ -10,6 +10,23 @@ edition = "2021"
 inherits = "release"
 debug = true
 
+[features]
+bench-internals = []
+
+[[example]]
+name = "profile_compile"
+path = "benchmark/profile_compile.rs"
+
+[[example]]
+name = "profile_metrics"
+path = "benchmark/profile_metrics.rs"
+required-features = ["bench-internals"]
+
+[[example]]
+name = "profile_timings"
+path = "benchmark/profile_timings.rs"
+required-features = ["bench-internals"]
+
 [[bin]]
 name = "descendc"
 path = "src/main.rs"
