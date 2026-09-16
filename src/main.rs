@@ -4,7 +4,6 @@ use descend::{compile, error::ErrorReported, error::ExecutableError, error::File
 use env_logger::Env;
 use log::LevelFilter;
 use log::{debug, error, info};
-use std::env;
 use std::fs;
 use std::fs::write;
 use std::path::PathBuf;
@@ -19,10 +18,6 @@ struct Cli {
     /// Enable debug mode.
     #[arg(short, long)]
     debug: bool,
-
-    /// Suppress warning if nvcc (CUDA Toolkit) is not installed.
-    #[arg(long)]
-    suppress_cuda_warning: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -91,11 +86,6 @@ impl TempFile {
     fn new(path: PathBuf) -> Self {
         TempFile { path }
     }
-
-    /// Returns the file path as a string.
-    fn path_string(&self) -> String {
-        self.path.to_string_lossy().into_owned()
-    }
 }
 
 impl Drop for TempFile {
@@ -112,15 +102,7 @@ impl Drop for TempFile {
     }
 }
 
-/// Checks if a command exists using the which crate
-fn command_exists(cmd: &str) -> bool {
-    which(cmd).is_ok()
-}
-
-fn generate_cuda(input: &str) -> Result<String, ErrorReported> {
-    compile(input)
-}
-
+#[inline]
 fn write_cuda_file(cuda_code: &str, filename: &str) -> Result<(), ErrorReported> {
     write(filename, cuda_code).map_err(|e| FileIOError::new(filename, e).emit())
 }
@@ -174,8 +156,8 @@ fn run_executable(executable: &str) -> Result<(), ErrorReported> {
     Ok(())
 }
 
-fn handle_emit(common: CommonArgs) -> Result<(), ErrorReported> {
-    let cuda_code = generate_cuda(&common.input)?;
+fn emit_cuda(common: CommonArgs) -> Result<(), ErrorReported> {
+    let cuda_code = compile(&common.input)?;
     if let Some(file) = common.output {
         write_cuda_file(&cuda_code, &file)?;
         info!("CUDA code written to {}", file);
@@ -185,26 +167,21 @@ fn handle_emit(common: CommonArgs) -> Result<(), ErrorReported> {
     Ok(())
 }
 
-fn handle_build_run(
+fn build_and_run(
     common: CommonArgs,
     build_run: BuildRunArgs,
     run_after: bool,
-    suppress_cuda_warning: bool,
 ) -> Result<(), ErrorReported> {
-    if !command_exists("nvcc") {
-        if suppress_cuda_warning {
-            info!("Warning: 'nvcc' not found, but warnings are suppressed. Compilation will likely fail.");
-        } else {
-            return Err(
-                NVCCError::new("Error: 'nvcc' is not installed. Please install the CUDA Toolkit to compile the code.")
-                    .emit()
-            );
-        }
+    if !which("nvcc").is_ok() {
+        return Err(NVCCError::new(
+            "nvcc is not installed. Please install the CUDA Toolkit to compile the code.",
+        )
+        .emit());
     }
-    let cuda_code = generate_cuda(&common.input)?;
+    let cuda_code = compile(&common.input)?;
 
     // Determine the file name based on the --save-cuda flag. If save_cuda is false, generate a temporary file path.
-    let (cuda_file, _temp_guard): (String, Option<TempFile>) = if build_run.save_cuda {
+    let (cuda_file, _temp_guard) = if build_run.save_cuda {
         (
             common
                 .output
@@ -212,7 +189,7 @@ fn handle_build_run(
             None,
         )
     } else {
-        let temp_dir = env::temp_dir();
+        let temp_dir = std::env::temp_dir();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -255,23 +232,15 @@ fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or(default_log_level.to_string()))
         .init();
 
-    if cli.debug {
-        info!("Debug mode enabled.");
-    }
-
-    if !command_exists("clang-format") {
+    if !which("clang-format").is_ok() {
         error!("Error: 'clang-format' is not installed. Please install clang-format to proceed.");
         exit(1);
     }
 
     let result = match cli.command {
-        Commands::Emit { common } => handle_emit(common),
-        Commands::Build { common, build_run } => {
-            handle_build_run(common, build_run, false, cli.suppress_cuda_warning)
-        }
-        Commands::Run { common, build_run } => {
-            handle_build_run(common, build_run, true, cli.suppress_cuda_warning)
-        }
+        Commands::Emit { common } => emit_cuda(common),
+        Commands::Build { common, build_run } => build_and_run(common, build_run, false),
+        Commands::Run { common, build_run } => build_and_run(common, build_run, true),
     };
 
     if let Err(e) = result {
