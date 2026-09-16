@@ -4,3 +4,10 @@ Cargo.lock
 /.vscode
 *.out
 .cargo/config.toml
+
+# Generated compiler benchmark and profiler results
+/benchmark-results*/
+/flamegraph-results*/
+/heaptrack-results*/
+/performance-results*/
+/benchmark/__pycache__/

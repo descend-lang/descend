@@ -69,4 +69,3 @@ fn main() -[t:cpu.thread]-> () <'a, 'b, 'c>{
     let h_output: &'b uniq cpu.mem [i32; 128] = unsafe _;
     reduce_shared_mem(ha_array, h_output)
 }
-

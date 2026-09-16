@@ -1,12 +1,12 @@
 extern crate core;
 
 use crate::error::ErrorReported;
-use bumpalo::Bump;
-mod arena_ast;
+
 mod ast;
 mod codegen;
 pub mod error;
 pub mod parser;
+#[allow(clippy::result_large_err)]
 pub mod ty_check;
 
 pub fn compile(file_path: &str) -> Result<String, ErrorReported> {
@@ -25,7 +25,6 @@ enum CompilePhase {
 trait CompileObserver {
     fn start(&mut self, _phase: CompilePhase) {}
     fn finish(&mut self, _phase: CompilePhase) {}
-    fn record_arena_bytes(&mut self, _bytes: usize) {}
 }
 
 struct NoopObserver;
@@ -40,31 +39,26 @@ fn compile_with_observer(
     let source = parser::SourceCode::from_file(file_path)?;
     observer.finish(CompilePhase::SourceLoad);
 
-    let arena = Bump::new();
-
     observer.start(CompilePhase::AstPreparation);
-    let mut compil_unit = parser::parse(&arena, &source)?;
+    let mut compil_unit = parser::parse(&source)?;
     observer.finish(CompilePhase::AstPreparation);
 
     observer.start(CompilePhase::TypeCheck);
-    ty_check::ty_check(&mut compil_unit, &arena)?;
+    ty_check::ty_check(&mut compil_unit)?;
     observer.finish(CompilePhase::TypeCheck);
 
     observer.start(CompilePhase::Codegen);
-    let cuda = codegen::gen(&compil_unit, &arena, false);
+    let cuda = codegen::gen(&compil_unit);
     observer.finish(CompilePhase::Codegen);
-    observer.record_arena_bytes(arena.allocated_bytes());
 
     observer.start(CompilePhase::Teardown);
     drop(compil_unit);
-    drop(arena);
     drop(source);
     observer.finish(CompilePhase::Teardown);
 
     Ok(cuda)
 }
 
-#[cfg(feature = "bench-internals")]
 #[derive(Debug)]
 pub struct CompileMetrics {
     pub source_load: std::time::Duration,
@@ -77,7 +71,6 @@ pub struct CompileMetrics {
     pub cuda: String,
 }
 
-#[cfg(feature = "bench-internals")]
 struct TimingObserver {
     total_start: std::time::Instant,
     phase_start: std::time::Instant,
@@ -86,10 +79,8 @@ struct TimingObserver {
     type_check: std::time::Duration,
     codegen: std::time::Duration,
     teardown: std::time::Duration,
-    arena_allocated_bytes: Option<usize>,
 }
 
-#[cfg(feature = "bench-internals")]
 impl TimingObserver {
     fn new() -> Self {
         let now = std::time::Instant::now();
@@ -101,7 +92,6 @@ impl TimingObserver {
             type_check: std::time::Duration::ZERO,
             codegen: std::time::Duration::ZERO,
             teardown: std::time::Duration::ZERO,
-            arena_allocated_bytes: None,
         }
     }
 
@@ -113,13 +103,12 @@ impl TimingObserver {
             codegen: self.codegen,
             teardown: self.teardown,
             total: self.total_start.elapsed(),
-            arena_allocated_bytes: self.arena_allocated_bytes,
+            arena_allocated_bytes: None,
             cuda,
         }
     }
 }
 
-#[cfg(feature = "bench-internals")]
 impl CompileObserver for TimingObserver {
     fn start(&mut self, _phase: CompilePhase) {
         self.phase_start = std::time::Instant::now();
@@ -135,13 +124,8 @@ impl CompileObserver for TimingObserver {
             CompilePhase::Teardown => self.teardown = elapsed,
         }
     }
-
-    fn record_arena_bytes(&mut self, bytes: usize) {
-        self.arena_allocated_bytes = Some(bytes);
-    }
 }
 
-#[cfg(feature = "bench-internals")]
 pub fn compile_measured(file_path: &str) -> Result<CompileMetrics, ErrorReported> {
     let mut observer = TimingObserver::new();
     let cuda = compile_with_observer(file_path, &mut observer)?;
