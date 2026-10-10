@@ -1,0 +1,30 @@
+fn add_vec<r: prv>(
+    output: &r uniq gpu.global [i32; 2],
+    input: &r shrd gpu.global [i32; 2],
+    a : i32
+) -[grid: gpu.grid<X<1>, X<2>>]-> () {
+    sched block in grid {
+        sched thread in block {
+            (*output).to_view.grp::<1>[[block]][[thread]] =  (*input).to_view.grp::<1>[[block]][[thread]] + a
+        }
+    }
+}
+
+fn h_add_vec<a: prv, b: prv>(
+    h_output: &a uniq cpu.mem [i32; 2],
+    h_input: &b shrd cpu.mem [i32; 2],
+    a: i32
+) -[t: cpu.thread]-> () {
+    let mut gpu = gpu_device(0);
+
+    let mut output = gpu_alloc_copy(&uniq gpu, &shrd *h_output);
+    let input = gpu_alloc_copy(&uniq gpu, &shrd *h_input);
+    add_vec::<<<X<1>, X<2>>>>(&uniq output, &shrd input, a);
+    copy_to_host(&shrd output, h_output)
+}
+
+fn main() -[t: cpu.thread]-> () <'a>{
+    let h_output: &'a uniq cpu.mem [i32; 2] = unsafe _;
+    let h_input: &'a shrd cpu.mem [i32; 2] = unsafe _;
+    h_add_vec(h_output, h_input, 7)
+}

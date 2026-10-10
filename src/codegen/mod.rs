@@ -9,6 +9,8 @@ use cu_ast as cu;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+// TODO prefix user-named identifiers
+
 pub(crate) static WARP_IDENT: &str = "$warp";
 
 // Precondition. all function definitions are successfully typechecked and
@@ -791,7 +793,7 @@ fn unnamed_shared_mem_decls(dtys: Vec<desc::DataTy>) -> Box<AbstractStmt> {
     //  https://forums.developer.nvidia.com/t/dynamic-shared-memory-allocation/21671/2
     // Choose the last approach.
     Box::new(move |param_names: &[String]| {
-        let buffer_name = "$buffer";
+        let buffer_name = "gen_buffer";
         let extern_shrd_mem_decl = cu::Stmt::VarDecl {
             name: buffer_name.to_string(),
             ty: cu::Ty::CArray(Box::new(cu::Ty::Scalar(cu::ScalarTy::Byte)), None),

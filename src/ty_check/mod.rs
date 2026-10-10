@@ -57,6 +57,45 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
     }
 }
 
+/// type check a kernel function body whose application has been checked externally. Generic
+///     arguments are expected to be valid and only required to instantiate the natural numbers of the
+///     function.
+///
+/// compil_unit : the compilation unit containing all global definitions and declarations as it is
+///     expected by ty_check as well.
+/// kname : the name of the kernel function to be type checked. The kernel function must be defined
+///     within compil_unit
+/// gen_args : expects the generic arguments supplied to the function. Only the natrual numbers are truly
+///     required, but the other arguments are accepted for convnience, so that the client does not
+///     have to filter the nats out.
+///     All natural numbers must be reducable to values, i.e., not free variables are allowed in
+///     expressions.
+pub fn ext_ty_check_kernel(compil_unit: &mut CompilUnit, kname: &str, gen_args: &[ArgKinded]) -> TyResult<()> {
+    let mut gl_ctx = GlobalCtx::new(
+        compil_unit,
+        pre_decl::fun_decls()
+            .into_iter()
+            .map(|(fname, fty)| GlobalDecl::FnDecl(Box::from(fname), Box::new(fty)))
+            .collect(),
+    );
+    if let Some(mut fn_def) = gl_ctx.pop_fun_def(kname) {
+        let mut nat_names = vec![];
+        let mut nat_vals = vec![];
+        for (ik, ga) in fn_def.generic_params.iter().zip(gen_args) {
+            if let (Kind::Nat, ArgKinded::Nat(n)) = (ik.kind, ga) {
+                nat_names.push(ik.ident.name.clone());
+                // evaluate natural numbers under empty NatCtx
+                nat_vals.push(n.eval(&NatCtx::new())?);
+            }
+        }
+        let mut called_nat_ctx =
+            NatCtx::with_frame(nat_names.into_iter().zip(nat_vals.clone()).collect());
+        ty_check_global_fun_def(&mut gl_ctx, &mut called_nat_ctx, &mut fn_def)
+    } else {
+        Err(TyError::CtxError(CtxError::IdentNotFound(Ident::new(kname))))
+    }
+}
+
 struct ExprTyCtx<'src, 'compil, 'ctxt> {
     gl_ctx: &'ctxt mut GlobalCtx<'src, 'compil>,
     nat_ctx: &'ctxt mut NatCtx,
@@ -1353,6 +1392,8 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
             ctx.gl_ctx
                 .push_fun_checked_under_nats(fn_def, Box::from(nat_vals))
         }
+    } else {
+        return Err(TyError::CtxError(CtxError::IdentNotFound(*app_kernel.fun_ident.clone())))
     }
     Ok(unit_ty)
 }
