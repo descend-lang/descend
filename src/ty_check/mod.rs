@@ -10,7 +10,6 @@ mod unify;
 
 use self::pl_expr::PlExprTyCtx;
 use crate::ast::internal::{Frame, IdentTyped, Loan, Place, PrvMapping};
-use crate::ast::printer::PrintState;
 use crate::ast::utils;
 use crate::ast::*;
 use crate::error::ErrorReported;

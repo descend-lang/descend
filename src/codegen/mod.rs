@@ -42,7 +42,7 @@ pub fn gen(comp_unit: &desc::CompilUnit) -> String {
 ///
 // FIXME a remaining problem: Not all generic arguments are ever applied. This means that only a
 //      templated version of the CUDA source is generated.
-pub fn ext_gen(
+pub fn ext_gen_kernel(
     comp_unit: &desc::CompilUnit,
     kname: &str,
     shared_mem_dtys: Vec<desc::DataTy>,

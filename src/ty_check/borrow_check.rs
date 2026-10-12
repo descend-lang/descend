@@ -76,7 +76,10 @@ pub(super) fn access_safety_check(ctx: &BorrowCheckCtx, p: &PlaceExpr) -> OwnRes
     let loans = borrow_check(ctx, p)?;
     let mut evaled_loans = HashSet::new();
     for l in loans {
-        evaled_loans.insert(Loan { place_expr: l.place_expr.eval_nat(ctx.nat_ctx)?, own: l.own});
+        evaled_loans.insert(Loan {
+            place_expr: l.place_expr.eval_nat(ctx.nat_ctx)?,
+            own: l.own,
+        });
     }
     Ok(evaled_loans)
 }
@@ -416,7 +419,8 @@ fn ownership_safe_under_existing_borrows(
     if !ctx.unsafe_flag {
         for prv_mapping in ctx.ty_ctx.prv_mappings() {
             let PrvMapping { prv, loans } = prv_mapping;
-            let no_uniq_overlap = no_uniq_loan_overlap(ctx.nat_ctx, ctx.own, pl_expr, loans)?.is_none();
+            let no_uniq_overlap =
+                no_uniq_loan_overlap(ctx.nat_ctx, ctx.own, pl_expr, loans)?.is_none();
             if !no_uniq_overlap {
                 return at_least_one_borrowing_place_and_all_in_reborrow(
                     ctx.ty_ctx,
@@ -437,7 +441,9 @@ fn no_uniq_loan_overlap(
     loans: &HashSet<Loan>,
 ) -> NatEvalResult<Option<Loan>> {
     for l in loans {
-        if (own == Ownership::Uniq || l.own == Ownership::Uniq) && overlap(nat_ctx, &l.place_expr, pl_expr)? {
+        if (own == Ownership::Uniq || l.own == Ownership::Uniq)
+            && overlap(nat_ctx, &l.place_expr, pl_expr)?
+        {
             return Ok(Some(l.clone()));
         }
     }
@@ -472,7 +478,11 @@ fn at_least_one_borrowing_place_and_all_in_reborrow(
     Ok(())
 }
 
-fn conflicting_path(nat_ctx: &NatCtx, pathl: &[PlExprPathElem], pathr: &[PlExprPathElem]) -> NatEvalResult<bool> {
+fn conflicting_path(
+    nat_ctx: &NatCtx,
+    pathl: &[PlExprPathElem],
+    pathr: &[PlExprPathElem],
+) -> NatEvalResult<bool> {
     for lr in pathl.iter().zip(pathr) {
         match lr {
             (PlExprPathElem::Idx(_), _) => return Ok(true),
@@ -498,8 +508,14 @@ fn conflicting_path(nat_ctx: &NatCtx, pathl: &[PlExprPathElem], pathr: &[PlExprP
                         ArgKinded::Nat(lower_right),
                         ArgKinded::Nat(upper_right),
                     ) => {
-                        if range_not_intersects(nat_ctx, lower_left, upper_left, lower_right, upper_right)? {
-                            return Ok(false)
+                        if range_not_intersects(
+                            nat_ctx,
+                            lower_left,
+                            upper_left,
+                            lower_right,
+                            upper_right,
+                        )? {
+                            return Ok(false);
                         };
                     }
                     _ => panic!("expected nats"),
@@ -517,7 +533,8 @@ fn overlap(nat_ctx: &NatCtx, pll: &PlaceExpr, plr: &PlaceExpr) -> NatEvalResult<
     let (pl_ident, pl_path) = pll.as_ident_and_path();
     let (pr_ident, pr_path) = plr.as_ident_and_path();
     if pl_ident == pr_ident {
-        Ok(conflicting_path(nat_ctx, &pl_path, &pr_path)? || conflicting_path(nat_ctx, &pr_path, &pl_path)?)
+        Ok(conflicting_path(nat_ctx, &pl_path, &pr_path)?
+            || conflicting_path(nat_ctx, &pr_path, &pl_path)?)
     } else {
         Ok(false)
     }
