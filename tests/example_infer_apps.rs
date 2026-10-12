@@ -21,6 +21,45 @@ fn transpose_shrd_mem() -> Res {
 }
 
 #[test]
+fn ext_transpose_shrd_mem() -> Res {
+    use descend::ast::{ArgKinded, BinOpNat, DataTy, DataTyKind, Nat, Provenance, ScalarTy};
+    use descend::ty_check::ext_ty_check_kernel;
+
+    let source = descend::parser::SourceCode::from_file("examples/infer/ext_transpose_shrd_mem.desc")?;
+    let mut compil_unit = descend::parser::parse(&source)?;
+    let n256 = Nat::Lit(256);
+    let n32 = Nat::Lit(32);
+    let n8 = Nat::Lit(8);
+    let n256x32 = Nat::BinOp(
+        BinOpNat::Mul,
+        Box::new(Nat::Lit(256)),
+        Box::new(Nat::Lit(32)),
+    );
+    let gen_args = vec![
+        ArgKinded::Nat(n256),
+        ArgKinded::Nat(n32),
+        ArgKinded::Nat(n8),
+        ArgKinded::Nat(n256x32.clone()),
+        ArgKinded::Provenance(Provenance::Value("dummy0".to_string())),
+        ArgKinded::Provenance(Provenance::Value("dummy1".to_string())),
+    ];
+    descend::ty_check::ext_ty_check_kernel(&mut compil_unit, "par_transpose", &gen_args)
+        .map_err(|err| err.emit(&source))?;
+    let code = descend::codegen::ext_gen(
+        &compil_unit,
+        "par_transpose",
+        vec![DataTy::new(DataTyKind::Array(
+            Box::new(DataTy::new(DataTyKind::Array(
+                Box::new(DataTy::new(DataTyKind::Scalar(ScalarTy::F32))),
+                n256x32.clone(),
+            ))),
+            n256x32,
+        ))],
+    );
+    Ok(println!("{}", code))
+}
+
+#[test]
 fn matmul() -> Res {
     Ok(println!(
         "{}",

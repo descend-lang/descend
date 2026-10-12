@@ -1,6 +1,6 @@
 mod borrow_check;
 mod ctxs;
-mod error;
+pub mod error;
 mod exec;
 mod infer_kinded_args;
 mod pl_expr;
@@ -10,6 +10,7 @@ mod unify;
 
 use self::pl_expr::PlExprTyCtx;
 use crate::ast::internal::{Frame, IdentTyped, Loan, Place, PrvMapping};
+use crate::ast::printer::PrintState;
 use crate::ast::utils;
 use crate::ast::*;
 use crate::error::ErrorReported;
@@ -17,7 +18,7 @@ use ctxs::{AccessCtx, GlobalCtx, KindCtx, TyCtx};
 use error::*;
 use std::collections::HashSet;
 
-type TyResult<T> = Result<T, TyError>;
+pub type TyResult<T> = Result<T, TyError>;
 
 macro_rules! matches_dty {
     ($ty: expr, $dty_pat: pat_param) => {
@@ -70,7 +71,11 @@ pub fn ty_check(compil_unit: &mut CompilUnit) -> Result<(), ErrorReported> {
 ///     have to filter the nats out.
 ///     All natural numbers must be reducable to values, i.e., not free variables are allowed in
 ///     expressions.
-pub fn ext_ty_check_kernel(compil_unit: &mut CompilUnit, kname: &str, gen_args: &[ArgKinded]) -> TyResult<()> {
+pub fn ext_ty_check_kernel(
+    compil_unit: &mut CompilUnit,
+    kname: &str,
+    gen_args: &[ArgKinded],
+) -> TyResult<()> {
     let mut gl_ctx = GlobalCtx::new(
         compil_unit,
         pre_decl::fun_decls()
@@ -90,9 +95,13 @@ pub fn ext_ty_check_kernel(compil_unit: &mut CompilUnit, kname: &str, gen_args: 
         }
         let mut called_nat_ctx =
             NatCtx::with_frame(nat_names.into_iter().zip(nat_vals.clone()).collect());
-        ty_check_global_fun_def(&mut gl_ctx, &mut called_nat_ctx, &mut fn_def)
+        ty_check_global_fun_def(&mut gl_ctx, &mut called_nat_ctx, &mut fn_def)?;
+        gl_ctx.push_fun_checked_under_nats(fn_def, Box::from(nat_vals));
+        Ok(())
     } else {
-        Err(TyError::CtxError(CtxError::IdentNotFound(Ident::new(kname))))
+        Err(TyError::CtxError(CtxError::IdentNotFound(Ident::new(
+            kname,
+        ))))
     }
 }
 
@@ -1393,7 +1402,9 @@ fn ty_check_app_kernel(ctx: &mut ExprTyCtx, app_kernel: &mut AppKernel) -> TyRes
                 .push_fun_checked_under_nats(fn_def, Box::from(nat_vals))
         }
     } else {
-        return Err(TyError::CtxError(CtxError::IdentNotFound(*app_kernel.fun_ident.clone())))
+        return Err(TyError::CtxError(CtxError::IdentNotFound(
+            *app_kernel.fun_ident.clone(),
+        )));
     }
     Ok(unit_ty)
 }
@@ -1739,7 +1750,7 @@ pub fn accessible_memory(exec_ty: &ExecTy, mem: &Memory) -> TyResult<()> {
     } else {
         Err(TyError::String(format!(
             "Trying to dereference pointer to `{:?}` from execution resource `{:?}`",
-            mem, &exec_ty.ty
+            mem, exec_ty.ty
         )))
     }
 }

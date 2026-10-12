@@ -2,8 +2,8 @@ extern crate core;
 
 use crate::error::ErrorReported;
 
-mod ast;
-mod codegen;
+pub mod ast;
+pub mod codegen;
 pub mod error;
 pub mod parser;
 // FIXME do not allow the large error

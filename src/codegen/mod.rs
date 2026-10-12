@@ -16,12 +16,55 @@ pub(crate) static WARP_IDENT: &str = "$warp";
 // Precondition. all function definitions are successfully typechecked and
 // therefore every subexpression stores a type
 pub fn gen(comp_unit: &desc::CompilUnit) -> String {
-    let mut initial_fns_to_generate = collect_initial_fns_to_generate(comp_unit);
+    let codegen_ctx = CodegenCtx::new(
+        // CpuThread is only a dummy and will be set according to the generated function.
+        desc::ExecExpr::new(desc::ExecExprKind::new(desc::BaseExec::CpuThread)),
+        &comp_unit.items,
+    );
+    gen_ctx(codegen_ctx)
+}
+
+/// generate code possibly without explicit kernel calls
+/// external information for a kernel call is provided by by giving the kernel name and
+///     the data types for shared memory that are required with a kernel call
+/// kname : the name of the kernel function
+/// shared_mem_dtys : a vector of data types for which shared memmory buffers are allocated.
+///     These data types are used to compute offsets into the singular shared memory buffer in
+///     CUDA, where each offsets represents the beginning of a new shared memory buffer in Descend
+///
+/// IMPORTANT: this function will still attempt to compile the entire compilation unit. The only
+/// change is that the provided kernel name is used to actually mark the function as a kernel.
+/// Recognizing an actual kernel would otherwise require finding a kernel call in host code.
+/// This implies that all function definitions in the compilation unit must have been type checked.
+/// Type checking only happens from a root definition on all children. If external kernel call type
+/// checking was used, then any host-side functions have likely not been type checked and should not
+/// be part of the compilation unit.
+///
+// FIXME a remaining problem: Not all generic arguments are ever applied. This means that only a
+//      templated version of the CUDA source is generated.
+pub fn ext_gen(
+    comp_unit: &desc::CompilUnit,
+    kname: &str,
+    shared_mem_dtys: Vec<desc::DataTy>,
+) -> String {
     let mut codegen_ctx = CodegenCtx::new(
         // CpuThread is only a dummy and will be set according to the generated function.
         desc::ExecExpr::new(desc::ExecExprKind::new(desc::BaseExec::CpuThread)),
         &comp_unit.items,
     );
+
+    let num_shrd_mem_decls = shared_mem_dtys.len();
+    let unnamed_shrd_mem_decls = unnamed_shared_mem_decls(shared_mem_dtys);
+    codegen_ctx.kernel_infos.push(KernelInfo {
+        name: kname.to_string(),
+        unnamed_shrd_mem_decls,
+        num_shrd_mem_decls,
+    });
+    gen_ctx(codegen_ctx)
+}
+
+fn gen_ctx(mut codegen_ctx: CodegenCtx) -> String {
+    let mut initial_fns_to_generate = collect_initial_fns_to_generate(codegen_ctx.comp_unit);
     let mut generated_initial_fns = Vec::with_capacity(initial_fns_to_generate.len() * 4);
     for fun_def in &mut initial_fns_to_generate {
         // inline_unit_exec_ty_value(fun_def);
@@ -75,9 +118,8 @@ pub fn gen(comp_unit: &desc::CompilUnit) -> String {
     printer::print(&cu_program)
 }
 
-fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::FunDef> {
+fn collect_initial_fns_to_generate(comp_unit: &[desc::Item]) -> Vec<desc::FunDef> {
     comp_unit
-        .items
         .iter()
         // Filter out the only functions that make sense to be generated without an explicit call.
         //
@@ -87,11 +129,17 @@ fn collect_initial_fns_to_generate(comp_unit: &desc::CompilUnit) -> Vec<desc::Fu
         // We know the values for GpuGrid, GlobalThreads and CpuThread, because all are unit types.
         .filter_map(|item| {
             if let desc::Item::FunDef(f) = item {
+                let expect_msg = format!(
+                    "function `{}` was not type checked fully in the previous step: \
+                    did you type check an external kernel call? Then maybe this function was never \
+                    reached by type checking.",
+                    f.ident.name
+                );
                 if f.param_decls
                     .iter()
                     .all(|p| !is_view_dty(p.ty.as_ref().unwrap()))
                     && matches!(
-                        &f.exec.ty.as_ref().unwrap().ty,
+                        &f.exec.ty.as_ref().expect(&expect_msg).ty,
                         desc::ExecTyKind::GpuGrid(_, _)
                             | desc::ExecTyKind::GpuToThreads(_, _)
                             | desc::ExecTyKind::CpuThread
