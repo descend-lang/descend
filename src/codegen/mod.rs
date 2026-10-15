@@ -73,7 +73,18 @@ fn gen_ctx(mut codegen_ctx: CodegenCtx) -> String {
             desc::ExecTyKind::GpuGrid(gdim, bdim) => {
                 desc::BaseExec::GpuGrid(gdim.clone(), bdim.clone())
             }
-            _ => unreachable!("Every exec must be constructed based on a gpu grid."),
+            _ => {
+                // FIXME see comment in collect_initial_fns_to_generate
+                //  at the moment we generate a definition for every function, which breaks for
+                //  non grid-level device side functions that refer to their execution resources in the
+                //  body
+                //  the following is just a dummy value
+                desc::BaseExec::GpuGrid(
+                    desc::Dim::Z(Box::new(desc::Dim1d(desc::Nat::Lit(0)))),
+                    desc::Dim::Z(Box::new(desc::Dim1d(desc::Nat::Lit(0)))),
+                )
+            } // TODO reintroduce
+              // _ => unreachable!("Every exec must be constructed based on a gpu grid."),
         };
         codegen_ctx.push_scope();
         codegen_ctx.exec = desc::ExecExpr::new(desc::ExecExprKind::new(exec));
@@ -138,12 +149,16 @@ fn collect_initial_fns_to_generate(comp_unit: &[desc::Item]) -> Vec<desc::FunDef
                 if f.param_decls
                     .iter()
                     .all(|p| !is_view_dty(p.ty.as_ref().unwrap()))
-                    && matches!(
-                        &f.exec.ty.as_ref().expect(&expect_msg).ty,
-                        desc::ExecTyKind::GpuGrid(_, _)
-                            | desc::ExecTyKind::GpuToThreads(_, _)
-                            | desc::ExecTyKind::CpuThread
-                    )
+                // FIXME Currently, there is no way to generate a function with a specialized
+                // execution resource. For now, ignores whether the exact execution resource is
+                // known. This BREAKS when the specific execution resource is referenced in the
+                // function's body.
+                //&& matches!(
+                //    &f.exec.ty.as_ref().expect(&expect_msg).ty,
+                //    desc::ExecTyKind::GpuGrid(_, _)
+                //        | desc::ExecTyKind::GpuToThreads(_, _)
+                //        | desc::ExecTyKind::CpuThread
+                //)
                 {
                     Some(f.as_ref())
                 } else {
